@@ -14,16 +14,19 @@
     "test": "node --test tests/*.test.ts"
   },
   "dependencies": {
+    "@companion/platform-contracts": "workspace:*",
     "lucide-react": "^0.468.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "react-markdown": "^10.1.0",
-    "@companion/platform-contracts": "workspace:*"
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "typescript": "5.9.3",
-    "vite": "8.2.2"
+    "vite": "8.2.2",
+    "vite-plugin-pwa": "2.0.0",
+    "workbox-build": "7.4.1",
+    "workbox-window": "7.4.1"
   }
 }

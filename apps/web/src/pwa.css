@@ -1,0 +1,22 @@
+.pwa-shell{height:100dvh;min-height:0;display:flex;flex-direction:column;background:var(--cream)}
+.pwa-page-content{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;overflow:auto}
+.pwa-page-content>.workspace{height:auto;min-height:0;flex:1;grid-template-rows:minmax(0,1fr)}
+.pwa-page-content>.workspace>.main-shell{min-height:0}
+.pwa-page-content .main-columns{grid-template-rows:minmax(0,1fr)}
+.pwa-page-content .main-content{min-height:0}
+.pwa-status-stack{flex:0 0 auto;border-bottom:1px solid #dbe5d2;background:#f1f6e9}
+.pwa-notice{display:flex;align-items:flex-start;gap:10px;padding:12px 24px;max-width:1160px;margin:0 auto;color:#4b6441}
+.pwa-notice+.pwa-notice{border-top:1px solid #dce8d0}
+.pwa-notice>svg{flex:0 0 auto;margin-top:3px}
+.pwa-notice>div{flex:1;min-width:0}
+.pwa-notice strong{font-size:13px;font-weight:600;line-height:1.7}
+.pwa-notice p{font-size:12px;line-height:1.8;margin:2px 0 0;overflow-wrap:anywhere}
+.pwa-dismiss{flex:0 0 32px;width:32px;height:32px}
+.pwa-notice-offline,.pwa-notice-unavailable{color:#79603f}
+.public-connection{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:35px 20px;gap:27px;text-align:center}
+.public-connection>section{max-width:430px;width:100%;padding:24px;border:1px solid var(--line);border-radius:18px;background:var(--white)}
+.public-connection-icon{margin:0 auto 18px;width:52px;height:52px;display:flex;align-items:center;justify-content:center;border:1px solid #dde8d2;background:#f0f5e9;color:#677b54;border-radius:15px}
+.public-connection h1{font-size:21px;line-height:1.55;font-weight:600;letter-spacing:-.3px;margin:0 0 12px}
+.public-connection p{font-size:14px;line-height:1.85;color:#6b785f;margin:0 0 22px;overflow-wrap:anywhere}
+.public-connection small{display:block;font-size:12px;line-height:1.8;color:#737c68;margin-top:17px}
+@media(max-width:699px){.pwa-notice{padding:10px 13px;gap:8px}.pwa-notice strong{font-size:13px}.pwa-notice p{font-size:12px}.public-connection{padding:28px 17px}.public-connection>section{padding:23px 18px}.public-connection h1{font-size:20px}}

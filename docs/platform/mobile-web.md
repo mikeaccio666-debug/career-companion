@@ -1,0 +1,52 @@
+# 手机网页与 PWA
+
+网页以响应式 Web 和 PWA 为第一入口，共用现有账号、聊天、语音、资料和可审阅任务接口。2026-10-06 已完成公开界面的离线入口、构建版本校验、温和的更新提示及桌面 Chrome 浏览器验收；真机安装、HTTPS 麦克风和 WebRTC 仍待设备测试。手机上的任务审批继续遵守平台授权，不能替代插件需要的可信点击。
+
+## 构建方案
+
+采用维护中的 `vite-plugin-pwa` **2.0.0** 与 Workbox `generateSW`，锁定 `workbox-build`／`workbox-window` **7.4.1**。实际使用 Node **24.21.0**、Vite **8.2.2** 完成类型检查和生产构建，兼容性以锁文件及实际检查为依据。原手写 `public/sw.js` 已移除，新的固定 `/sw.js` 由构建生成；Workbox runtime 内联，不依赖运行时 CDN。配置与校验分别在 [vite.config.ts](../../apps/web/vite.config.ts) 和 [pwa-build.ts](../../apps/web/pwa-build.ts)。
+
+构建读取 Vite 实际 `root`／`outDir`，只允许固定公开文件和带内容指纹的 JS、CSS、图片与字体。重复路径、query、外部 URL、私有路径、符号链接及缺少必需文件都会使构建失败，防止遗漏过大 bundle 后仍生成“可离线”的清单。每条预缓存记录均附上文件字节的 SHA-256 `integrity`，HTML 也检查；哈希 bundle 使用文件名版本，固定路径使用构建 revision。Workbox 安装时按此 integrity 获取资源，缺资源或实际字节不符使新版安装失败，旧版继续工作。[Workbox 预缓存与 integrity](https://developer.chrome.com/docs/workbox/modules/workbox-precaching)
+
+这解决安装阶段收到 A 版 HTML、B 版 bundle 的混用问题。校验范围是预缓存资源获取，未覆盖 service worker 脚本自身或它执行前的 `importScripts`；上线仍须保证部署产物一致。独立静态服务对 HTML／`sw.js` 使用 `no-cache`，内容指纹资源使用长期 `immutable`，其他公开文件要求重新验证，详见 [static-web.ts](../../services/platform-api/src/static-web.ts)。
+
+2026-10-06 最终普通构建的 **12 条／700.11 KiB** 清单如下；指纹文件名随后续构建变化，列表是本轮快照：
+
+```text
+index.html
+mark.svg
+manifest.webmanifest
+pwa-legacy-cleanup.js
+icons/icon-192.png
+icons/icon-512.png
+icons/maskable-512.png
+icons/apple-touch-icon.png
+assets/workbox-window.prod.es5-Bd17z0YL.js
+assets/virtual_pwa-register-YTNlueIS.js
+assets/index-DfGilTcS.css
+assets/index-CklaSCN4.js
+```
+
+PNG 提供192／512标准图标、独立512 maskable 图标及180 Apple 图标，沿用现有 SVG 图形。提供这些资源不等于已通过 iOS／Android 安装验收。
+
+## 私有数据与离线入口
+
+产品 CacheStorage 只保存上述公开构建资源，没有 runtime cache、后台写入队列或请求重放。API、认证、知识来源、聊天、上传、语音和媒体都不进入此缓存。导航 fallback 只匹配无 query 的 `/` 与 `/index.html`；Workbox 默认还允许 `/index` 作为公共 HTML 的别名。`ignoreURLParametersMatching: []` 保留全部 query，带 token 或其他参数的 URL 不匹配预缓存或导航 fallback，不会被转换成产品缓存键。
+
+成功安装离线入口后，离线新开页面展示公共连接入口；无法确认账号时不以缓存的私人内容恢复工作台。恢复网络后，用户点击“重试连接”重新读取账号与服务状态，不自动发送消息、重试任务或提交申请。这个策略限定的是产品 CacheStorage；它不承诺清空普通浏览器 HTTP 缓存或已打开页面的内存。账号接口与私人内容继续遵守原有鉴权和响应缓存边界。
+
+## 更新与旧缓存
+
+注册采用 `prompt`，`skipWaiting: false`、`clientsClaim: false`。网页丢弃注册函数返回的强制更新方法，不发送 `SKIP_WAITING`，也不自动刷新其他页面；新版安装后自然 waiting。提示要求用户“先保存或复制需要保留的内容，结束录音或对话，再关闭所有工作台窗口重新打开”。草稿仍在当前页面内存，关闭窗口前需要用户自行保存或复制。联网且页面可见时，每小时检查新版，连接／可见性恢复也受同一间隔约束。[Vite PWA 更新提示](https://vite-pwa-org.netlify.app/guide/prompt-for-update)、[Service Worker 生命周期](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API/Using_Service_Workers)
+
+当前 Workbox 缓存命名为 `openfield-precache-v2-<registration.scope>`，自然激活时仅从自己的 precache 删除不再属于新版清单的条目。`cleanupOutdatedCaches` 关闭；额外兼容脚本只在没有同源窗口时删除确切旧名 `openfield-shell-v1`，检查包含未受控窗口，有任何窗口便保留、等待后续自然激活。外部命名空间不清理。这一策略依赖正常 waiting 生命周期，不承诺保护任意第三方脚本强制接管或删除缓存的行为。
+
+## 本轮验收与下一步
+
+网页完整 **236／236** 测试通过，含新增8项构建及11项运行层测试。真实 Chrome 在 localhost:4391 使用五个隔离 session：核心 A／B 与两种安装故障分别使用三个 profile，另外两个用于布局诊断和最终源码验收。A／B 是两个私有、实际 Vite 生产构建，B 只加入虚构 HTML 标题、main 标记与 CSS 标记来产生不同指纹；浏览器逐一核对新版12份缓存资源的 SHA-256。核心 A／B 验收在最后的文案／CSS修正前完成，修正后的最终实际生产构建另行完成390×844布局验收。具体故障与布局结果见 [验证记录](verification.md#pwa-离线入口与自然更新)。本轮没有调用模型／真实媒体服务、使用真人麦克风、修改主库或远端开发实例、部署产品。
+
+已通过的关键场景包括：A 离线新页与显式联网重连；两扇旧 A 窗口保留各自草稿、B waiting 提示两窗可见；关闭全部同源窗口后自然切到 B 并离线打开；新版 JS 503 和新版 HTML 被旧版 HTML 200 替换均导致安装失败、旧版离线可用；私人接口、媒体故障 fixture 和带 token 的入口不进入产品缓存；旧 v1 sentinel 删除而其他缓存 sentinel 保留。
+
+下一轮在目标 HTTPS 环境用真实 iPhone Safari 和 Android Chrome 检查安装／重新启动、麦克风容器实际解码、权限拒绝／取消、WebRTC、软键盘与 safe area、慢网和断网。录音或播放在切后台、`pagehide`、锁屏时如何暂停／结束／恢复，需先作独立 UX 决策，再做系统中断验收。现有390×844桌面视口和合成录音证据均不能替代这些检查。
+
+已有共享登录 Cookie 的跨窗口账号变更尚未实时同步：源码发现账号漂移风险，本轮未复现跨账号过程，也未修复；两窗用同一虚构账号的 PWA 验收不证明账号隔离。最终主 JS **571.66 kB／gzip 175.07 kB** 仍触发 >500 kB 构建提示，后续按实际首屏网络与交互表现评估拆包。当前成果是可维护的生产构建层与有限验收，公开上线仍需 [部署与运维验收](architecture.md)。

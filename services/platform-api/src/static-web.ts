@@ -84,7 +84,7 @@ export async function configureStaticWeb(app: FastifyInstance, directory: string
         || actual.ino !== expected.ino || actual.dev !== expected.dev || actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) return notFound(reply);
     } catch { return notFound(reply); }
     reply.header('X-Content-Type-Options', 'nosniff');
-    reply.header('Cache-Control', relative === 'index.html' ? 'no-cache' : hashedAsset.test(relative)
+    reply.header('Cache-Control', relative === 'index.html' || relative === 'sw.js' ? 'no-cache' : hashedAsset.test(relative)
       ? 'public, max-age=31536000, immutable' : 'public, max-age=0, must-revalidate');
     return reply.sendFile(relative, { cacheControl: false });
   }
