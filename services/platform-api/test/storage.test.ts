@@ -9,7 +9,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import { HeadObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { LocalBlobStorage, S3BlobStorage } from '../src/storage.ts';
+import { LocalBlobStorage, S3BlobStorage, validateUpload } from '../src/storage.ts';
 
 const config={bucket:'synthetic-bucket',region:'us-east-1',accessKeyId:'synthetic-access',secretAccessKey:'synthetic-secret'};
 function client(send:(command:any,options?:{abortSignal?:AbortSignal})=>unknown):Pick<S3Client,'send'>{return {send:async(command:any,options:any)=>send(command,options)} as unknown as Pick<S3Client,'send'>;}
@@ -17,6 +17,20 @@ async function collect(stream:Readable){const chunks:Buffer[]=[];for await(const
 async function fixture(run:(storage:LocalBlobStorage,directory:string)=>Promise<void>){const directory=await fs.mkdtemp(path.join(os.tmpdir(),'private-stream-fixture-'));try{await run(new LocalBlobStorage(directory),directory);}finally{await fs.rm(directory,{recursive:true,force:true});}}
 const closed=(stream:Readable)=>stream.closed?Promise.resolve():new Promise<void>(resolve=>stream.once('close',resolve));
 const next=()=>new Promise<void>(resolve=>setImmediate(resolve));
+
+test('OGG and FLAC uploads require their canonical MIME, extension and distinct container signature',()=>{
+  const ogg=Buffer.from('OggS\0Synthetic container fixture.'),flac=Buffer.from('fLaCSynthetic container fixture.');
+  assert.doesNotThrow(()=>validateUpload('fictional.ogg','audio/ogg',ogg));
+  assert.doesNotThrow(()=>validateUpload('fictional.FLAC','audio/flac',flac));
+  for(const [filename,mime,bytes] of [
+    ['fictional.ogg','audio/ogg',flac],['fictional.flac','audio/flac',ogg],
+    ['fictional.flac','audio/ogg',ogg],['fictional.ogg','audio/flac',flac],
+    ['fictional.ogg','audio/ogg',Buffer.from('Ogg')],['fictional.flac','audio/flac',Buffer.from('fLa')],
+    ['fictional.ogg','audio/ogg',Buffer.from('OggS').map(byte=>byte|0x80)],['fictional.flac','audio/flac',Buffer.from('fLaC').map(byte=>byte|0x80)],
+    ['fictional.ogg','audio/ogg',Buffer.from('Synthetic nonaudio bytes.')],['fictional.flac','audio/flac',Buffer.from('Synthetic nonaudio bytes.')],
+    ['fictional.oga','audio/ogg',ogg],['fictional.ogg','application/ogg',ogg],['fictional.flac','audio/x-flac',flac],
+  ] as const)assert.throws(()=>validateUpload(filename,mime,bytes),{code:'INVALID_INPUT'});
+});
 
 test('local reads use bounded FD streams for full and inclusive ranges without readFile',async()=>fixture(async(storage)=>{
   const bytes=Buffer.from('Only invented private fixture bytes.');await storage.put('synthetic',bytes);

@@ -53,7 +53,7 @@ async function register():Promise<Actor>{
 }
 async function request(actor:Actor,route:string,payload:Record<string,unknown>){return system.app.inject({method:'POST',url:prefix+route,remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie},payload});}
 type Part={name:string;value:string;mime?:string}|{name:string;bytes:Buffer;filename?:string;mime?:string};
-async function multipart(actor:Actor,parts:Part[]){
+async function multipart(actor:Actor,parts:Part[],route='/voice/transcribe'){
   const boundary=`synthetic-voice-${randomUUID()}`,chunks:Buffer[]=[];
   for(const part of parts){
     const file='bytes' in part;
@@ -61,7 +61,7 @@ async function multipart(actor:Actor,parts:Part[]){
     chunks.push(file?part.bytes:Buffer.from(part.value));chunks.push(Buffer.from('\r\n'));
   }
   chunks.push(Buffer.from(`--${boundary}--\r\n`));
-  return system.app.inject({method:'POST',url:prefix+'/voice/transcribe',remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie,'content-type':`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat(chunks)});
+  return system.app.inject({method:'POST',url:prefix+route,remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie,'content-type':`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat(chunks)});
 }
 const audio:Part={name:'file',bytes:wav()};
 async function state(actor:Actor){return {leases:(await db.query('SELECT count(*)::integer AS n FROM platform_runtime_leases WHERE user_id=$1',[actor.user.id])).rows[0].n,usage:(await db.query('SELECT count(*)::integer AS n FROM platform_usage WHERE user_id=$1',[actor.user.id])).rows[0].n,sessions:(await db.query('SELECT count(*)::integer AS n FROM platform_voice_sessions WHERE user_id=$1',[actor.user.id])).rows[0].n};}
@@ -130,6 +130,51 @@ test('faster-whisper transcription-only selection preserves either multipart fie
   assert.deepEqual(calls.slice(beforeCalls),[0,1].map(()=>({kind:'transcription',provider:'faster-whisper',input:{name:'synthetic.wav',mime:'audio/wav',bytes:wav().length}})));
   assert.deepEqual(await state(actor),{leases:0,usage:0,sessions:0});
   assert.equal((await db.query('SELECT count(*)::integer AS n FROM platform_uploads WHERE user_id=$1',[actor.user.id])).rows[0].n,0);
+});
+
+test('canonical OGG and FLAC reach the selected transcription adapter in either multipart order without retaining input audio',async()=>{
+  const actor=await register(),beforeCalls=calls.length,expected:typeof calls=[];
+  for(const [extension,mime,signature] of [['ogg','audio/ogg','OggS'],['flac','audio/flac','fLaC']] as const){
+    const bytes=Buffer.from(signature+'Synthetic container fixture.'),file:Part={name:'file',bytes,filename:`recording.${extension}`,mime},provider:Part={name:'provider',value:'faster-whisper'};
+    for(const parts of [[file,provider],[provider,file]]){
+      const result=await multipart(actor,parts);assert.equal(result.statusCode,200,result.body);assert.deepEqual(result.json(),{text:'Synthetic faster-whisper transcript'});
+      expected.push({kind:'transcription',provider:'faster-whisper',input:{name:`recording.${extension}`,mime,bytes:bytes.length}});
+    }
+  }
+  assert.deepEqual(calls.slice(beforeCalls),expected);assert.deepEqual(await state(actor),{leases:0,usage:0,sessions:0});
+  assert.equal((await db.query('SELECT count(*)::integer AS n FROM platform_uploads WHERE user_id=$1',[actor.user.id])).rows[0].n,0);
+});
+
+test('OGG and FLAC signature or extension mismatches never acquire a voice lease or invoke transcription',async()=>{
+  const actor=await register(),beforeCalls=calls.length;
+  const ogg=Buffer.from('OggSSynthetic container fixture.'),flac=Buffer.from('fLaCSynthetic container fixture.');
+  for(const [filename,mime,bytes] of [
+    ['recording.ogg','audio/ogg',flac],['recording.flac','audio/flac',ogg],
+    ['recording.flac','audio/ogg',ogg],['recording.ogg','audio/flac',flac],
+    ['recording.ogg','audio/ogg',Buffer.from('Ogg')],['recording.flac','audio/flac',Buffer.from('fLa')],
+    ['recording.ogg','audio/ogg',Buffer.from(Buffer.from('OggS').map(byte=>byte|0x80))],['recording.flac','audio/flac',Buffer.from(Buffer.from('fLaC').map(byte=>byte|0x80))],
+    ['recording.ogg','audio/ogg',Buffer.from('Synthetic nonaudio bytes.')],['recording.flac','audio/flac',Buffer.from('Synthetic nonaudio bytes.')],
+  ] as const){
+    const result=await multipart(actor,[{name:'file',bytes,filename,mime},{name:'provider',value:'faster-whisper'}]);
+    assert.equal(result.statusCode,400,result.body);assert.equal(result.json().error.code,'INVALID_INPUT');
+  }
+  assert.equal(calls.length,beforeCalls);assert.deepEqual(await state(actor),{leases:0,usage:0,sessions:0});
+  assert.equal((await db.query('SELECT count(*)::integer AS n FROM platform_uploads WHERE user_id=$1',[actor.user.id])).rows[0].n,0);
+});
+
+test('explicit OGG and FLAC uploads remain private downloads and do not call a voice adapter',async()=>{
+  const actor=await register(),other=await register(),beforeCalls=calls.length;
+  for(const [extension,mime,signature] of [['ogg','audio/ogg','OggS'],['flac','audio/flac','fLaC']] as const){
+    const bytes=Buffer.from(signature+'Synthetic uploaded container fixture.');
+    const uploaded=await multipart(actor,[{name:'file',bytes,filename:`fictional.${extension}`,mime}],'/uploads');assert.equal(uploaded.statusCode,201,uploaded.body);
+    const attachment=uploaded.json().attachment;assert.equal(attachment.mime,mime);assert.equal(attachment.size,bytes.length);
+    const read=await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip,headers:{cookie:actor.cookie}});
+    assert.equal(read.statusCode,200,read.body);assert.deepEqual(read.rawPayload,bytes);assert.equal(read.headers['content-type'],mime);
+    assert.equal(read.headers['cache-control'],'private, no-store');assert.equal(read.headers['x-content-type-options'],'nosniff');assert.match(String(read.headers['content-disposition']),/^attachment;/);
+    const denied=await system.app.inject({method:'GET',url:attachment.url,remoteAddress:other.ip,headers:{cookie:other.cookie}});assert.equal(denied.statusCode,404,denied.body);
+    assert.equal((await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip})).statusCode,401);
+  }
+  assert.equal(calls.length,beforeCalls);assert.deepEqual(await state(actor),{leases:0,usage:0,sessions:0});
 });
 
 test('faster-whisper silence is an empty successful transcript and unavailable speech or realtime does not call an adapter',async()=>{

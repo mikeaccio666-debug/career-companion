@@ -167,7 +167,7 @@ export function createStorage(config: PlatformConfig): BlobStorage { return conf
 const mimeExtensions: Record<string, string[]> = {
   'application/pdf': ['.pdf'], 'text/plain': ['.txt'], 'text/markdown': ['.md'], 'text/csv': ['.csv'], 'application/json': ['.json'],
   'image/png': ['.png'], 'image/jpeg': ['.jpg','.jpeg'], 'image/webp': ['.webp'],
-  'audio/webm': ['.webm'], 'video/webm': ['.webm'], 'audio/mpeg': ['.mp3'], 'audio/wav': ['.wav'], 'audio/x-wav': ['.wav'], 'audio/mp4': ['.m4a'], 'video/mp4': ['.mp4'],
+  'audio/webm': ['.webm'], 'video/webm': ['.webm'], 'audio/mpeg': ['.mp3'], 'audio/wav': ['.wav'], 'audio/x-wav': ['.wav'], 'audio/mp4': ['.m4a'], 'audio/ogg': ['.ogg'], 'audio/flac': ['.flac'], 'video/mp4': ['.mp4'],
 };
 export function validateUpload(filename: string, mime: string, bytes: Uint8Array) {
   if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw invalid('Files must contain 1 byte to 20 MB.');
@@ -180,6 +180,8 @@ export function validateUpload(filename: string, mime: string, bytes: Uint8Array
   if (mime === 'image/webp' && !(start.toString('ascii',0,4)==='RIFF' && start.toString('ascii',8,12)==='WEBP')) throw invalid('Invalid WebP file.');
   if ((mime==='audio/webm' || mime==='video/webm') && !start.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3]))) throw invalid('Invalid WebM file.');
   if ((mime==='audio/wav'||mime==='audio/x-wav') && !(start.toString('ascii',0,4)==='RIFF' && start.toString('ascii',8,12)==='WAVE')) throw invalid('Invalid WAV file.');
+  if (mime==='audio/ogg' && !start.subarray(0,4).equals(Buffer.from('OggS'))) throw invalid('Invalid OGG file.');
+  if (mime==='audio/flac' && !start.subarray(0,4).equals(Buffer.from('fLaC'))) throw invalid('Invalid FLAC file.');
   if ((mime==='video/mp4'||mime==='audio/mp4') && start.toString('ascii',4,8)!=='ftyp') throw invalid('Invalid MP4 file.');
   if (mime==='audio/mpeg' && !(start.toString('ascii',0,3)==='ID3' || (start[0]===255 && (start[1]!&0xe0)===0xe0))) throw invalid('Invalid MP3 file.');
   if (mime.startsWith('text/') || mime==='application/json') {
