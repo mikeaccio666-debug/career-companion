@@ -4,7 +4,7 @@ import type { Database } from './database.ts';
 import { ApiError } from './errors.ts';
 
 export type UserRequestLimitScope = 'api' | 'chat' | 'speech' | 'transcription' | 'realtime' | 'control';
-export type AnonymousRequestLimitScope = 'auth-login' | 'auth-register' | 'public';
+export type AnonymousRequestLimitScope = 'auth-login' | 'auth-register' | 'auth-email-request' | 'auth-email-consume' | 'public';
 export type RequestLimitScope = UserRequestLimitScope | AnonymousRequestLimitScope;
 export interface RequestLimitPolicy { max: number; windowSeconds: number; }
 export interface RequestLimitDecision { allowed: boolean; remaining: number; retryAfterSeconds: number; }
@@ -26,11 +26,13 @@ export const DEFAULT_REQUEST_LIMIT_POLICIES: Readonly<Record<RequestLimitScope, 
   control: Object.freeze({ max: 120, windowSeconds: 60 }),
   'auth-login': Object.freeze({ max: 20, windowSeconds: 60 }),
   'auth-register': Object.freeze({ max: 10, windowSeconds: 60 }),
+  'auth-email-request': Object.freeze({ max: 10, windowSeconds: 3600 }),
+  'auth-email-consume': Object.freeze({ max: 20, windowSeconds: 60 }),
   public: Object.freeze({ max: 120, windowSeconds: 60 }),
 });
 
 const userScopes = new Set<UserRequestLimitScope>(['api', 'chat', 'speech', 'transcription', 'realtime', 'control']);
-const anonymousScopes = new Set<AnonymousRequestLimitScope>(['auth-login', 'auth-register', 'public']);
+const anonymousScopes = new Set<AnonymousRequestLimitScope>(['auth-login', 'auth-register', 'auth-email-request', 'auth-email-consume', 'public']);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function unavailable() { return new ApiError(503, 'REQUEST_LIMIT_UNAVAILABLE', 'Request availability could not be confirmed. Please try again.'); }
 function integer(value: unknown, min: number, max: number): value is number {

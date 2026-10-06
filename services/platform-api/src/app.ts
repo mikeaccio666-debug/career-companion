@@ -8,6 +8,7 @@ import { createProviderRuntime } from '@companion/ai-core';
 import { Database } from './database.ts';
 import { readConfig, type PlatformConfig } from './config.ts';
 import { checkPassword, getUser, hashPassword, logout, setSession } from './auth.ts';
+import { AccountActions } from './account-actions.ts';
 import { ApiError, attachments, identifier, invalid, notFound, object, string } from './errors.ts';
 import { createStorage, type BlobStorage, validateUpload } from './storage.ts';
 import { JobService, mapApproval, parseJob, providerAvailable, publicError, TaskQueue, verifyAttachments } from './jobs.ts';
@@ -29,6 +30,7 @@ function mode(value:unknown,fallback:ChatMode='chat'):ChatMode { if(value===unde
 function passwordInput(value:unknown):string {if(typeof value!=='string'||!value.length||value.length>256)throw invalid('A password of at most 256 characters is required.');return value;}
 function params(request:FastifyRequest,key='id'){return identifier((request.params as Record<string,unknown>)[key]);}
 function voiceBody(value:unknown,fields:readonly string[]){const data=object(value);if(Object.keys(data).some(key=>!fields.includes(key)))throw invalid('Unsupported voice request field.');return data;}
+function accountBody(value:unknown,fields:readonly string[]){const data=object(value);if(Object.keys(data).some(key=>!fields.includes(key)))throw invalid('Unsupported account request field.');return data;}
 function voiceTurnTaking(value:unknown):'patient'|'balanced'|'quick'|undefined {
   if(value===undefined)return undefined;
   if(value==='patient'||value==='balanced'||value==='quick')return value;
@@ -57,6 +59,7 @@ export async function buildApp(options:AppOptions={}) {
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage);
   const requestLimits=new RequestLimits(db,options.requestLimits);
+  const accountActions=new AccountActions(db,config.accountEmail);
   const queue=options.queue??(options.enableQueue===false?undefined:new TaskQueue(jobs));
   const app=Fastify({logger:false,bodyLimit:256*1024,requestTimeout:120_000});
   await configurePlatformHttp(app,config);
@@ -94,7 +97,11 @@ export async function buildApp(options:AppOptions={}) {
     // Socket address only: cookies and untrusted forwarding headers do not establish identity.
     enforceLimit(await requestLimits.consumeAnonymous(request.raw.socket.remoteAddress??'',scope),reply);
   };
-  const secured=(scope:UserRequestLimitScope)=>({preHandler:[authenticated,authenticatedLimit(scope)]});
+  async function verifiedAccount(request:FastifyRequest){
+    if(config.requireVerifiedEmail && !(request as AuthRequest).platformUser.emailVerified)throw new ApiError(403,'EMAIL_VERIFICATION_REQUIRED','Verify your email to use the workspace.');
+  }
+  const secured=(scope:UserRequestLimitScope)=>({preHandler:[authenticated,verifiedAccount,authenticatedLimit(scope)]});
+  const limitedAccount={preHandler:[authenticated,authenticatedLimit('control')]};
   const secure=secured('api'),control=secured('control');
   function requestSignal(request:FastifyRequest,reply:FastifyReply){
     const controller=new AbortController();
@@ -106,6 +113,7 @@ export async function buildApp(options:AppOptions={}) {
 
   app.get(`${prefix}/health`,async(request,reply)=>{try{await db.query('SELECT 1');return {ok:true,database:'connected',queue:queue?'configured':'disabled'};}catch{reply.code(503);return {ok:false,database:'unavailable',queue:queue?'configured':'disabled'};}});
   app.get(`${prefix}/capabilities`,{preHandler:anonymousLimit('public')},async()=>({providers:runtime.capabilities()}));
+  app.get(`${prefix}/auth/options`,{preHandler:anonymousLimit('public')},async()=>({emailActionsEnabled:Boolean(config.accountEmail),requireVerifiedEmail:config.requireVerifiedEmail}));
   app.post(`${prefix}/auth/register`,{preHandler:anonymousLimit('auth-register')},async(request,reply)=>{
     const data=object(request.body),email=string(data.email,'email',254).toLowerCase(),name=string(data.name,'name',100);
     const password=passwordInput(data.password);
@@ -113,7 +121,7 @@ export async function buildApp(options:AppOptions={}) {
     const id=randomUUID();
     try{await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)',[id,email,name,await hashPassword(password)]);}
     catch(error){if((error as {code?:string}).code==='23505')throw new ApiError(409,'EMAIL_EXISTS','An account already exists for this email.');throw error;}
-    await setSession(db,config,reply,id);reply.code(201);return {user:{id,email,name}};
+    await setSession(db,config,reply,id,'0');reply.code(201);return {user:{id,email,name,emailVerified:false}};
   });
   app.post(`${prefix}/auth/login`,{preHandler:anonymousLimit('auth-login')},async(request,reply)=>{
     const data=object(request.body),email=string(data.email,'email',254).toLowerCase(),password=passwordInput(data.password);
@@ -121,10 +129,28 @@ export async function buildApp(options:AppOptions={}) {
     const row=result.rows[0];
     const valid=await checkPassword(password,row?.password_hash??'scrypt:00000000000000000000000000000000:'+Buffer.alloc(64).toString('hex'));
     if(!row||!valid)throw new ApiError(401,'INVALID_CREDENTIALS','Email or password is incorrect.');
-    await setSession(db,config,reply,row.id);return {user:{id:row.id,email:row.email,name:row.name}};
+    await setSession(db,config,reply,row.id,row.auth_version);return {user:{id:row.id,email:row.email,name:row.name,emailVerified:row.email_verified_at!==null}};
   });
-  app.post(`${prefix}/auth/logout`,control,async(request,reply)=>{await logout(db,request,reply);return {ok:true};});
-  app.get(`${prefix}/auth/me`,secure,async request=>({user:(request as AuthRequest).platformUser}));
+  app.post(`${prefix}/auth/logout`,limitedAccount,async(request,reply)=>{await logout(db,request,reply);return {ok:true};});
+  app.get(`${prefix}/auth/me`,{preHandler:[authenticated,authenticatedLimit('api')]},async request=>({user:(request as AuthRequest).platformUser}));
+  app.post(`${prefix}/auth/password-reset/request`,{preHandler:anonymousLimit('auth-email-request')},async(request,reply)=>{
+    const data=accountBody(request.body,['email']),email=string(data.email,'email',254).toLowerCase();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw invalid('Use a valid email.');
+    await accountActions.requestPasswordReset(email);reply.code(202);return {accepted:true};
+  });
+  app.post(`${prefix}/auth/password-reset/complete`,{preHandler:anonymousLimit('auth-email-consume')},async(request,reply)=>{
+    const data=accountBody(request.body,['token','password']);
+    await accountActions.consume('password-reset',string(data.token,'token',128),typeof data.password==='string'?data.password:undefined);
+    reply.clearCookie('companion_session',{path:'/',httpOnly:true,sameSite:'lax',secure:config.secureCookies});return {ok:true};
+  });
+  app.post(`${prefix}/auth/email-verification/request`,limitedAccount,async(request,reply)=>{
+    accountBody(request.body,[]);await accountActions.requestEmailVerification(userId(request));reply.code(202);return {accepted:true};
+  });
+  app.post(`${prefix}/auth/email-verification/complete`,limitedAccount,async(request)=>{
+    const data=accountBody(request.body,['token']);
+    await accountActions.consume('verify-email',string(data.token,'token',128),undefined,userId(request));
+    const user=await getUser(db,request);if(!user)throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');return {user};
+  });
   app.get(`${prefix}/usage`,secure,async request=>{
     if(Object.keys(request.query as Record<string,unknown>).length)throw invalid('Usage is scoped to the signed-in account and current UTC month.');
     return {usage:await accountUsage(db,userId(request))};

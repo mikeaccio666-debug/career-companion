@@ -9,6 +9,10 @@ envVarGroups:
         value: production
       - key: PLATFORM_ALLOW_PROVIDER_CALLS
         value: "0"
+      - key: PLATFORM_ALLOW_ACCOUNT_EMAIL
+        value: "1"
+      - key: PLATFORM_REQUIRE_VERIFIED_EMAIL
+        value: "1"
       - key: PLATFORM_ENABLE_BROWSER
         value: "0"
       - key: PLATFORM_ENABLE_BROWSER_ACTIONS
@@ -47,6 +51,14 @@ services:
           property: connectionString
       - key: PLATFORM_ALLOWED_ORIGINS
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: PLATFORM_ACCOUNT_EMAIL_FROM
+        sync: false
+      - key: PLATFORM_ACCOUNT_WEB_ORIGIN
+        sync: false
+      - key: PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY
+        sync: false
       - key: PLATFORM_S3_ENDPOINT
         sync: false
       - key: PLATFORM_S3_BUCKET
@@ -84,6 +96,26 @@ services:
           type: web
           name: career-platform-api
           envVarKey: PLATFORM_ALLOWED_ORIGINS
+      - key: RESEND_API_KEY
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: RESEND_API_KEY
+      - key: PLATFORM_ACCOUNT_EMAIL_FROM
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_ACCOUNT_EMAIL_FROM
+      - key: PLATFORM_ACCOUNT_WEB_ORIGIN
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_ACCOUNT_WEB_ORIGIN
+      - key: PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY
       - key: PLATFORM_S3_ENDPOINT
         fromService:
           type: web

@@ -34,6 +34,7 @@ test('production policies explicitly cover bounded account and anonymous scopes'
     speech: { max: 20, windowSeconds: 60 }, transcription: { max: 20, windowSeconds: 60 },
     realtime: { max: 4, windowSeconds: 3600 }, control: { max: 120, windowSeconds: 60 },
     'auth-login': { max: 20, windowSeconds: 60 }, 'auth-register': { max: 10, windowSeconds: 60 },
+    'auth-email-request': { max: 10, windowSeconds: 3600 }, 'auth-email-consume': { max: 20, windowSeconds: 60 },
     public: { max: 120, windowSeconds: 60 },
   });
   assert(Object.isFrozen(DEFAULT_REQUEST_LIMIT_POLICIES));

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readAccountEmailConfig, type AccountEmailConfig } from './account-mail.ts';
 
 export const workspaceRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 
@@ -8,6 +9,7 @@ export interface PlatformConfig {
   host: '127.0.0.1' | 'localhost' | '::1' | '0.0.0.0'; webStaticDir?: string;
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
+  accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
 }
 
 function port(value: string | undefined, name: string): number | undefined {
@@ -51,6 +53,11 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   }
   if (production && !env.PLATFORM_ALLOWED_ORIGINS?.trim()) throw new Error('Production application origins must be explicitly configured');
   const allowedOrigins = origins(env.PLATFORM_ALLOWED_ORIGINS ?? 'http://localhost:4321,http://127.0.0.1:4321,http://localhost:4320,http://127.0.0.1:4320', production);
+  if (env.PLATFORM_REQUIRE_VERIFIED_EMAIL !== undefined && !['0', '1'].includes(env.PLATFORM_REQUIRE_VERIFIED_EMAIL)) throw new Error('PLATFORM_REQUIRE_VERIFIED_EMAIL must be 0 or 1');
+  if (production && env.PLATFORM_REQUIRE_VERIFIED_EMAIL === '0') throw new Error('Production requires verified email accounts');
+  const requireVerifiedEmail = production || env.PLATFORM_REQUIRE_VERIFIED_EMAIL === '1';
+  const accountEmail = readAccountEmailConfig(env, allowedOrigins);
+  if (requireVerifiedEmail && !accountEmail) throw new Error('Verified email accounts require explicitly configured account email');
   const s3 = env.PLATFORM_S3_BUCKET ? {
     endpoint: env.PLATFORM_S3_ENDPOINT, bucket: env.PLATFORM_S3_BUCKET,
     region: env.PLATFORM_S3_REGION ?? 'us-east-1',
@@ -74,7 +81,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
-    sessionDays: 14, maxActiveJobs, secureCookies: production,
+    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail,
     queueName: env.PLATFORM_QUEUE_NAME ?? 'companion-platform-jobs', s3,
   };
 }

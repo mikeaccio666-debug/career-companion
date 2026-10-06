@@ -10,12 +10,16 @@ const production: NodeJS.ProcessEnv = {
   PLATFORM_ALLOWED_ORIGINS: 'https://app.example.invalid', PLATFORM_S3_BUCKET: 'synthetic-private-objects',
   PLATFORM_S3_ENDPOINT: 'https://objects.example.invalid', PLATFORM_S3_REGION: 'auto',
   PLATFORM_S3_ACCESS_KEY_ID: 'synthetic-access-key', PLATFORM_S3_SECRET_ACCESS_KEY: 'synthetic-storage-secret',
+  PLATFORM_ALLOW_ACCOUNT_EMAIL: '1', RESEND_API_KEY: 'synthetic-mail-key',
+  PLATFORM_ACCOUNT_EMAIL_FROM: 'noreply@example.invalid', PLATFORM_ACCOUNT_WEB_ORIGIN: 'https://app.example.invalid',
+  PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY: '11'.repeat(32),
 };
 
 test('listener defaults stay on loopback and hosted ports require explicit, valid configuration', () => {
   const local = readConfig({});
   assert.equal(local.host, '127.0.0.1'); assert.equal(local.port, 4320);
   assert.equal(local.secureCookies, false); assert.equal(local.s3, undefined); assert.equal(local.webStaticDir, undefined);
+  assert.equal(local.accountEmail, undefined); assert.equal(local.requireVerifiedEmail, false);
   assert.equal(readConfig({ PLATFORM_HOST: '0.0.0.0', PORT: '10000' }).host, '0.0.0.0');
   assert.equal(readConfig({ PORT: '10000' }).port, 10000);
   assert.equal(readConfig({ PLATFORM_PORT: '4319' }).port, 4319);
@@ -33,6 +37,7 @@ test('listener defaults stay on loopback and hosted ports require explicit, vali
 test('production requires explicit backend connections, exact HTTPS origins and server-owned object credentials', () => {
   const valid = readConfig(production);
   assert.equal(valid.secureCookies, true); assert.equal(valid.host, '127.0.0.1');
+  assert.equal(valid.requireVerifiedEmail, true); assert.ok(valid.accountEmail);
   assert.deepEqual([...valid.allowedOrigins], ['https://app.example.invalid']);
   assert.equal(valid.s3?.region, 'auto');
   // AWS's regional endpoint can be derived by the SDK when an explicit endpoint is absent.
@@ -47,6 +52,16 @@ test('production requires explicit backend connections, exact HTTPS origins and 
   }
   for (const value of ['https://redis.example.invalid', 'redis://:local-companion-redis-only@redis.example.invalid', 'redis://redis.example.invalid/0\n']) {
     assert.throws(() => readConfig({ ...production, PLATFORM_REDIS_URL: value }), /connection|PLATFORM_REDIS_URL/i);
+  }
+});
+
+test('production requires account email and cannot disable verification; development mail remains opt-in', () => {
+  assert.throws(() => readConfig({ ...production, PLATFORM_ALLOW_ACCOUNT_EMAIL: '0' }), /email/i);
+  assert.throws(() => readConfig({ ...production, PLATFORM_REQUIRE_VERIFIED_EMAIL: '0' }), /verified/i);
+  assert.throws(() => readConfig({ PLATFORM_REQUIRE_VERIFIED_EMAIL: '1' }), /email/i);
+  for (const value of ['', 'true', 'yes', ' 1']) assert.throws(() => readConfig({ PLATFORM_REQUIRE_VERIFIED_EMAIL: value }), /PLATFORM_REQUIRE_VERIFIED_EMAIL/);
+  for (const key of ['RESEND_API_KEY', 'PLATFORM_ACCOUNT_EMAIL_FROM', 'PLATFORM_ACCOUNT_WEB_ORIGIN', 'PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY'] as const) {
+    assert.throws(() => readConfig({ ...production, [key]: undefined }), Error);
   }
 });
 

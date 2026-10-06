@@ -37,7 +37,8 @@ export interface ProviderStatus {
   executionTemplate?: ExecutionTemplateBinding;
 }
 
-export interface User { id: string; email: string; name: string; }
+export interface User { id: string; email: string; name: string; emailVerified?: boolean; }
+export interface AuthOptions { emailActionsEnabled: boolean; requireVerifiedEmail: boolean; }
 export interface Conversation {
   id: string; title: string; mode: ChatMode; persona?: string;
   createdAt: string; updatedAt: string;

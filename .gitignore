@@ -6,6 +6,7 @@
 # Dependencies and generated output
 node_modules/
 .pnpm-store/
+imports/
 .local/
 .next/
 dist/

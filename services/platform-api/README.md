@@ -25,7 +25,7 @@ Legacy tasks without a valid saved snapshot cannot make a ComfyUI request and mu
 
 ## API
 
-All paths start with `/api/platform`. Public routes are `GET /health`, `GET /capabilities`, `POST /auth/register` and `POST /auth/login`. Registration requires email, name and a password of at least 10 characters. Other routes require the opaque HttpOnly session cookie. Mutating routes require an `Origin` included in `PLATFORM_ALLOWED_ORIGINS`.
+All paths start with `/api/platform`. Public routes are `GET /health`, `GET /capabilities`, `GET /auth/options`, `POST /auth/register`, `POST /auth/login`, and the password-reset request/completion routes documented below. Registration requires email, name and a password of 10–256 characters. Other routes require the opaque HttpOnly session cookie; production workspace routes also require verified email. `GET /auth/me`, logout and email-verification actions remain available to an authenticated unverified account. All mutating routes, including public account actions, require an `Origin` included in `PLATFORM_ALLOWED_ORIGINS`.
 
 - Identity: `GET /auth/me`, `POST /auth/logout`.
 - Conversations: `GET/POST /conversations`, `GET/DELETE /conversations/:id`, `POST /conversations/:id/messages`. The message response streams named SSE events `start`, `delta`, `tool`, `approval`, `done`, `error`.
@@ -42,6 +42,33 @@ All paths start with `/api/platform`. Public routes are `GET /health`, `GET /cap
 List/create/read responses use `{conversations}`, `{conversation}`, `{conversation,messages}`, `{jobs}`, `{job,approval?}`, `{approvals}`, `{approval}`, `{memories}`, `{memory}`, and `{attachment}`. UUID ownership is checked before reading or mutating data. Artifact URLs require the owner's session and use private/no-store caching. Text files and potentially active content are served as downloads with `nosniff` and a sandbox policy.
 
 Per-user database leases permit at most two simultaneous chat streams and one voice request/session lease. Stream leases renew and stale streams become failed after interruption. Voice-session issuing is limited to four attempts per user per hour in PostgreSQL; transcription/speech endpoints also rate-limit session requests. Realtime leases expire after ten minutes or a client release. Releasing a lease does not revoke a provider credential or terminate a provider session; the client must close its WebRTC connection. Token usage is saved as provider/model/counts without prompts in the usage table. These safeguards are a local baseline, not billing or a public free-tier policy.
+
+## Account email and recovery
+
+`GET /auth/options` returns the public `AuthOptions` shape `{emailActionsEnabled,requireVerifiedEmail}`. These booleans describe server configuration and access policy; they do not claim that an email was sent or delivered. Register/login/me identities include `emailVerified`. New and pre-migration accounts remain unverified until a real challenge is consumed; migration does not backfill mailbox ownership.
+
+| Route | Authentication and exact input | Response |
+| --- | --- | --- |
+| `POST /auth/password-reset/request` | Public; `{email}` | `202 {accepted:true}` when account email is configured |
+| `POST /auth/password-reset/complete` | Public; `{token,password}` with password 10–256 characters | `200 {ok:true}`; clears the current session cookie |
+| `POST /auth/email-verification/request` | Current account session; `{}` | `202 {accepted:true}` when account email is configured |
+| `POST /auth/email-verification/complete` | The same owner account's session; `{token}` | `200 {user}` with current verification state |
+
+Unknown account-action fields are rejected; clients cannot select an owner, redirect, sender or provider. Reset requests for an unknown email or an exhausted target allowance return the same accepted response as an eligible account. Neither request response issues a token, URL, account identifier or session. `202` means the request was accepted: a challenge may not have been queued, the worker has not necessarily sent it, and the recipient has not necessarily received it. Delivery processing happens outside the request. Missing/disabled mail returns the same safe `503 ACCOUNT_EMAIL_UNAVAILABLE` for valid known and unknown emails; database failure returns `503 ACCOUNT_ACTION_UNAVAILABLE` without raw diagnostics.
+
+Account email is separately opt-in with `PLATFORM_ALLOW_ACCOUNT_EMAIL=1`. It requires server-only `RESEND_API_KEY`, `PLATFORM_ACCOUNT_EMAIL_FROM`, `PLATFORM_ACCOUNT_WEB_ORIGIN` and `PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY`. The encryption key is a dedicated 32-byte secret encoded as 64 hex characters, shared by API and worker. The web origin must be an exact member of `PLATFORM_ALLOWED_ORIGINS`, without paths, credentials or query strings; non-loopback origins require HTTPS. These values never belong in `VITE_*`, source, browser responses or logs. The example leaves mail disabled and secrets empty. This switch is independent of the commercial-model switch.
+
+Development defaults to `requireVerifiedEmail:false`. Explicit `PLATFORM_REQUIRE_VERIFIED_EMAIL=1` requires complete account-email configuration. `NODE_ENV=production` always requires verified accounts and configured email; a production `PLATFORM_REQUIRE_VERIFIED_EMAIL=0` is rejected. An unverified production session can read its own identity, request/complete verification and log out, while ordinary workspace reads and mutations return `403 EMAIL_VERIFICATION_REQUIRED` before provider or task execution.
+
+Migration `012_account_actions.sql` adds mailbox-verification time, account/session `auth_version`, challenges and an independent encrypted mail outbox. A challenge uses 32 random bytes encoded as a 43-character base64url token; its authoritative row stores only SHA-256, owner, purpose, account version, timestamps and consumption state. Links expire after 15 minutes. Repeated requests retain prior valid links until expiry or successful consumption. Consumers lock the user first and conditionally lock the matching challenge, then complete the change in one transaction; independent API instances cannot consume the same challenge twice. Email verification also requires the current server-authenticated user ID to match the challenge owner, so a mailbox link alone cannot promote someone else's pre-registered session.
+
+Password reset changes the password, increments `auth_version`, deletes all that user's sessions, and revokes their outstanding challenges and unsent encrypted messages atomically. Login binds a session to the version used during password verification, and subsequent authentication requires the account/session versions to match. An old-password login cannot acquire a valid session after a concurrent reset. Reset completion does not automatically log in or verify an email; the user signs in again. Verification consumes/revokes that owner's remaining verification challenges and messages without changing the password or auth version.
+
+Mail links use the configured application origin and `/#account-action=<purpose>&token=<secret>`. The frontend keeps the received secret in memory after clearing the fragment and submits it only after explicit confirmation; GET/page loading does not consume a challenge or change a password. An expired, used, malformed, wrong-purpose or wrong-owner validly shaped challenge returns the same `400 ACCOUNT_ACTION_INVALID`; invalid new passwords return `400 INVALID_REQUEST`.
+
+The outbox encrypts the fixed `from/to/subject/text` payload with AES-256-GCM; plaintext mail and tokens are not stored in the outbox or logged. The existing worker runs a separate account-email loop. PostgreSQL `SKIP LOCKED` and 30-second leases coordinate workers. Dispatch uses only `POST https://api.resend.com/emails`, server Bearer authorization, redirect rejection and the outbox UUID as `Idempotency-Key`. Each retry preserves the same key and payload and is allowed only during the challenge's 15-minute lifetime. Resend documents a 24-hour idempotency window; the platform does not extend its own deadline to match it. [Send Email](https://resend.com/docs/api-reference/emails/send-email), [Idempotency Keys](https://resend.com/docs/dashboard/emails/idempotency-keys).
+
+Provider acceptance marks `sent`; it is not proof of recipient delivery. Sent, expired, revoked and invalid encrypted payloads erase their ciphertext. Retries store only a fixed error code, and no configured email worker makes no database or network calls. Real sender-domain/account configuration, email delivery and production capacity still require validation.
 
 ## Reusing private artwork
 
@@ -141,11 +168,11 @@ HTTP delivery authenticates before touching storage and checks upload, artifact 
 
 For the optional real-store regression, start `pnpm infra:objects`, then run `PLATFORM_TEST_OBJECT_STORAGE=1 pnpm --filter @companion/platform-api exec tsx --test test/object-storage.integration.test.ts`. It creates and cleans only its own random bucket and PostgreSQL schema, uses fictional credentials and refuses non-loopback endpoints. The default test run skips this opt-in store fixture. Real cloud access, production bucket policies, durability, upload streaming and concurrency sizing remain separate work.
 
-API replicas share PostgreSQL sessions, request counters and outbox rows; worker replicas share the same Redis queue and database leases. A production deployment must explicitly configure database/Redis URLs, allowed origins and HTTPS cookies, use object storage, and route same-origin API traffic through its TLS ingress. It also needs email verification/reset, account recovery, usage billing/quotas, backups, retention and operational monitoring before public launch. Request-counter load and the actual ingress identity boundary need independent production validation.
+API replicas share PostgreSQL sessions, request counters and outbox rows; worker replicas share the same Redis queue and database leases. A production deployment must explicitly configure database/Redis URLs, allowed origins and HTTPS cookies, use object storage, and route same-origin API traffic through its TLS ingress. Account verification/reset and shared limits now have tested implementations; real email delivery, usage billing/quotas, backups, retention and operational monitoring remain launch work. Request-counter load and the actual ingress identity boundary need independent production validation.
 
 ### Shared request limits
 
-Migration `011_request_limits.sql` creates atomic PostgreSQL fixed windows. Protected routes authenticate the session before counting the verified user ID. Session rotation and API restarts do not reset an account's allowance, and accounts behind the same network do not share protected-route counters.
+Migration `011_request_limits.sql` creates atomic PostgreSQL fixed windows; `013_account_action_limits.sql` adds anonymous recovery scopes. Protected routes authenticate the session, enforce verified email when required, then count the authenticated user ID. Session rotation and API restarts do not reset an account's allowance, and accounts behind the same network do not share protected-route counters.
 
 | Scope | Default allowance | Routes |
 | --- | --- | --- |
@@ -154,8 +181,13 @@ Migration `011_request_limits.sql` creates atomic PostgreSQL fixed windows. Prot
 | Speech | 20/minute | Text to speech |
 | Transcription | 20/minute | Speech to text |
 | Realtime | 4/hour | Voice-session creation |
-| Control | 120/minute | Job cancellation, voice-session release, logout |
-| Anonymous | Public 120/minute; login 20/minute; registration 10/minute | Public capabilities and authentication |
+| Control | 120/minute | Job cancellation, voice-session release, logout and authenticated email-verification actions |
+| Anonymous | Public 120/minute; login 20/minute; registration 10/minute | Public capabilities, auth options and authentication |
+| Anonymous email request | 10/hour | Password-reset request, keyed to the actual socket peer |
+| Anonymous email consume | 20/minute | Password-reset completion, keyed to the actual socket peer |
+| Email target/purpose | 3/hour | Reset or verification requests, with separate PostgreSQL windows per normalized-email digest and purpose |
+
+The target allowance is shared across API instances and silently suppresses new mail after exhaustion; account-action requests still return the uniform `202`. It does not reset existing links or reveal whether an account exists. Anonymous HTTP limits return ordinary `429` and `Retry-After`. Authenticated verification retains the separate control limit as well as the email-target allowance.
 
 Scopes are exclusive: generation does not also consume the ordinary API window. Controls have a separate bounded window, so exhausted ordinary/generation allowance does not block cancellation or release. Existing ownership checks, realtime usage checks and concurrent leases still apply. Invalid or expired sessions return 401 before protected quota writes. A denied request returns 429 with a positive `Retry-After`, exposed through CORS; unavailable counters return a sanitized 503 before providers or handlers run.
 
@@ -171,6 +203,8 @@ pnpm --filter @companion/platform-api test
 ```
 
 Tests use unique temporary PostgreSQL schemas, private temporary files and a unique real Redis queue. They verify authentication, CSRF rejection, two-user isolation, message streaming and ordering, attachment ownership, approval gating, concurrent claims, failure persistence, generation-aware retry, cancellation, interrupted-task review, provider task recovery, active-job limits and actual BullMQ outbox dispatch. Voice-history integration tests also verify explicit unverified provenance, separation from ordinary messages, server-issued session ownership, post-release saves, idempotent concurrent retries, rejected credential/event fields, audio ownership and cumulative limits. The temporary schemas and blobs are removed afterward.
+
+Account fixtures exercise two actual HTTP API instances, a disabled-mail instance, independent PostgreSQL schemas and a loopback-only Resend protocol fixture. They cover uniform request responses, atomic target limits, encrypted dispatch, stable retries after uncertain acceptance, timeouts, worker leases, expiry, invalid ciphertext, owner-bound verification, concurrent reset consumption, session revocation, access gates and transaction rollback. The 2026-10-06 remote source verification matched 16 files by SHA-256: 47 targeted tests passed, API/core/web type checks passed, and the full API run passed 209 tests with four opt-in environment tests skipped. The first run exposed a permitted synchronous Fastify hook that did not complete; the async fix passed real HTTP verification. The regression checks migrated independent test schemas and sent no real mail or paid model requests. Subsequently, the development main database was backed up and migrations 012/013 were applied; only the owner’s API and worker were reloaded. Health and auth options passed with account mail disabled. The browser verified the disabled controls, URL-fragment removal and private workspace isolation at a mobile viewport; no credentials were entered or reset submitted. See [verification records](../../docs/platform/verification.md) for subsequent runtime evidence.
 
 Model-relay fixtures inject Responses transports and fictional credentials. They cover worker authorization, approved model/policy binding, atomic job and daily reservations, duplicate rejection, hosted-tool/state rejection, metadata stripping, sanitized provider failures, incomplete output, usage/size limits, cancellation and uncertainty propagation into job state. The core stdio fixtures additionally cover framing, concurrency, bounded output and cancellation settlement.
 

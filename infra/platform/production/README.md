@@ -24,6 +24,10 @@
 
 生产必须明确提供 `PLATFORM_DATABASE_URL`、`PLATFORM_REDIS_URL`、精确HTTPS的 `PLATFORM_ALLOWED_ORIGINS`、私人存储bucket／region／server-only credentials。自定义S3 endpoint必须是精确HTTPS origin；AWS原生S3可省略endpoint。私有bucket的权限仍需在真实账号验证，配置存在不证明可连接。
 
+生产也要求启用账户邮件：`PLATFORM_ALLOW_ACCOUNT_EMAIL=1`、`RESEND_API_KEY`、已验证发信域下的 `PLATFORM_ACCOUNT_EMAIL_FROM`、与允许 origin 一致的 `PLATFORM_ACCOUNT_WEB_ORIGIN`，以及专用32字节AES-GCM密钥的64位十六进制 `PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY`。API与worker须共享相同配置和密钥。生产不能关闭邮箱验证；未验证账号只能读取自己账号、申请/完成验证及退出，不能访问工作台数据或调用模型。迁移不会把旧账号自动标成已验证。开发默认不发邮件、不强制邮箱验证。
+
+账户邮件由独立的数据库outbox发送，不进入模型任务队列。原始邮件正文与短期链接仅存于加密payload，成功提交供应商或过期/撤销后删除密文；供应商已接受不等于已送达。15分钟内的重试固定payload和幂等标识；创建邮件、确认发信域、实际投递与垃圾邮件表现仍须在真实供应商账户验证。配置错误会拒绝启动，不回退到日志输出或向网页返回找回秘密。详见 [账户流程](../../../services/platform-api/README.md)。
+
 `PLATFORM_HOST` 默认loopback；托管入口显式设 `0.0.0.0`。接受宿主提供的 `PORT`，如果同时设置 `PLATFORM_PORT` 必须相同。只有需要同源React时设置 `PLATFORM_WEB_STATIC_DIR=/app/apps/web/dist`；独立API可以省略。静态服务只读构建产物，API／缺失asset不回落HTML。健康端点只核数据库并报告队列是否配置，不能用它代替worker存活／队列滞后告警。
 
 商业模型、浏览器动作及CLI在例子中均关闭。正式启用模型需分别设置已支持的provider key／model和开关；语音、浏览器及CLI需要其目标环境验收和独立执行边界。普通容器不因为使用Dockerfile就能运行嵌套Docker任务。

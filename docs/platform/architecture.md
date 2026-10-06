@@ -10,7 +10,7 @@
 | packages/platform-contracts | 账号、消息、任务、供应商、产物和 runtime 共享接口 |
 | packages/ai-core | 供应商协议、流式工具循环、媒体任务、浏览器和 CLI 执行器 |
 | packages/career-core | 七个版本化求职 skill、资料准备条件、来源 ports 和成长证据规则；尚未挂入求职 API/runtime |
-| services/platform-api | 身份、所有者校验、私有文件、消息保存、审批、用量和任务 worker |
+| services/platform-api | 身份、邮箱验证与密码找回、所有者校验、私有文件、消息保存、审批、用量、任务与邮件 worker |
 | services/local-speech | 独立 Python／Kokoro CPU 语音服务；显式准备固定资产，运行时不下载模型 |
 | services/local-transcription | 独立 Python／Faster Whisper CPU 转写；固定 tiny 与本地 VAD，20 MiB／120秒限制 |
 | infra/platform | 独立本地 PostgreSQL、Redis，及可选 SeaweedFS 开发对象存储 |
@@ -40,7 +40,7 @@ PostgreSQL 是任务状态的依据，Redis 负责分发任务。创建任务和
 | 文字、陪伴、工具 Agent | OpenAI Responses；OpenRouter、Ollama、Ark 兼容接口 | Ollama／Qwen 本地真实文字与工具调用已通过；商业接口仍为协议 fixture，商业账户实调用待验证。工具受 API 身份和任务权限控制 |
 | 图片与参考图编辑 | OpenAI Images；fal；ComfyUI | 本地协议测试；模型权限和实际成果待验证 |
 | 视频 | Ark Seedance；fal；ComfyUI | 持久化任务 ID、轮询、成果转存和恢复。Ark、fal 可在请求中直接交付私有参考图片；实际模型权限、图片规格及生成质量待账号实测 |
-| 语音 | 本地 Kokoro 英文 TTS、Faster Whisper ASR；OpenAI 转写、TTS、Realtime WebRTC | 逐回合网页交流已连接转写、审阅、正常会话回答与私人朗读；各阶段分别选服务、取消和明确保存。商业语音、实时通话与真实麦克风仍待实测 |
+| 语音 | 本地 Kokoro 英文 TTS、Faster Whisper ASR；OpenAI 转写、TTS、Realtime WebRTC；ElevenLabs TTS | 逐回合交流已连接转写、审阅、会话回答与私人朗读。ElevenLabs 已贯通直接朗读、任务及持久工作流，固定服务端模型／声线、MP3与取消；不上传录音或训练声线，也不提供其 ASR／Realtime。商业账户、本人训练、真人听感、实时通话与真实麦克风仍待实测 |
 | 浏览器 | 独立 Playwright context；明确操作计划与逐步回执 | 读取公共 HTTPS 页面；可选的点击、文本填写、下拉选择与滚动需单独启用和批准。没有登录、验证码、敏感字段或最终提交；验证范围见记录 |
 | CLI harness | 固定版本官方 Codex 镜像；worker 的 Responses relay | 实际 Docker 与官方 Codex 在断网容器内写出虚构代码文件。模型响应由测试 fixture 提供；商业模型质量与费用待验证。默认保留内部 sandbox，显式外层隔离模式另见执行器说明 |
 | 工作流 | 最多 8 个明确的文字、图片、视频或语音步骤 | 私有模板、固定执行计划、逐步成果保存及图片引用。已完成步骤不重做；已保存的异步任务继续查询；没有确认结果的步骤等待审阅 |
@@ -50,7 +50,9 @@ PostgreSQL 是任务状态的依据，Redis 负责分发任务。创建任务和
 
 本次预览显式使用 `http://127.0.0.1:11434/v1` 的已安装 `qwen2.5:7b`，商业开关仍为0。实际 `/api/status` 确认该 Ollama 实例 `cloud.disabled=true`；这属于本机状态，不能推广到任意 Ollama 实例。平台环境里的开关不会改变另一个已运行 Ollama 服务的云设置。Ollama 接入阶段没有下载或修改其权重；本地接入成功也不证明内容质量或上线吞吐能力。
 
-Kokoro 的准备命令单独下载锁定版本的权重、英文音色与 G2P 资产，校验 SHA256 后写入忽略的本地目录。HTTP supervisor 与模型子进程分开：单请求、无等待队列；客户端断连或超时会收回并等待该子进程退出，再重新加载。清理无法确认时停止接收生成并要求重启。子进程不继承供应商密钥，导入模型库前关闭常见 Python socket 连接与 DNS；这属于 Python 运行时边界，不是 OS 网络沙箱。平台 API 保留身份、租约及私有 WAV 保存，网页不直接访问语音服务；文字用量账本不统计 TTS 费用。当前仅开放 `kokoro-82m`／`af_heart` 美式英语朗读；Linux CPU 依赖已锁定，Linux 部署和多用户吞吐未验证。详见 [本地语音服务](../../services/local-speech/README.md)。
+Kokoro 的准备命令单独下载锁定版本的权重、英文音色与 G2P 资产，校验 SHA256 后写入忽略的本地目录。HTTP supervisor 与模型子进程分开：单请求、无等待队列；客户端断连或超时会收回并等待该子进程退出，再重新加载。清理无法确认时停止接收生成并要求重启。子进程不继承供应商密钥，导入模型库前关闭常见 Python socket 连接与 DNS；这属于 Python 运行时边界，不是 OS 网络沙箱。平台 API 保留身份、租约及私有 WAV 保存，网页不直接访问语音服务；文字用量账本不统计 TTS 费用。当前仅开放 `kokoro-82m`／`af_heart` 美式英语朗读；Linux CPU 依赖已锁定，远端开发实例的真实 Kokoro→Whisper 往返已验证，多用户吞吐和一般音质仍未验收。详见 [本地语音服务](../../services/local-speech/README.md) 和 [运行验证](verification.md)。
+
+ElevenLabs adapter 只开放服务器明确绑定的 `eleven_v4`、`eleven_v3`、`eleven_multilingual_v2` 或 `eleven_flash_v2_5` 的单声线 HTTP TTS。音频为受大小和签名检查的 MP3；任务、工作流使用同一实现和取消边界，不在失败后换模型、声线、供应商或保留策略。当前声线是服务端审阅的产品共享配置，没有个人声线注册授权、录音上传或训练功能；账号可用性、本人训练是否完成和真人听感不能由配置状态推断。提供历史保留默认关闭，此模式的供应商账号条件仍须实测；详见 [adapter 边界](../../packages/ai-core/README.md#elevenlabs-and-a-configured-custom-voice)。
 
 创作页可以将已保存的私有图片带入下一轮图片修改或图片生成视频草稿，也可以选择工作流中已保存的图片成果。参考图显示预览、来源和顺序；最多四张 PNG、JPEG 或 WebP，总计20 MiB。服务端公开每种能力的参考输入支持，网页不会把 ComfyUI 等未提供该绑定的服务当成可编辑图片服务。选择作品只准备草稿，不创建任务或调用模型；完整审阅固定描述、服务、模型、参数及图片，用户确认后才创建新的创作任务，原作品保留。
 
@@ -96,6 +98,20 @@ OpenAI 官方公告 Sora 2 和 Videos API 于 2026 年 9 月 24 日关闭，因�
 
 ## 从本地走向多用户服务
 
+账号接口已实现邮箱验证和密码找回。公开的 `GET /api/platform/auth/options` 返回 `AuthOptions` 的 `emailActionsEnabled` 与 `requireVerifiedEmail`，身份响应提供真实 `emailVerified`。`POST /auth/password-reset/request` 接受 `{email}`，`/auth/password-reset/complete` 接受 `{token,password}`；验证申请 `/auth/email-verification/request` 接受 `{}`，完成 `/auth/email-verification/complete` 接受 `{token}`，两者均要求当前账号会话。上述 POST 路径均以 `/api/platform` 为前缀，并校验固定应用 Origin；请求不能选择他人 owner、邮件服务或跳转地址。完整返回与错误语义见 [API 说明](../../services/platform-api/README.md#account-email-and-recovery)。
+
+开发默认关闭邮件，也不强制邮箱验证；显式开启 `PLATFORM_ALLOW_ACCOUNT_EMAIL=1` 才读取服务端 Resend key、发件人、允许列表中的精确网页 origin 和独立32字节加密密钥。非 loopback 网页 origin 必须 HTTPS。模型调用开关与邮件开关独立。生产配置强制邮箱已验证、拒绝关闭此要求，并要求邮件配置完整；新账号和旧账号不会被迁移自动标为已验证。未验证会话可以查看自己的身份、请求／完成验证和退出；其他产品访问在模型或任务执行前被拒绝。
+
+申请采用统一 `202 {accepted:true}`，未知邮箱和目标额度耗尽也使用同一返回；这既不证明已入队，也不证明已发送或送达。默认关闭或配置缺失如实返回 `503 ACCOUNT_EMAIL_UNAVAILABLE`，不会签发假 token。服务器生成32字节随机秘密，以43字符 base64url 进入15分钟有效的邮件链接；数据库挑战只存 SHA-256、真实 owner、用途、账号版本、期限与消费状态。完整固定邮件 payload 单独经过 AES-256-GCM 加密进入 PostgreSQL outbox，申请接口不等待第三方。前端清除 URL fragment，只在内存保留邮件秘密，用户明确点击才 POST 消费；GET 与邮件扫描器不能直接完成账号变更。
+
+所有实例共享按规范化邮箱摘要和用途的3次／小时目标预算；重复申请不立即作废之前尚有效的链接。公开找回申请另有真实 socket IP 的10次／小时限制，公开完成为20次／分钟；已登录验证使用独立 control 限额。消费先锁用户、再检查对应未消费挑战，按当前 `auth_version` 在同一事务里完成变更；不同实例不能重复消费。验证还要求真实当前会话的用户 ID 与邮件挑战 owner 相同，避免单凭他人的邮箱链接提升预注册账号。找回成功更新密码、递增 `auth_version`、撤销全部旧会话及其他挑战／未发邮件；登录会话绑定密码校验时的版本，所以并发旧密码登录不能在重设后得到有效会话。完成找回不自动登录，也不自动声明邮箱已验证。
+
+邮件 worker 使用 `SKIP LOCKED` 与租约，固定调用 `https://api.resend.com/emails`，不接受客户端 endpoint。重试保持同一 UUID `Idempotency-Key` 和同一邮件 payload，最长只有本平台的15分钟链接期限；供应商的24小时幂等保留不延长它。成功受理、过期、撤销或无效密文都会删除 outbox 密文，只保留有限元数据与固定失败码，不记录正文、令牌或上游原始错误。供应商受理仍不是收件人送达证明；真实发件域、账户投递及生产负载尚未验证。[Resend 发送接口](https://resend.com/docs/api-reference/emails/send-email)、[幂等说明](https://resend.com/docs/dashboard/emails/idempotency-keys)。
+
+2026-10-06 的这轮远端源码验证逐一匹配16个文件 SHA-256，定向47项全部通过，API／core／web类型检查通过，API完整回归209项通过、4项额外环境测试跳过。测试使用独立 PostgreSQL schema 和本地 HTTP 邮件 fixture，没有真实邮件或付费模型调用；随后已备份开发主库并应用012／013，只重载本人API与worker；health 200、邮件仍关闭。网页已检查默认关闭、同页链接清除与私人工作台隔离，手机尺寸无横向溢出；没有输入新凭据或提交密码更新。具体范围以 [验证记录](verification.md) 为准。
+
+共享请求限流已实现 PostgreSQL 原子固定窗口，按真实认证账号计数，切换 session 或 API 重启不会清空；同网络不同账号互相独立。生成、普通 API 和取消／释放等 control 窗口分别计算，计数故障在执行前安全失败。匿名计数只接受真实 socket peer 摘要，不信任客户端转发头；生产 ingress 身份和边缘防滥用需另外设计，不能把代理自身 IP 当成所有用户的身份。当前窗口不是费用预算，数据库请求压力与生产连接预算仍待负载验收。
+
 文字会话采用 `platform_chat_calls` 按每次供应商请求记录用量，Agent 的工具循环分轮计数。受信任的 runtime 在发送请求前等待开始记录保存，结束时记录完成／失败／取消／中断与供应商统计；同一个 call ID 的相同终态写入可重复，冲突终态拒绝。只接受非负整数 token，不把缺失字段补成零，不以字符数估计实际账单。没有上报、无效上报和运行中分别保留；过期会话调用恢复为中断。记录不包含正文、reasoning、工具参数、原始供应商响应或密钥。
 
 `GET /api/platform/usage` 仅返回已登录用户当前 UTC 月份的文字调用汇总和供应商／所选模型明细，不允许请求参数选择他人账户。会话删除后保留该用户的调用标识与统计，删除会话／消息外键关联；删除用户会级联删除账本。旧 `platform_usage` 记录没有完整调用标识，不回填成新调用或并入 token 合计。设置页显示统计覆盖情况；这不是美元账单或付费配额，工作流、语音、图片／视频与 CLI 仍分别有自己的执行记录，不在本汇总中。
@@ -104,7 +120,7 @@ OpenAI 官方公告 Sora 2 和 Videos API 于 2026 年 9 月 24 日关闭，因�
 
 私有上传和产物下载先校验登录与所有者，再读取存储元数据。GET 支持完整流与单段闭区间、开放区间、后缀 Range；HEAD 只查元数据。服务端使用背压流与固定长度检查，客户端中断会取消读取。If-Range 仅接受当前强 ETag 的精确匹配；本地读取固定文件描述符，S3 用 IfMatch 固定对象版本。无效、多段或未知单位的 Range 忽略并返回完整200，合法超界范围返回416。没有公开桶或浏览器供应商存储密钥；原有 private no-store 等响应边界保留。[HTTP 范围语义](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.2)、[S3 读取接口](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)
 
-公开上线前还有明确缺口：邮箱验证和密码找回、商业用量计费与全平台额度、共享限流、防滥用、对象存储生命周期、已有本地文件向对象存储的迁移、备份恢复、监控、数据库连接预算、部署 ingress、HTTPS 和网络出口策略。当前实例只监听本机，也没有模拟上述功能已完成。模型输入读取、文件上传和供应商产物接收仍受现有字节上限约束；下载流式化不等于这些路径已经全部流式化，也没有证明生产并发容量。
+公开上线前还有明确缺口：真实邮件配置与投递、商业用量计费与全平台额度、生产限流负载及边缘防滥用、对象存储生命周期、生产数据／文件迁移、备份恢复、监控、数据库连接预算、部署 ingress、HTTPS 和网络出口策略。邮箱验证／找回和共享限流的代码与虚构资料集成验证已经完成，不能据此推断这些生产运维项或账号服务已验收。当前开发实例只监听本机。模型输入读取、文件上传和供应商产物接收仍受现有字节上限约束；下载流式化不等于这些路径已经全部流式化，也没有证明生产并发容量。
 
 手机网页已使用响应式布局和 PWA 静态缓存。真机安装、HTTPS 麦克风、WebRTC 稳定性与移动浏览器兼容性仍需设备测试。手机审批属于平台任务授权，不会替代原插件要求的可信点击。
 
