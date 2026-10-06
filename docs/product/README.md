@@ -44,6 +44,7 @@
 | `10-channels-discord-and-mobile.md` | Web 与 PWA、Discord 私信与社区、其他手机渠道、App 路线 | 渠道行为 |
 | `11-apply-automation-consent.md` | 插件逐项授权：授权清单、对话授权、底线、回执、代码改动点 | 插件与代签 |
 | `12-voice.md` | 主理人与面试官的声线方案、开源与商用对比、盲测方法 | 声线 |
+| `13-launch-and-operations.md` | 真实上线的部署与运维：托管与拓扑、三套环境与发布、数据与隐私、安全、监控与危机兜底、上线清单、值班、成本、时间线 | 部署、发布与运维（工程细节以 `docs/platform/` 为准） |
 
 旧文档 `docs/product-brief.md` 与 `docs/career/*.md` 的目标用户和首例偏商科，已由本目录取代；其中「不做签证判断、交给 DSO」的边界保留在 01 与 02。
 
