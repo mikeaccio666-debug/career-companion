@@ -1,0 +1,127 @@
+# Reviewable example only. Applying creates paid services and a public API.
+# Region/resource sizes are example inputs, not a selected production budget.
+previews:
+  generation: off
+envVarGroups:
+  - name: career-platform-runtime
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PLATFORM_ALLOW_PROVIDER_CALLS
+        value: "0"
+      - key: PLATFORM_ENABLE_BROWSER
+        value: "0"
+      - key: PLATFORM_ENABLE_BROWSER_ACTIONS
+        value: "0"
+      - key: PLATFORM_ENABLE_CLI
+        value: "0"
+      - key: PLATFORM_QUEUE_NAME
+        value: career-platform-production-jobs
+services:
+  - type: web
+    name: career-platform-api
+    runtime: docker
+    plan: 0.5c-512mb
+    region: oregon
+    dockerfilePath: infra/platform/production/Dockerfile
+    dockerContext: .
+    dockerCommand: /app/infra/platform/production/entrypoint.sh web
+    preDeployCommand: /app/infra/platform/production/entrypoint.sh migrate
+    autoDeployTrigger: off
+    maxShutdownDelaySeconds: 120
+    healthCheckPath: /api/platform/health
+    envVars:
+      - fromGroup: career-platform-runtime
+      - key: PLATFORM_HOST
+        value: 0.0.0.0
+      - key: PLATFORM_WEB_STATIC_DIR
+        value: /app/apps/web/dist
+      - key: PLATFORM_DATABASE_URL
+        fromDatabase:
+          name: career-platform-db
+          property: connectionString
+      - key: PLATFORM_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: career-platform-queue
+          property: connectionString
+      - key: PLATFORM_ALLOWED_ORIGINS
+        sync: false
+      - key: PLATFORM_S3_ENDPOINT
+        sync: false
+      - key: PLATFORM_S3_BUCKET
+        sync: false
+      - key: PLATFORM_S3_REGION
+        sync: false
+      - key: PLATFORM_S3_ACCESS_KEY_ID
+        sync: false
+      - key: PLATFORM_S3_SECRET_ACCESS_KEY
+        sync: false
+  # Start this role only after the one migration succeeds; cross-service publication is not atomic.
+  - type: worker
+    name: career-platform-worker
+    runtime: docker
+    plan: 0.5c-512mb
+    region: oregon
+    dockerfilePath: infra/platform/production/Dockerfile
+    dockerContext: .
+    dockerCommand: /app/infra/platform/production/entrypoint.sh worker
+    autoDeployTrigger: off
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - fromGroup: career-platform-runtime
+      - key: PLATFORM_DATABASE_URL
+        fromDatabase:
+          name: career-platform-db
+          property: connectionString
+      - key: PLATFORM_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: career-platform-queue
+          property: connectionString
+      - key: PLATFORM_ALLOWED_ORIGINS
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_ALLOWED_ORIGINS
+      - key: PLATFORM_S3_ENDPOINT
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_S3_ENDPOINT
+      - key: PLATFORM_S3_BUCKET
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_S3_BUCKET
+      - key: PLATFORM_S3_REGION
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_S3_REGION
+      - key: PLATFORM_S3_ACCESS_KEY_ID
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_S3_ACCESS_KEY_ID
+      - key: PLATFORM_S3_SECRET_ACCESS_KEY
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_S3_SECRET_ACCESS_KEY
+  - type: keyvalue
+    name: career-platform-queue
+    plan: 256mb
+    region: oregon
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
+    ipAllowList: []
+databases:
+  - name: career-platform-db
+    plan: 0.5c-1g
+    region: oregon
+    postgresMajorVersion: "17"
+    diskSizeGB: 10
+    ipAllowList: []
+    highAvailability:
+      enabled: false

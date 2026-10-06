@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "missionId": "00000000-0000-4000-8000-00000000a001",
+  "resume": {
+    "state": "READY",
+    "resumeVersionId": "00000000-0000-4000-8000-00000000a004",
+    "artifactId": "00000000-0000-4000-8000-00000000a005",
+    "contentRevision": "1",
+    "libraryRevision": "2",
+    "fileName": "Avery ChainTest Resume.pdf",
+    "size": 2048
+  },
+  "coverLetter": {
+    "state": "NONE"
+  }
+}

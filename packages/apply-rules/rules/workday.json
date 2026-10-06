@@ -1,0 +1,279 @@
+{
+  "$comment": "Workday 登录后申请 wizard 的规则。2026-09-15 在 nvidia.wd5 一个候选人没开过的岗位上逐页实测，覆盖第 1 步 My Information、第 2 步 My Experience、第 3 步 Application Questions、第 4 步 Voluntary Disclosures；第 5 步 Review 只有提交按钮，故意不锚。规则接管五个已有档案键的低风险文本字段，外加厂商声明的下拉/prompt 形状与题干作用域；账号创建、密码、验证码、增删经历行、最终 Submit 均不在本规则授权面内。EEO 与 acceptTermsAndAgreements 这类未列明/混合授权勾选由 kernel 自己按类别拒绝，不是本文件放行的。生产 vendor 仍只能来自后端 exact (atsProvider, pathRuleId) mapping；本文件存在不等于 production activation。",
+  "schemaVersion": 2,
+  "vendor": "workday",
+  "$comment.finalSubmitControl": "2026-10-04 没有声明：最终的「Submit」在登录之后的 Review 那一步，只读拿不到那一页的 DOM（要建账号、填完前几步，负责人决定不在真实网站上这么做）。即便拿到了也声明不了：Workday 的页面上没有 <form>（2026-09-22 nvidia.wd5 实测，底栏按钮没写 type），Review 页上也没有可填的栏，现行内核只认「扫描出的字段所在的那张表里的原生提交」。要开这一家需要三样：① 负责人本人投递时在 Review 页存一份 DOM（只留结构）；② 内核加一种「无字段的检查页 + 规则声明的那一颗」的认法；③ 改「只按原生提交」那条规则（AGENTS.md RULE-EXT-NEVER-SUBMIT 第 3 条），由负责人定。",
+  "finalSubmitControl": null,
+  "$comment.accountSteps": "2026-09-28 在 nvidia.wd5（…/job/US-Remote/Software-Engineer--OpenShell_JR2020825/apply/applyManually）只读实测：未登录、没有输入、没有提交，只点了「Sign in with email」「Create Account」两个视图切换。负责人 2026-09-28 决定像 Jobright 那样替用户过账号墙；规则只说这一步长什么样，能不能动手由运行时包的 account-access 位与用户同意过的那一版文案说了算。实测记下的：① 账号墙容器是 applyFlowPage 里的 signInContent（页头另有一颗 utilityButtonSignIn，不在申请流程里，不认）；Workday 会记住上一次的视图，同一个岗位下一次可能直接是登录或注册那一步，所以三步各认各的标志。② 第一步是「选怎么登录」：Google、LinkedIn 两颗是 type=button，我们只按「Sign in with email」（没写 type、页面上此刻没有 form）。③ 登录与注册两步的提交按钮（signInSubmitButton / createAccountSubmitButton）是 type=submit、aria-hidden、tabindex=-2，上面罩着一层同样大小的 div[role=button][data-automation-id=click_filter]（aria-label 分别是「Submit」「Create Account」），人点到的是那一层、它的 onClick 走网站自己的表单提交（form 上挂着 React 的 onSubmit）——所以提交声明的是那一层，按的方式是原生激活。④ 两个输入框都没有 name；邮箱 autocomplete=email，登录的密码 current-password、注册的两个 new-password。⑤ 注册条款是一个勾选框 createAccountCheckbox，标签只写「I agree」，条款正文（每人一份候选人档案、按条款与隐私说明存资料）在旁边收着的 richText 里；它属于「接受注册所需的网站条款」，点击策略另判它的字里没有掺营销、短信或实质授权。⑥ 「Create Account」「Sign In」两颗切换钮不在 form 里、没写 type。⑦ 蜜罐 beecatcher（name=website、1×0 像素）在账号墙外面，我们只写声明的那几格，碰不到它。⑧ 按了提交之后网站怎么说话（账号已存在、密码不对、要验证邮箱、被锁）这次无法只读看到——要提交才会出来；banners 与 outcomes 先按通用的警示元素与常见说法写，负责人端到端实测后按真实的 DOM 与原文收窄（热更新，不必发版）。注册页写明的密码要求：特殊字符、至少 8 位、数字、大写、字母、小写；插件生成的密码是 16 位、四类都有。",
+  "accountSteps": {
+    "container": "[data-automation-id=\"applyFlowPage\"] [data-automation-id=\"signInContent\"]",
+    "steps": [
+      {
+        "kind": "choice",
+        "marker": "button[data-automation-id=\"SignInWithEmailButton\"]",
+        "useEmail": "button[data-automation-id=\"SignInWithEmailButton\"]"
+      },
+      {
+        "kind": "createAccount",
+        "marker": "button[data-automation-id=\"createAccountSubmitButton\"]",
+        "email": "input[data-automation-id=\"email\"]",
+        "password": "input[type=\"password\"][data-automation-id=\"password\"]",
+        "verifyPassword": "input[type=\"password\"][data-automation-id=\"verifyPassword\"]",
+        "terms": "input[type=\"checkbox\"][data-automation-id=\"createAccountCheckbox\"]",
+        "submit": "[data-automation-id=\"noCaptchaWrapper\"] [data-automation-id=\"click_filter\"][role=\"button\"]",
+        "toSignIn": "button[data-automation-id=\"signInLink\"]"
+      },
+      {
+        "kind": "signIn",
+        "marker": "button[data-automation-id=\"signInSubmitButton\"]",
+        "email": "input[data-automation-id=\"email\"]",
+        "password": "input[type=\"password\"][data-automation-id=\"password\"]",
+        "submit": "[data-automation-id=\"noCaptchaWrapper\"] [data-automation-id=\"click_filter\"][role=\"button\"]",
+        "toCreateAccount": "button[data-automation-id=\"createAccountLink\"]"
+      }
+    ],
+    "banners": "[data-automation-id=\"applyFlowPage\"] [data-automation-id=\"signInContent\"] [role=\"alert\"], [data-automation-id=\"applyFlowPage\"] [data-automation-id=\"signInContent\"] [aria-live=\"assertive\"], [data-automation-id=\"applyFlowPage\"] [data-automation-id=\"signInContent\"] [data-automation-id*=\"error\" i], [data-automation-id=\"applyFlowPage\"] [data-automation-id=\"signInContent\"] [data-automation-id*=\"alert\" i]",
+    "outcomes": [
+      {
+        "kind": "accountExists",
+        "text": {
+          "source": "already\\s+(?:exists|in\\s+use|registered|been\\s+(?:used|registered|taken))|(?:e-?mail)(?:\\s+address)?\\s+is\\s+already|account\\s+(?:with|for)\\s+(?:this|that)\\s+e-?mail.{0,40}\\bexists",
+          "flags": "i"
+        }
+      },
+      {
+        "kind": "wrongPassword",
+        "text": {
+          "source": "(?:wrong|incorrect|invalid)\\b.{0,40}\\b(?:password|credentials|sign[- ]?in)|(?:e-?mail|user\\s*name)(?:\\s+address)?\\s+(?:and|or)\\s+password\\s+(?:is|are|you\\s+entered|do(?:es)?\\s+not|don['’]t)|password\\s+(?:is\\s+)?(?:incorrect|invalid|wrong)",
+          "flags": "i"
+        }
+      },
+      {
+        "kind": "verifyEmail",
+        "text": {
+          "source": "verif(?:y|ication)\\b.{0,60}\\b(?:e-?mail|account|link|inbox)|(?:check|confirm|open)\\s+your\\s+(?:e-?mail|inbox)|activat(?:e|ion)\\b.{0,30}\\b(?:account|e-?mail|link)|not\\s+(?:yet\\s+)?(?:been\\s+)?(?:verified|activated|confirmed)",
+          "flags": "i"
+        }
+      },
+      {
+        "kind": "blocked",
+        "text": {
+          "source": "\\blocked\\b|too\\s+many\\s+(?:failed\\s+|unsuccessful\\s+)?(?:sign[- ]?in\\s+|login\\s+)?(?:attempts|tries)|temporarily\\s+(?:blocked|disabled|unavailable)|(?:disabled|deactivated)\\s+due\\s+to|single\\s+sign-on|\\bsso\\b",
+          "flags": "i"
+        }
+      }
+    ]
+  },
+  "$comment.emailVerification": "2026-10-04：Workday 的邮箱验证是点链接，不是验证码（各家雇主公开的候选人账号说明：注册之后收到一封验证邮件，点里面的链接激活账号）。没有可声明的验证码格（codePrompts 为空），只给浮层那张「去邮箱点一下验证链接」的卡一行发件人：Workday 按租户发信，地址形如「公司名@myworkday.com」（雇主公开的说明里写的是 <租户>@myworkday.com）。账号墙上认「要验证邮箱」照旧靠 accountSteps.outcomes 的 verifyEmail。如果哪一家租户改成了验证码，网站上的验证码格会照旧被 one-time-code 的通用判据挡在填写之外、浮层说「去网站上输入验证码」；要接进这张卡，得先有人只读量一次那一页再声明。",
+  "emailVerification": {
+    "mail": {
+      "from": [
+        "…@myworkday.com"
+      ],
+      "subject": null
+    },
+    "codePrompts": []
+  },
+  "applyPath": {
+    "$comment": "只匹配已进入申请 wizard 的 /job/.../apply；岗位详情、登录页与 apply 后追加管理路径均拒绝。pathname 仍须来自 verified canonical Job application URL。",
+    "$comment_flags": "2026-09-15 在 nvidia.wd5.myworkdayjobs.com 只读实测：真实 apply 路径的语言段是 /en-US/（区域码大写），例如 /en-US/NVIDIAExternalCareerSite/job/Israel-Raanana/SONiC-Software-Engineer---Python_JR2017236/apply；没有 i 标志时 [a-z]{2}-[a-z]{2} 匹配不到 en-US，可选组落空后 [^/]+ 吞掉 en-US，整条路径被拒绝。放行 i 只影响大小写，形状不变。",
+    "$comment_manual": "2026-09-15 同一次实测：/apply 只是入口页（Autofill with Resume / Apply Manually / Use My Last Application 三个按钮），真正的 My Information 表单与其后整个 wizard 都住在 /apply/applyManually。旧形状在这一页上 isApplyPath 返回 false —— lab 不看它，production 的 gate 看，所以那一条等于永远不放行。只追加这**一个**确切的段；其余追加路径（管理、状态、撤回）仍然拒绝。",
+    "$comment_entries": "2026-09-23 追加另外两个入口段：负责人在 nvidia.wd5 上点的是「Use My Last Application」，页面就是同一个 wizard 的 My Information（applyFlowMyInfoPage 在），浮层却说「这一页没有认出申请表」——路径只认 applyManually。同日只读核实 NVIDIA 岗位页 Apply 弹层的三个链接：…/apply/autofillWithResume、…/apply/applyManually、…/apply/useMyLastApplication（data-automation-id 与段名逐字相同）。三个入口进去都是同一套 wizard，锚点照旧由 anchors 判：Autofill with Resume 先有一步上传简历，那一步没有锚，扫描如实说还看不到表单。仍然只认这三个确切的段；管理、状态、撤回与任何更深的追加路径照旧拒绝。",
+    "source": "^\\/(?:[a-z]{2}-[a-z]{2}\\/)?[^/]+\\/job\\/(?:[^/]+\\/)+apply(?:\\/(?:applyManually|autofillWithResume|useMyLastApplication))?\\/?$",
+    "flags": "i"
+  },
+  "$comment.anchors": "2026-09-15 实测（nvidia.wd5，一个候选人没开过的岗位，一路推到第 4 步）：这个 wizard 是 5 步，每一步在 applyFlowPage 里各自挂一个自己的页锚，步骤名由 progressBarActiveStep 给出——1 My Information / 2 My Experience / 3 Application Questions / 4 Voluntary Disclosures / 5 Review。解释器按声明顺序取第一个匹配到的容器，同一时刻页面上只存在其中一个，所以顺序等于步骤顺序、互不遮挡。applyFlowQuestionsPage 不是这一次量到的，它来自 2026-08-21 rochester.wd5 的脱敏夹具（tests/fixtures/workday/experience-and-questions.html）：同一个 wizard 在别的租户/流程里把自定义题页叫这个名字，两个都收才不会在别家掉回 NO_ROOT。Review（第 5 步）**故意不锚**：那一页没有可填控件，只有一个真提交按钮，锚了等于把扫描器领到提交面前，收益为零。",
+  "anchors": [
+    "[data-automation-id=\"applyFlowMyInfoPage\"]",
+    "[data-automation-id=\"applyFlowMyExpPage\"]",
+    "[data-automation-id=\"applyFlowPrimaryQuestionsPage\"]",
+    "[data-automation-id=\"applyFlowQuestionsPage\"]",
+    "[data-automation-id=\"applyFlowVoluntaryDisclosuresPage\"]"
+  ],
+  "$comment.listboxComboboxes": "2026-09-15 在 nvidia.wd5.myworkdayjobs.com 的 My Information 只读实测：Country / State / Phone Device Type 三个下拉都不是 <select>，而是一个可见的 button[aria-haspopup=\"listbox\"]（344x40，带 name/id/aria-label）加紧邻的一个 input[type=text]（0x0，无 id 无 name，value 是选中项的不透明 id）。扫描看见的是那个 input，它自己的几何与 CSS 隐藏的陷阱逐条一致；人操作的是按钮。按钮打开后自己带上 aria-expanded=true 与 aria-controls -> body 下的 ul[role=listbox] > li[role=option]，所以选项点击的归属由 withinOwnedPopup 从 DOM 自证，click 策略一个字都不用放宽。activationSelector 声明的就是这个按钮：蜜罐几何量它、指针序列点它、弹层归属认它。",
+  "listboxComboboxes": [
+    {
+      "triggerSelector": "button[aria-haspopup=\"listbox\"] + input[type=\"text\"]",
+      "activationSelector": "button[aria-haspopup=\"listbox\"]",
+      "valueContainerSelector": "[data-automation-id^=\"formField-\"]",
+      "selectedValueSelector": "button[aria-haspopup=\"listbox\"]"
+    }
+  ],
+  "$comment.promptComboboxes": "2026-09-15 在 nvidia.wd5.myworkdayjobs.com 的 My Information 逐项只读实测「How Did You Hear About Us?」(input#source--source)：(1) 它不是 typeahead —— 输入 \"Link\" 后（裸 input 事件、可信按键两种都试过）六行一个不变；(2) 菜单外挂在 <body> 下的 div[data-automation-id=\"activeListContainer\"][role=\"listbox\"]，**没有 id**，输入框自始至终没有 aria-controls/aria-owns，所以 withinOwnedPopup 一个字都证明不了，选项点击在派发任何事件之前就落 OUTSIDE_FORM；(3) 真正吃指针的是 [role=option] 里面那个无角色的 div[data-automation-id=\"promptOption\"] —— 对外层 wrapper 派 mousedown/mouseup/click（带不带 view/detail/buttons、带不带 pointer 事件）一律没反应，对内层那一行派同样三个事件每次都进得去；(4) 第一层是 6 个分类（Associations / Event-Conference / Job Board / Social Media / University / Website），点一个就把列表换成它的叶子，\"Linkedin Jobs\" 在 Job Board 下面；(5) 再点一次触发器会把已经展开的菜单退回第一层，所以走位不需要第二种点击目标（菜单自己的返回箭头在 activeListContainer 外面，声明它就等于再开一类可点目标，不划算）。选中后值出现在 [data-automation-id=\"selectedItem\"] 里、菜单消失。triggerSelector 用 data-uxi-widget-type 而不是 id：source--source 是这一道题的 id，而同一形状的 moniker prompt 在这一页还有 countryPhoneCode 一个，跨租户稳定的是部件类型。",
+  "$comment.promptComboboxes.scope": "2026-09-15 补测，把上面那条的作用面收窄到**实测过是分层的那一个**。原来的 triggerSelector 是裸的 input[data-uxi-widget-type=\"selectinput\"]，于是同形状的 phoneNumber--countryPhoneCode 与 skills--skills 也被宣告成分层 prompt。它们不是：countryPhoneCode 打开后第一层直接就是答案（Afghanistan (+93) / Åland Islands (+358) / Albania (+355) / Algeria (+213) / American Samoa (+1) …），一次渲染 13 行，滚动容器 scrollHeight 7496 对 clientHeight 359（约两百项虚拟滚动），且输入 \"United States\" 后一行都不过滤。分层走位靠「点一行看列表变不变」来下探，而在扁平 prompt 上点一行**就是选中**——2026-09-15 实测：宿主已经把 countryPhoneCode 预填成 \"United States of America (+1)\"，采集走位把它改成 \"Afghanistan (+93)\"，再几趟变成 \"Anguilla (+1)\"，宿主随即以 phoneNumber--phoneNumber「The number length does not match valid numbers for this region」拒收整页——电话号码本身从头到尾没错。分层是厂商知识，没量过就不许声明：只留 formField-source 这一个量过的。落在作用面外的同形状部件退回普通 combobox 通路（只开菜单读 [role=option]，不点行），写不了就如实报，不会替用户改掉一个对的值。",
+  "promptComboboxes": [
+    {
+      "triggerSelector": "[data-automation-id=\"formField-source\"] input[data-uxi-widget-type=\"selectinput\"]",
+      "containerSelector": "[data-automation-id=\"multiSelectContainer\"]",
+      "selectedValueSelector": "[data-automation-id=\"selectedItem\"]",
+      "popupRootSelector": "div[data-automation-id=\"activeListContainer\"][role=\"listbox\"]",
+      "optionSelector": "[data-automation-id=\"promptOption\"]",
+      "maxCategories": 8
+    }
+  ],
+  "$comment.searchPromptComboboxes": "2026-09-24 第 2 步 My Experience 的 Field of Study（教育行内）与「Type to Add Skills」：与 How Did You Hear About Us? 同一套 selectinput 部件，但不是分层菜单——经批准在 adobe.wd5 测试台上用自己的测试词实测：打字（原生 setter + input、再补最后一个字符的按键）一行结果都不出；回车才搜；只有一个结果时 Workday 自己把它选上、输入框清空（「Computer Science」→「Computer and Information Science」）；好几个结果时弹出 body 下的 div[data-automation-id=activeListContainer][role=listbox]（没有 id），行里接指针的是 promptOption（Field of Study 的行带单选圆点，Skills 的行带复选框）；搜「Python」回来 14 行、没有一行就叫 Python；Escape 关不上列表，点别处能关。选中的值是框里的 selectedItem。写法在内核 write/searchPrompt.ts：回车只按给不属于任何 <form> 的规则声明的搜索框，好几行时只按别的下拉同一道候选阶梯（一字不差、只差格式、唯一的词边界前缀）挑，恰好一行才点；好几行都说得通（搜「Python」有几行都以这个词开头）或一行都对不上，就清空搜索框、不选，交还用户。maxValues：Field of Study 一段教育一个；Skills 按档案逐项搜、最多 15 项。⚠️ 这是新的顶层规则字段：这一版之前的插件解析器不认识它、会整份拒收这份发布（所有厂商一起停）。负责人 2026-09-24 定：商店还没上架，不抬最低插件版本；这份发布上线那天，把已装的旧包（测试台、Mike 的测试包、同事的包）都换成含这一版内核的新构建；上架之后再补最低插件版本闸。",
+  "searchPromptComboboxes": [
+    {
+      "triggerSelector": "[data-automation-id=\"formField-fieldOfStudy\"] input[data-uxi-widget-type=\"selectinput\"]",
+      "containerSelector": "[data-automation-id=\"multiSelectContainer\"]",
+      "selectedValueSelector": "[data-automation-id=\"selectedItem\"]",
+      "popupRootSelector": "div[data-automation-id=\"activeListContainer\"][role=\"listbox\"]",
+      "optionSelector": "[data-automation-id=\"promptOption\"]",
+      "maxValues": 1
+    },
+    {
+      "triggerSelector": "[data-automation-id=\"formField-skills\"] input[data-uxi-widget-type=\"selectinput\"]",
+      "containerSelector": "[data-automation-id=\"multiSelectContainer\"]",
+      "selectedValueSelector": "[data-automation-id=\"selectedItem\"]",
+      "popupRootSelector": "div[data-automation-id=\"activeListContainer\"][role=\"listbox\"]",
+      "optionSelector": "[data-automation-id=\"promptOption\"]",
+      "maxValues": 15
+    },
+    {
+      "triggerSelector": "[data-automation-id=\"formField-countryPhoneCode\"] input[data-uxi-widget-type=\"selectinput\"]",
+      "containerSelector": "[data-automation-id=\"multiSelectContainer\"]",
+      "selectedValueSelector": "[data-automation-id=\"selectedItem\"]",
+      "popupRootSelector": "div[data-automation-id=\"activeListContainer\"][role=\"listbox\"]",
+      "optionSelector": "[data-automation-id=\"promptOption\"]",
+      "maxValues": 1
+    }
+  ],
+  "$comment.searchPromptComboboxes.countryPhoneCode": "2026-09-28 第 1 步 My Information 的「Country Phone Code」（必填）：adobe.wd5 测试台只读实测结构（没打字、没开菜单）——同一套 selectinput 部件：input#phoneNumber--countryPhoneCode（aria-required=true、placeholder「Search」、enterkeyhint=search、不在任何 <form> 里，整页没有 <form>），外面是 multiSelectContainer，选中的值是里面 selectedItemList 下的 selectedItem（「United States of America (+1)」，Workday 按 Country 自己带出来的，测试台上每次打开都已带出）。从前没有声明，扫描把这个搜索框当成普通文本框、认不出键：一个「空着的」必填，浮层列成「我们没认出这一题」，连填停在第 1 页。声明之后内核读得到框里选着的那一项：选着就不动它（页面上本来就有，不算需要你；测试台上用插件本身跑过，第 1 页因此翻得过去）；空着才按号码自己写明的区号去搜（内核 engine 的区号搜索式单选：条目记在电话名下、国名取居住国、搜「国名 (+区号)」、网站自己选上的那一项区号不对照实报 VALUE_COERCED，见 write/searchPrompt.ts 的 fillCallingCodePrompt）——回车搜索这个行为是同一套部件在 Field of Study／Skills 上量的，这个部件上没有打字实测：搜不到、搜出来对不上都不点，清空搜索框交还用户。电话号码栏照旧只写国内号段。2026-09-15 的采集走位在这个部件上点过行、把区号改成了 Afghanistan——所以它不进 promptComboboxes（那是分层菜单，点一行就是选中），只进这里。它的键不在 keySteps 里：旧内核（认得这个顶层键、不认得区号搜索式单选）看到的是一个没键的组合框，与从前一样交还用户，不会把号码写进去。",
+  "$comment.questionScopes": "同一次实测：值镜像 input 没有任何 host 声明的标签（label 的 for 指向按钮），标签兜底只能抓到按钮自己的文案，于是「Phone Device Type」这道题在扫描结果里叫「Select One」。Workday 每道题都恰好渲染在一个 data-automation-id=\"formField-*\" 包裹里，题干就是里面那个唯一的、不包住任何控件的 <label>。单选组（formField-candidateIsPreviousWorker）里有三个 label（legend 一个、Yes/No 各一个），不唯一，作用域按解释器的规则不解析——那一组的题干本来就由 legend 给出，行为不变。",
+  "$comment.questionScopes.legend": "2026-09-15 实测第 3 步 Application Questions（applyFlowPrimaryQuestionsPage）：雇主自定义题的 wrapper 是 formField-<随机 hex GUID>，里面**一个 <label> 都没有**——题干住在 <fieldset><legend> 里的 div[data-automation-id=\"richText\"]；控件是 My Information 那套同样的 button[aria-haspopup=listbox] + 0×0 镜像 input，镜像自己无 id 无 name 无 aria-label。于是只有上面那条 label 作用域时，这两道题在扫描结果里都叫空字符串，答案层无从下手。作用域表里一个 container 只许一条（schema 强制），所以第二条换一个**更窄且不同**的 container：同一个 wrapper 还带 data-fkit-id=\"primaryQuestionnaire--<GUID>\"，closest() 取到的正是这一题自己（外层把两题包在一起的那个是 primaryQuestionnaire--null，更远）。解释器按声明顺序试、不命中就往下落：第 3 步的 wrapper 里 <label> 数为 0 → 第一条不解析 → 第二条用 legend 解析出题干。第 1、2、4 步一个都不碰——它们的 wrapper 没有 primaryQuestionnaire 这个 fkit id，永远走第一条。",
+  "questionScopes": [
+    {
+      "container": "[data-automation-id^=\"formField-\"]",
+      "label": "label"
+    },
+    {
+      "container": "[data-fkit-id^=\"primaryQuestionnaire--\"]",
+      "label": "legend"
+    }
+  ],
+  "excludeWithin": [
+    "nav",
+    "footer",
+    "[role=\"navigation\"]"
+  ],
+  "denyLabels": [
+    {
+      "source": "captcha|verification code|one[- ]time password",
+      "flags": "i"
+    }
+  ],
+  "denyNameSubstrings": [
+    "password",
+    "captcha",
+    "recaptcha",
+    "beecatcher"
+  ],
+  "widgetNames": [],
+  "$comment.rowScopes": "2026-09-24 在 adobe.wd5.myworkdayjobs.com（没登录、/apply/applyManually，岗位 R171718）测试台标签页上只读量了第 2 步 My Experience，并经批准点过一次「Add Another」、在一行里写过测试日期：区是 div[role=group][aria-labelledby=\"<区标题>-section\"]，区里每一段是 div[role=group][aria-labelledby=\"<区标题>-<n>-panel\"]，其中装字段的那一层是 div[data-fkit-id=\"workExperience-<序号>--null\"]（教育是 education-<序号>--null），序号是页面生成的（29、30……），加一行就再生成一个。「Add」／「Add Another」是区里最后那颗 button[data-automation-id=\"add-button\"]：没有 type 属性，整页没有 <form>，三个区（经历、教育、证书）各一颗、automation id 相同，所以加行选择器必须带上区；点一下（与内核同样的 mousedown/mouseup/click，click 先 preventDefault）新行在下一个微任务里就出来了（测得 78ms 内），没有分段保存，不声明 save；第 2 行起标题旁有一颗没有 automation id 的 Delete，不声明 remove。行用 fkit 那一层而不是 panel：fkit 不随界面语言变。区用 aria-labelledby 是因为 0 行时区里除了标题与按钮什么都没有，而这个 id 是由区标题文字拼的——只认英文界面，别的语言里一行都认不出、也不加行（fail closed）。行内的格靠控件 id 认（cellIdPattern 剥掉「<区>-<序号>--」）：文本框的 id 与 name 一致，而日期的每一段、Role Description、Field of Study 都只有 id 没有 name。日期是分段的 input[role=spinbutton]（MM/YYYY 两段、教育只有 YYYY 一段），写法见内核 write/setValue.ts 的分段日期那一节。刻意不映射：Role Description（档案里没有经历描述）、I currently work here（在职与否由下面 keySteps 的 ancestorAttrMap 给新角色 experience.isCurrent：旧插件对不认识的角色是跳过，放在 fieldMap 里则会整份拒收）、Degree（它的镜像输入框没有 id，由 ancestorAttrMap 的 formfield-degree 认）。（2026-09-24 追加：教育行的 Field of Study 按 id 认成 education.fieldOfStudy，控件由下面的 searchPromptComboboxes 支持，见那一条。）",
+  "rowScopes": [
+    {
+      "kind": "contains",
+      "container": "[role=\"group\"][aria-labelledby=\"Work-Experience-section\"]",
+      "row": "[data-fkit-id^=\"workExperience-\"][data-fkit-id$=\"--null\"]",
+      "collection": "experience",
+      "cellIdPattern": {
+        "source": "^workExperience-\\d+--(.+)$"
+      },
+      "fieldMap": {
+        "jobTitle": "title",
+        "companyName": "company",
+        "location": "location",
+        "startDate-dateSectionMonth-input": "startMonth",
+        "startDate-dateSectionYear-input": "startYear",
+        "endDate-dateSectionMonth-input": "endMonth",
+        "endDate-dateSectionYear-input": "endYear"
+      },
+      "actions": {
+        "add": "[role=\"group\"][aria-labelledby=\"Work-Experience-section\"] button[data-automation-id=\"add-button\"]"
+      }
+    },
+    {
+      "kind": "contains",
+      "container": "[role=\"group\"][aria-labelledby=\"Education-section\"]",
+      "row": "[data-fkit-id^=\"education-\"][data-fkit-id$=\"--null\"]",
+      "collection": "education",
+      "cellIdPattern": {
+        "source": "^education-\\d+--(.+)$"
+      },
+      "fieldMap": {
+        "schoolName": "school",
+        "fieldOfStudy": "fieldOfStudy",
+        "gradeAverage": "gpa",
+        "firstYearAttended-dateSectionYear-input": "startYear",
+        "lastYearAttended-dateSectionYear-input": "endYear"
+      },
+      "actions": {
+        "add": "[role=\"group\"][aria-labelledby=\"Education-section\"] button[data-automation-id=\"add-button\"]"
+      }
+    }
+  ],
+  "$comment.fileUploads": "2026-09-28 第 2 步 My Experience 的简历栏：adobe.wd5 测试台只读实测（插件自己挂上简历之后读结构，没有点删除）。部件根 div[data-automation-id=attachments-FileUpload]（label 由 aria-labelledby 指），里面是拖放区、文件框 input[data-automation-id=file-upload-input-ref][type=file][multiple]（一直在页面上，Workday 在 change 里拿走文件、把它清空，所以我们读不回来）与一格列表：每一份已上传的文件是一个 file-upload-item，名字在 file-upload-item-name（就是文件名），传好了再挂上 file-upload-successful（「Successfully Uploaded!」带一个勾），旁边有一颗 delete-file。页面主世界里只读打点：change 之后约 10 毫秒列出那一项，约 0.6 秒后挂上「传好了」（208 KB）。从前内核只看得到这一栏里出现了文件名，记成「网站没确认」（FILLED_UNVERIFIED），必填的简历因此进了「需要你」，连填停在第 2 页。这里声明这个部件怎么说「收下了」：内核只认我们这一次挂上之后多出来的、名字就是这一份、带着 file-upload-successful 的那一项（write/setFile.ts 的 watchDeclaredUpload）；没有这个标记、名字不对、那一项挂上之前就在，照旧是「网站没确认」。部件根里只能有这一个文件框，不然不认。⚠️ 这是新的顶层键（现有的键里没有一个说得出「上传部件收下了」）：纯加法，去掉它就是从前的行为；2026-09-28 之后的内核不认识它只是不解释，更早的包（含商店 1.0.0）整份拒收——与 accountSteps 同一个发布口径，随同一次后端发布走。",
+  "fileUploads": [
+    {
+      "triggerSelector": "[data-automation-id=\"attachments-FileUpload\"] input[type=\"file\"]",
+      "containerSelector": "[data-automation-id=\"attachments-FileUpload\"]",
+      "itemSelector": "[data-automation-id=\"file-upload-item\"]",
+      "itemNameSelector": "[data-automation-id=\"file-upload-item-name\"]",
+      "successSelector": "[data-automation-id=\"file-upload-successful\"]"
+    }
+  ],
+  "$comment.fileContextMaxDepth": "2026-09-24 同一页只读实测：简历栏的 input[type=file]（display:none，旁边看得见的是「Select files」按钮）往上 5 层才是 wrapper formField-（真的就叫这个，后面什么都没有，标签「Upload a file (5MB max)*」没有 for），区标题「Resume/CV」是往上第 8 层那个 <h4>。缺省只往上找 4 层，两段文字一段都够不着，于是这一栏从来是「不支持的控件」、必填的简历卡住整个向导。抬到上限 8：文件框往上一路只有它自己一个 file 控件，够不到别的附件题。",
+  "fileContextMaxDepth": 8,
+  "keySteps": [
+    {
+      "$comment": "2026-09-22：How Did You Hear About Us? 的输入框最近的带 data-automation-id 的祖先是 multiselectInputContainer（一个结构包装层），而 ancestorAttrMap 是「最近的祖先说了算、不认识就闭集拒绝」——这是故意的（分机栏不许继承外层电话栏的键），所以它在那一步拿不到键。不加「透明包装层」一类的新规则字段：旧版插件的解析器对不认识的规则键是整份拒收，一份被拒会让整个发布包被拒。输入框自己身上有 Workday 平台级的稳定字段 id（source--source，与外层 data-fkit-id 同值），attrMap(id) 放在 ancestorAttrMap 前面：对认不出的 id 它放行给下一步，其他字段照旧由 ancestorAttrMap 认。控件本身由 promptComboboxes 支持。",
+      "type": "attrMap",
+      "attr": "id",
+      "confidence": 1,
+      "map": {
+        "source--source": "heardAboutSource",
+        "skills--skills": "skills.all"
+      },
+      "$comment_skills": "2026-09-24：Skills 的输入框 id 是平台级的 skills--skills（不带行号），最近的带 automation id 的祖先是 multiselectInputContainer（结构包装层），ancestorAttrMap 认不到——与 source--source 同一个理由放在这里。控件由 searchPromptComboboxes 支持，技能按档案逐项搜。"
+    },
+    {
+      "$comment": "2026-09-24 adobe.wd5 第 3 步 Application Questions：「Are you of legal age to work in the country in which this position will be based?*」是按钮下拉（button[aria-haspopup=listbox] + 0×0 镜像输入框），包装层 formField-<GUID>、按钮 id primaryQuestionnaire--<GUID>。下面的祖先表对 GUID 包装层是闭集拒绝，于是这一题从来没有键，落「没把握」。这一步只放十一家共用的那一条 over18 正则（与 generic 等十家逐字相同），排在祖先表**前面**：标签对不上就放行给下一步，别的栏照旧由祖先表认——My Information、My Experience、Voluntary Disclosures 那几栏的题干一个都对不上它（apply-workday-my-info-keys、apply-workday-wizard-pages 锁着）。confidence 与十家的标签模式相同（0.75）。怎么答由内核 dict/ageQuestion.ts 按整句判：问法定工作年龄的，年满 18（明确的或按学历／工作经历推出来的）答肯定那一项，明确未满 18 交还用户；它不是工作授权题。只用已有的 step 类型与已有的键：旧插件照样读得懂。同页「Have you ever worked at Adobe in the following capacity:」那一组复选框不需要键，内核按题面认（dict/historyAnswers.ts）。",
+      "type": "labelPatterns",
+      "confidence": 0.75,
+      "patterns": [
+        {
+          "$comment": "十一家共用，与 generic.json 等十家的 over18 那一条逐字相同；说法与判读见那边的注释。",
+          "regex": {
+            "source": "\\b(?:at\\s+least|over|older\\s+than|a\\s+minimum\\s+of|minimum)\\s+18\\b|\\b18\\s+(?:years\\s+(?:of\\s+age|old|or\\s+older)|\\+|or\\s+older)\\b|\\bage\\s+of\\s+18\\b|\\b(?:under|younger\\s+than|not\\s+yet)\\s+18\\b|\\bless\\s+than\\s+18\\s+(?:years?|yrs?)\\b|\\b(?:are\\s+you|i\\s+am|you\\s+are)\\s+(?:(?:currently|still)\\s+)?(?:a\\s+)?minor\\b|\\bunder-?aged?\\b|\\blegal\\s+(?:working\\s+age|age\\s+(?:to|for|of)\\s+(?:work|employment|be\\s+employed))\\b",
+            "flags": "i"
+          },
+          "key": "over18"
+        }
+      ]
+    },
+    {
+      "$comment": "Workday 的 input id 会生成、name 可为空；跨租户稳定信号是最近的 formField-* wrapper。只映射档案闭集已有且能由普通文本原语安全写入的项。extension、address、postal、country 等全部保持未知/手动。 2026-09-22 在 nvidia.wd5 真实申请页上逐个读了每个控件最近的带 data-automation-id 的祖先：Address Line 1、Postal Code、Country（按钮下拉）、State（formField-countryRegion，按钮下拉）的最近祖先就是它们自己的 formField，而这四个键原先一个都没写，于是四栏全落「没把握，没敢填」（内核含义是 !field.key）。国家与州的控件本身早就由 listboxComboboxes 支持；档案里国家是 ISO 码、州是两字母码，engine 的 countryDisplayNames / subdivisionName 负责展开成 Workday 列表里的全名。Country Phone Code 与 Phone Device Type 这一版不写：前者按地址国家选会让「地址在美国、手机 +86」的用户被拨错国家，要从号码本身读；后者档案里没有。 2026-09-22 起 formField-phoneType 也映射到 phone：Phone Device Type 是必填、档案里没有这一项，它空着整个向导过不了第一步。engine 规定 phone 落在「问设备类型的选项控件」上时，候选是手机的各种写法（有 cell / mobile 就选，产品决定），不是号码——电话元数据守卫对这一种选择器开口，分机栏与设备类型的文本框照旧拦。",
+      "$comment_email": "2026-09-24 adobe.wd5 没登录直接进 applyManually：第 1 页 My Information 有必填的 Email（包装层 formField-emailAddress）。登录后的租户第 1 页没有这一栏，所以从前没映射，浮层只能让 AI 起草。email 是档案闭集里的键，写入走普通文本原语。",
+      "$comment_linkedin": "2026-09-15 实测第 2 步 My Experience（applyFlowMyExpPage）「Social Network URLs」：<div data-automation-id=\"formField-linkedInAccount\"> 里就是一个普通 <input type=text id=socialNetworkAccounts--linkedInAccount name=linkedInAccount>，标签「Please provide a link to your LinkedIn profile:」由同 wrapper 的 <label for> 给出，aria-required=false。linkedinUrl 是 11 键闭集里的键，写入走的还是普通文本原语——这一条同时是这一页**唯一**能让扫描产出 canonical 字段的映射，没有它整页落 NO_CANONICAL_FIELD，简历附件与 Skills 也就一起进不去。",
+      "type": "ancestorAttrMap",
+      "attr": "data-automation-id",
+      "confidence": 1,
+      "map": {
+        "formfield-legalname--firstname": "firstName",
+        "formfield-legalname--lastname": "lastName",
+        "formfield-city": "city",
+        "formfield-phonenumber": "phone",
+        "formfield-linkedinaccount": "linkedinUrl",
+        "formfield-addressline1": "addressLine1",
+        "formfield-postalcode": "addressPostalCode",
+        "formfield-country": "addressCountry",
+        "formfield-countryregion": "addressRegion",
+        "formfield-phonetype": "phone",
+        "formfield-emailaddress": "email",
+        "formfield-degree": "education.degreeLevel",
+        "formfield-currentlyworkhere": "experience.isCurrent"
+      },
+      "$comment_experience": "2026-09-24 第 2 步 My Experience：Degree 是与国家下拉同一个部件（button[aria-haspopup=listbox] + 0×0 镜像输入框），镜像没有 id 也没有 name，行内的 cellIdPattern 认不到它，最近的带 automation id 的祖先是 formField-degree；在教育行里时行序由行作用域给出。Adobe 的选项是 Select One / GED / High School / Associates / Bachelors / Masters / Doctorate / JD（经批准打开下拉只读，Escape 关上，没选）。「I currently work here」是行内的 input[type=checkbox]，最近的祖先是 formField-currentlyWorkHere；experience.isCurrent 是 2026-09-24 新加的角色——旧插件的解析器对不认识的键是跳过（2026-09-21 起），放在 rowScopes 的 fieldMap 里则会整份拒收，所以只能在这里。"
+    }
+  ]
+}

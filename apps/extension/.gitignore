@@ -1,0 +1,7 @@
+# Rebuildable local assistant preview and isolated extension spike.
+.assistant-preview/
+.assistant-spike/
+.output-assistant-read/
+.output-assistant-profile/
+
+.output-assistant/

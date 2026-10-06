@@ -1,0 +1,49 @@
+{
+  "id": "V10-same-url-chain-broken",
+  "scenarioClass": "same-url-injection",
+  "title": "A rescan that reuses the previous DOM generation is not a new observation",
+  "todayBehavior": "Same-URL in-place injection can present new controls under the old generation; without a fence the compiler would treat them as if they had always been there.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "email",
+          "shape": "EMAIL",
+          "label": "Email"
+        }
+      ],
+      "ua2": {
+        "email": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "EMAIL"
+        }
+      }
+    },
+    {
+      "cause": "HOST_MUTATION_RESCAN",
+      "domGeneration": "g0",
+      "delta": {
+        "inherit": true,
+        "add": [
+          {
+            "ref": "phone",
+            "shape": "TEL",
+            "label": "Phone"
+          }
+        ]
+      },
+      "ua2": {
+        "phone": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "PHONE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "compile": "COMPILE_INCOMPLETE",
+    "compileReason": "EPOCH_CHAIN_BROKEN"
+  }
+}

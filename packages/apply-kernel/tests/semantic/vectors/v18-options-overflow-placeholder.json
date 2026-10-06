@@ -1,0 +1,89 @@
+{
+  "id": "V18-options-overflow-placeholder",
+  "scenarioClass": "date",
+  "title": "An over-bound option list and an empty placeholder option are local facts, not a page failure",
+  "todayBehavior": "UA-1 fails the whole page when any control has too many options or an empty option, so one year picker makes every other question on the page undiscoverable (ruling 2026-09-01 ③).",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "year",
+          "shape": "SELECT",
+          "label": "Graduation year",
+          "required": true,
+          "optionsPreset": "YEARS_32",
+          "optionsOverflow": true
+        },
+        {
+          "ref": "country",
+          "shape": "SELECT",
+          "label": "Country",
+          "autocomplete": [
+            "country"
+          ],
+          "required": true,
+          "options": [
+            "",
+            "United States",
+            "Canada"
+          ],
+          "placeholderOptions": [
+            0
+          ]
+        },
+        {
+          "ref": "email",
+          "shape": "EMAIL",
+          "label": "Email",
+          "autocomplete": [
+            "email"
+          ],
+          "required": true
+        }
+      ],
+      "ua2": {
+        "year": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "country": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "COUNTRY"
+        },
+        "email": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "EMAIL"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "compile": "OK",
+    "logicalControls": [
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "year"
+        ],
+        "optionsIncomplete": true,
+        "placeholderOptions": 0
+      },
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "country"
+        ],
+        "optionsIncomplete": false,
+        "placeholderOptions": 1
+      },
+      {
+        "kind": "TEXT_SINGLE",
+        "members": [
+          "email"
+        ]
+      }
+    ],
+    "nodeCount": 3
+  }
+}

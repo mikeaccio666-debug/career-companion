@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "kind": "channel/ready",
+  "clientRequestId": "discover-1",
+  "extensionVersion": "1.4.0",
+  "capabilities": [
+    "DISCOVERY_V1",
+    "DOCK_AUTOFILL_V1"
+  ],
+  "state": "READY"
+}

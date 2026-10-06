@@ -1,0 +1,366 @@
+{
+  "$comment": "iCIMS 适配规则。2026-08-22 在真实 posting（careers-udhgroup.icims.com/jobs/<id>/<slug>）上由负责人本人登录后只读核实。四件实测事实定了这份规则：1) **整站套在同源 iframe 里**（顶层零 input，全部内容在 ?in_iframe=1 的同源 iframe 内，可访问非跨域）——内容脚本注入到子帧即可，帧仲裁已有。2) 命名规范出奇地好：`PersonProfileFields.<Field>` / `PortalProfileFields.<Field>`，且**每个可见字段都带 W3C autocomplete**，是本仓见过与 SmartRecruiters 并列最稳的一档。3) 锚点是 form#profileForm，容器类名带 iCIMS_ 前缀（iCIMS_ProfileFormTable / iCIMS_BasicProfilePane）。4) ⚠️ **申请入口这一步同时是建号页**：页面上有 PersonProfileFields.Password / .Password_Confirm 与 h-captcha-response。当前 runtime 把密码与人机验证都挡在扫描面之外；密码只有在 pending L2-P 的 origin-bound local credential + durable per-item release 全链获批后才可能走专用路径，人机验证始终由用户本人完成。故本规则继续用 denyNameSubstrings 根本不让两者进入候选集。用户名 Login 同理不映射；最终 Submit 始终由用户本人操作。",
+  "schemaVersion": 2,
+  "vendor": "icims",
+  "finalSubmitControl": null,
+  "$comment.accountSteps": "2026-09-28 在 careers-udhgroup.icims.com …/jobs/4439/<slug>/login 只读实测（内容在同源的 ?in_iframe=1 子帧里；没有输入、没有提交）。负责人 2026-09-28 决定替用户过账号墙；规则只说这一步长什么样，能不能动手由运行时包的 account-access 位与用户同意过的那一版文案说了算。实测记下的：① 容器 div.iCIMS_MainWrapper.iCIMS_LoginPage；门户级的 /jobs/login 与岗位的 /jobs/<id>/<slug>/login 是同一张「Enter Your Information」。② 先报邮箱：form#enterEmailForm.iCIMS_SignIn（POST 到 …/login?step=email），邮箱 input#email[name=css_loginName][type=email]，隐私政策「I accept」勾选框 input#accept_gdpr（aria-required，正文是这家公司的隐私政策：收集哪些资料、怎么用），「Next」是 input#enterEmailSubmitButton[type=submit]，勾上之前是禁用的。③ 隐形 hCaptcha 是另外挂在 form 上的 div#h-captcha（data-size=invisible）：网站自己的 submit 监听先 preventDefault、跑 hcaptcha.execute，通过了再由网站自己的回调提交；要人过的挑战会弹出来，由用户本人完成。④ 报完邮箱之后是「输入密码」还是「建档（档案表里带 Password / Password_Confirm）」要提交邮箱才看得到，这次没有碰，所以这里只声明「先报邮箱」这一步——宁缺毋错；后面两步等负责人端到端实测之后补（热更新）。⑤ 页面自带的登录提示原文（login.jsp 的资源串）：「Invalid login or password.」「Login Attempt Failed - Please Try Again」「Your account has been disabled due to inactivity.」「…can only be accessed via Single Sign-On (SSO).」；错误写进 .alert-text（password.js 的 platformLoginSetMsg）。注意：iCIMS 今天的识别还没通（主机不在厂商表里、没有 whitelabelRoot，同源子帧也不报到），这一段数据在识别接通之前不会生效。",
+  "accountSteps": {
+    "container": "div.iCIMS_MainWrapper.iCIMS_LoginPage",
+    "path": {
+      "source": "^\\/jobs\\/(?:[^/]+\\/[^/]+\\/)?login\\/?$"
+    },
+    "steps": [
+      {
+        "kind": "identify",
+        "marker": "form#enterEmailForm.iCIMS_SignIn",
+        "email": "form#enterEmailForm input#email[type=\"email\"]",
+        "terms": "form#enterEmailForm input#accept_gdpr[type=\"checkbox\"]",
+        "submit": "form#enterEmailForm input#enterEmailSubmitButton[type=\"submit\"]"
+      }
+    ],
+    "banners": "div.iCIMS_MainWrapper.iCIMS_LoginPage [role=\"alert\"], div.iCIMS_MainWrapper.iCIMS_LoginPage .alert-text",
+    "outcomes": [
+      {
+        "kind": "wrongPassword",
+        "text": {
+          "source": "invalid\\s+login\\s+or\\s+password|login\\s+attempt\\s+failed",
+          "flags": "i"
+        }
+      },
+      {
+        "kind": "blocked",
+        "text": {
+          "source": "disabled\\s+due\\s+to\\s+inactivity|single\\s+sign-on|\\bsso\\b|do\\s+not\\s+have\\s+proper\\s+credentials",
+          "flags": "i"
+        }
+      }
+    ]
+  },
+  "applyPath": {
+    "$comment": "登录后的候选人档案/申请页：/jobs/<id>/<slug>/candidate。岗位详情页（/job）与登录页（/login）都不是可填表单，不匹配。",
+    "source": "^\\/jobs\\/[^/]+\\/[^/]+\\/candidate\\/?$"
+  },
+  "anchors": [
+    "form#profileForm"
+  ],
+  "excludeWithin": [
+    "footer",
+    "[role=\"search\"]",
+    "nav"
+  ],
+  "$comment.denyLabels": "captcha 一律拒。iCIMS 这一步用 hCaptcha，题干里带 captcha 字样。",
+  "denyLabels": [
+    {
+      "source": "captcha",
+      "flags": "i"
+    }
+  ],
+  "$comment.denyNameSubstrings": "password 是本表最要紧的一条——建号页上 PersonProfileFields.Password 与 .Password_Confirm 与档案字段混在同一个 form 里，两者的 name 只差一个词。挡在扫描面之外而不是靠「不映射」：不映射的控件仍会进候选集、仍会被标签兜底看到，而一个叫 Confirm your password 的栏位落到任何 URL/文本模式上都是灾难。",
+  "denyNameSubstrings": [
+    "password",
+    "recaptcha",
+    "captcha",
+    "h-captcha"
+  ],
+  "widgetNames": [],
+  "$comment.rowScopes": "iCIMS 把行序编进 **id 前缀**（`-1_PersonProfileFields.PhoneNumber`、`-1_PersonProfileFields.AddressCity`；加行按钮同样带行序 `PersonProfileFields.AddressesButton_-1`），DOM 上没有可依的行元素——这是本仓第二种行模型，见 contracts.ts 的 RowScopeRule 与 50-证据库 §F.6-f。`-1` 是 iCIMS 表示「尚未保存的新行」的约定，**不是序号**，所以行标识按不透明字符串处理、行的先后由控件在 DOM 里的首次出现顺序决定。\n\n为什么是两条而不是一条：电话与地址是**两个不同的集合**，而它们的行标识都可能是 `-1`（各自集合内的新行）。只写一条 `^(-?\\d+)_PersonProfileFields\\.` 会把两个集合的同号行并成一行——电话号码与城市会被判成同一行的两个控件。集合的区分写在 pattern 里（Phone / Address），不同 rowScope 条目天然产出不同的行标识前缀。\n\n2026-08-22 在 careers-udhgroup 租户的 Candidate Profile 页实测。**该租户的档案页只收电话与地址、没有经历/教育段**——iCIMS 的段是逐租户配置的，所以「iCIMS 有没有经历段」没有统一答案；遇到带经历段的租户需要按同一形态补条目。",
+  "rowScopes": [
+    {
+      "kind": "idPrefix",
+      "container": "form#profileForm",
+      "idPattern": {
+        "source": "^(-?\\d+)_PersonProfileFields\\.Phone"
+      }
+    },
+    {
+      "kind": "idPrefix",
+      "container": "form#profileForm",
+      "idPattern": {
+        "source": "^(-?\\d+)_PersonProfileFields\\.Address"
+      }
+    }
+  ],
+  "$comment.rowActions": "2026-08-22 在登录后的 Candidate Profile 页实测：加行按钮是 `<a id=\"PersonProfileFields.AddressesButton_-1\" role=\"button\" href=\"javascript:void(0)\">Add More (Addresses)</a>`，电话与地址各有一个、互不相干。三件要紧的事：1) **按钮的行标识是后缀**（`...Button_-1`）而字段是**前缀**（`-1_PersonProfileFields.AddressCity`）——所以选择器写成 `id^=` 前缀匹配、不解析行标识；行标识只从字段取（idPattern），这条分工是刻意的。2) 它是 `<a>` 不是 `<button>`，会撞上代点击的 LINK 拒绝——修法见 click/policy.ts 的 `hrefNavigates`（fail closed：调用方不表态仍按导航处理）。3) **不声明 `save`**：iCIMS 没有分段保存，加完行直接能填；也没量到删行按钮，故不声明 `remove`。4) **本文件刻意不声明这两个 add 动作。** schema 要求 `actions` 必须配 `collection`，而电话/地址不是 education/experience——档案里只有**一个**电话、**一个**地址，永远不需要加第二行，声明了也没有任何代码路径会用它。不上线死规则数据：选择器作为实测证据记在这条注释里，等遇到带经历/教育段的 iCIMS 租户时，按同一形态（`a[id^=\"PersonProfileFields.<Collection>Button_\"]`）配上 `collection` 一起声明。证据见 50-证据库 §F.6-k。",
+  "keySteps": [
+    {
+      "$comment": "最稳的一档：iCIMS 给每个可见字段都写了 W3C autocomplete。刻意**不映射** username 与 new-password：当前 stable runtime 必须拒绝，且 password 已被 denyNameSubstrings 挡在扫描面外。pending proposal 若获 final approval，也必须由独立的 origin-bound local credential 路径消费，不能复用本规则的通用字段映射。",
+      "type": "attrMap",
+      "attr": "autocomplete",
+      "confidence": 1,
+      "map": {
+        "given-name": "firstName",
+        "family-name": "lastName",
+        "email": "email"
+      }
+    },
+    {
+      "$comment": "iCIMS 自己的命名空间，跨租户稳定（页面上写作 PersonProfileFields.<Field>；**此处必须小写**——解释器查表前会把属性值小写化，大小写混排的键永远查不中，schema 也会直接 RULES_MALFORMED 拒收，本次就是这样被咬住的）。它与上面的 autocomplete 互为佐证：任何一边被租户配置改掉，另一边仍能命中。MiddleName 不映射——档案 11 键里没有中间名，猜测正是这台引擎要消灭的失败形态。",
+      "type": "attrMap",
+      "attr": "id",
+      "confidence": 1,
+      "map": {
+        "personprofilefields.firstname": "firstName",
+        "personprofilefields.lastname": "lastName",
+        "personprofilefields.email": "email"
+      }
+    },
+    {
+      "$comment": "标签兜底只对 iCIMS 命名空间之外的逐租户自定义题开门。租户可以在同一表单上加任意问题，那些控件不带 PersonProfileFields./PortalProfileFields. 前缀。\n\n⚠️ **模式必须全小写**：解释器查表前会把 name 小写化。本条初版写的是 `^(?!(Person|Portal)ProfileFields\\.).+$`，负向前瞻对小写值永远不成立、`.+$` 恒真——**这道闸从落地起就没关上过**，每一个 PersonProfileFields.* 控件都落到了标签兜底。2026-08-23 由规则模式普查抓到。schema 现已把「比对小写值的模式里出现未转义大写字母」做成整份拒收，同类错误写不出来了。\n\n⚠️ **还有更深一层**：光改小写仍然没关上。行内字段的 name 前面还有**行标识前缀**（`-1_PersonProfileFields.AddressCity`），而负向前瞻只看字符串开头——于是 `-1_` 开头的字段一律通过。修好之前 `AddressCity` 靠标签「City」拿到了 `city`：这一次恰好对，但同一条路上任何一个命名空间字段都可能被标签猜错（例如紧急联系人电话被猜成申请人电话）。现行模式 `^(?!(-?\\d+_)?(person|portal)profilefields\\.).+$` 把可选的行前缀一并算进去。端到端用例见 apply-rules-schema.test.ts。",
+      "type": "labelFallbackGate",
+      "nameRegex": {
+        "source": "^(?!(-?\\d+_)?(person|portal)profilefields\\.).+$"
+      },
+      "allowEmptyName": true
+    },
+    {
+      "$comment": "仅供逐租户自定义题使用。与 Workable 同档 0.75：标签匹配天然比属性钩子弱。",
+      "type": "labelPatterns",
+      "confidence": 0.75,
+      "patterns": [
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Pronouns / Preferred pronouns：ats-lab 语料 130 次。",
+          "regex": {
+            "source": "^(?:preferred\\s+)?pronouns?(?:\\s*\\((?:optional|if applicable)\\))?\\??$",
+            "flags": "i"
+          },
+          "key": "preferredPronouns"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Date available / When can you start：语料 70 次。不认光秃秃的 start date（经历段也有），这里要求它就是整条标签。",
+          "regex": {
+            "source": "^(?:(?:earliest|preferred)\\s+)?(?:available\\s+)?start\\s+date(?:\\s*\\(.*\\))?\\??$|^date\\s+available\\??$|^(?:earliest\\s+)?availability(?:\\s+(?:date|to\\s+start))?\\??$|\\bwhen\\s+(?:can|could|would|are)\\s+you\\s+(?:be\\s+)?(?:available\\s+to\\s+)?start(?:\\s+work)?\\b|^available\\s+(?:to\\s+)?start(?:\\s+date)?\\??$",
+            "flags": "i"
+          },
+          "key": "earliestStartDate"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Notice period（天）。",
+          "regex": {
+            "source": "^(?:current\\s+)?notice\\s+period(?:\\s*\\((?:in\\s+)?days\\))?\\??$|\\bnotice\\s+period\\s*\\((?:in\\s+)?days\\)",
+            "flags": "i"
+          },
+          "key": "noticePeriodDays"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Summary / About you：语料 62 次。",
+          "regex": {
+            "source": "^(?:professional\\s+|brief\\s+|short\\s+)?summary(?:\\s+of\\s+(?:qualifications|experience))?\\??$|^(?:about|tell\\s+us\\s+(?:a\\s+(?:bit|little)\\s+)?about)\\s+(?:you|yourself)\\??$|^(?:short\\s+)?bio(?:graphy)?\\??$|^personal\\s+statement\\??$|^introduce\\s+yourself\\??$",
+            "flags": "i"
+          },
+          "key": "profileSummary"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Headline：语料 50 次；用现任职位答。",
+          "regex": {
+            "source": "^(?:professional\\s+)?headline\\??$|^current\\s+(?:job\\s+)?(?:title|role|position)\\??$",
+            "flags": "i"
+          },
+          "key": "currentJobTitle"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Desired pay / Salary expectations：语料 70 次。",
+          "regex": {
+            "source": "^(?:desired|expected|target|requested|minimum)\\s+(?:annual\\s+|base\\s+)?(?:pay|salary|compensation)(?:\\s+(?:range|rate))?(?:\\s*\\(.*\\))?\\??$|^(?:salary|compensation|pay)\\s+(?:expectation|requirement)s?(?:\\s*\\(.*\\))?\\??$|^(?:what\\s+(?:is|are)\\s+your\\s+)?(?:salary|compensation)\\s+expectations?\\??$",
+            "flags": "i"
+          },
+          "key": "expectedSalaryAmount"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：期望薪资的币种。",
+          "regex": {
+            "source": "^(?:salary\\s+|pay\\s+|compensation\\s+)?currency\\??$",
+            "flags": "i"
+          },
+          "key": "expectedSalaryCurrency"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：期望薪资的周期（年/月/时）。",
+          "regex": {
+            "source": "^(?:pay|salary|compensation)\\s+(?:period|frequency|basis|type|interval)\\??$",
+            "flags": "i"
+          },
+          "key": "expectedSalaryPeriod"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Are you at least 18：语料 18 次。 2026-09-24：反着问的也认成 over18（under 18、younger than 18、not yet 18、less than 18 years、Are you a minor、underage；「Minor」「Do you have a minor in …」这类辅修题不认）。答哪一项由内核 dict/ageQuestion.ts 按题面判：未满 18 那一边答档案值的反面，带条件、否定或问号前还问了别的一律不答。 2026-09-24（二）：问法定工作年龄的也认成 over18（legal age to work、legal working age、legal age for/of employment、legal age to be employed；adobe.wd5 第 3 步原题「Are you of legal age to work in the country in which this position will be based?」）。它问的是年龄，不是工作授权。内核 dict/ageQuestion.ts 按整句判：年满 18（明确的，或按学历／工作经历推出来的）答肯定那一项；明确未满 18 不答（很多地方未满 18 也能工作），交还用户；除问法与地点之外多一个字（in a bar、full time）、或同一句还问了工作授权的，一律不答。「legal drinking age」「legal age to sell …」不认。Workday 从这一版起也带这一条，十一家逐字相同。",
+          "regex": {
+            "source": "\\b(?:at\\s+least|over|older\\s+than|a\\s+minimum\\s+of|minimum)\\s+18\\b|\\b18\\s+(?:years\\s+(?:of\\s+age|old|or\\s+older)|\\+|or\\s+older)\\b|\\bage\\s+of\\s+18\\b|\\b(?:under|younger\\s+than|not\\s+yet)\\s+18\\b|\\bless\\s+than\\s+18\\s+(?:years?|yrs?)\\b|\\b(?:are\\s+you|i\\s+am|you\\s+are)\\s+(?:(?:currently|still)\\s+)?(?:a\\s+)?minor\\b|\\bunder-?aged?\\b|\\blegal\\s+(?:working\\s+age|age\\s+(?:to|for|of)\\s+(?:work|employment|be\\s+employed))\\b",
+            "flags": "i"
+          },
+          "key": "over18"
+        },
+        {
+          "$comment": "2026-09-24（负责人：跟 Jobright 一样）：「Are you a transitioning service member?」——Shield AI 的 Lever 表单上是一道必填单选（No／Yes），后面跟一道「If yes, what partnership program are you working with?」。整句才认：带条件、否定、掺了退伍军人（那是 EEO 自我认同）、问家属的都不认。答案由内核按工作经历推（dict/historyAnswers.ts：有工作经历、没有一段像军队服役就答 No；有一段像、或没有工作经历就不答），只在选项控件上、恰好一项对得上时写。旧版内核不认识这个键，按规则解析的口径只跳过这一条。",
+          "regex": {
+            "source": "^\\s*(?:are\\s+you\\s+(?:(?:currently|presently|now)\\s+)?(?:an?\\s+)?)?transitioning\\s+(?:(?:u\\.?\\s?s\\.?|united\\s+states)\\s+)?(?:military\\s+)?service\\s*-?\\s*members?\\s*(?:\\((?:required|optional)\\)\\s*)?\\??\\s*(?:\\((?:required|optional)\\))?[\\s*✱]*$",
+            "flags": "i"
+          },
+          "key": "transitioningServiceMember"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Willing to relocate。",
+          "regex": {
+            "source": "^(?:are\\s+you\\s+)?(?:willing|open|able)\\s+to\\s+relocate(?:\\s+(?:for|to)\\s+this\\s+(?:role|position|job|location))?\\??$|^(?:open\\s+to\\s+)?relocation\\??$|^relocation\\s+(?:willingness|preference)\\??$",
+            "flags": "i"
+          },
+          "key": "openToRelocation"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：愿意搬去哪些城市。",
+          "regex": {
+            "source": "relocat\\w*.*\\b(?:which|what)\\s+(?:cities|locations|areas)\\b|\\b(?:cities|locations|areas)\\b.*\\brelocat",
+            "flags": "i"
+          },
+          "key": "openToRelocationCities"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：远程/混合/现场偏好。",
+          "regex": {
+            "source": "^(?:preferred\\s+|desired\\s+)?work(?:ing|place)?\\s+(?:arrangement|mode|model|setting|style|environment|location\\s+preference)s?\\??$|^(?:remote|hybrid|on-?site|in-?office)(?:\\s*(?:/|,|or)\\s*(?:remote|hybrid|on-?site|in-?office))+(?:\\s+preference)?\\??$|\\bpreference\\b.*\\b(?:remote|hybrid|on-?site|in-?person|in-?office)\\b|\\b(?:remote|hybrid|on-?site|in-?person|in-?office)\\b.*\\bpreference\\b",
+            "flags": "i"
+          },
+          "key": "preferredWorkModes"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Twitter / X：语料 34 次。",
+          "regex": {
+            "source": "\\btwitter\\b|^x\\s*(?:\\(formerly\\s+twitter\\)|profile|url|handle)\\??$|\\bx\\.com\\b",
+            "flags": "i"
+          },
+          "key": "profileTwitterUrl"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Other website：语料 46 次。",
+          "regex": {
+            "source": "^(?:other|additional|another|secondary)\\s+(?:website|site|url|link)s?(?:\\s*\\(optional\\))?\\??$|^other\\s+(?:links?|urls?)\\??$",
+            "flags": "i"
+          },
+          "key": "otherWebsiteUrl"
+        },
+        {
+          "regex": {
+            "source": "linkedin",
+            "flags": "i"
+          },
+          "key": "linkedinUrl"
+        },
+        {
+          "regex": {
+            "source": "github",
+            "flags": "i"
+          },
+          "key": "githubUrl"
+        },
+        {
+          "regex": {
+            "source": "(portfolio|personal (web)?site|website)",
+            "flags": "i"
+          },
+          "key": "portfolioUrl"
+        },
+        {
+          "regex": {
+            "source": "^\\s*city\\b",
+            "flags": "i"
+          },
+          "key": "city"
+        },
+        {
+          "regex": {
+            "source": "phone( number)?",
+            "flags": "i"
+          },
+          "key": "phone"
+        },
+        {
+          "$comment": "2026-09-22 清点发现：email 在十一份规则里一条 labelPatterns 都没有，全靠各家 attrMap（name=\"email\"）。在 ATS 自己域名上够用，但页面一旦认不出厂商（公司自建域）attrMap 整条路不成立，而它是 97 页语料里最常见的字段（170 次）。整条标签相等才认：「Referrer’s email」「Emergency contact email」这类他人信息栏不中。",
+          "regex": {
+            "source": "^e-?mail(?:\\s+address)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "email"
+        },
+        {
+          "$comment": "2026-09-22 同上（语料里 54 次）。要求整条标签相等，所以「Email address」不会落到这里；「Address Line 2」也不中——那是另一栏（公寓号之类），我们没有对应的键。",
+          "regex": {
+            "source": "^(?:street\\s+)?address(?:\\s+line\\s*1)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressLine1"
+        },
+        {
+          "$comment": "2026-09-22 同上（语料里 32 次）。覆盖 ZIP / Zip code / Postal code / ZIP / Postal code 四种写法。",
+          "regex": {
+            "source": "^(?:zip|postal)(?:\\s*/\\s*postal)?(?:\\s+code)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressPostalCode"
+        },
+        {
+          "$comment": "2026-09-22：纯标签下连名都认不出——各家全靠 attrMap 的 name 钩子（name=\"first_name\"），认不出厂商的页面上那条路不成立。标签取自 97 页语料（First Name 76 次、First name 27 次）。整条相等才认：「Preferred First Name」照旧落 preferredName，「Referrer’s first name」这类他人姓名不中。",
+          "regex": {
+            "source": "^(?:legal\\s+|given\\s+)?first\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^given\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "firstName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Last Name 76 次、Last name 27 次）。surname / family name 是同一栏的另外两种写法。",
+          "regex": {
+            "source": "^(?:legal\\s+|family\\s+)?last\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^surname(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^family\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "lastName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Full Name 34 次、Full name 33 次）。刻意**不认**光秃秃的「Name」：那一栏在公司名、学校名、推荐人姓名上同样叫 Name，认错一个写进去的就是别人的资料。",
+          "regex": {
+            "source": "^(?:legal\\s+)?full\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "fullName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Phone 137 次、Phone Number 11 次）。句尾允许缀区号：带旗标的号码框把它写进标签（Phone+1 / Phone +1，语料里 22 次）。分机、区号、号码类型另有 isPhoneMetaField 守卫，这里的正则也不认它们。",
+          "regex": {
+            "source": "^(?:mobile\\s+|cell\\s+|home\\s+|work\\s+|primary\\s+|personal\\s+)?phone(?:\\s+number)?\\s*(?:\\+\\d{1,4})?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "phone"
+        },
+        {
+          "$comment": "2026-09-22 实测：rippling 与 lever 的申请页都问「Current company」，而十家里只有三家写了这条规则，于是那一栏落进「没把握，没敢填」——那句话的内核含义是 `!field.key`，也就是我们没认出来。正则取自 greenhouse 已验证的那一条：只认光秃秃的公司/雇主栏，「reference company」（推荐人的公司）与「which company are you applying to」都不中。",
+          "regex": {
+            "source": "^(?:(?:current|most recent|current\\s*/\\s*most recent|current or most recent)\\s+)?(?:company|employer)(?:\\s+name)?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "currentCompany"
+        },
+        {
+          "$comment": "2026-09-22 jobvite 实测原话是「How did you hear this job?」——句中**没有 \"about\"**，而现有那条正则把 about 写死了，于是整条落空。这一条把 about 放成可选，并且要求紧跟 us/this/the，「have you heard of us before?」仍然不中（那是问听没听说过，不是问从哪听说的）。",
+          "regex": {
+            "source": "^(?:please\\s+)?(?:tell\\s+us\\s+|let\\s+us\\s+know\\s+)?(?:how|where)\\s+(?:did|do)\\s+you\\s+(?:hear|find|learn)(?:\\s+out)?(?:ed)?\\s+(?:about\\s+)?(?:us|this|the)\\b[^?]{0,60}\\??\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "heardAboutSource"
+        },
+        {
+          "$comment": "2026-09-22 jobvite 实测：光秃秃的「Country」，十家里只有四家认得。正则取自 greenhouse 已验证的那一条。",
+          "regex": {
+            "source": "^country(?:\\s*(?:of\\s+(?:residence|location|citizenship\\s+is\\s+not\\s+asked\\s+here)))?\\s*\\*?$|^what\\s+country\\s+are\\s+you\\s+(?:based|located|living)\\s+in\\??$",
+            "flags": "i"
+          },
+          "key": "addressCountry"
+        },
+        {
+          "$comment": "2026-09-22 jobvite 实测原话就是光秃秃的「State」。`addressRegion` 在后端下发的 35 键放行名单里、档案里也有值，而十家规则**一条对应的正则都没有**——这一栏从来没有被填上过。两端锚定是必需的：「employment status」「visa status」「please state your reason」都带 state 字样，一条都不许中。",
+          "regex": {
+            "source": "^(?:state|province|region)(?:\\s*(?:/|,|or)\\s*(?:state|province|region))?\\s*\\*?$|^state\\s+or\\s+province\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressRegion"
+        }
+      ]
+    }
+  ]
+}

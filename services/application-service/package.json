@@ -1,0 +1,23 @@
+{
+  "name": "@career/application-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent read-only automation reference service and strict execution verification seams",
+  "engines": { "node": "24.21.0" },
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@edaix/contracts": "workspace:*",
+    "@edaix/apply-rules": "workspace:*",
+    "@edaix/apply-kernel": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,92 @@
+<!--
+  Workday 申请流程 step 2「My Information」的**真实结构**。
+
+  取自 rochester.wd5.myworkdayjobs.com 的真实岗位申请流程
+  （2026-08-21 在 Mike 已登录的会话里只读实测：未填写任何字段、未点击任何按钮、
+  未推进流程、未修改账号内的任何数据）。只保留结构、data-automation-id、
+  label 与控件形态，去掉全部品牌文案与租户标识。
+
+  ⚠️ 三件与我们直接相关的结构事实：
+   ① **整页没有 <form> 元素**。四家现行适配器都锚在 form 上（`form#application-form`
+      等），这一家锚不了——只能锚 `[data-automation-id="applyFlowMyInfoPage"]`。
+   ② 三种控件形态，只有第一种今天填得了：
+      · input[type=text]      —— 普通文本
+      · button[aria-haspopup="listbox"] —— **自定义下拉，不是 <select>**
+      · input[autocomplete=off] 无 type —— 带远程建议的 typeahead
+   ③ 有 0×0 的隐藏控件（含 phone-sms-opt-in）。几何层会把它们判成蜜罐——
+      在这一页上是良性的（它们本来也没有 canonical key），但说明几何层在
+      Workday 上是真的在工作，不是摆设。
+-->
+<div data-automation-id="applyFlowPage">
+  <div data-automation-id="progressBar"></div>
+  <div data-automation-id="applyFlowMyInfoPage">
+
+    <!-- typeahead：无 type、autocomplete=off、308x36 -->
+    <div data-automation-id="formField-source">
+      <label for="source--source">How Did You Hear About Us?*</label>
+      <input id="source--source" autocomplete="off" aria-required="true" />
+    </div>
+
+    <div data-automation-id="formField-candidateIsPreviousWorker">
+      <label for="prev--0">Have you ever been employed at this employer?</label>
+      <input id="prev--0" type="radio" />
+    </div>
+
+    <!-- 自定义下拉：button[aria-haspopup=listbox]，不是 select -->
+    <div data-automation-id="formField-country">
+      <label for="country--country">Country*</label>
+      <button id="country--country" type="button" aria-haspopup="listbox">Select One</button>
+    </div>
+
+    <div data-automation-id="formField-legalName--firstName">
+      <label for="name--legalName--firstName">First Name*</label>
+      <input id="name--legalName--firstName" type="text" aria-required="true" />
+    </div>
+    <div data-automation-id="formField-legalName--lastName">
+      <label for="name--legalName--lastName">Last Name*</label>
+      <input id="name--legalName--lastName" type="text" aria-required="true" />
+    </div>
+    <div data-automation-id="formField-preferredCheck">
+      <label for="preferred--0">I have a preferred name</label>
+      <input id="preferred--0" type="checkbox" aria-required="false" />
+    </div>
+
+    <div data-automation-id="formField-addressLine1">
+      <label for="addr--addressLine1">Address Line 1</label>
+      <input id="addr--addressLine1" type="text" aria-required="false" />
+    </div>
+    <div data-automation-id="formField-city">
+      <label for="addr--city">City</label>
+      <input id="addr--city" type="text" aria-required="false" />
+    </div>
+    <div data-automation-id="formField-countryRegion">
+      <label for="addr--countryRegion">State</label>
+      <button id="addr--countryRegion" type="button" aria-haspopup="listbox">Select One</button>
+    </div>
+    <div data-automation-id="formField-postalCode">
+      <label for="addr--postalCode">Postal Code</label>
+      <input id="addr--postalCode" type="text" aria-required="false" />
+    </div>
+
+    <div data-automation-id="formField-phoneType">
+      <label for="phone--phoneType">Phone Device Type*</label>
+      <button id="phone--phoneType" type="button" aria-haspopup="listbox">Select One</button>
+    </div>
+    <div data-automation-id="formField-countryPhoneCode">
+      <label for="phone--countryPhoneCode">Country Phone Code*</label>
+      <input id="phone--countryPhoneCode" autocomplete="off" aria-required="true" />
+    </div>
+    <div data-automation-id="formField-phoneNumber">
+      <label for="phone--phoneNumber">Phone Number*</label>
+      <input id="phone--phoneNumber" type="text" aria-required="true" />
+    </div>
+    <!-- ⚠️ 这一栏正是电话元数据守卫要拦的：写进整串号码会被宿主截断成垃圾 -->
+    <div data-automation-id="formField-extension">
+      <label for="phone--extension">Phone Extension</label>
+      <input id="phone--extension" type="text" aria-required="false" />
+    </div>
+
+    <!-- 0×0 的隐藏控件，实测存在 -->
+    <input type="checkbox" data-automation-id="phone-sms-opt-in" style="width:0;height:0" />
+  </div>
+</div>

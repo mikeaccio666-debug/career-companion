@@ -1,0 +1,55 @@
+{
+  "id": "V22-row-container-replaced",
+  "scenarioClass": "row-id-reuse",
+  "title": "A control whose element persists while its row container is replaced is a contradiction, and the compile fails closed",
+  "todayBehavior": "Nothing cross-checks control identity against row identity, so a control could silently belong to two different rows across a rescan and a write would land in the wrong one.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "c1",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "E1"
+          }
+        }
+      ],
+      "ua2": {
+        "c1": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        }
+      }
+    },
+    {
+      "cause": "HOST_MUTATION_RESCAN",
+      "domGeneration": "g1",
+      "delta": {
+        "inherit": true,
+        "patch": {
+          "c1": {
+            "ref": "c1_again",
+            "element": "c1",
+            "row": {
+              "group": "exp",
+              "ordinal": 0,
+              "shape": "exp",
+              "element": "E2"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expected": {
+    "compile": "COMPILE_INCOMPLETE",
+    "compileReason": "CONTROL_IN_TWO_NODES"
+  }
+}

@@ -1,0 +1,28 @@
+<!--
+  iCIMS 账号墙「先报邮箱」这一步的合成夹具（结构照 2026-09-28 careers-udhgroup.icims.com …/jobs/<id>/<slug>/login?in_iframe=1
+  的只读实测：同源 iframe 里；没有输入、没有提交）。只留结构、id、name 与 class。
+
+  实测记下的：form#enterEmailForm.iCIMS_SignIn（POST 到 …/login?step=email）；邮箱 input#email[name=css_loginName]
+  [type=email][autocomplete=email]；隐私政策「I accept」勾选框 input#accept_gdpr（aria-required）；「Next」是
+  input#enterEmailSubmitButton[type=submit]，勾上之前是禁用的；隐形 hCaptcha 是另外挂在 form 上的 div#h-captcha，
+  网站自己的 submit 监听先跑它、通过了再由网站自己提交。之后的「输入密码」「建档」两步要提交邮箱才看得到，这次没有碰。
+-->
+<div class="iCIMS_MainWrapper iCIMS_LoginPage">
+  <div class="container-fluid iCIMS_SignUpContainer">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content modal-body">
+        <h1>Enter Your Information</h1>
+        <form id="enterEmailForm" class="iCIMS_SignIn" method="post" action="login?step=email&amp;in_iframe=1">
+          <label for="email">Email</label>
+          <input id="email" name="css_loginName" type="email" autocomplete="email" class="form-control">
+          <div id="icims_accept_gdpr_desc">This Privacy Policy explains what information we collect and how we use it. <a href="#privacy">Privacy Policy</a></div>
+          <label for="accept_gdpr">I accept</label>
+          <input id="accept_gdpr" name="accept_gdpr" type="checkbox" value="1" aria-required="true" aria-describedby="icims_accept_gdpr_desc">
+          <div class="iCIMS_ErrorMessage NoDisplay"><span class="alert-text"></span></div>
+          <input id="enterEmailSubmitButton" type="submit" class="iCIMS_PrimaryButton gdprAnswerSubmitButton" value="Next" disabled>
+          <div id="h-captcha" class="h-captcha" data-sitekey="sitekey-placeholder" data-size="invisible"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>

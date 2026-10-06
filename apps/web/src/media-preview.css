@@ -1,0 +1,2 @@
+.media-preview{min-width:0}.media-preview video{background:#20251d}.media-preview-error{padding:8px 10px 10px}.media-preview-error p{font-size:12px;line-height:1.7;color:#6a745e;margin:0 0 4px;overflow-wrap:anywhere}.media-preview-error .text-button{min-height:44px;font-size:12px;gap:6px}
+.artifact-grid>.artifact:has(.media-preview>audio){grid-column:1/-1}

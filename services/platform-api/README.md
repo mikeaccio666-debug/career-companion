@@ -1,0 +1,189 @@
+# Platform API
+
+Independent Fastify service for the web product. PostgreSQL owns identity, messages, saved memories, approvals, jobs, attempts and artifact metadata. Redis/BullMQ distributes jobs; it is not the source of task truth. The migrated application service and Argoland runtime are not started by this service.
+
+Local Faster Whisper uses the existing authenticated voice transcription route, owner checks and runtime lease/usage boundary. An explicit provider is validated before upload execution; speech-only or transcription-only providers cannot authorize other voice capabilities. Import does not automatically persist raw audio or a transcript. Production queue recovery, deployment binding and storage readiness remain separate work; see [deployment plan](../../docs/platform/deployment-plan.md).
+
+Run these commands from the workspace root:
+
+```sh
+docker compose -f infra/platform/compose.yaml up -d postgres redis
+pnpm --filter @companion/platform-api migrate
+pnpm --filter @companion/platform-api dev
+pnpm --filter @companion/platform-api worker
+```
+
+The final two commands run in separate terminals. API listens on `127.0.0.1:4320`; web development uses `localhost:4321` with an API proxy. Default development PostgreSQL and Redis credentials match the isolated compose stack. To change them, set the `PLATFORM_*` variables documented in `infra/platform/.env.example`; no existing Argoland environment file is loaded.
+
+Provider configuration is server-only and supplied by `@companion/ai-core`. With no credentials configured, capabilities explain what is unavailable and corresponding operations return HTTP 503. Commercial provider calls additionally require `PLATFORM_ALLOW_PROVIDER_CALLS=1`; configuring credentials does not itself run a paid call. Integration tests use synthetic runtimes or injected Responses fixtures and never contact commercial model services.
+
+Local Kokoro speech uses the same authenticated voice endpoint, per-user lease, limits and private upload storage. The backend calls the separately prepared loopback service; browser clients never call its port directly. Capability checks reject Kokoro transcription and realtime requests before allocating a lease or usage record. See the [speech service setup](../local-speech/README.md). Workflow speech uses this same configured runtime and publishes private WAV artifacts only under the current job lease.
+
+ComfyUI jobs bind a server-reviewed API graph captured at runtime startup. Public task/step `executionTemplate` contains only `{version:1,hash}`; the graph, server URL and prompt selector are saved privately in the job's `execution_policy`. Client graphs, file paths, prompt selectors and separate ComfyUI model overrides are rejected. A supplied stale binding returns 409. Changing a template file requires restarting the services for new jobs to capture its new hash; existing jobs retain their original snapshot and reviewed workflow hash. Retries and handle recovery never capture the newest template. Changing the server URL refuses new submission or polling for the old binding. Completed workflow receipts remain usable without contacting ComfyUI again.
+
+Legacy tasks without a valid saved snapshot cannot make a ComfyUI request and must be prepared again. An unconfirmed submission stays `uncertain`; no handle means ordinary retry is held, while a persisted handle permits a reviewed poll of that same request. Approval and final publication recheck the binding and private policy. The digest covers the graph, URL and prompt node/field; it does not pin installed custom nodes, server binaries or model weights. The local fixtures validate PostgreSQL, private storage and injected protocol requests, without running actual ComfyUI models or verifying generated-media quality.
+
+## API
+
+All paths start with `/api/platform`. Public routes are `GET /health`, `GET /capabilities`, `POST /auth/register` and `POST /auth/login`. Registration requires email, name and a password of at least 10 characters. Other routes require the opaque HttpOnly session cookie. Mutating routes require an `Origin` included in `PLATFORM_ALLOWED_ORIGINS`.
+
+- Identity: `GET /auth/me`, `POST /auth/logout`.
+- Conversations: `GET/POST /conversations`, `GET/DELETE /conversations/:id`, `POST /conversations/:id/messages`. The message response streams named SSE events `start`, `delta`, `tool`, `approval`, `done`, `error`.
+- Jobs: `GET/POST /jobs`, `GET /jobs/:id`, `POST /jobs/:id/cancel`, `POST /jobs/:id/retry`.
+- Approvals: `GET /approvals`, `POST /approvals/:id/decision` with `decision: approved` or `rejected`.
+- Explicit saved context: `GET/POST /memories`, `DELETE /memories/:id`.
+- Private uploads: `POST /uploads` multipart file (maximum 20 MB), `GET/HEAD /uploads/:id`, `GET/HEAD /artifacts/:id`. Authenticated downloads support bounded streaming and a single byte Range; HEAD reads metadata without opening the body.
+- Reusable private images: `GET /artifacts/:id/reference-attachment` returns `{attachment,source:{artifactId,jobId}}`.
+- Private text/code reading: `GET /artifacts/:id/text` returns a bounded UTF-8 page with source IDs, version and continuation metadata.
+- Voice: `POST /voice/session`, `POST /voice/session/release` with returned `sessionId`, `POST /voice/transcribe` multipart audio, `POST /voice/speech`.
+- Explicit voice history: `GET/POST /conversations/:id/voice-records`.
+- Saved workflow templates: `GET/POST /workflow-templates`, `PUT/DELETE /workflow-templates/:id`.
+
+List/create/read responses use `{conversations}`, `{conversation}`, `{conversation,messages}`, `{jobs}`, `{job,approval?}`, `{approvals}`, `{approval}`, `{memories}`, `{memory}`, and `{attachment}`. UUID ownership is checked before reading or mutating data. Artifact URLs require the owner's session and use private/no-store caching. Text files and potentially active content are served as downloads with `nosniff` and a sandbox policy.
+
+Per-user database leases permit at most two simultaneous chat streams and one voice request/session lease. Stream leases renew and stale streams become failed after interruption. Voice-session issuing is limited to four attempts per user per hour in PostgreSQL; transcription/speech endpoints also rate-limit session requests. Realtime leases expire after ten minutes or a client release. Releasing a lease does not revoke a provider credential or terminate a provider session; the client must close its WebRTC connection. Token usage is saved as provider/model/counts without prompts in the usage table. These safeguards are a local baseline, not billing or a public free-tier policy.
+
+## Reusing private artwork
+
+`GET /artifacts/:id/reference-attachment` resolves a persisted PNG, JPEG or WebP artifact to its existing private upload. The artifact, upload and source job must all belong to the current account. The response supplies the existing attachment ID, name, MIME, size and session-protected upload URL, together with the source artifact/job IDs. Reading this reference does not copy a blob, create an upload or job, call a model, change the source artwork or make its URL public. It remains usable when model calls are disabled, so a user can prepare a draft without starting generation. Completed private results from a partially completed parent task can also be selected explicitly.
+
+Reference images must be non-empty, at most 20 MiB and consistent with their persisted MIME and byte-size metadata. The service checks PNG/JPEG/WebP file signatures after reading the original private bytes. This is a signature check, not full image decoding or a guarantee that a supplier accepts the image dimensions or account/model combination.
+
+New image/video jobs continue to submit `attachmentIds` through the existing owner-checked reader. Before accepting a task, the API checks the selected provider's `referenceImages` capability for that task kind, distinct image count, supported MIME types, combined byte limit, file signatures and provider binding. At most four distinct references totaling 20 MiB are permitted, with lower provider limits enforced. Providers without reference support, including the current ComfyUI template path, reject attachments for image/video generation. Inputs without references retain their normal creation behavior. The runtime rechecks references before dispatch; provider capability metadata does not prove paid account entitlement or model quality.
+
+For OpenAI image jobs, an attached private image selects the existing image-edit adapter rather than ordinary image generation. Ark video and fal use their declared private-reference bindings. Each edit creates a new job and new output artifacts; the source remains available. No client-facing provider URL or public transfer URL is required.
+
+Agent mode provides `get_artifact_reference(artifactId)` using the same ownership and file checks as the GET endpoint. `list_jobs` supplies candidate artifact IDs; the reference tool returns an attachment ID that `create_job` can use. Tool schema allows up to ten distinct attachment IDs for the existing general task interface; server parsing enforces at most four for image/video references, and media creation applies the same provider/content checks. If a media request omits its model, creation freezes the declared default for that capability before model-specific preflight; server-driven ComfyUI templates retain their existing model-free configuration. Resolving a reference grants no new creation authorization. Image/video jobs keep their existing queued behavior after an authorized creation request; browser, CLI and workflow tasks still require explicit approval.
+
+## Reading private text results
+
+Agent `read_artifact_text` and `GET /artifacts/:id/text` share the same owner-bound reader. Text/plain, Markdown, CSV and JSON are supported; browser artifacts use the separate approved-observation reader. Artifact, upload and source job ownership are checked before storage. Stored MIME and size must agree. Every read validates the complete source (at most 1 MiB) as strict UTF-8 and rejects binary signatures and unsupported control characters; it does not execute or render the file as active content.
+
+For the first Agent call provide only `artifactId`. Optional `maxBytes` controls the returned page: default 12 KiB, maximum 16 KiB, distinct from the source-size limit. Returned `nextOffset` is a UTF-8 byte boundary; any nonzero offset requires the exact strong `version` returned by a previous read. GET query fields are `offset`, `version` and `maxBytes`; unknown fields, duplicate numeric fields and invalid values are rejected. A changed blob returns 409 rather than mixing versions. Serialized results remain below the Agent result limit and identify `provenance: untrusted_artifact`; a truncated page is not the whole file.
+
+The reader uses pinned `stat`/`openRead` rather than unbounded `get`, waits for storage cleanup and propagates cancellation. Safe validation and lookup errors return as tool data so the model can correct its request; cancelled reads stop the tool loop. Resolving text neither copies a file nor creates a task or permission. Existing partial text results remain readable; a parent task need not have completed every step. Original large files remain available through authenticated downloads.
+
+## Explicit voice history
+
+Voice excerpts are saved only by an explicit user action. They use a separate table and are never inserted as normal model messages, fed automatically into chat context, or presented as server-verified transcripts. Recording/transcription and speech synthesis do not themselves create voice-history records.
+
+`POST /conversations/:id/voice-records` accepts the following fields; all other fields, including provider/model claims, credentials and raw vendor-event envelopes, are rejected:
+
+```json
+{
+  "clientRecordId": "a-new-stable-uuid-per-excerpt",
+  "source": "realtime_transcript",
+  "role": "assistant",
+  "text": "The final text selected by the user",
+  "sessionId": "the-server-issued-voice-session-uuid",
+  "attachmentIds": []
+}
+```
+
+`source` is `realtime_transcript`, `transcription_excerpt` or `speech_excerpt`; the reported `role` is `user`, `assistant` or `unknown`. `sessionId` is required for realtime excerpts and disallowed for other sources. Optional attachments must be private audio uploads owned by the current user. A speech excerpt can associate the returned synthesis attachment with the exact text sent for synthesis. The server still labels its text as client submitted rather than asserting that its content was independently verified.
+
+The response is `{record,created}` with HTTP 201 on creation or 200 for an identical retry. Each record has fixed `provenance: client_submitted`, source, reported speaker, text, authorized attachment metadata and server timestamps. Realtime records additionally receive provider/model from the server-issued session marker. A stable `clientRecordId` is unique per user; reuse with a different conversation or excerpt returns 409. Reads return `{records}` in saved order. Reading, saving and retrying require the conversation owner's session.
+
+Realtime issuance stores only session ID, owner, provider/model and timing metadata. It never stores the short-lived credential, SDP, or vendor-event payloads. Associated session ownership and any remaining runtime lease are checked before creating a record. Explicit saving remains available for 24 hours after issuance, including after the user ends the connection; this does not extend the provider session or lease. An identical saved retry can still be retrieved after that window. Session metadata stays private; the platform does not expose a session-listing endpoint.
+
+Limits are 8,000 characters/32 KiB of text per record, two audio attachments totaling at most 20 MB, 500 records/1 MiB of text per conversation, and 10,000 records/20 MiB of text per user. A feature-specific PostgreSQL advisory lock serializes cumulative limits across conversations without reversing chat's lease lock order. Deleting a conversation deletes its saved excerpts. Public-launch retention rules, account deletion and user-selectable retention remain deployment work.
+
+## Task execution
+
+CLI, browser and workflow jobs always start in `needs_approval`. Creating a task through an agent tool does not grant permission to execute it. Approval atomically changes the job to `queued` and inserts a PostgreSQL outbox record. The API dispatches outbox entries to BullMQ with generation-specific identifiers; workers claim each task under a database lock and hold a renewable lease. Results are saved only if the lease remains current and the task has not been cancelled. Each attempt is recorded separately.
+
+Cancellation prevents publishing a successful result; it cannot undo an external effect that already happened. Runtime cancellation is cooperative and a database heartbeat aborts work whose lease was revoked. Known asynchronous video task IDs and fal/ComfyUI image task IDs are saved before polling and reused after interruption. An interrupted attempt without a safely resumable task ID becomes `uncertain` and requires user review before retry. Other provider failures stay `failed`, with safe error messages. No automatic retries issue additional paid requests.
+
+An in-flight cancellation retains its execution lease until the worker confirms shutdown. Its API response carries `CANCELLATION_PENDING`; retry is blocked while cleanup remains pending. A `CLI_CLEANUP_UNCONFIRMED` result changes even a cancelled job to `uncertain` and blocks ordinary retry with `OPERATOR_REVIEW_REQUIRED`. CLI work interrupted by a worker crash receives the same operator-review requirement. The local operator must verify the specific container stopped before changing this incident; the service exposes no endpoint that pretends cleanup succeeded.
+
+## Saved workflows and durable steps
+
+Workflow templates are private reusable designs. `GET /workflow-templates` returns `{templates}`; `POST` and `PUT` return `{template}`; deletion returns `{ok:true}` and hides a soft-deleted template. Creation accepts `{name,description?,steps}`. Updates also require the current positive `revision`; concurrent edits return `409 WORKFLOW_TEMPLATE_REVISION_CONFLICT` rather than overwriting the accepted revision. Owner checks and the same session/Origin requirements apply to every operation. Saving a template requires no configured provider and does not create or execute a job.
+
+Templates support one to eight explicit `chat`, `image`, `video` or `speech` steps with `provider`, `prompt`, optional `model` and bounded options. Limits are 100 active templates per user, 128 KiB per payload, 100 characters for names, 1,000 for descriptions and 20,000 per step prompt. A per-user database lock makes the capacity check atomic. Unknown fields, credentials and server connection settings are rejected, including inside nested provider input. The same parser validates plans supplied directly to job creation. Workflow options use the 128 KiB allowance; ordinary job options retain their smaller limit.
+
+An image or video step may select up to four distinct earlier image results through `referenceImages: [{fromStep:0,imageIndex:0}]`. Indices start at zero and omitted `imageIndex` means zero. References cannot point forward, select a non-image step or duplicate an image. Provider binding is checked before saving and again before execution: Ark video uses `referenceMode` (`first_frame`, `first_last_frame`, `reference_image`), while fal uses `referenceField` (`image_url`, `image_urls`). These references read only this job's completed private receipts, never arbitrary uploads owned by the same user. The selected model must support the provider-specific binding.
+
+Creating a workflow job freezes the reviewed goal, execution steps and capability-specific model choices independently of later template edits. Missing models are rejected except for ComfyUI, whose server template defines generation and is saved as a private execution snapshot with a public version binding. New template files do not change existing tasks. Every attempt requires a fresh generation approval that includes the frozen definition hash.
+
+Workers receive internal checkpoint callbacks, not a public endpoint for fabricating results. Before each new external call, the worker persists `started` under owner, generation, approval, definition-hash and live-lease checks. Each subsequent transition uses a compare-and-swap revision and keeps a metadata-only transition ledger. Completed text and artifacts are saved privately per step before later steps run; partial completed artifacts remain visible if the parent job fails. One step permits at most eight artifacts, 100 MiB per artifact and 200 MiB combined. Publishing references rechecks authorization after storage, removes proven unpublished blobs after rejection, and preserves committed blobs if the database acknowledgement is lost. Final parent success rechecks the live lease, current approval, frozen definition and completion of every step. Expired leases cannot be renewed by a stale worker.
+
+Completed steps are reused without another model call, including when their provider is no longer enabled. A known asynchronous provider task is resumed by polling its saved handle after another approval; it never issues a replacement creation request. A confirmed terminal provider failure can start a new approved attempt while retaining its earlier ledger. A started or uncertain step without a known handle blocks ordinary retry with `WORKFLOW_REVIEW_REQUIRED`; the service exposes no force-replay endpoint for an unknown paid result. `Job.workflowSteps` reports step states and safe errors, and `workflowResumeAvailable` indicates whether a reviewed continuation is supported without exposing provider handles. Recovery preserves completed receipts and known handles and marks interrupted calls without handles uncertain.
+
+## CLI model relay
+
+An approved CLI task can use the server's OpenAI Responses access through a callback given only to its claimed worker. The API exposes no public model-proxy route. The disconnected Docker container receives no provider key or external model URL: its reviewed wrapper bridges the official Codex CLI's internal loopback requests over bounded stdin/stdout frames. Execution requires the isolated harness configuration, `PLATFORM_CLI_MODEL_RELAY=1`, server credentials and `PLATFORM_ALLOW_PROVIDER_CALLS=1`; these commercial switches remain off by default.
+
+Every request must match the task owner, CLI provider, current generation, live execution lease and current approved action. Creation fixes the CLI model from server configuration, saves its execution policy, and includes the actual model and relay allowances in the approval. A conflicting client model is rejected. A later configuration change cannot substitute a different model or enlarge the approved allowances; current server limits can tighten them. Authorization is checked before dispatch, during the request and before returning its result.
+
+Before a provider request, PostgreSQL atomically reserves `encoded request bytes + 1,024 + allowed output tokens` under a per-user advisory lock. This is a conservative usage allowance, not a tokenizer, dollar balance or billing guarantee. The defaults and server settings are:
+
+| Scope | Default | Server setting |
+| --- | ---: | --- |
+| Requests across all attempts of one job | 16 | `PLATFORM_CLI_RELAY_MAX_REQUESTS` |
+| Reserved usage across all attempts of one job | 131,072 | `PLATFORM_CLI_RELAY_MAX_TOKENS` |
+| Reserved usage across a user's jobs per UTC day | 524,288 | `PLATFORM_CLI_RELAY_DAILY_TOKENS` |
+| Output tokens per request | 4,096 | `PLATFORM_CLI_RELAY_MAX_OUTPUT_TOKENS` |
+
+Requests are also limited to 256 KiB and responses to 8 MiB. An accepted request ID is unique per job generation and cannot be replayed automatically. Reservations are retained after failure or uncertainty; a new attempt does not reset the job allowance. The audit stores model, counts, reservation, status and safe error codes, without prompts, provider credentials or raw upstream errors. Official Codex's `client_metadata` and ordinary `metadata` are accepted for compatibility and stripped before forwarding.
+
+The relay pins its upstream route, forces `store: false`, disables background execution and accepts only text context plus bounded local function/custom tools. Hosted tools and retained response/conversation references are rejected. Native Responses JSON or SSE bytes are buffered and validated for completion and bounded usage before being forwarded; this path does not deliver incremental upstream deltas to the CLI while generation is running. Upstream error bodies and response headers are not passed through.
+
+Cancellation, timeout and authorization loss abort upstream work, but do not prove that provider execution or charging was undone. Interrupted, malformed, oversized or otherwise unconfirmed results keep their reservation and use `uncertain`; provider 5xx responses are also ambiguous. Explicit provider rejection uses `failed`. Outstanding `reserved` or `uncertain` requests prevent a worker from publishing successful results, even if the harness returns normally. Worker errors preserve the same uncertain job state and require another review before retry. The stdio bridge retains structured safe broker error codes and waits for cancelled callbacks to settle rather than treating a closed client connection as successful settlement.
+
+## Storage and scaling
+
+Local private blobs and per-job workspaces default to `.local/platform/blobs` under the workspace root. Production uses the included S3-compatible adapter by setting `PLATFORM_S3_*`; bucket provisioning and access policies are explicit deployment work. The optional `object-storage` profile now uses SeaweedFS 4.48 pinned by its multi-architecture digest. MinIO's previous image could not be pulled, and its community repository is archived. Existing MinIO volumes are untouched. [SeaweedFS release](https://github.com/seaweedfs/seaweedfs/releases/tag/4.48), [MinIO project status](https://github.com/minio/minio).
+
+From the workspace root, `pnpm infra:objects` starts this development-only store on `http://127.0.0.1:19000`. It uses its own named volume, precreates `companion-dev`, and initializes the fictional credentials `local-companion-s3-access` / `local-companion-s3-secret-only`. These public development values belong only to this loopback fixture. Telemetry, WebDAV, administration UI, embedded IAM and table services are disabled; the S3 endpoint requires signed credentials. No host data directories are mounted. The platform preview keeps its existing local storage; changing `PLATFORM_S3_*` does not migrate existing blobs.
+
+HTTP delivery authenticates before touching storage and checks upload, artifact and source-job ownership. Full responses are streamed as 200; single closed/open/suffix ranges use 206 with exact Content-Range/Length, and valid unsatisfiable ranges return empty 416. Malformed, multiple or unknown-unit Range values are ignored and return full 200. HEAD ignores Range and opens no body. If-Range matches only a current strong ETag; mismatches, weak tags or dates cause full 200. The S3 adapter uses HeadObject plus GetObject Range/IfMatch, not upstream If-Range. Local reads pin a file descriptor and object reads pin a version. Cancelled clients tear down the read; short or oversized streams abort instead of completing with inconsistent bytes. Response headers remain private/no-store, with MIME, disposition and nosniff; downloads do not use buffered `storage.get`. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.2), [AWS GetObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html).
+
+For the optional real-store regression, start `pnpm infra:objects`, then run `PLATFORM_TEST_OBJECT_STORAGE=1 pnpm --filter @companion/platform-api exec tsx --test test/object-storage.integration.test.ts`. It creates and cleans only its own random bucket and PostgreSQL schema, uses fictional credentials and refuses non-loopback endpoints. The default test run skips this opt-in store fixture. Real cloud access, production bucket policies, durability, upload streaming and concurrency sizing remain separate work.
+
+API replicas share PostgreSQL sessions, request counters and outbox rows; worker replicas share the same Redis queue and database leases. A production deployment must explicitly configure database/Redis URLs, allowed origins and HTTPS cookies, use object storage, and route same-origin API traffic through its TLS ingress. It also needs email verification/reset, account recovery, usage billing/quotas, backups, retention and operational monitoring before public launch. Request-counter load and the actual ingress identity boundary need independent production validation.
+
+### Shared request limits
+
+Migration `011_request_limits.sql` creates atomic PostgreSQL fixed windows. Protected routes authenticate the session before counting the verified user ID. Session rotation and API restarts do not reset an account's allowance, and accounts behind the same network do not share protected-route counters.
+
+| Scope | Default allowance | Routes |
+| --- | --- | --- |
+| Ordinary API | 120/minute | Other authenticated reads and mutations |
+| Chat | 20/minute | Message generation |
+| Speech | 20/minute | Text to speech |
+| Transcription | 20/minute | Speech to text |
+| Realtime | 4/hour | Voice-session creation |
+| Control | 120/minute | Job cancellation, voice-session release, logout |
+| Anonymous | Public 120/minute; login 20/minute; registration 10/minute | Public capabilities and authentication |
+
+Scopes are exclusive: generation does not also consume the ordinary API window. Controls have a separate bounded window, so exhausted ordinary/generation allowance does not block cancellation or release. Existing ownership checks, realtime usage checks and concurrent leases still apply. Invalid or expired sessions return 401 before protected quota writes. A denied request returns 429 with a positive `Retry-After`, exposed through CORS; unavailable counters return a sanitized 503 before providers or handlers run.
+
+Anonymous subjects are canonicalized hashes of the actual socket peer, never cookies or arbitrary forwarding headers. Behind a reverse proxy the socket may represent the proxy itself; trusted ingress identity and edge abuse limits must be designed and tested before production. Health, static assets, preflight and unknown routes do not consume these counters.
+
+Counter queries have a transaction-local PostgreSQL statement timeout (default 2000ms, trusted override 50–5000ms). The existing pool connection timeout is 5000ms; these are separate bounds, not an end-to-end HTTP deadline. Expired rows are cleaned in bounded batches with a separate timeout and `SKIP LOCKED`. Tests/configuration may supply trusted server policy overrides through `AppOptions.requestLimits`; request input cannot select policy. These limits count attempts, including authenticated requests that later fail validation; they are not billing or a global model-spend budget.
+
+## Verification
+
+```sh
+pnpm --filter @companion/platform-api check
+pnpm --filter @companion/platform-api test
+```
+
+Tests use unique temporary PostgreSQL schemas, private temporary files and a unique real Redis queue. They verify authentication, CSRF rejection, two-user isolation, message streaming and ordering, attachment ownership, approval gating, concurrent claims, failure persistence, generation-aware retry, cancellation, interrupted-task review, provider task recovery, active-job limits and actual BullMQ outbox dispatch. Voice-history integration tests also verify explicit unverified provenance, separation from ordinary messages, server-issued session ownership, post-release saves, idempotent concurrent retries, rejected credential/event fields, audio ownership and cumulative limits. The temporary schemas and blobs are removed afterward.
+
+Model-relay fixtures inject Responses transports and fictional credentials. They cover worker authorization, approved model/policy binding, atomic job and daily reservations, duplicate rejection, hosted-tool/state rejection, metadata stripping, sanitized provider failures, incomplete output, usage/size limits, cancellation and uncertainty propagation into job state. The core stdio fixtures additionally cover framing, concurrency, bounded output and cancellation settlement.
+
+Workflow fixtures verify owner/CSRF isolation, optimistic edit conflicts, atomic template capacity, bounded plans, credential rejection, image-reference binding and immutable job snapshots. Checkpoint fixtures use real PostgreSQL and private storage to test lease/approval/hash/revision checks, partial artifacts, cancellation, lost commit acknowledgements, unknown-result holds and reviewed handle recovery. Injected real-runtime transports verify that recovery polls an existing video task without repeating completed text generation, and that a generated private image supplies the next Ark request while an ordinary same-owner upload remains inaccessible through the checkpoint reader. Final-publication fixtures reject expired leases or changed approvals/definitions and clean unpublished ordinary-job output.
+
+Private-artwork fixtures use real PostgreSQL and private files with injected provider transports. A three-job generation/edit/edit chain verifies that each edit receives the original saved bytes in multipart input, creates independent output and retains the source. Repeated reference GETs leave upload/blob counts unchanged. Two-account tests cover ownership of artifacts, uploads and source jobs; malformed metadata, unsupported MIME, signature errors, size limits and missing provider reference support are rejected before a generation request. An actual Agent adapter with injected Responses transport verifies `list_jobs` → `get_artifact_reference` → `create_job` with owned references, plus foreign and non-image rejection. These fixtures call no commercial model and do not verify image decoding, paid account access or generated-image quality.
+
+Opt-in harness integration uses a locally built `companion-codex-relay:local` image, real Docker isolation and the official Codex executable, while continuing to supply fake Responses rather than calling a commercial model. It verifies that the approved platform job actually runs a command, creates a file and stores the resulting private artifact through the audited broker. It requires Docker, the reviewed image and explicit harness-test settings; the default test run skips it.
+
+```sh
+PLATFORM_TEST_REAL_HARNESS=1 PLATFORM_TEST_CLI_EXTERNAL_SANDBOX=1 pnpm --filter @companion/platform-api exec tsx --test test/model-relay.integration.test.ts
+```
+
+The external-sandbox fixture setting makes the Docker worker's network, mounts, user and resource controls the execution boundary; see the reviewed harness configuration in `packages/ai-core/README.md`. Neither this fixture nor the ordinary broker tests verify real provider entitlement, paid model quality or production billing.
+
+Queue behavior follows the [BullMQ worker documentation](https://docs.bullmq.io/guide/workers/) and [idempotent-job guidance](https://docs.bullmq.io/patterns/idempotent-jobs). External providers that do not support idempotency cannot provide an exactly-once guarantee; the uncertainty state preserves that distinction.

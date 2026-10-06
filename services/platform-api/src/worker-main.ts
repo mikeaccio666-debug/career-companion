@@ -1,0 +1,13 @@
+import { createProviderRuntime } from '@companion/ai-core';
+import { Database } from './database.ts';
+import { readConfig } from './config.ts';
+import { createStorage } from './storage.ts';
+import { createWorker, JobService, recoverInterrupted } from './jobs.ts';
+const config=readConfig(),db=new Database(config.databaseUrl);
+const jobs=new JobService(db,config,createProviderRuntime(),createStorage(config));
+await db.query('SELECT 1');await recoverInterrupted(jobs);
+const worker=createWorker(jobs);
+worker.on('error',()=>{process.stderr.write('Worker connection interrupted; waiting for recovery.\n');});
+const recovery=setInterval(()=>void recoverInterrupted(jobs).catch(()=>{}),15_000);recovery.unref();
+process.stdout.write('Platform task worker started.\n');
+for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{clearInterval(recovery);void worker.close().then(()=>db.close()).then(()=>process.exit(0));});

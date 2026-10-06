@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    jobvite 填充率基准夹具。
+
+    出处：由 tests/apply-jobvite-adapter.test.ts 的 mountJobviteFixture() 提升而来。
+    来源是 2026-08-23 对 jobs.jobvite.com/ninjaone/job/<id>/apply 真实在招岗位的实测
+    —— **数据同意闸由负责人本人过**（铁律 5：那一下永远由用户点），我们在之后接管。
+
+    与其余夹具同一性质：**静态快照，不是线上抓取**。引用基线数字时必须连
+    citationScope 一起转述。
+
+    这一家的 name/id 刻意保留实测到的逐字段 token（input-yH3T0fwn）：
+    它们跨租户不可用，任何靠它们过的断言都没在测真链路（钩子是 autocomplete）。
+    两个文件输入刻意留在 <form> **之外** —— 锚点必须是容器才罩得住。
+  -->
+  <body>
+
+    <article class="jv-page-body">
+      <div class="jv-wrapper">
+        <div class="jv-form jv-apply-form">
+          <form name="scopeData.applyForm">
+            <label for="jv-field-yH3T0fwn">Chosen First Name*</label>
+            <input id="jv-field-yH3T0fwn" name="input-yH3T0fwn" type="text" autocomplete="given-name" required />
+            <label for="jv-field-yG3T0fwm">Chosen Last Name*</label>
+            <input id="jv-field-yG3T0fwm" name="input-yG3T0fwm" type="text" autocomplete="family-name" required />
+            <label for="jv-field-yF3T0fwl">Email*</label>
+            <input id="jv-field-yF3T0fwl" name="input-yF3T0fwl" type="text" autocomplete="email" required />
+            <label for="jv-field-yI3T0fwo">Cell Phone*</label>
+            <input id="jv-field-yI3T0fwo" name="input-yI3T0fwo" type="tel" autocomplete="tel" required />
+            <label for="jv-field-yL3T0fwr">Country*</label>
+            <select id="jv-field-yL3T0fwr" name="input-yL3T0fwr" autocomplete="country-name" required>
+              <option value="">Select</option><option value="DE">Germany</option>
+            </select>
+            <label for="jv-field-yK3T0fwq">State*</label>
+            <select id="jv-field-yK3T0fwq" name="input-yK3T0fwq" autocomplete="address-level1" required>
+              <option value="">Select</option><option value="BE">Berlin</option>
+            </select>
+            <label for="jv-field-yJ3T0fwp">City*</label>
+            <input id="jv-field-yJ3T0fwp" name="input-yJ3T0fwp" type="text" autocomplete="address-level2" required />
+            <textarea id="g-recaptcha-response" name="g-recaptcha-response"></textarea>
+          </form>
+          <!-- ⚠️ 两个文件输入在 <form> **之外**：锚点必须是容器，不是 form。 -->
+          <div><label for="file-input-0">File</label>
+            <input id="file-input-0" type="file" />
+            <textarea id="jv-paste-resume-textarea0" placeholder="Type or paste your Resume here"></textarea></div>
+          <div><label for="file-input-1">File</label>
+            <input id="file-input-1" type="file" />
+            <textarea id="jv-paste-resume-textarea1" placeholder="Type or paste your Cover Letter here"></textarea></div>
+        </div>
+      </div>
+    </article>
+  </body>
+</html>

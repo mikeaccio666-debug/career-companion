@@ -1,0 +1,37 @@
+<!--
+  BambooHR 申请页的最终提交（2026-10-04 只读实测：<公司>.bamboohr.com/careers/<id>，nomadgcs、flchealth、kiln、youngliving、
+  securitymetrics、mountainland 等在招岗位；只点了规则声明的 applyGate「Apply for This Job」把表展开，没有输入、没有提交）。
+  合成夹具，只留结构与钩子。
+
+  实测记下的：「Submit Application」是原生 <button type="submit" form="job-application-form">，但它**不在** form 里——
+  它住在表下方那条固定的操作栏里，靠 form 属性认领这张表（button.form 就是 form#job-application-form）。表里一个原生提交
+  都没有。所以只在扫描根（那张表）里找它找不到；规则写的选择器带着 form="job-application-form"，内核在表里没找到时，只认
+  整页恰好一颗、form 属性正好指着这张表的那一颗。操作栏里另一颗「Cancel」也写着 type=submit，但它没有 form 属性、也不在任何
+  form 里（button.form 是 null），选择器认不到它。
+-->
+<section>
+  <form id="job-application-form">
+    <label for="firstName">First Name *</label><input id="firstName" name="firstName" type="text" />
+    <label for="lastName">Last Name *</label><input id="lastName" name="lastName" type="text" />
+    <label for="email">Email *</label><input id="email" name="email" type="text" />
+    <label for="phone">Phone *</label><input id="phone" name="phone" type="text" />
+    <div>
+      <div><span>Resume*</span></div>
+      <div>
+        <button type="button"><span>Choose File*</span></button>
+        <input aria-label="file-input" data-bi-id="-file-input" required tabindex="-1" type="file" />
+      </div>
+    </div>
+    <label for="lu">LinkedIn URL</label><input id="lu" name="linkedinUrl" type="text" />
+  </form>
+</section>
+<div class="fabric-root">
+  <div class="fabric-content">
+    <div class="fabric-left">
+      <div class="fabric-actions">
+        <button class="MuiButtonBase-root MuiButton-root" data-fabric-component="Button" form="job-application-form" type="submit">Submit Application</button>
+        <button class="MuiButtonBase-root MuiButton-root" data-fabric-component="Button" type="submit">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>

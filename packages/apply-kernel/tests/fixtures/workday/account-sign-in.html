@@ -1,0 +1,33 @@
+<!--
+  Workday 账号墙「用邮箱登录」这一步的合成夹具（结构照 2026-09-28 nvidia.wd5 只读实测：点了「Sign in with email」这一
+  视图切换，没有输入、没有提交）。
+
+  实测记下的：真正的提交按钮 signInSubmitButton 是 type=submit、aria-hidden、tabindex=-2，上面罩着一层同样大小的
+  `div[role=button][data-automation-id=click_filter]`（aria-label「Submit」）——人点到的是那一层，它的 onClick 走网站自己的
+  表单提交（form 上挂着 React 的 onSubmit）。两个输入框都没有 name；「Create Account」切换钮不在 form 里、没写 type。
+  页面别处有一个 beecatcher 蜜罐（name=website、1×0 像素），不在账号墙里。
+-->
+<div data-automation-id="applyFlowPage">
+  <div data-automation-id="signInContent">
+    <div dir="ltr">
+      <h3 id="authViewTitle">Sign In</h3>
+      <form data-automation-id="signInFormo">
+        <div data-automation-id="formField-email">
+          <label for="input-6"><span>Email Address<abbr aria-hidden="true">*</abbr></span></label>
+          <div><input type="text" data-automation-id="email" id="input-6" aria-required="true" aria-invalid="false" autocomplete="email"></div>
+        </div>
+        <div data-automation-id="formField-password">
+          <label for="input-7"><span>Password<abbr aria-hidden="true">*</abbr></span></label>
+          <div><input type="password" data-automation-id="password" id="input-7" aria-required="true" autocomplete="current-password"></div>
+        </div>
+        <div data-automation-id="noCaptchaWrapper">
+          <div aria-label="Submit" role="button" tabindex="0" data-automation-id="click_filter"></div>
+          <button type="submit" data-automation-id="signInSubmitButton" tabindex="-2" aria-hidden="true">Sign In</button>
+        </div>
+      </form>
+      <div>Don't have an account yet?<button data-automation-id="createAccountLink">Create Account</button></div>
+      <div><button data-automation-id="forgotPasswordLink">Forgot your password?</button></div>
+    </div>
+  </div>
+</div>
+<input id="beecatcher-sign-in" name="website" type="text" data-automation-id="beecatcher" style="width:1px;height:0">

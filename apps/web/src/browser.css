@@ -1,0 +1,84 @@
+.browser-editor, .browser-review { border: 1px solid #dfe9d1; border-radius: 14px; background: #fffefa; padding: 23px; min-width: 0; }
+.browser-editor fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.browser-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 21px; }
+.browser-editor-heading h2 { color: #557141; font-size: 16px; font-weight: 500; margin: 0; }
+.browser-editor-heading .badge { font-size: 10px; flex-shrink: 0; }
+.browser-editor label { display: flex; flex-direction: column; gap: 8px; color: #64794f; font-size: 12px; min-width: 0; margin-bottom: 17px; }
+.browser-editor input, .browser-editor textarea, .browser-editor select { width: 100%; min-width: 0; box-sizing: border-box; padding: 11px 12px; font-size: 14px; color: #526e40; border: 1px solid #dce8cf; border-radius: 8px; background: #f9fcf4; }
+.browser-editor textarea { resize: vertical; line-height: 1.9; }
+.browser-editor input::placeholder, .browser-editor textarea::placeholder { color: #77836b; }
+.browser-design-note { margin: 13px 0 17px; color: #6a7e57; font-size: 12px; line-height: 1.85; overflow-wrap: anywhere; }
+.browser-actions-list { display: flex; flex-direction: column; gap: 13px; margin-top: 20px; }
+.browser-edit-action { border: 1px solid #dfead1; border-radius: 10px; background: #f7fbf0; padding: 16px; min-width: 0; }
+.browser-action-top { display: flex; align-items: center; gap: 9px; margin-bottom: 18px; }
+.browser-action-number { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; background: #e8f2dc; border-radius: 8px; font-size: 12px; color: #5c7646; }
+.browser-action-top > label { flex: 1; flex-direction: row; align-items: center; gap: 8px; margin: 0; }
+.browser-action-top > label select { width: 125px; padding: 8px 10px; background: #fcfef8; }
+.browser-order-actions { display: flex; gap: 3px; margin-left: auto; }
+.browser-order-actions .icon-button { width: 31px; height: 35px; color: #657b52; }
+.browser-order-actions .icon-button:disabled { opacity: .32; }
+.browser-action-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; min-width: 0; }
+.browser-edit-action > label:last-child, .browser-edit-action > .browser-action-fields:last-child > label { margin-bottom: 0; }
+.browser-add-action { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 17px 0; }
+.browser-add-action > label { flex-direction: row; align-items: center; gap: 8px; margin: 0; }
+.browser-add-action select { width: 130px; padding: 9px; }
+.browser-add-action > span { margin-left: auto; white-space: nowrap; font-size: 11px; color: #778468; }
+.browser-editor-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 11px; border-top: 1px solid #e2ebd8; padding-top: 18px; margin-top: 20px; }
+.browser-editor-footer > span { flex: 1; color: #748564; font-size: 11px; line-height: 1.8; }
+.browser-editor .primary, .browser-editor .secondary, .browser-review .primary, .browser-review .secondary, .browser-result-next .secondary { font-size: 13px; padding: 10px 12px; min-height: 40px; }
+.browser-editor fieldset:disabled > label, .browser-editor fieldset:disabled .browser-actions-list { opacity: .6; }
+.browser-boundary-note { color: #718461; font-size: 12px; line-height: 1.9; margin: 13px 0; overflow-wrap: anywhere; }
+.browser-review { margin-top: 19px; background: #fbfdf7; }
+.browser-plan-details dl { margin: 0; display: flex; flex-direction: column; gap: 15px; }
+.browser-plan-details dt { display: flex; gap: 5px; align-items: center; margin-bottom: 6px; color: #6d7f5a; font-size: 12px; }
+.browser-plan-details dd { margin: 0; font-size: 14px; color: #557141; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.browser-plan-url { display: block; font-size: 12px; margin-top: 2px; color: #7b876d; overflow-wrap: anywhere; }
+.browser-plan-details ol { list-style: none; display: flex; flex-direction: column; gap: 10px; margin: 19px 0 0; padding: 0; }
+.browser-plan-details li { min-width: 0; padding: 13px; border: 1px solid #dfe9d2; border-radius: 9px; background: #f5faed; }
+.browser-plan-details li strong { display: block; font-weight: 500; font-size: 13px; color: #5b7745; line-height: 1.8; overflow-wrap: anywhere; }
+.browser-plan-details li small { display: block; margin-top: 10px; font-size: 11px; color: #718360; }
+.browser-plan-details pre { margin: 7px 0 0; padding: 10px; color: #567042; font-size: 13px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; background: #fcfef8; border: 1px solid #e3ecd9; border-radius: 6px; font-family: ui-monospace, monospace; }
+.browser-readonly-summary { padding: 12px 14px; border-radius: 8px; background: #edf6e1; color: #627a4c; font-size: 13px; line-height: 1.8; margin: 17px 0 12px; }
+.browser-readiness { padding: 13px; background: #fcf8e9; border: 1px solid #e5d7b0; border-radius: 8px; margin: 17px 0; color: #7d6f46; font-size: 12px; line-height: 1.9; }
+.browser-readiness p { margin: 0; }
+.browser-review-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.browser-notice { border-radius: 8px; background: #edf7df; color: #53743c; font-size: 12px; line-height: 1.9; padding: 13px 15px; }
+.browser-job-with-draft { min-width: 0; }
+.browser-result-next { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 10px 0 7px; }
+.browser-result-next small { flex: 1; color: #728361; font-size: 11px; line-height: 1.9; min-width: 150px; }
+.browser-job-progress { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 12px 0; padding: 9px 11px; border-radius: 7px; background: #f1f7e8; color: #647c4f; }
+.browser-job-progress strong { font-size: 12px; font-weight: 500; }
+.browser-job-progress > span { font-size: 11px; color: #7b886b; margin-left: auto; }
+.browser-job-progress p { width: 100%; color: #7c7050; font-size: 11px; line-height: 1.85; margin: 5px 0 0; }
+.browser-approval-card > strong { display: flex; align-items: center; gap: 7px; line-height: 1.8; }
+.browser-approval-card .browser-plan-details { margin-top: 15px; }
+.browser-approval-card .browser-plan-details dl { gap: 12px; }
+.browser-approval-card .browser-plan-details dt { font-size: 11px; }
+.browser-approval-card .browser-plan-details dd { font-size: 12px; line-height: 1.9; }
+.browser-approval-card .browser-plan-url { font-size: 10px; }
+.browser-approval-card .browser-plan-details li { padding: 10px; }
+.browser-approval-card .browser-plan-details li strong { font-size: 12px; }
+.browser-approval-card .browser-plan-details pre { font-size: 12px; line-height: 1.9; max-height: none; overflow: visible; margin: 7px 0 0; color: #567042; }
+.browser-approval-card .browser-boundary-note { font-size: 11px; }
+.browser-approval-card .approval-decisions { margin-top: 17px; }
+@media (max-width: 699px) {
+  .browser-editor, .browser-review { padding: 16px; border-radius: 12px; }
+  .browser-editor input, .browser-editor textarea, .browser-editor select { font-size: 16px; }
+  .browser-action-top { flex-wrap: wrap; gap: 7px; }
+  .browser-action-top > label { gap: 6px; }
+  .browser-action-top > label select { width: 103px; }
+  .browser-order-actions { gap: 0; }
+  .browser-order-actions .icon-button { width: 28px; height: 40px; }
+  .browser-edit-action { padding: 13px; }
+  .browser-action-fields { grid-template-columns: 1fr; gap: 0; }
+  .browser-add-action { gap: 8px; }
+  .browser-add-action > label { font-size: 11px; gap: 6px; }
+  .browser-add-action select { width: 110px; }
+  .browser-add-action .secondary { padding: 10px; }
+  .browser-editor-footer > span { width: 100%; flex: auto; }
+  .browser-editor-footer .primary { margin-left: auto; }
+  .browser-review-actions .primary, .browser-review-actions .secondary { flex: 1; justify-content: center; min-height: 44px; padding: 10px 8px; }
+  .browser-plan-details dd, .browser-plan-details pre { font-size: 14px; }
+  .browser-result-next { align-items: flex-start; gap: 8px; }
+  .browser-result-next .secondary { min-height: 44px; }
+}

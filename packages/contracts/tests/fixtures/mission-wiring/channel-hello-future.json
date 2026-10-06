@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "kind": "channel/hello",
+  "clientRequestId": "discover-1",
+  "expectedOwnerId": "00000000-0000-4000-8000-00000000a001",
+  "requiredCapabilities": [
+    "DISCOVERY_V1",
+    "FORM_PLAN_V1",
+    "GUIDED_AUTOFILL_V1",
+    "ZZZ_FUTURE_V9"
+  ]
+}

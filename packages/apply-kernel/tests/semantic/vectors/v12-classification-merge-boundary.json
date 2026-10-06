@@ -1,0 +1,107 @@
+{
+  "id": "V12-classification-merge",
+  "scenarioClass": "classification-merge",
+  "title": "Members that disagree make the question UNRESOLVED, and confidence is the weakest member's",
+  "todayBehavior": "Each member carries its own kind and confidence, so a group whose members disagree has no single answer and nothing records the disagreement.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "site",
+          "shape": "URL",
+          "label": "Website"
+        },
+        {
+          "ref": "city",
+          "shape": "TEXT",
+          "label": "City",
+          "required": true
+        },
+        {
+          "ref": "pw",
+          "shape": "PASSWORD",
+          "label": "Create a password",
+          "required": true
+        },
+        {
+          "ref": "g_a",
+          "shape": "RADIO",
+          "label": "Option A",
+          "legend": "Pick one",
+          "groupKey": "pick"
+        },
+        {
+          "ref": "g_b",
+          "shape": "RADIO",
+          "label": "Option B",
+          "legend": "Pick one",
+          "groupKey": "pick"
+        }
+      ],
+      "ua2": {
+        "site": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "URL",
+          "confidence": "MEDIUM"
+        },
+        "city": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "CITY",
+          "confidence": "LOW"
+        },
+        "pw": {
+          "kind": "HUMAN_ACTION_REQUIRED"
+        },
+        "g_a": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "g_b": {
+          "kind": "HUMAN_ACTION_REQUIRED",
+          "confidence": "MEDIUM"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "PASSWORD",
+        "members": [
+          "pw"
+        ]
+      },
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "g_a",
+          "g_b"
+        ],
+        "grouping": "SHARED_NAME"
+      }
+    ],
+    "nodeCount": 4,
+    "classifications": {
+      "site": {
+        "kind": "CANONICAL_FIELD",
+        "canonicalField": "URL",
+        "confidence": "MEDIUM",
+        "merge": "SINGLE"
+      },
+      "city": {
+        "confidence": "LOW",
+        "canonicalField": "CITY"
+      },
+      "pw": {
+        "kind": "HUMAN_ACTION_REQUIRED"
+      },
+      "g_a": {
+        "kind": "UNRESOLVED",
+        "merge": "CLASSIFICATION_CONFLICT",
+        "canonicalField": null,
+        "confidence": "MEDIUM"
+      }
+    }
+  }
+}

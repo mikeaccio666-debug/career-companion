@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    lever 填充率基准夹具。
+
+    出处：由 tests/apply-lever-adapter.test.ts 的 mountLeverFixture() 提升而来。那份结构的来源见
+    packages/apply-rules/rules/lever.json 的 $comment：
+    Lever 适配规则。2026-08-01 对 jobs.lever.co/<org>/<uuid>/apply 真实 posting 只读核实。
+
+    与 greenhouse 两份夹具同一性质：**静态快照，不是线上抓取**，也不代表该
+    厂商全部表单形态。引用基线数字时必须连 citationScope 一起转述。
+
+    2026-09-15 按 jobs.lever.co/palantir/ac978161-…/apply 只读实测补上了简历栏与
+    结构化地点题的**标签内部结构**。两处都是同一类缺陷：typeahead 与上传部件的
+    三段状态文案就放在 `<label>` 里，靠类名（样式表里的 `display:none`）藏着，
+    于是标签读成
+      「Current location No location found. Try entering a different locationLoading」
+      「Resume/CV ATTACH RESUME/CVCouldn't auto-read resume.Analyzing resume...Success!」
+    ——属性层（inline style / hidden / aria-hidden）一个都读不到。
+  -->
+  <head>
+    <style>
+      /* 线上样式表里的原样声明：状态文案靠类名藏，不是 inline style。 */
+      .dropdown-no-results,
+      .dropdown-loading-results,
+      .resume-upload-failure,
+      .resume-upload-working,
+      .resume-upload-success { display: none; }
+    </style>
+  </head>
+  <body>
+
+<div class="content">
+  <form id="application-form" method="POST">
+    <label><div class="application-label">Resume/CV <span class="required">✱</span></div>
+      <div class="application-field">
+        <a href="#" class="postings-btn visible-resume-upload">
+          <svg class="icon icon-paperclip" width="16" height="16" viewBox="0 0 16 16"><path d="M4 3.375C4 1.5125 5.5125 0 7.375 0z"></path></svg>
+          <span class="filename"></span><span class="default-label">ATTACH RESUME/CV</span>
+          <input class="application-file-input" data-qa="input-resume" name="resume" id="resume-upload-input" tabindex="-1" type="file" />
+        </a>
+        <span class="resume-upload-failure"><div class="resume-upload-label">Couldn't auto-read resume.</div></span>
+        <span class="resume-upload-working"><div class="resume-upload-label">Analyzing resume...</div></span>
+        <span class="resume-upload-success"><div class="resume-upload-label">Success!</div></span>
+      </div>
+    </label>
+
+    <li class="application-question">
+      <label><span class="application-label">Full name✱</span>
+        <input type="text" name="name" required /></label>
+    </li>
+
+    <li class="application-question">
+      <label><span class="application-label">Email✱</span>
+        <input type="email" name="email" required /></label>
+    </li>
+
+    <li class="application-question">
+      <label><span class="application-label">Phone ✱</span>
+        <input type="text" name="phone" required /></label>
+    </li>
+
+    <!-- 2026-09-15 按 jobs.lever.co/palantir/ac978161-…/apply 只读实测更新：结构化地点问题是一个
+         li.application-question[data-qa=structured-contact-location-question]，隐藏见证是
+         input#selected-location，建议渲染进 .dropdown-results。lever.json 的 typeaheadComboboxes
+         就是按这三处声明的。 -->
+    <li class="application-question" data-qa="structured-contact-location-question">
+      <label><span class="application-label">Current location ✱</span>
+        <div class="application-field">
+          <input type="text" name="location" id="location-input" class="location-input" required />
+          <input type="hidden" id="selected-location" name="selectedLocation" />
+          <!-- 三段状态文案都在 label 里，全部靠类名 display:none 藏着。 -->
+          <div class="dropdown-container">
+            <div class="dropdown-results"></div>
+            <div class="dropdown-no-results">No location found. Try entering a different location</div>
+            <div class="dropdown-loading-results"><svg class="icon icon-loading-spinner" width="16" height="16" viewBox="0 0 16 16"><path d="M16 8C16 12.4183 12.4183 16 8 16z"></path></svg><div>Loading</div></div>
+          </div>
+        </div></label>
+    </li>
+
+    <li class="application-question">
+      <label><span class="application-label">Current company</span>
+        <input type="text" name="org" /></label>
+    </li>
+
+    <li class="application-question">
+      <label><span class="application-label">LinkedIn URL</span>
+        <input type="text" name="urls[LinkedIn]" /></label>
+    </li>
+    <li class="application-question">
+      <label><span class="application-label">GitHub URL</span>
+        <input type="text" name="urls[GitHub]" /></label>
+    </li>
+    <li class="application-question">
+      <label><span class="application-label">Portfolio URL</span>
+        <input type="text" name="urls[Portfolio]" /></label>
+    </li>
+    <li class="application-question">
+      <label><span class="application-label">Other website</span>
+        <input type="text" name="urls[Other]" /></label>
+    </li>
+
+    <li class="application-question">
+      <label><span class="application-label">Pronouns</span>
+        <input type="checkbox" name="pronouns" value="she/her" /></label>
+    </li>
+
+    <li class="application-question">
+      <label><span class="application-label">Why do you want to work here?</span>
+        <textarea name="cards[e27c9c9a][field1]"></textarea></label>
+    </li>
+    <li class="application-question">
+      <label><span class="application-label">Years of experience</span>
+        <select name="cards[e27c9c9a][field0]"><option value=""></option><option value="3">3</option></select></label>
+    </li>
+
+    <!--
+      2026-09-15 jobs.lever.co/palantir/ac978161-6f46-4f6b-ad9e-a258e642751c/apply 只读实测：
+      逐 posting 自定义题（cards[<uuid>][fieldN]）的真实形态。题干在 div.application-label > div.text
+      （必填带 span.required ✱），控件在兄弟 div.application-field 里：文本题只有 placeholder，
+      单选/复选/下拉都没有 legend、label 或 aria 名字。uuid 与选项文案为该 posting 原样（复选组
+      33 项只留 3 项，university 下拉 3302 项只留 3 项），值全部为空。
+      规则 lever.json 的 questionScopes 就是照这段声明的；没有它，这里 5 道题的题干为空或只剩 placeholder。
+    -->
+    <li class="application-question custom-question">
+      <div>
+        <div class="application-label full-width text"><div class="text">Preferred Name | What would you like us to call you?</div></div>
+        <div class="application-field full-width"><input class="card-field-input" type="text" placeholder="Type your response" name="cards[a69a985a-eae9-4c14-90fb-b5a4b891523e][field1]"></div>
+      </div>
+    </li>
+    <li class="application-question custom-question">
+      <div>
+        <div class="application-label full-width multiple-select"><div class="text">Language Skill(s) (Check all that apply)<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field">
+          <ul data-qa="checkboxes">
+            <li><label><input type="checkbox" name="cards[a69a985a-eae9-4c14-90fb-b5a4b891523e][field0]" value="English (ENG)" required=""><span class="application-answer-alternative">English (ENG)</span></label></li>
+            <li><label><input type="checkbox" name="cards[a69a985a-eae9-4c14-90fb-b5a4b891523e][field0]" value="Spanish (SPA)" required=""><span class="application-answer-alternative">Spanish (SPA)</span></label></li>
+            <li><label><input type="checkbox" name="cards[a69a985a-eae9-4c14-90fb-b5a4b891523e][field0]" value="French (FRA)" required=""><span class="application-answer-alternative">French (FRA)</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </li>
+    <li class="application-question custom-question">
+      <div>
+        <div class="application-label full-width multiple-choice"><div class="text">Are you legally authorized to work in the country for which you are applying?<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field">
+          <ul data-qa="multiple-choice">
+            <li><label><input type="radio" name="cards[1c719ca9-5069-4afe-9e82-39ca420e0edb][field0]" value="Yes" required="required"><span class="application-answer-alternative">Yes</span></label></li>
+            <li><label><input type="radio" name="cards[1c719ca9-5069-4afe-9e82-39ca420e0edb][field0]" value="No" required="required"><span class="application-answer-alternative">No</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </li>
+    <li class="application-question custom-question">
+      <div>
+        <div class="application-label full-width dropdown"><div class="text">Please tell us how you heard about this opportunity.<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field">
+          <div class="application-dropdown">
+            <select name="cards[a6197d84-549e-4a91-8bb0-6af972510013][field0]" required="">
+              <option value="">Select...</option>
+              <option value="Agency or Non-Palantir Recruiter">Agency or Non-Palantir Recruiter</option>
+              <option value="America's Job Exchange">America's Job Exchange</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </li>
+    <li class="application-question custom-question">
+      <div>
+        <div class="application-label full-width multiple-choice"><div class="text">As part of our interview process, we may use AI notetakers to transcribe conversations for accuracy and efficiency. Please see our candidate privacy policy for more information on how we process your data. Your decision to opt in or out of this tooling will not impact your candidacy.<span class="required">✱</span></div></div>
+        <div class="application-field full-width required-field">
+          <ul data-qa="multiple-choice">
+            <li><label><input type="radio" name="cards[73796cde-fc01-4758-9002-c85155f3503d][field0]" value="Yes, I consent" required="required"><span class="application-answer-alternative">Yes, I consent</span></label></li>
+            <li><label><input type="radio" name="cards[73796cde-fc01-4758-9002-c85155f3503d][field0]" value="No, I do not consent" required="required"><span class="application-answer-alternative">No, I do not consent</span></label></li>
+          </ul>
+        </div>
+      </div>
+    </li>
+  </form>
+</div>
+  </body>
+</html>

@@ -1,0 +1,76 @@
+{
+  "id": "V03-radio-legend-only",
+  "scenarioClass": "radio-checkbox-group",
+  "title": "Without the sidecar, contiguous same-legend radios group structurally and say so",
+  "todayBehavior": "Nothing groups them at all: four radios become four questions. With legend-only evidence the grouping is a guess, and the consumer must be able to see that it is.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "sidecar": false,
+      "controls": [
+        {
+          "ref": "r1_yes",
+          "shape": "RADIO",
+          "label": "Yes",
+          "legend": "Are you willing to relocate?",
+          "required": true
+        },
+        {
+          "ref": "r1_no",
+          "shape": "RADIO",
+          "label": "No",
+          "legend": "Are you willing to relocate?",
+          "required": true
+        },
+        {
+          "ref": "r2_yes",
+          "shape": "RADIO",
+          "label": "Yes",
+          "legend": "Have you worked here before?"
+        },
+        {
+          "ref": "r2_no",
+          "shape": "RADIO",
+          "label": "No",
+          "legend": "Have you worked here before?"
+        }
+      ],
+      "ua2": {
+        "r1_yes": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "r1_no": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "r2_yes": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "r2_no": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "r1_yes",
+          "r1_no"
+        ],
+        "grouping": "SHARED_FIELDSET_LEGEND"
+      },
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "r2_yes",
+          "r2_no"
+        ],
+        "grouping": "SHARED_FIELDSET_LEGEND"
+      }
+    ],
+    "nodeCount": 2
+  }
+}

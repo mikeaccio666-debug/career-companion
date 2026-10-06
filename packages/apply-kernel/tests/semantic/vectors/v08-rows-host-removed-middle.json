@@ -1,0 +1,128 @@
+{
+  "id": "V08-rows-host-removed",
+  "scenarioClass": "row-id-reuse",
+  "title": "The host removes the middle row: the third row inherits the second row's UA-1 address but keeps its own incarnation, and the removed row retires",
+  "todayBehavior": "identityDigest is nonce + DOM path, so the shifted third row is indistinguishable from the removed second row, and an ordinal-keyed row scope silently repoints at a different row.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "c1",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "E1"
+          }
+        },
+        {
+          "ref": "c2",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 1,
+            "shape": "exp",
+            "element": "E2"
+          }
+        },
+        {
+          "ref": "c3",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 2,
+            "shape": "exp",
+            "element": "E3"
+          }
+        }
+      ],
+      "ua2": {
+        "c1": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "c2": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "c3": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        }
+      }
+    },
+    {
+      "cause": "HOST_MUTATION_RESCAN",
+      "domGeneration": "g1",
+      "delta": {
+        "inherit": true,
+        "remove": [
+          "c2"
+        ],
+        "patch": {
+          "c3": {
+            "ref": "c3_shifted",
+            "element": "c3",
+            "row": {
+              "group": "exp",
+              "ordinal": 1,
+              "shape": "exp",
+              "element": "E3"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expected": {
+    "nodeCount": 3,
+    "liveRows": 2,
+    "retiredRows": 1,
+    "sameNode": [
+      [
+        "c3",
+        "c3_shifted"
+      ]
+    ],
+    "differentNode": [
+      [
+        "c2",
+        "c3_shifted"
+      ],
+      [
+        "c1",
+        "c3_shifted"
+      ]
+    ],
+    "rowTokensDiffer": [
+      [
+        "c2",
+        "c3_shifted"
+      ]
+    ],
+    "rowRetired": {
+      "c1": false,
+      "c2": true,
+      "c3_shifted": false
+    },
+    "nodeRowRetired": {
+      "c1": false,
+      "c2": true,
+      "c3_shifted": false
+    },
+    "rowOrdinals": {
+      "c1": 0,
+      "c2": 1,
+      "c3_shifted": 1
+    }
+  }
+}

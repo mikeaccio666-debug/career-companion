@@ -1,0 +1,98 @@
+{
+  "id": "V21-legend-contiguity",
+  "scenarioClass": "radio-checkbox-group",
+  "title": "Without the sidecar, same-legend radios separated by another question do not group, and a same-legend checkbox is not a radio member",
+  "todayBehavior": "Legend text is the only grouping signal available with no sidecar. Grouping every same-legend radio regardless of position would merge two questions that merely reuse a legend, and one answer would be written into both.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "sidecar": false,
+      "controls": [
+        {
+          "ref": "a_yes",
+          "shape": "RADIO",
+          "label": "Yes",
+          "legend": "Are you authorised to work?",
+          "required": true
+        },
+        {
+          "ref": "b_yes",
+          "shape": "RADIO",
+          "label": "Yes",
+          "legend": "Have you applied before?"
+        },
+        {
+          "ref": "a_no",
+          "shape": "RADIO",
+          "label": "No",
+          "legend": "Are you authorised to work?",
+          "required": true
+        },
+        {
+          "ref": "a_maybe",
+          "shape": "CHECKBOX",
+          "label": "Maybe",
+          "legend": "Are you authorised to work?"
+        }
+      ],
+      "ua2": {
+        "a_yes": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "b_yes": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "a_no": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "a_maybe": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "a_yes"
+        ],
+        "grouping": "SHARED_FIELDSET_LEGEND"
+      },
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "b_yes"
+        ],
+        "grouping": "SHARED_FIELDSET_LEGEND"
+      },
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "a_no"
+        ],
+        "grouping": "SHARED_FIELDSET_LEGEND"
+      },
+      {
+        "kind": "CHECKBOX_SINGLE",
+        "members": [
+          "a_maybe"
+        ],
+        "grouping": "SHARED_FIELDSET_LEGEND"
+      }
+    ],
+    "nodeCount": 4,
+    "differentNode": [
+      [
+        "a_yes",
+        "a_no"
+      ],
+      [
+        "a_no",
+        "a_maybe"
+      ]
+    ]
+  }
+}

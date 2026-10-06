@@ -1,0 +1,103 @@
+{
+  "id": "V26-split-date-near-miss",
+  "scenarioClass": "date",
+  "title": "Adjacent selects merge into one date only on real month/year evidence in one row",
+  "todayBehavior": "Nothing merges split dates. Merging on weaker evidence would fuse two unrelated choices, and one write would land across both.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "near_m",
+          "shape": "SELECT",
+          "label": "Month",
+          "optionsPreset": "MONTHS_SHORT_11",
+          "row": {
+            "group": "edu",
+            "ordinal": 0,
+            "shape": "edu",
+            "element": "U1"
+          }
+        },
+        {
+          "ref": "near_y",
+          "shape": "SELECT",
+          "label": "Year",
+          "optionsPreset": "YEARS_6",
+          "row": {
+            "group": "edu",
+            "ordinal": 0,
+            "shape": "edu",
+            "element": "U1"
+          }
+        },
+        {
+          "ref": "rowless_m",
+          "shape": "SELECT",
+          "label": "Month",
+          "optionsPreset": "MONTHS"
+        },
+        {
+          "ref": "rowed_y",
+          "shape": "SELECT",
+          "label": "Year",
+          "optionsPreset": "YEARS_6",
+          "row": {
+            "group": "edu",
+            "ordinal": 1,
+            "shape": "edu",
+            "element": "U2"
+          }
+        }
+      ],
+      "ua2": {
+        "near_m": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "near_y": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "rowless_m": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "rowed_y": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "near_m"
+        ],
+        "dateShape": null
+      },
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "near_y"
+        ],
+        "dateShape": null
+      },
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "rowless_m"
+        ],
+        "dateShape": null
+      },
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "rowed_y"
+        ],
+        "dateShape": null
+      }
+    ],
+    "nodeCount": 4
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@edaix/contracts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./execution-wizard": "./src/executionWizard.ts",
+    "./draft": "./src/draft/index.ts",
+    "./draft/pilot-ua2-classification": "./src/draft/pilotUa2Classification.ts",
+    "./draft/pilot-ua3-candidate-rule": "./src/draft/pilotUa3CandidateRule.ts",
+    "./draft/pilot-ua4-write-authority": "./src/draft/pilotUa4WriteAuthority.ts",
+    "./draft/answer-resolution": "./src/draft/answerResolution.ts",
+    "./draft/pilot-ua5-certification": "./src/draft/pilotUa5Certification.ts",
+    "./draft/pilot-ua5-profile-payloads": "./src/draft/pilotUa5ProfilePayloads.ts",
+    "./draft/pilot-ua5-profile-currentness": "./src/draft/pilotUa5ProfileCurrentness.ts",
+    "./draft/pilot-local-wizard": "./src/draft/pilotLocalWizard.ts",
+    "./draft/pilot-wizard-context": "./src/draft/pilotWizardContext.ts"
+  },
+  "typesVersions": {
+    "*": {
+      "execution-wizard": ["./src/executionWizard.ts"]
+    }
+  },
+  "sideEffects": false,
+  "scripts": {
+    "generate:iana-time-zones": "node scripts/generate-iana-time-zones.mjs",
+    "verify:iana-time-zones": "node scripts/generate-iana-time-zones.mjs --check",
+    "test": "vitest run",
+    "check": "tsc --noEmit && node -e \"Promise.all([import('@edaix/contracts'), import('@edaix/contracts/draft/pilot-ua2-classification'), import('@edaix/contracts/draft/pilot-ua3-candidate-rule'), import('@edaix/contracts/draft/pilot-ua4-write-authority'), import('@edaix/contracts/draft/answer-resolution'), import('@edaix/contracts/draft/pilot-ua5-profile-payloads')]).then(([stable, ua2, ua3, ua4, ar, ua5Profile]) => { if (stable.AGENT_API_BASE_PATH !== '/api/v1/agent' || typeof ua2.parsePilotUa2ClassificationRequest !== 'function' || typeof ua3.parsePilotUa3CandidateRuleRequest !== 'function' || typeof ua4.parsePilotUa4WriteAuthorityRequest !== 'function' || typeof ar.resolveAnswerDisposition !== 'function' || typeof ua5Profile.parsePilotUa5ProfilePayloadResponse !== 'function') process.exit(1); })\""
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

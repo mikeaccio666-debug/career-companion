@@ -1,0 +1,44 @@
+{
+  "$comment": "CONTROLLED_REHEARSAL only. Synthetic Data-L1-free combobox authority for Rippling-shaped kernel tests; never exported by package.json, runtime-release.ts, or release-manifest.json.",
+  "schemaVersion": 2,
+  "vendor": "rippling",
+  "applyPath": { "source": "^/controlled/rippling/?$" },
+  "anchors": ["form"],
+  "finalSubmitControl": null,
+  "excludeWithin": [],
+  "denyLabels": [],
+  "denyNameSubstrings": [],
+  "widgetNames": [],
+  "rowScopes": [],
+  "comboboxSemanticControls": [
+    {
+      "triggerSelector": "input[role=\"combobox\"]",
+      "openState": {
+        "attribute": "aria-expanded",
+        "openValue": "true",
+        "closedValue": "false"
+      },
+      "optionRootSelector": "[role=\"listbox\"]",
+      "optionMemberSelector": "[role=\"option\"]",
+      "optionIdentityAttribute": "data-option-id",
+      "selectedState": {
+        "attribute": "aria-selected",
+        "selectedValue": "true",
+        "unselectedValue": "false"
+      },
+      "transaction": {
+        "snapshot": "exact-selected-option",
+        "restoreActivation": "native-click"
+      }
+    }
+  ],
+  "keySteps": [
+    {
+      "type": "labelPatterns",
+      "confidence": 1,
+      "patterns": [
+        { "regex": { "source": "^location$", "flags": "i" }, "key": "location" }
+      ]
+    }
+  ]
+}

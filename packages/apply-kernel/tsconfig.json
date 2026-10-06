@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    // 与 packages/contracts 和 apps/extension 保持一致：contracts 的 index.ts
+    // 用 `export * from './x.ts'` 形式再导出，从**包根**（@edaix/contracts）
+    // import 时 tsc 会走进去。本包过去只从 /draft 子路径进所以没暴露；
+    // 2026-08-16 的 §5.8 档案键奇偶测试第一次从包根进，CI 报 TS5097。
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "tests/**/*.ts", "vitest.config.ts"]
+}

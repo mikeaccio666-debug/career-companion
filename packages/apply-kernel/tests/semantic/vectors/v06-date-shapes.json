@@ -1,0 +1,104 @@
+{
+  "id": "V06-date-shapes",
+  "scenarioClass": "date",
+  "title": "Native, masked and split month/year dates are each one date question with an explicit shape",
+  "todayBehavior": "A masked text date is UNRESOLVED and a split month/year pair becomes two unrelated STRUCTURED_CHOICE dispositions, so one logical date ends with two terminals.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "d_native",
+          "shape": "DATE",
+          "label": "Available start date",
+          "required": true
+        },
+        {
+          "ref": "d_masked",
+          "shape": "TEXT",
+          "label": "Start date",
+          "placeholderShape": "MONTH_YEAR_MASK",
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "E1"
+          }
+        },
+        {
+          "ref": "d_month",
+          "shape": "SELECT",
+          "label": "Start month",
+          "optionsPreset": "MONTHS",
+          "row": {
+            "group": "edu",
+            "ordinal": 0,
+            "shape": "edu",
+            "element": "U1"
+          }
+        },
+        {
+          "ref": "d_year",
+          "shape": "SELECT",
+          "label": "Start year",
+          "optionsPreset": "YEARS_START_6",
+          "row": {
+            "group": "edu",
+            "ordinal": 0,
+            "shape": "edu",
+            "element": "U1"
+          }
+        }
+      ],
+      "ua2": {
+        "d_native": {
+          "kind": "STRUCTURED_DATE"
+        },
+        "d_masked": {
+          "kind": "UNRESOLVED",
+          "confidence": "LOW"
+        },
+        "d_month": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "d_year": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "DATE",
+        "members": [
+          "d_native"
+        ],
+        "dateShape": "NATIVE_DATE"
+      },
+      {
+        "kind": "DATE",
+        "members": [
+          "d_masked"
+        ],
+        "dateShape": "TEXT_MASKED"
+      },
+      {
+        "kind": "DATE",
+        "members": [
+          "d_month",
+          "d_year"
+        ],
+        "dateShape": "SPLIT_MONTH_YEAR"
+      }
+    ],
+    "nodeCount": 3,
+    "classifications": {
+      "d_month": {
+        "merge": "MEMBERS_AGREE",
+        "kind": "STRUCTURED_CHOICE"
+      }
+    }
+  }
+}

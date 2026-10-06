@@ -1,0 +1,105 @@
+{
+  "id": "V09-unobserved-row-group",
+  "scenarioClass": "row-id-reuse",
+  "title": "A rescan that never observes the row group does not retire its rows, and row-scoped questions never make a root-scope question ambiguous",
+  "todayBehavior": "Nothing tracks row lifetime at all. Retiring a row we simply did not look at would withhold Undo for a value we really did write, which is strictly worse for the user than keeping it live and letting readback fail.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "current_company",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true
+        },
+        {
+          "ref": "c1",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "E1"
+          }
+        },
+        {
+          "ref": "c2",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 1,
+            "shape": "exp",
+            "element": "E2"
+          }
+        },
+        {
+          "ref": "email",
+          "shape": "EMAIL",
+          "label": "Email",
+          "autocomplete": [
+            "email"
+          ],
+          "required": true
+        }
+      ],
+      "ua2": {
+        "c1": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "c2": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "email": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "EMAIL"
+        },
+        "current_company": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        }
+      }
+    },
+    {
+      "cause": "HOST_MUTATION_RESCAN",
+      "domGeneration": "g1",
+      "delta": {
+        "inherit": true,
+        "remove": [
+          "c1",
+          "c2"
+        ]
+      }
+    }
+  ],
+  "expected": {
+    "nodeCount": 4,
+    "liveRows": 2,
+    "retiredRows": 0,
+    "rowRetired": {
+      "c1": false,
+      "c2": false
+    },
+    "rowTokensDiffer": [
+      [
+        "c1",
+        "c2"
+      ]
+    ],
+    "classifications": {
+      "current_company": {
+        "duplicateRootStem": false
+      },
+      "c1": {
+        "duplicateRootStem": false
+      }
+    }
+  }
+}

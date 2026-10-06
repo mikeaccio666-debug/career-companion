@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    ashby 填充率基准夹具。
+
+    出处：由 tests/apply-ashby-adapter.test.ts 的 mountAshbyFixture() 提升而来。那份结构的来源见
+    packages/apply-rules/rules/ashby.json 的 $comment：
+    Ashby 适配规则。2026-08-01 对 jobs.ashbyhq.com/<org>/<uuid>/application 真实 posting 只读核实。
+
+    与 greenhouse 两份夹具同一性质：**静态快照，不是线上抓取**，也不代表该
+    厂商全部表单形态。引用基线数字时必须连 citationScope 一起转述。
+  -->
+  <body>
+
+<div id="root">
+  <div class="ashby-job-posting-right-pane">
+    <div id="form" role="tabpanel">
+      <div class="_jobPostingForm_5yu8i_402 ashby-application-form-container">
+        <div class="_section_5yu8i_86 ashby-application-form-section-container">
+          <label for="_systemfield_name">Name</label>
+          <input id="_systemfield_name" name="_systemfield_name" type="text" required />
+
+          <label for="_systemfield_email">Email</label>
+          <input id="_systemfield_email" name="_systemfield_email" type="email" required />
+
+          <label for="6187fd70-0105-4785-8940-1c1f804dbc8a">Phone Number</label>
+          <input id="6187fd70-0105-4785-8940-1c1f804dbc8a"
+                 name="6187fd70-0105-4785-8940-1c1f804dbc8a" type="tel" required />
+
+          <label for="090051c4-93ff-4f42-80bb-e0b9d8a26afa">LinkedIn</label>
+          <input id="090051c4-93ff-4f42-80bb-e0b9d8a26afa"
+                 name="090051c4-93ff-4f42-80bb-e0b9d8a26afa" type="text" />
+
+          <label for="res">Resume</label>
+          <input id="res" type="file" />
+
+          <label>Yes<input type="radio"
+            name="26c8666f-a821-493e-921c-b6f966a1c09d_fe19ec8e-680c-4f8d-bc5b-0c0866587f75" /></label>
+          <label>No<input type="radio"
+            name="26c8666f-a821-493e-921c-b6f966a1c09d_fe19ec8e-680c-4f8d-bc5b-0c0866587f75" /></label>
+
+          <!--
+            2026-09-15 jobs.ashbyhq.com/notion/7793e862-50fa-4357-a4bc-2328440f8d68/application 只读实测：
+            每道题的题干都是 label.ashby-application-form-question-title。location 自动完成框没有 id，
+            label 的 for 指空，控件只剩 placeholder；yes/no 题是两个 button + 一个 tabindex=-1 的 checkbox；
+            单选/复选题是没有 legend 的 fieldset，题干 label 的 for 指向题目 uuid 而非任何控件；复选组里
+            每个 checkbox 的 name 就是它自己的选项文案。构建哈希 class（_fieldEntry_1e3gg_28 之类）已去掉，
+            只留语义 class；uuid 与选项文案为该 posting 原样，值全部为空。
+            规则 ashby.json 的 questionScopes 就是照这段声明的；没有它，location 只剩 placeholder、
+            单选组题干为空、「How did you hear」按 name 拆成 4 道单项题。
+          -->
+          <div class="ashby-application-form-field-entry" data-field-path="_systemfield_location">
+            <label class="ashby-application-form-question-title" for="_systemfield_location">Location</label>
+            <div>
+              <input class="ashby-application-form-input-autocomplete" placeholder="Start typing..." aria-autocomplete="list" aria-expanded="false" aria-haspopup="listbox" role="combobox">
+              <button type="button">toggle</button>
+            </div>
+          </div>
+          <div class="ashby-application-form-field-entry" data-field-path="790b5934-74f5-46f5-897a-675b7f37f2f3">
+            <label class="ashby-application-form-question-title" for="790b5934-74f5-46f5-897a-675b7f37f2f3">Will you now or in the future require Notion to sponsor an immigration case in order to employ you?</label>
+            <div class="ashby-application-form-input-yesno">
+              <button class="ashby-application-form-input-yesno-option" aria-pressed="false" data-option="yes" type="button">Yes</button>
+              <button class="ashby-application-form-input-yesno-option" aria-pressed="false" data-option="no" type="button">No</button>
+              <input type="checkbox" tabindex="-1" name="790b5934-74f5-46f5-897a-675b7f37f2f3">
+            </div>
+          </div>
+          <div data-field-path="b0a5aba8-dbb7-41a9-b548-f72cc3e48956">
+            <fieldset class="ashby-application-form-input-radio-group">
+              <label class="ashby-application-form-question-title" for="b0a5aba8-dbb7-41a9-b548-f72cc3e48956">What pronouns would you like our team to use when addressing you?</label>
+              <div class="ashby-application-form-input-radio-group-option">
+                <span><input type="radio" id="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956-labeled-radio-0" name="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956" class="ashby-application-form-input-radio-group-option-radio"></span>
+                <label for="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956-labeled-radio-0" class="ashby-application-form-input-radio-group-option-label">He/Him</label>
+              </div>
+              <div class="ashby-application-form-input-radio-group-option">
+                <span><input type="radio" id="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956-labeled-radio-1" name="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956" class="ashby-application-form-input-radio-group-option-radio"></span>
+                <label for="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956-labeled-radio-1" class="ashby-application-form-input-radio-group-option-label">She/Her</label>
+              </div>
+              <div class="ashby-application-form-input-radio-group-option">
+                <span><input type="radio" id="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956-labeled-radio-2" name="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956" class="ashby-application-form-input-radio-group-option-radio"></span>
+                <label for="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956-labeled-radio-2" class="ashby-application-form-input-radio-group-option-label">They/Them</label>
+              </div>
+              <div class="ashby-application-form-input-radio-group-option">
+                <span><input type="radio" id="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956-labeled-radio-3" name="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956" class="ashby-application-form-input-radio-group-option-radio"></span>
+                <label for="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_b0a5aba8-dbb7-41a9-b548-f72cc3e48956-labeled-radio-3" class="ashby-application-form-input-radio-group-option-label">Prefer not to say</label>
+              </div>
+            </fieldset>
+          </div>
+          <div data-field-path="0b3b7773-f6d9-4032-9ab1-368c4164e95a">
+            <fieldset class="ashby-application-form-input-checkbox-group">
+              <label class="ashby-application-form-question-title" for="0b3b7773-f6d9-4032-9ab1-368c4164e95a">How did you hear about this opportunity? (select all that apply)</label>
+              <div class="ashby-application-form-input-checkbox-group-option">
+                <span class="ashby-application-form-input-checkbox-group-option-checkbox"><input type="checkbox" id="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_0b3b7773-f6d9-4032-9ab1-368c4164e95a-labeled-checkbox-0" name="LinkedIn"></span>
+                <label for="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_0b3b7773-f6d9-4032-9ab1-368c4164e95a-labeled-checkbox-0" class="ashby-application-form-input-checkbox-group-option-label">LinkedIn</label>
+              </div>
+              <div class="ashby-application-form-input-checkbox-group-option">
+                <span class="ashby-application-form-input-checkbox-group-option-checkbox"><input type="checkbox" id="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_0b3b7773-f6d9-4032-9ab1-368c4164e95a-labeled-checkbox-1" name="Glassdoor"></span>
+                <label for="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_0b3b7773-f6d9-4032-9ab1-368c4164e95a-labeled-checkbox-1" class="ashby-application-form-input-checkbox-group-option-label">Glassdoor</label>
+              </div>
+              <div class="ashby-application-form-input-checkbox-group-option">
+                <span class="ashby-application-form-input-checkbox-group-option-checkbox"><input type="checkbox" id="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_0b3b7773-f6d9-4032-9ab1-368c4164e95a-labeled-checkbox-2" name="Notion Blog"></span>
+                <label for="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_0b3b7773-f6d9-4032-9ab1-368c4164e95a-labeled-checkbox-2" class="ashby-application-form-input-checkbox-group-option-label">Notion Blog</label>
+              </div>
+              <div class="ashby-application-form-input-checkbox-group-option">
+                <span class="ashby-application-form-input-checkbox-group-option-checkbox"><input type="checkbox" id="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_0b3b7773-f6d9-4032-9ab1-368c4164e95a-labeled-checkbox-3" name="Conference or Meetup"></span>
+                <label for="bd5b0ecb-7bba-4958-946f-47ac05bea7c1_0b3b7773-f6d9-4032-9ab1-368c4164e95a-labeled-checkbox-3" class="ashby-application-form-input-checkbox-group-option-label">Conference or Meetup</label>
+              </div>
+            </fieldset>
+          </div>
+
+          <textarea name="g-recaptcha-response"></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+  </body>
+</html>

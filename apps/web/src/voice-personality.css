@@ -1,0 +1,16 @@
+.voice-personality-picker { border: 0; padding: 0; margin: 24px 0; min-width: 0; }
+.voice-personality-picker legend { font-size: 14px; font-weight: 550; color: var(--ink); margin-bottom: 12px; }
+.voice-personality-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.voice-personality-option { padding: 14px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--white); text-align: left; }
+.voice-personality-option.selected { border-color: #9fb794; background: #eef4e8; }
+.voice-personality-option strong { display: block; font-size: 13px; font-weight: 550; margin-bottom: 7px; }
+.voice-personality-option span { display: block; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.voice-personality-picker .helper-text { margin-top: 10px; line-height: 1.8; }
+.voice-sound-choice { margin: 13px 0; }
+.voice-sound-choice label, .voice-turn-taking { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; color: #61774f; font-size: 12px; }
+.voice-sound-choice select, .voice-turn-taking select { border: 1px solid #dce7cd; border-radius: 8px; padding: 7px 10px; background: var(--white); color: var(--ink); min-width: 120px; max-width: 100%; font-size: 13px; }
+.voice-sound-choice .helper-text { line-height: 1.8; margin-top: 7px; }
+.voice-fixed-sound { border: 1px solid var(--line); padding: 7px 10px; border-radius: 8px; color: var(--muted); background: #f6f8f0; overflow-wrap: anywhere; }
+.voice-turn-taking { margin: 12px 0; }
+.voice-role-stamp { margin: 12px 0 7px; color: #587046; font-size: 12px; }
+@media (max-width: 600px) { .voice-personality-options { grid-template-columns: 1fr; gap: 8px; } .voice-personality-option { padding: 12px 14px; } .voice-personality-option strong { margin-bottom: 3px; } .voice-sound-choice label, .voice-turn-taking { align-items: flex-start; } .voice-sound-choice select, .voice-turn-taking select { max-width: 100%; } }

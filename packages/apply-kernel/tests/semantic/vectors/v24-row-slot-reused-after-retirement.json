@@ -1,0 +1,131 @@
+{
+  "id": "V24-row-slot-reused",
+  "scenarioClass": "row-id-reuse",
+  "title": "A row container that disappears and comes back is a new incarnation; the retired one stays in the graph",
+  "todayBehavior": "Nothing tracks row lifetime. Replacing the retired incarnation with the new one would strand every node written against the old row, and Undo would resolve into a slot that now holds different data.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "c_a",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "E1"
+          }
+        },
+        {
+          "ref": "c_b",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 1,
+            "shape": "exp",
+            "element": "E2"
+          }
+        }
+      ],
+      "ua2": {
+        "c_a": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "c_b": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        }
+      }
+    },
+    {
+      "cause": "HOST_MUTATION_RESCAN",
+      "domGeneration": "g1",
+      "delta": {
+        "inherit": true,
+        "remove": [
+          "c_b"
+        ]
+      }
+    },
+    {
+      "cause": "HOST_MUTATION_RESCAN",
+      "domGeneration": "g2",
+      "delta": {
+        "inherit": true,
+        "add": [
+          {
+            "ref": "c_b2",
+            "shape": "TEXT",
+            "element": "c_b2",
+            "label": "Company",
+            "required": true,
+            "row": {
+              "group": "exp",
+              "ordinal": 1,
+              "shape": "exp",
+              "element": "E2"
+            }
+          }
+        ]
+      },
+      "ua2": {
+        "c_b2": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "compile": "OK",
+    "liveRows": 2,
+    "retiredRows": 1,
+    "rowRetired": {
+      "c_a": false,
+      "c_b": true,
+      "c_b2": false
+    },
+    "nodeRowRetired": {
+      "c_b": true,
+      "c_b2": false
+    },
+    "rowTokensDiffer": [
+      [
+        "c_b",
+        "c_b2"
+      ]
+    ],
+    "differentNode": [
+      [
+        "c_b",
+        "c_b2"
+      ]
+    ],
+    "rowOrdinals": {
+      "c_a": 0,
+      "c_b": 1,
+      "c_b2": 1
+    },
+    "observedEpochs": {
+      "c_a": [
+        0,
+        2
+      ],
+      "c_b": [
+        0,
+        0
+      ],
+      "c_b2": [
+        2,
+        2
+      ]
+    }
+  }
+}

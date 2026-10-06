@@ -1,0 +1,65 @@
+{
+  "id": "V05-contenteditable",
+  "scenarioClass": "contenteditable",
+  "title": "A required rich-text answer keeps its own kind and its required flag",
+  "todayBehavior": "A contenteditable is observed as role=textbox with no inputType and falls through to the label regex, so it can be classified as an ordinary text field with a canonical concept.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "fullname",
+          "shape": "TEXT",
+          "label": "Full name",
+          "autocomplete": [
+            "name"
+          ],
+          "required": true
+        },
+        {
+          "ref": "why",
+          "shape": "RICHTEXT",
+          "label": "Why do you want to join us?",
+          "required": true
+        }
+      ],
+      "ua2": {
+        "fullname": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "NAME_FULL"
+        },
+        "why": {
+          "kind": "UNRESOLVED",
+          "confidence": "LOW"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "TEXT_RICH",
+        "members": [
+          "why"
+        ],
+        "required": true
+      },
+      {
+        "kind": "TEXT_SINGLE",
+        "members": [
+          "fullname"
+        ],
+        "required": true
+      }
+    ],
+    "nodeCount": 2,
+    "classifications": {
+      "why": {
+        "kind": "UNRESOLVED",
+        "confidence": "LOW",
+        "canonicalField": null
+      }
+    }
+  }
+}

@@ -1,0 +1,90 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import type { Job } from '@companion/platform-contracts';
+import { jobRetryPresentation } from '../src/job-retry.ts';
+
+const workflow = (change: Partial<Job> = {}): Job => ({ id: 'fictional-job', kind: 'workflow', provider: 'workflow', prompt: 'Fictional workflow goal.', status: 'failed', progress: 25, artifacts: [], createdAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z', attempt: 1, workflowSteps: [{ index: 0, kind: 'image', provider: 'fal', state: 'completed' }, { index: 1, kind: 'video', provider: 'ark', state: 'provider_task' }], ...change });
+
+test('workflow provider-task recovery is labelled by step checkpoints without a top-level handle', () => {
+  const presentation = jobRetryPresentation(workflow());
+  assert.equal(presentation.canRetry, true);
+  assert.equal(presentation.label, '审阅后继续');
+  assert.match(presentation.note, /已完成步骤.*保留/);
+  assert.match(presentation.note, /已有供应商任务.*查询该任务/);
+  assert.match(presentation.note, /未完成.*费用/);
+  assert.equal(jobRetryPresentation(workflow({ status: 'uncertain', workflowResumeAvailable: true })).label, '审阅后继续');
+});
+
+test('unknown started and uncertain workflow steps have no ordinary retry action', () => {
+  for (const state of ['started', 'uncertain'] as const) {
+    const presentation = jobRetryPresentation(workflow({ workflowSteps: [{ index: 0, kind: 'image', provider: 'openai', state }] }));
+    assert.equal(presentation.canRetry, false);
+    assert.match(presentation.note, /核对供应商结果/);
+  }
+  for (const code of ['WORKFLOW_REVIEW_REQUIRED', 'WORKFLOW_STEP_UNCERTAIN', 'WORKFLOW_CHECKPOINT_UNCERTAIN']) assert.equal(jobRetryPresentation(workflow({ error: { code, message: 'Fictional public failure.' } })).canRetry, false);
+});
+
+test('only an explicit API recovery flag releases uncertain workflow results', () => {
+  for (const state of ['started', 'uncertain'] as const) {
+    const steps: Job['workflowSteps'] = [{ index: 0, kind: 'video', provider: 'ark', state }];
+    const allowed = jobRetryPresentation(workflow({ status: 'uncertain', workflowSteps: steps, workflowResumeAvailable: true }));
+    assert.equal(allowed.canRetry, true);
+    assert.equal(allowed.label, '审阅后继续');
+    assert.match(allowed.note, /已完成步骤.*保留/);
+    assert.match(allowed.note, /费用/);
+    assert.equal(jobRetryPresentation(workflow({ status: 'uncertain', workflowSteps: steps })).canRetry, false);
+    assert.equal(jobRetryPresentation(workflow({ status: 'uncertain', workflowSteps: steps, workflowResumeAvailable: false })).canRetry, false);
+  }
+  assert.equal(jobRetryPresentation(workflow({ status: 'uncertain', workflowSteps: undefined, providerTaskId: 'not-a-workflow-recovery-proof' })).canRetry, false);
+  assert.equal(jobRetryPresentation(workflow({ workflowResumeAvailable: false })).canRetry, false);
+});
+
+test('active workflows are not presented as recovery actions and explicit failures remain retryable', () => {
+  assert.deepEqual(jobRetryPresentation(workflow({ status: 'running' })), { canRetry: false, label: '重试', note: '' });
+  const failure = workflow({ workflowSteps: [{ index: 0, kind: 'image', provider: 'openai', state: 'failed' }] });
+  assert.equal(jobRetryPresentation(failure).canRetry, true);
+  assert.equal(jobRetryPresentation(failure).label, '重试');
+});
+
+test('ordinary media polling and unconfirmed CLI shutdown retain their execution boundaries', () => {
+  assert.equal(jobRetryPresentation(workflow({ kind: 'video', provider: 'ark', providerTaskId: 'fictional-handle' })).label, '继续查询');
+  assert.match(jobRetryPresentation(workflow({ kind: 'video', provider: 'ark', providerTaskId: 'fictional-handle' })).note, /同一个生成任务/);
+  const cleanup = jobRetryPresentation(workflow({ kind: 'cli', provider: 'cli', error: { code: 'CLI_CLEANUP_UNCONFIRMED', message: 'Fictional cleanup message.' } }));
+  assert.equal(cleanup.canRetry, false);
+  assert.match(cleanup.note, /停止状态/);
+});
+
+test('browser tasks requiring review cannot be retried and partial outcomes remain reviewable', () => {
+  const job = workflow({ kind: 'browser', provider: 'browser', options: { url: 'https://example.com/', actions: [{ type: 'scroll', direction: 'down', pixels: 500 }] }, browserExecution: { completedActions: 1, totalActions: 3, state: 'uncertain', reviewRequired: true } });
+  const presentation = jobRetryPresentation(job);
+  assert.equal(presentation.canRetry, false);
+  assert.match(presentation.note, /部分结果|已有执行记录/);
+  assert.match(presentation.note, /新的完整计划/);
+  assert.equal(jobRetryPresentation({ ...job, browserExecution: undefined }).canRetry, false);
+  assert.equal(jobRetryPresentation({ ...job, browserExecution: { completedActions: 0, totalActions: 3, state: 'ready', reviewRequired: false } }).canRetry, true);
+  assert.equal(jobRetryPresentation({ ...job, browserExecution: { completedActions: 0, totalActions: 3, state: 'unexpected', reviewRequired: false } as any }).canRetry, false);
+});
+
+test('known read-only browser failures retain ordinary retry without an action checkpoint', () => {
+  const readonly = workflow({ kind: 'browser', provider: 'browser', options: { url: 'https://example.com/' } });
+  assert.equal(jobRetryPresentation(readonly).canRetry, true);
+  assert.equal(jobRetryPresentation({ ...readonly, options: { ...readonly.options, actions: [] } }).canRetry, true);
+  assert.equal(jobRetryPresentation({ ...readonly, options: { url: 'http://127.0.0.1:4671/fixture' } }).canRetry, true);
+  assert.equal(jobRetryPresentation({ ...readonly, options: { url: 'not-a-url' } }).canRetry, false);
+  for (const actions of [null, 'invalid', [{ type: 'scroll', direction: 'down', pixels: 500 }]]) assert.equal(jobRetryPresentation({ ...readonly, options: { url: 'https://example.com/', actions } }).canRetry, false);
+});
+
+test('existing or malformed browser action records cannot be bypassed by deleting action metadata', () => {
+  const readonlyOptions = { url: 'https://example.com/', actions: [] };
+  const browser = workflow({ kind: 'browser', provider: 'browser', options: readonlyOptions });
+  assert.equal(jobRetryPresentation({ ...browser, browserExecution: { completedActions: 0, totalActions: 1, state: 'started', reviewRequired: false } }).canRetry, false);
+  assert.equal(jobRetryPresentation({ ...browser, browserExecution: { completedActions: 1, totalActions: 1, state: 'completed', reviewRequired: false } }).canRetry, false);
+  assert.equal(jobRetryPresentation({ ...browser, browserExecution: { state: 'ready', reviewRequired: false } as any }).canRetry, false);
+  assert.equal(jobRetryPresentation({ ...browser, browserExecution: { completedActions: 0, totalActions: 1, state: 'unknown', reviewRequired: false } as any }).canRetry, false);
+});
+
+test('browser review error codes override a stale permissive progress summary without changing other task kinds', () => {
+  const browser = workflow({ kind: 'browser', provider: 'browser', browserExecution: { completedActions: 0, totalActions: 1, state: 'ready', reviewRequired: false }, error: { code: 'BROWSER_REVIEW_REQUIRED', message: 'Fictional review required.' } });
+  assert.equal(jobRetryPresentation(browser).canRetry, false);
+  assert.equal(jobRetryPresentation({ ...browser, kind: 'image', provider: 'openai' }).canRetry, true);
+});

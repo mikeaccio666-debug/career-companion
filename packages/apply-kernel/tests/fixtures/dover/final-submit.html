@@ -1,0 +1,36 @@
+<!--
+  Dover 申请页的最终提交（2026-10-04 只读实测：app.dover.com/apply/<公司>/<uuid>，Playground、CoverForce、Dover、MixRank、
+  Moda、Unthread 等在招岗位；只读 DOM，没有输入、没有点击、没有提交）。合成夹具，只留结构与钩子。
+
+  实测记下的：整页只有一个 <form>（react-final-form，noValidate），表里唯一的原生提交是 MUI 的
+  <button type="submit">Apply</button>（网站公开的前端代码里 disabled 只跟着「正在提交」），整页也只有这一颗原生提交；
+  简历上传是 type=button 的「Upload file」。没有「下一步」：一页填完就提交，成功之后整张表换成「Thanks for applying!」。
+-->
+<div id="root">
+  <div class="InboundApplication__FormWrapper">
+    <h2>Apply</h2>
+    <form novalidate>
+      <div>
+        <div role="button" tabindex="0">
+          <input type="file" accept=".pdf" multiple autocomplete="off" tabindex="-1" style="display: none;" />
+          <div><span>Autofill from resume</span><span>Upload file</span></div>
+        </div>
+      </div>
+      <label for="r3">​</label>
+      <input id="r3" name="firstName" type="text" required />
+      <label for="r4">​</label>
+      <input id="r4" name="lastName" type="text" required />
+      <label for="r5">​</label>
+      <input id="r5" name="email" type="email" required />
+      <label for="r6">​</label>
+      <input id="r6" name="linkedinUrl" type="text" required />
+      <div>
+        <div class="FormLabel">Resume *</div>
+        <button type="button">Upload file</button>
+        <input type="file" accept=".pdf" tabindex="-1" style="display: none;" />
+      </div>
+      <label><input type="checkbox" name="notifyOnView" /> Notify me by email when my application is viewed</label>
+      <button class="MuiButton-root MuiButton-contained" type="submit">Apply</button>
+    </form>
+  </div>
+</div>

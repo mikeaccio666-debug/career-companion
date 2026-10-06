@@ -1,0 +1,41 @@
+{
+  "id": "V19-sidecar-binding",
+  "scenarioClass": "same-url-injection",
+  "title": "A sidecar whose packet digest does not match the packet it claims to describe fails closed",
+  "todayBehavior": "Nothing binds structural evidence to a packet, so a stale or swapped sidecar would silently regroup a different page's controls.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "sidecarTamper": "PACKET_DIGEST",
+      "controls": [
+        {
+          "ref": "a",
+          "shape": "RADIO",
+          "label": "Yes",
+          "legend": "Remote?",
+          "groupKey": "remote"
+        },
+        {
+          "ref": "b",
+          "shape": "RADIO",
+          "label": "No",
+          "legend": "Remote?",
+          "groupKey": "remote"
+        }
+      ],
+      "ua2": {
+        "a": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "b": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "compile": "COMPILE_INCOMPLETE",
+    "compileReason": "SIDECAR_MISMATCH"
+  }
+}

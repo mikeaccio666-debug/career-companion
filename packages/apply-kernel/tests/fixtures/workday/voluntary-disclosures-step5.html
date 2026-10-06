@@ -1,0 +1,49 @@
+<!--
+  Workday step 5「Voluntary Disclosures」的**真实结构**。
+  取自 rochester.wd5.myworkdayjobs.com 真实申请流程（2026-08-21 只读实测）。
+  只保留结构与 automation-id，不含任何作答值。
+
+  ⚠️ 两件事实：
+  ① EEO 字段是**语义化命名**（不是 step 5 自定义题那种 GUID）——所以
+     「认出这是 EEO 题」在技术上完全可行，CAP-AF-024 卡的纯粹是法务。
+  ② 最后一栏 `acceptTermsAndAgreements` 是**必填的未列明／混合授权勾选**
+     （「I acknowledge and consent to submission of this application」）。它不在 pending
+     proposal 的四类窄授权内，始终由用户本人完成——**再完美的 autofill 也填不完一份 Workday
+     申请，用户必须自己勾这一格**。这是 2026-08-12 审计第 38 项
+     （「L3 在含法律勾选表单上的语义」，至今未闭合）的活证据。
+-->
+<div data-automation-id="applyFlowPage">
+  <div data-automation-id="progressBarActiveStep">current step 5 of 7 Voluntary Disclosures</div>
+
+  <div data-automation-id="formField-hispanicOrLatino">
+    <label for="d1">Are you of Hispanic or Latino descent?</label>
+    <button id="d1" type="button" aria-haspopup="listbox">Select One</button>
+  </div>
+
+  <div data-automation-id="formField-ethnicityMulti">
+    <fieldset data-automation-id="ethnicityMulti-CheckboxGroup">
+      <legend>Please select the ethnicity which most accurately describes how you identify yourself.</legend>
+      <input id="e1" type="checkbox" aria-required="false" /><label for="e1">American Indian or Alaska Native</label>
+      <input id="e2" type="checkbox" /><label for="e2">Asian</label>
+      <input id="e3" type="checkbox" /><label for="e3">Black or African American</label>
+    </fieldset>
+  </div>
+
+  <div data-automation-id="formField-gender">
+    <label for="d2">Please select your sex.*</label>
+    <button id="d2" type="button" aria-haspopup="listbox">Select One</button>
+  </div>
+
+  <div data-automation-id="formField-veteranStatus">
+    <label for="d3">Please select your Veteran status</label>
+    <button id="d3" type="button" aria-haspopup="listbox">Select One</button>
+  </div>
+
+  <!-- ★ 必填的未列明／混合授权：始终由用户本人勾 -->
+  <div data-automation-id="formField-acceptTermsAndAgreements">
+    <label for="t1">I acknowledge and consent to submission of this application for employment</label>
+    <input id="t1" type="checkbox" aria-required="true" />
+  </div>
+
+  <button data-automation-id="pageFooterNextButton" type="submit">Save and Continue</button>
+</div>

@@ -1,0 +1,39 @@
+{
+  "name": "@edaix/extension",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../scripts/with-env.mjs VIBE_DIST=local VIBE_API_BASE=http://localhost:3000 VIBE_WEB_BASE=http://localhost:3100 VIBE_LIVE_HOST_WRITES=0 VIBE_EXECUTION_RUNTIME_BUNDLE_ENABLED=0 VIBE_TRUST_TELEMETRY_ENABLED=0 -- wxt",
+    "build": "pnpm check:default-artifact",
+    "build:default": "node ../../scripts/with-env.mjs VIBE_DIST=local VIBE_API_BASE=http://localhost:3000 VIBE_WEB_BASE=http://localhost:3100 VIBE_LIVE_HOST_WRITES=0 VIBE_EXECUTION_RUNTIME_BUNDLE_ENABLED=0 VIBE_TRUST_TELEMETRY_ENABLED=0 -- wxt build",
+    "build:local": "node ../../scripts/with-env.mjs VIBE_DIST=local VIBE_API_BASE=http://localhost:3000 VIBE_WEB_BASE=http://localhost:3100 VIBE_LIVE_HOST_WRITES=0 VIBE_EXECUTION_RUNTIME_BUNDLE_ENABLED=0 VIBE_TRUST_TELEMETRY_ENABLED=0 -- wxt build",
+    "build:field-lab": "node ../../scripts/with-env.mjs VIBE_DIST=field-lab VIBE_EXTENSION_FIELD_LAB_ENABLED=1 -- wxt build",
+    "check:default-artifact": "pnpm build:default && vitest run --config vitest.artifact.config.ts tests/artifact/default-manifest.test.ts",
+    "check:field-lab-artifact": "pnpm build:field-lab && vitest run --config vitest.artifact.config.ts tests/artifact/field-lab-manifest.test.ts",
+    "postinstall": "wxt prepare",
+    "check": "wxt prepare && tsc --noEmit && node ../../scripts/ci/check-extension-field-lab-wiring.mjs",
+    "test": "vitest run && node --test ../../scripts/ci/check-extension-field-lab-wiring.test.mjs",
+    "preview:ui": "vite --config vite.assistant.config.ts",
+    "build:ui": "vite build --config vite.assistant.config.ts"
+  },
+  "dependencies": {
+    "@edaix/agent-channel": "workspace:*",
+    "@edaix/apply-kernel": "workspace:*",
+    "@edaix/contracts": "workspace:*",
+    "@noble/hashes": "1.8.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "esbuild": "0.27.7",
+    "happy-dom": "^20.11.2",
+    "typescript": "^5.9.3",
+    "vite": "8.2.2",
+    "vitest": "^4.1.10",
+    "wxt": "^0.20.26"
+  }
+}

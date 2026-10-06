@@ -1,0 +1,84 @@
+{
+  "id": "V27-merge-edges",
+  "scenarioClass": "classification-merge",
+  "title": "Same kind but different canonical fields is a conflict; an unclassified member is named; the phone-meta guard needs a phone field",
+  "todayBehavior": "UA-2 answers per control, so a group whose members name different fields has no single answer, and nothing records which case it is.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "mix_a",
+          "shape": "RADIO",
+          "label": "A",
+          "legend": "Preferred contact",
+          "groupKey": "mix"
+        },
+        {
+          "ref": "mix_b",
+          "shape": "RADIO",
+          "label": "B",
+          "legend": "Preferred contact",
+          "groupKey": "mix"
+        },
+        {
+          "ref": "part_a",
+          "shape": "CHECKBOX",
+          "label": "A",
+          "legend": "Interests",
+          "groupKey": "part"
+        },
+        {
+          "ref": "part_b",
+          "shape": "CHECKBOX",
+          "label": "B",
+          "legend": "Interests",
+          "groupKey": "part"
+        },
+        {
+          "ref": "ext_mail",
+          "shape": "EMAIL",
+          "label": "Phone extension"
+        }
+      ],
+      "ua2": {
+        "mix_a": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "EMAIL"
+        },
+        "mix_b": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "PHONE"
+        },
+        "part_a": {
+          "kind": "STRUCTURED_CHOICE",
+          "confidence": "MEDIUM"
+        },
+        "ext_mail": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "EMAIL"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "nodeCount": 3,
+    "classifications": {
+      "mix_a": {
+        "merge": "CLASSIFICATION_CONFLICT",
+        "kind": "UNRESOLVED",
+        "canonicalField": null
+      },
+      "part_a": {
+        "merge": "MEMBER_UNCLASSIFIED",
+        "kind": "STRUCTURED_CHOICE",
+        "confidence": "MEDIUM"
+      },
+      "ext_mail": {
+        "stemGuard": "NONE",
+        "canonicalField": "EMAIL"
+      }
+    }
+  }
+}

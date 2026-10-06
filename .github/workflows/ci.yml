@@ -1,0 +1,55 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: companion
+          POSTGRES_USER: companion
+          POSTGRES_PASSWORD: local-companion-dev-only
+        ports: ["5442:5432"]
+        options: >-
+          --health-cmd "pg_isready -U companion -d companion"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6388:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      PLATFORM_REDIS_URL: redis://127.0.0.1:6388/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @companion/ai-core exec playwright install --with-deps chromium
+      - run: node infra/platform/harness/build.mjs
+      - run: pnpm check
+      - run: pnpm -r --workspace-concurrency=1 --if-present test
+        env:
+          # Synthetic Responses only; Docker remains disconnected and provider calls stay off.
+          PLATFORM_TEST_REAL_HARNESS: "1"
+          PLATFORM_TEST_CLI_EXTERNAL_SANDBOX: "1"
+      - run: pnpm build:extension
+      - run: pnpm build:extension-ui
+      - run: pnpm build:web

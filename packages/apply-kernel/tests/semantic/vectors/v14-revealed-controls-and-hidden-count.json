@@ -1,0 +1,93 @@
+{
+  "id": "V14-revealed-and-hidden",
+  "scenarioClass": "dynamic-dependency",
+  "title": "Hidden natives are counted before they have identity; revealed controls become nodes and the re-observed question keeps its identity across the address shift",
+  "todayBehavior": "Controls hidden behind a choice are dropped from the packet with no count, so a page can look fully covered while required questions were never observed.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "hiddenNotObserved": 2,
+      "controls": [
+        {
+          "ref": "sponsor",
+          "shape": "SELECT",
+          "label": "Do you require sponsorship?",
+          "required": true,
+          "optionsPreset": "NO_YES"
+        }
+      ],
+      "ua2": {
+        "sponsor": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    },
+    {
+      "cause": "POST_WRITE_RESCAN",
+      "domGeneration": "g1",
+      "hiddenNotObserved": 0,
+      "delta": {
+        "inherit": true,
+        "patch": {
+          "sponsor": {
+            "ref": "sponsor_shifted",
+            "element": "sponsor"
+          }
+        },
+        "add": [
+          {
+            "ref": "visa_type",
+            "shape": "TEXT",
+            "label": "Visa type",
+            "required": true
+          },
+          {
+            "ref": "visa_expiry",
+            "shape": "DATE",
+            "label": "Visa expiry",
+            "required": true
+          }
+        ]
+      },
+      "ua2": {
+        "visa_type": {
+          "kind": "UNRESOLVED",
+          "confidence": "LOW"
+        },
+        "visa_expiry": {
+          "kind": "STRUCTURED_DATE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "nodeCount": 3,
+    "sameNode": [
+      [
+        "sponsor",
+        "sponsor_shifted"
+      ]
+    ],
+    "hiddenNotObservedByEpoch": [
+      2,
+      0
+    ],
+    "classifications": {
+      "visa_type": {
+        "kind": "UNRESOLVED",
+        "confidence": "LOW"
+      }
+    },
+    "observedEpochs": {
+      "sponsor": [
+        0,
+        1
+      ],
+      "visa_type": [
+        1,
+        1
+      ]
+    }
+  }
+}

@@ -1,0 +1,72 @@
+import type { ChatInput, ChatContext, CreateJobInput, JobExecutionContext, JobExecutionResult, PlatformProviderRuntime, VoiceSessionInput, ProviderAttachment, ComfyUITemplateSnapshot, SpeechInput, TranscriptionContext, Capability } from '@companion/platform-contracts';
+import { HttpClient, type Fetch, type ResolveHost } from './http.ts';
+import { providerStatuses, requireProvider } from './config.ts';
+import { streamOpenAI, streamCompatible } from './chat.ts';
+import { generateOpenAIImage, generateArkVideo, generateFal, generateComfyUI, realtimeOpenAI, transcribeOpenAI, speechOpenAI } from './media.ts';
+import { ProviderError, invalid } from './errors.ts';
+import { executeBrowser, executeCli } from './executors.ts';
+import { executeWorkflow } from './workflow.ts';
+import { validateMediaJobInput } from './media-input.ts';
+import { captureComfyUITemplate, checkComfyUIServer, validateComfyUITemplateSnapshot } from './comfyui-template.ts';
+import { speechKokoro } from './kokoro.ts';
+import { transcribeLocal } from './local-transcription.ts';
+import { speechJobOptions } from './voice-input.ts';
+import { speechElevenLabs } from './elevenlabs.ts';
+export { parseExecutionTemplateBinding, validateComfyUITemplateSnapshot } from './comfyui-template.ts';
+export { ProviderError } from './errors.ts';
+export { workflowHash, workflowDefinitionHash } from './workflow.ts';
+export { validateMediaReferenceBinding, validateMediaJobInput, validateMediaReferenceImages, isArkSeedance25Model } from './media-input.ts';
+export { parseBrowserTaskOptions, browserDefinitionHash } from './browser-actions.ts';
+
+export interface RuntimeOptions { env?:NodeJS.ProcessEnv; fetch?:Fetch; resolveHost?:ResolveHost; }
+function requireVoiceProvider(env:NodeJS.ProcessEnv,requested:string|undefined,capability:Extract<Capability,'speech'|'transcription'|'realtime'>){
+  const provider=requested===undefined?'openai':requested;
+  if(typeof provider!=='string'||!/^[a-z][a-z0-9_-]{0,99}$/.test(provider))invalid('Select a valid voice provider.');
+  requireProvider(env,provider,capability);
+  // A future catalog entry alone does not install an audio or WebRTC adapter.
+  if(provider!=='openai'&&!(['kokoro','elevenlabs'].includes(provider)&&capability==='speech')&&!(provider==='faster-whisper'&&capability==='transcription'))throw new ProviderError('PROVIDER_UNSUPPORTED','No voice adapter is available for this provider.',400);
+  return provider;
+}
+export function createProviderRuntime(options:RuntimeOptions={}):PlatformProviderRuntime{
+  const env={...(options.env??process.env)};const http=new HttpClient(options.fetch??globalThis.fetch,options.resolveHost);
+  let comfyuiTemplate: ComfyUITemplateSnapshot | undefined;
+  try { comfyuiTemplate = captureComfyUITemplate(env); } catch { /* An invalid local template disables this provider without stopping the platform. */ }
+  const runtime:PlatformProviderRuntime={
+    capabilities:()=>providerStatuses(env).map(provider => provider.id === 'comfyui' ? { ...provider,
+      enabled: Boolean(comfyuiTemplate), keyConfigured: Boolean(comfyuiTemplate),
+      ...(comfyuiTemplate ? { executionTemplate: { version: 1 as const, hash: comfyuiTemplate.hash }, reason: undefined } : { reason: 'Connect ComfyUI and a valid server-reviewed API workflow, then restart the services.' }),
+    } : provider),
+    captureComfyUITemplate() {
+      if (!comfyuiTemplate) throw new ProviderError('INVALID_COMFYUI_TEMPLATE', 'Configure a valid server-reviewed ComfyUI API workflow, then restart the services.', 503);
+      return structuredClone(comfyuiTemplate);
+    },
+    validateComfyUITemplate(snapshot, binding) { checkComfyUIServer(validateComfyUITemplateSnapshot(snapshot, binding), env); },
+    streamChat(input:ChatInput,context:ChatContext={}){
+      requireProvider(env,input.provider,input.mode==='agent'?'agent':'chat');
+      if(!input.messages.length||input.messages.length>200)invalid('A conversation must contain between 1 and 200 context messages.');
+      return input.provider==='openai'?streamOpenAI(http,env,input,context):streamCompatible(http,env,input,context);
+    },
+    async executeJob(input:CreateJobInput,context:JobExecutionContext):Promise<JobExecutionResult>{
+      if(input.executionTemplate&&input.provider!=='comfyui')invalid('Only ComfyUI generation tasks use a server template version.');
+      requireProvider(env,input.provider,input.kind);context.signal?.throwIfAborted();
+      if(!input.prompt||input.prompt.length>20_000)invalid('A task prompt must contain between 1 and 20000 characters.');
+      if(input.kind==='workflow'&&input.provider==='workflow')return executeWorkflow(runtime,input,context);
+      if(input.kind==='image'||input.kind==='video')validateMediaJobInput(input);
+      if(input.provider==='browser'&&input.kind==='browser')return executeBrowser(input,context,env);
+      if(input.provider==='cli'&&input.kind==='cli')return executeCli(input,context,env);
+      if(input.provider==='openai'&&input.kind==='image')return generateOpenAIImage(http,env,input,context);
+      if(input.kind==='speech'){
+        return {artifacts:[await runtime.speech({provider:input.provider,text:input.prompt,model:input.model,...speechJobOptions(input.options)},{signal:context.signal})]};
+      }
+      if(input.provider==='ark'&&input.kind==='video')return generateArkVideo(http,env,input,context);
+      if(input.provider==='fal'&&['image','video'].includes(input.kind))return generateFal(http,env,input,context);
+      if(input.provider==='comfyui')return generateComfyUI(http,env,input,context);
+      throw new ProviderError('PROVIDER_UNSUPPORTED','No executor is available for this task.',400);
+    },
+    async createVoiceSession(input:VoiceSessionInput={},context={}){requireVoiceProvider(env,input.provider,'realtime');return realtimeOpenAI(http,env,input,context.signal);},
+    async transcribe(input:ProviderAttachment,context:TranscriptionContext={}){const provider=requireVoiceProvider(env,context.provider,'transcription');return provider==='faster-whisper'?transcribeLocal(http,env,input,context):transcribeOpenAI(http,env,input,context.signal);},
+    async speech(input:SpeechInput,context={}){const provider=requireVoiceProvider(env,input.provider,'speech');
+      if(provider==='elevenlabs')return speechElevenLabs(http,env,input,context.signal);
+      return provider==='kokoro'?speechKokoro(http,env,input,context.signal):speechOpenAI(http,env,input,context.signal);},
+  };return runtime;
+}

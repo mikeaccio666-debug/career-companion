@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    workable 填充率基准夹具。
+
+    出处：由 tests/apply-workable-adapter.test.ts 的 mountWorkableFixture() 提升而来。那份结构的来源见
+    packages/apply-rules/rules/workable.json 的 $comment：
+    Workable 适配规则。2026-08-01 对 apply.workable.com/<org>/j/<code>/apply/ 真实 posting 只读核实。
+
+    与 greenhouse 两份夹具同一性质：**静态快照，不是线上抓取**，也不代表该
+    厂商全部表单形态。引用基线数字时必须连 citationScope 一起转述。
+
+    2026-09-15 按 apply.workable.com/{blueground,tp-link-usa-corp,usa-vein-clinics,epignosis}
+    四个 board 的真实 apply 页只读实测更新了 Phone / Address / 简历三栏的**标签内部结构**
+    （四家逐字相同）。三处都是「label 的 textContent 里有用户根本读不到的文字」：
+      · 每个图标都是 `<svg aria-hidden><desc><p>SVGs not supported by this browser.</p></desc>`，
+        于是 Address 的标签读成「Address SVGs not supported by this browser.」；
+      · 电话的 intl-tel-input 把整张国家区号表放进同一个 `<label>`，靠类名
+        `.iti__hide`（样式表里的 `display:none`）藏起来——属性层读不到；
+      · 简历入口的 `<label>` 里只有一个图标，标签整条读成那句 SVG 兜底文案。
+    控件的 id / name / data-ui / 必填性一律保持夹具原值——这次改的只有标签结构。
+  -->
+  <head>
+    <style>
+      /* 线上样式表里的原样声明：下拉内容靠类名藏，不是 inline style。 */
+      .iti__hide { display: none; }
+    </style>
+  </head>
+  <body>
+
+<div data-ui="careers-page-content">
+  <main role="main">
+    <form class="styles--2I-rr" data-ui="application-form">
+      <label for="firstname">First name*</label>
+      <input id="firstname" name="firstname" data-ui="firstname" type="text" required />
+
+      <label for="lastname">Last name*</label>
+      <input id="lastname" name="lastname" data-ui="lastname" type="text" required />
+
+      <label for="email">Email*</label>
+      <input id="email" name="email" data-ui="email" type="email" required />
+
+      <!-- 电话：标签包着 intl-tel-input 整个部件。用户读到的是「Phone *」与选中的
+           「+1」；`.iti__dropdown-content.iti__hide` 里那张国家表一个字都不上屏。
+           线上 240 条，这里留 3 条。 -->
+      <label>
+        <span><strong>*</strong></span><span id="phone_label"><strong>Phone</strong></span>
+        <div class="iti iti--allow-dropdown iti--separate-dial-code">
+          <div class="iti__flag-container">
+            <div class="iti__selected-flag" role="combobox" aria-haspopup="listbox"
+                 aria-expanded="false" aria-label="Telephone country code" tabindex="0" title="United States">
+              <div class="iti__flag iti__us"></div><div class="iti__selected-dial-code">+1</div>
+            </div>
+            <div class="iti__dropdown-content iti__hide iti--flexible-dropdown-width">
+              <ul class="iti__country-list" role="listbox" aria-label="List of countries">
+                <li class="iti__country" role="option" data-dial-code="1" data-country-code="us"><span class="iti__country-name">United States</span><span class="iti__dial-code">+1</span></li>
+                <li class="iti__country" role="option" data-dial-code="44" data-country-code="gb"><span class="iti__country-name">United Kingdom</span><span class="iti__dial-code">+44</span></li>
+                <li class="iti__country" role="option" data-dial-code="93" data-country-code="af"><span class="iti__country-name">Afghanistan</span><span class="iti__dial-code">+93</span></li>
+              </ul>
+            </div>
+          </div>
+          <input name="phone" type="tel" autocomplete="off" aria-labelledby="phone_label" required />
+        </div>
+      </label>
+
+      <!-- 地址：包裹 label 排在 aria-labelledby 之前命中（element.labels 先于 ARIA），
+           所以 `#address_label` 那句干净的「Address」救不了它——修的必须是标签文本
+           归一化本身，不是级联顺序。 -->
+      <label>
+        <span id="address_label"><strong>Address</strong></span>
+        <span><svg xmlns="http://www.w3.org/2000/svg" focusable="false" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><desc aria-hidden="true"><p>SVGs not supported by this browser.</p></desc><g fill-rule="evenodd"><path d="M8 0C3.6 0 0 3.6 0 8s3.6 8 8 8 8-3.6 8-8-3.6-8-8-8z"></path></g></svg></span>
+        <input id="address" name="address" data-ui="address" type="text"
+               aria-labelledby="address_label" aria-required="false" />
+      </label>
+
+      <label>City<input name="city" type="text" /></label>
+      <label>Postcode<input name="postcode" type="text" /></label>
+      <label>Country<input name="country" type="text" /></label>
+
+      <!-- 简历入口：`<label for>` 里只有一个图标。修之前这一栏的标签是
+           「SVGs not supported by this browser.」——一句凭空出现在审阅面板上的英文。 -->
+      <label for="input_files_resume"><svg xmlns="http://www.w3.org/2000/svg" focusable="false" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><desc aria-hidden="true"><p>SVGs not supported by this browser.</p></desc><use xlink:href="#upload24" fill-rule="evenodd"></use></svg></label>
+      <input id="input_files_resume" type="file" name="resume" data-ui="resume" />
+      <!-- 公司可以自定义核心字段的标签文案，这一句是常见写法。它同时命中
+           LABEL_PATTERNS 的 /website/i —— 没有"具名核心控件不走标签兜底"
+           这条守卫的话，用户的作品集网址会被写进求职信框。 -->
+      <label for="cover_letter">Cover letter or a link to your website</label>
+      <textarea id="cover_letter" name="cover_letter" data-ui="cover_letter"></textarea>
+
+      <label>Do you require sponsorship?
+        <input type="radio" name="QA_12113744" value="yes" /></label>
+
+      <label for="QA_12113745">LinkedIn profile</label>
+      <input id="QA_12113745" name="QA_12113745" data-ui="QA_12113745" type="text" />
+
+      <label for="QA_12113746">Why do you want to work here?</label>
+      <textarea id="QA_12113746" name="QA_12113746" data-ui="QA_12113746"></textarea>
+
+      <!-- 2026-08-24 live recheck: vendor-declared exact form-level final control. -->
+      <button data-ui="apply-button" type="submit">Submit application</button>
+    </form>
+  </main>
+</div>
+  </body>
+</html>

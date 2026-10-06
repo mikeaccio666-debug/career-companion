@@ -1,0 +1,67 @@
+{
+  "id": "V28-stem-across-epochs",
+  "scenarioClass": "repeated-rows",
+  "title": "One question re-observed at a shifted address is not a duplicate of itself",
+  "todayBehavior": "UA-1 identityDigest is an ordinal DOM path, so inserting anything above a field changes its address. Counting stems across the whole epoch chain would then report a page with one Company field as ambiguous, and a writer that honours the flag would refuse to fill it.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "sidecar": false,
+      "controls": [
+        {
+          "ref": "company",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true
+        }
+      ],
+      "ua2": {
+        "company": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        }
+      }
+    },
+    {
+      "cause": "HOST_MUTATION_RESCAN",
+      "domGeneration": "g1",
+      "sidecar": false,
+      "delta": {
+        "inherit": true,
+        "insertBefore": {
+          "ref": "company",
+          "controls": [
+            {
+              "ref": "banner_note",
+              "shape": "TEXT",
+              "label": "Referral code"
+            }
+          ]
+        },
+        "patch": {
+          "company": {
+            "ref": "company_shifted",
+            "element": "company_shifted"
+          }
+        }
+      },
+      "ua2": {
+        "banner_note": {
+          "kind": "UNRESOLVED",
+          "confidence": "LOW"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "classifications": {
+      "company": {
+        "duplicateRootStem": false
+      },
+      "company_shifted": {
+        "duplicateRootStem": false
+      }
+    }
+  }
+}

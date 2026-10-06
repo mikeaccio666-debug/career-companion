@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "model": "kokoro-82m",
+  "voice": "af_heart",
+  "language": "en-US",
+  "repository": "hexgrad/Kokoro-82M",
+  "revision": "f3ff3571791e39611d31c381e3a41a3af07b4987",
+  "license": "Apache-2.0",
+  "assets": [
+    {"file":"config.json","url":"https://huggingface.co/hexgrad/Kokoro-82M/resolve/f3ff3571791e39611d31c381e3a41a3af07b4987/config.json","size":2351,"sha256":"5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f"},
+    {"file":"kokoro-v1_0.pth","url":"https://huggingface.co/hexgrad/Kokoro-82M/resolve/f3ff3571791e39611d31c381e3a41a3af07b4987/kokoro-v1_0.pth","size":327212226,"sha256":"496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4"},
+    {"file":"voices/af_heart.pt","url":"https://huggingface.co/hexgrad/Kokoro-82M/resolve/f3ff3571791e39611d31c381e3a41a3af07b4987/voices/af_heart.pt","size":523425,"sha256":"0ab5709b8ffab19bfd849cd11d98f75b60af7733253ad0d67b12382a102cb4ff"},
+    {"file":"documentation/README.md","url":"https://huggingface.co/hexgrad/Kokoro-82M/resolve/f3ff3571791e39611d31c381e3a41a3af07b4987/README.md","size":6348,"sha256":"91dcabced89db6f109b8786642f50402d3ee87450e8189589b6f85520e7f4d78"},
+    {"file":"documentation/VOICES.md","url":"https://huggingface.co/hexgrad/Kokoro-82M/resolve/f3ff3571791e39611d31c381e3a41a3af07b4987/VOICES.md","size":7625,"sha256":"ec7e4941ad7e194af61e3455928528a9ff5360c7c505e412efab27d6a69ea106"},
+    {"file":"g2p/en_core_web_sm-3.8.0-py3-none-any.whl","url":"https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl","maxBytes":16777216,"sha256":"1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85","license":"MIT"}
+  ],
+  "packagedG2P": {"misaki":"0.9.4","espeakng-loader":"0.2.4","notes":"English dictionaries and eSpeak NG native library/data are supplied by the locked wheels. eSpeak NG and phonemizer have separate GPL licensing; not all dependencies share the model license."}
+}

@@ -1,0 +1,118 @@
+{
+  "id": "V29-addrow-rerender",
+  "scenarioClass": "repeated-rows",
+  "title": "An addRow that re-renders the whole list claims no row as ours",
+  "todayBehavior": "rowPlan may only remove rows we added. Claiming a host row that holds the user's own data as ADDED_BY_US is the unsafe direction, so ambiguous evidence must fall back to HOST_PRESENT.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "r0",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "E1"
+          }
+        },
+        {
+          "ref": "r1",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 1,
+            "shape": "exp",
+            "element": "E2"
+          }
+        }
+      ],
+      "ua2": {
+        "r0": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "r1": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        }
+      }
+    },
+    {
+      "cause": "POST_WRITE_RESCAN",
+      "domGeneration": "g1",
+      "attributedAddRowGroup": "exp",
+      "controls": [
+        {
+          "ref": "n0",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "F1"
+          }
+        },
+        {
+          "ref": "n1",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 1,
+            "shape": "exp",
+            "element": "F2"
+          }
+        },
+        {
+          "ref": "n2",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 2,
+            "shape": "exp",
+            "element": "F3"
+          }
+        }
+      ],
+      "ua2": {
+        "n0": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "n1": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "n2": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "liveRows": 3,
+    "retiredRows": 2,
+    "rowOrigins": {
+      "n0": "HOST_PRESENT",
+      "n1": "HOST_PRESENT",
+      "n2": "HOST_PRESENT"
+    },
+    "rowRetired": {
+      "r0": true,
+      "r1": true
+    }
+  }
+}

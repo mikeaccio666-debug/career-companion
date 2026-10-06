@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "clientRequestId": "00000000-0000-4000-8000-00000000a003",
+  "expectedMissionRevision": "1",
+  "extensionInstallId": "00000000-0000-4000-8000-00000000a007",
+  "page": {
+    "canonicalOrigin": "https://job-boards.greenhouse.io",
+    "pathname": "/argoland-chain-fixture/jobs/900000001"
+  },
+  "fieldKeys": [
+    "addressCountry",
+    "addressLine1",
+    "city",
+    "email",
+    "firstName",
+    "fullName",
+    "githubUrl",
+    "lastName",
+    "linkedinUrl",
+    "location",
+    "phone",
+    "portfolioUrl"
+  ]
+}

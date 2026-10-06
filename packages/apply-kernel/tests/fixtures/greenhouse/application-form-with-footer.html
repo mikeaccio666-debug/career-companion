@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <footer>
+      <form id="newsletter-form">
+        <label for="email">Subscribe to our newsletter</label>
+        <input id="email" data-fixture="newsletter-email" type="email" />
+      </form>
+    </footer>
+
+    <main>
+      <form id="application-form" class="application--form">
+        <label for="first_name">First Name*</label>
+        <input id="first_name" data-fixture="application-first-name" type="text" autocomplete="given-name" required />
+
+        <label for="last_name">Last Name*</label>
+        <input id="last_name" data-fixture="application-last-name" type="text" autocomplete="family-name" required />
+
+        <label for="email">Application Email*</label>
+        <input id="email" data-fixture="application-email" type="email" autocomplete="email" required />
+
+        <label for="resume">Resume/CV</label>
+        <input id="resume" data-fixture="application-resume" type="file" />
+
+        <!-- 2026-08-24 two-company live recheck: the exact form has one native final submit. -->
+        <button type="submit" class="btn btn--rounded">Submit application</button>
+      </form>
+    </main>
+  </body>
+</html>

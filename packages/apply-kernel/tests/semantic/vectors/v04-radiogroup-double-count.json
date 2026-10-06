@@ -1,0 +1,71 @@
+{
+  "id": "V04-radiogroup-double-count",
+  "scenarioClass": "radio-checkbox-group",
+  "title": "An ARIA radiogroup and its own role=radio members count once, and its bounded option list says so",
+  "todayBehavior": "UA-1 emits the radiogroup (with its options) and both role=radio members as separate controls, so UA-2 returns three classifications for one question and nothing links them.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "rg",
+          "role": "radiogroup",
+          "accessibleName": "Employment type",
+          "required": false,
+          "options": [
+            "Full-time",
+            "Part-time"
+          ],
+          "optionsOverflow": true
+        },
+        {
+          "ref": "rg_ft",
+          "role": "radio",
+          "accessibleName": "Full-time",
+          "memberOf": "rg",
+          "required": true
+        },
+        {
+          "ref": "rg_pt",
+          "role": "radio",
+          "accessibleName": "Part-time",
+          "memberOf": "rg"
+        }
+      ],
+      "ua2": {
+        "rg": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "rg_ft": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "rg_pt": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "rg",
+          "rg_ft",
+          "rg_pt"
+        ],
+        "grouping": "RADIOGROUP_OPTIONS",
+        "optionsIncomplete": true,
+        "required": true
+      }
+    ],
+    "nodeCount": 1,
+    "classifications": {
+      "rg": {
+        "kind": "STRUCTURED_CHOICE",
+        "merge": "MEMBERS_AGREE"
+      }
+    }
+  }
+}

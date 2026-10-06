@@ -1,0 +1,379 @@
+{
+  "$comment": "Ashby 适配规则。2026-08-01 对 jobs.ashbyhq.com/<org>/<uuid>/application 真实 posting 只读核实。Ashby 是四家里的异类，实测定了三件事：1) 根本没有 <form> 元素——申请是一棵裸 input 的 React 树，锚点只能是容器 class；Ashby 在构建哈希 class（_jobPostingForm_5yu8i_402，每次部署都变，绝不能用）旁边带了语义 class ashby-application-form-container，只有语义名稳定。2) 只有 _systemfield_* 的 name 稳定，其余全是逐公司 UUID，radio 组是 <questionUuid>_<optionUuid>——所以这家是标签匹配的真正试金石：LinkedIn 只能靠标签够到。3) g-recaptcha-response 是容器**内部**的具名 textarea，共享的 captcha 过滤在这里是承重墙不是防御性摆设。标签是主信号意味着守卫名单更要紧：engine.ts 在查这些 pattern 之前对每家厂商先跑 isOtherPersonField。",
+  "schemaVersion": 2,
+  "vendor": "ashby",
+  "applyPath": {
+    "$comment": "/<org>/<uuid>/application，带或不带尾斜杠；posting 页（/<org>/<uuid>）只渲染描述、没有字段。",
+    "source": "^\\/[^/]+\\/[^/]+\\/application\\/?$"
+  },
+  "$comment.anchors": "2026-09-24 测试台（jobs.ashbyhq.com/replit/447a6e11-b06b-4cc5-9203-cd55883f2af4/application）实测：自我认同问卷不在申请表那个容器里。#form 下并排四块：「Autofill from resume」上传区（.ashby-application-form-autofill-uploader，里面一个无 id/name 的 file input）、申请表容器、问卷（.ashby-survey-form-container > .ashby-application-form-container，性别/种族/退伍三组 radio，name 是 <uuid>__systemfield_eeoc_*）、隐私声明。只认第一个 .ashby-application-form-container 时问卷整块在扫描面之外，浮层上一行都没有。所以先试「同时直接挂着申请表容器与其后问卷容器的那一层」，它只在有问卷的页面上命中；没有问卷的页面照旧落到第二条。上传区在那一层里，归 excludeWithin：往它里面放简历会让 Ashby 解析简历、改写已填的栏。",
+  "anchors": [
+    "div:has(> .ashby-application-form-container ~ .ashby-survey-form-container)",
+    ".ashby-application-form-container"
+  ],
+  "$comment.finalSubmitControl": "2026-08-24 live Notion posting 只读复验：可见 ashby-application-form-submit-button 在 verified input container 之外、且页面没有 form；现行 native exact-form authority 无法证明，显式关闭而不按文案或构建 hash 猜测。2026-10-04 在 notion、ramp、linear、replit 的 7 个在招岗位重新只读复验：整页一个 <form> 都没有，「Submit Application」是没写 type、没有所属表单的 <button>（提交由页面脚本处理），有的岗位上它还在扫描根之外、class 是构建哈希。不是原生提交，照旧关闭；要开得先改「只按原生提交」那条规则，由负责人定。",
+  "finalSubmitControl": null,
+  "excludeWithin": [
+    "footer",
+    "[role=\"search\"]",
+    "nav",
+    ".ashby-application-form-autofill-uploader"
+  ],
+  "denyLabels": [
+    {
+      "source": "captcha",
+      "flags": "i"
+    }
+  ],
+  "denyNameSubstrings": [
+    "recaptcha",
+    "captcha"
+  ],
+  "widgetNames": [],
+  "$comment.questionScopes": "2026-09-15 对 jobs.ashbyhq.com/notion/7793e862-50fa-4357-a4bc-2328440f8d68/application 真实 posting 只读实测（ATS lab DOM dump）。每道题的题干都是 label.ashby-application-form-question-title（语义 class，旁边的 _heading_f7cvd_52 之类是构建哈希，不能用）：文本题在 div.ashby-application-form-field-entry 里，label[for] 指向控件 id；location 自动完成框 input[role=combobox] 没有 id，for 指空，于是只剩 placeholder「Start typing...」；yes/no 题是 div.ashby-application-form-input-yesno 里两个 button + 一个 tabindex=-1 的 checkbox（2 道，checkbox 自己的附近文字读成「YesNo」）；单选/复选题是 fieldset.ashby-application-form-input-radio-group / .ashby-application-form-input-checkbox-group（没有 legend，题干仍是那个 label，for 指向题目 uuid 而非任何控件）——复选组里每个 checkbox 的 name 是它自己的选项文案（LinkedIn / Glassdoor / …），按 name 归组会把一道 7 选项的题拆成 7 道单项题；单选组成员同名 <questionUuid>_<optionUuid>。三个容器都写进 closest 的选择器列表，最近的那个算数。没有本条时这一页 1 个 radio 组题干为空、location 只剩 placeholder、「How did you hear」拆成 7 题。",
+  "questionScopes": [
+    {
+      "container": ".ashby-application-form-field-entry, .ashby-application-form-input-radio-group, .ashby-application-form-input-checkbox-group",
+      "label": ".ashby-application-form-question-title"
+    }
+  ],
+  "$comment.listboxComboboxes": "2026-09-15 对 jobs.ashbyhq.com/notion/7793e862-50fa-4357-a4bc-2328440f8d68/application 只读实测（Playwright 合成事件，未提交）。Location 是 ARIA combobox：input.ashby-application-form-input-autocomplete（role=combobox、aria-autocomplete=list、aria-haspopup=listbox、aria-expanded=false，无 id/name，placeholder \"Start typing...\"），**点击不开列表，输入 1 个字符即开**：aria-expanded=true、aria-controls=:rN:（React useId）指向 div[role=listbox]._floatingContainer_*，它 **portal 到 body**、在 .ashby-application-form-container 之外；选项 div[role=option].ashby-application-form-input-autocomplete-popup-result（aria-selected 标当前；\"San Francisco, California, United States\" 等地理编码结果）。点选后输入框自己的 value=选项文字、aria-expanded=false、列表移除，失焦保留；不点选直接失焦则宿主自己把文字清空。所以 selectedValueSelector 指向触发器本身、回读读它的 value；容器用语义 class ashby-application-form-field-entry（_inputContainer_* 是构建哈希）。portal 列表里的选项由 click policy 的 withinOwnedPopup（触发器 aria-controls 所指的 listbox、触发器本身在表单内）放行，其余目标照旧 OUTSIDE_FORM。",
+  "listboxComboboxes": [
+    {
+      "triggerSelector": "input.ashby-application-form-input-autocomplete",
+      "valueContainerSelector": ".ashby-application-form-field-entry",
+      "selectedValueSelector": "input.ashby-application-form-input-autocomplete"
+    }
+  ],
+  "keySteps": [
+    {
+      "$comment": "Ashby 跨公司仅有的两个稳定 name。",
+      "type": "attrMap",
+      "attr": "name",
+      "confidence": 1,
+      "map": {
+        "_systemfield_name": "fullName",
+        "_systemfield_email": "email"
+      }
+    },
+    {
+      "$comment": "其余全是逐公司 UUID，标签文案在这家是主信号而非兜底。",
+      "type": "labelPatterns",
+      "confidence": 0.75,
+      "patterns": [
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Pronouns / Preferred pronouns：ats-lab 语料 130 次。 2026-09-22 真实页面实测：Ashby 问的是整句「What pronouns would you like our team to use?」，只认光秃秃 pronouns 的写法一条都不中（六页）。",
+          "regex": {
+            "source": "^(?:preferred\\s+)?pronouns?(?:\\s*\\((?:optional|if applicable)\\))?\\??$|^(?:what|which)\\s+(?:are\\s+your\\s+)?pronouns?\\b[^?]{0,60}\\??$",
+            "flags": "i"
+          },
+          "key": "preferredPronouns"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Date available / When can you start：语料 70 次。不认光秃秃的 start date（经历段也有），这里要求它就是整条标签。",
+          "regex": {
+            "source": "^(?:(?:earliest|preferred)\\s+)?(?:available\\s+)?start\\s+date(?:\\s*\\(.*\\))?\\??$|^date\\s+available\\??$|^(?:earliest\\s+)?availability(?:\\s+(?:date|to\\s+start))?\\??$|\\bwhen\\s+(?:can|could|would|are)\\s+you\\s+(?:be\\s+)?(?:available\\s+to\\s+)?start(?:\\s+work)?\\b|^available\\s+(?:to\\s+)?start(?:\\s+date)?\\??$",
+            "flags": "i"
+          },
+          "key": "earliestStartDate"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Notice period（天）。",
+          "regex": {
+            "source": "^(?:current\\s+)?notice\\s+period(?:\\s*\\((?:in\\s+)?days\\))?\\??$|\\bnotice\\s+period\\s*\\((?:in\\s+)?days\\)",
+            "flags": "i"
+          },
+          "key": "noticePeriodDays"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Summary / About you：语料 62 次。",
+          "regex": {
+            "source": "^(?:professional\\s+|brief\\s+|short\\s+)?summary(?:\\s+of\\s+(?:qualifications|experience))?\\??$|^(?:about|tell\\s+us\\s+(?:a\\s+(?:bit|little)\\s+)?about)\\s+(?:you|yourself)\\??$|^(?:short\\s+)?bio(?:graphy)?\\??$|^personal\\s+statement\\??$|^introduce\\s+yourself\\??$",
+            "flags": "i"
+          },
+          "key": "profileSummary"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Headline：语料 50 次；用现任职位答。",
+          "regex": {
+            "source": "^(?:professional\\s+)?headline\\??$|^current\\s+(?:job\\s+)?(?:title|role|position)\\??$",
+            "flags": "i"
+          },
+          "key": "currentJobTitle"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Desired pay / Salary expectations：语料 70 次。 2026-09-22 实测：Workable 六页问的是「What is your gross annual salary expectations for this role?」——「your」与 salary 之间夹了修饰词、句尾还带「for this role」，原来那一支两头都不允许，于是档案里有期望薪资却整条落空，再被 isJobDependentField 报成「取决于这个岗位」。修饰词限 3 个、只认结尾那一种从句，「current salary」与「salary range for this role」仍不中。",
+          "regex": {
+            "source": "^(?:desired|expected|target|requested|minimum)\\s+(?:annual\\s+|base\\s+)?(?:pay|salary|compensation)(?:\\s+(?:range|rate))?(?:\\s*\\(.*\\))?\\??$|^(?:salary|compensation|pay)\\s+(?:expectation|requirement)s?(?:\\s*\\(.*\\))?\\??$|^(?:what\\s+(?:is|are)\\s+your\\s+)?(?:gross\\s+|net\\s+|total\\s+|base\\s+|annual\\s+|monthly\\s+|yearly\\s+|expected\\s+|desired\\s+){0,3}(?:salary|compensation|pay)\\s*(?:expectations?|requirements?)?(?:\\s+for\\s+this\\s+(?:role|position|job|opening))?\\s*(?:\\([^)]{0,240}\\))?\\??$",
+            "flags": "i"
+          },
+          "key": "expectedSalaryAmount"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：期望薪资的币种。",
+          "regex": {
+            "source": "^(?:salary\\s+|pay\\s+|compensation\\s+)?currency\\??$",
+            "flags": "i"
+          },
+          "key": "expectedSalaryCurrency"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：期望薪资的周期（年/月/时）。",
+          "regex": {
+            "source": "^(?:pay|salary|compensation)\\s+(?:period|frequency|basis|type|interval)\\??$",
+            "flags": "i"
+          },
+          "key": "expectedSalaryPeriod"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Are you at least 18：语料 18 次。 2026-09-24：反着问的也认成 over18（under 18、younger than 18、not yet 18、less than 18 years、Are you a minor、underage；「Minor」「Do you have a minor in …」这类辅修题不认）。答哪一项由内核 dict/ageQuestion.ts 按题面判：未满 18 那一边答档案值的反面，带条件、否定或问号前还问了别的一律不答。 2026-09-24（二）：问法定工作年龄的也认成 over18（legal age to work、legal working age、legal age for/of employment、legal age to be employed；adobe.wd5 第 3 步原题「Are you of legal age to work in the country in which this position will be based?」）。它问的是年龄，不是工作授权。内核 dict/ageQuestion.ts 按整句判：年满 18（明确的，或按学历／工作经历推出来的）答肯定那一项；明确未满 18 不答（很多地方未满 18 也能工作），交还用户；除问法与地点之外多一个字（in a bar、full time）、或同一句还问了工作授权的，一律不答。「legal drinking age」「legal age to sell …」不认。Workday 从这一版起也带这一条，十一家逐字相同。",
+          "regex": {
+            "source": "\\b(?:at\\s+least|over|older\\s+than|a\\s+minimum\\s+of|minimum)\\s+18\\b|\\b18\\s+(?:years\\s+(?:of\\s+age|old|or\\s+older)|\\+|or\\s+older)\\b|\\bage\\s+of\\s+18\\b|\\b(?:under|younger\\s+than|not\\s+yet)\\s+18\\b|\\bless\\s+than\\s+18\\s+(?:years?|yrs?)\\b|\\b(?:are\\s+you|i\\s+am|you\\s+are)\\s+(?:(?:currently|still)\\s+)?(?:a\\s+)?minor\\b|\\bunder-?aged?\\b|\\blegal\\s+(?:working\\s+age|age\\s+(?:to|for|of)\\s+(?:work|employment|be\\s+employed))\\b",
+            "flags": "i"
+          },
+          "key": "over18"
+        },
+        {
+          "$comment": "2026-09-24（负责人：跟 Jobright 一样）：「Are you a transitioning service member?」——Shield AI 的 Lever 表单上是一道必填单选（No／Yes），后面跟一道「If yes, what partnership program are you working with?」。整句才认：带条件、否定、掺了退伍军人（那是 EEO 自我认同）、问家属的都不认。答案由内核按工作经历推（dict/historyAnswers.ts：有工作经历、没有一段像军队服役就答 No；有一段像、或没有工作经历就不答），只在选项控件上、恰好一项对得上时写。旧版内核不认识这个键，按规则解析的口径只跳过这一条。",
+          "regex": {
+            "source": "^\\s*(?:are\\s+you\\s+(?:(?:currently|presently|now)\\s+)?(?:an?\\s+)?)?transitioning\\s+(?:(?:u\\.?\\s?s\\.?|united\\s+states)\\s+)?(?:military\\s+)?service\\s*-?\\s*members?\\s*(?:\\((?:required|optional)\\)\\s*)?\\??\\s*(?:\\((?:required|optional)\\))?[\\s*✱]*$",
+            "flags": "i"
+          },
+          "key": "transitioningServiceMember"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Willing to relocate。",
+          "regex": {
+            "source": "^(?:are\\s+you\\s+)?(?:willing|open|able)\\s+to\\s+relocate(?:\\s+(?:for|to)\\s+this\\s+(?:role|position|job|location))?\\??$|^(?:open\\s+to\\s+)?relocation\\??$|^relocation\\s+(?:willingness|preference)\\??$",
+            "flags": "i"
+          },
+          "key": "openToRelocation"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：愿意搬去哪些城市。",
+          "regex": {
+            "source": "relocat\\w*.*\\b(?:which|what)\\s+(?:cities|locations|areas)\\b|\\b(?:cities|locations|areas)\\b.*\\brelocat",
+            "flags": "i"
+          },
+          "key": "openToRelocationCities"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：远程/混合/现场偏好。",
+          "regex": {
+            "source": "^(?:preferred\\s+|desired\\s+)?work(?:ing|place)?\\s+(?:arrangement|mode|model|setting|style|environment|location\\s+preference)s?\\??$|^(?:remote|hybrid|on-?site|in-?office)(?:\\s*(?:/|,|or)\\s*(?:remote|hybrid|on-?site|in-?office))+(?:\\s+preference)?\\??$|\\bpreference\\b.*\\b(?:remote|hybrid|on-?site|in-?person|in-?office)\\b|\\b(?:remote|hybrid|on-?site|in-?person|in-?office)\\b.*\\bpreference\\b",
+            "flags": "i"
+          },
+          "key": "preferredWorkModes"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Twitter / X：语料 34 次。",
+          "regex": {
+            "source": "\\btwitter\\b|^x\\s*(?:\\(formerly\\s+twitter\\)|profile|url|handle)\\??$|\\bx\\.com\\b",
+            "flags": "i"
+          },
+          "key": "profileTwitterUrl"
+        },
+        {
+          "$comment": "2026-09-21 填写键扩展（P1-5）：Other website：语料 46 次。",
+          "regex": {
+            "source": "^(?:other|additional|another|secondary)\\s+(?:website|site|url|link)s?(?:\\s*\\(optional\\))?\\??$|^other\\s+(?:links?|urls?)\\??$",
+            "flags": "i"
+          },
+          "key": "otherWebsiteUrl"
+        },
+        {
+          "$comment": "2026-09-22 真实环境实测放宽：原式要求标签以 how 开头、且公司名后不能跟括号，于是 Lever 的「Please tell us how you heard about this opportunity.」与 BambooHR 的「How did you learn about Nomad? (Acquaintance, Indeed…)」两条都不中，而档案里 heardAboutSource 是有值的。现在允许前面缀 please/tell us 一类引语、后面跟一段括号说明。 2026-09-22 真实页面实测：括号补充跟在问号**之后**（「… this opportunity? (Please be specific)」），原来的句尾只允许括号在问号之前，Ashby 六页全落「没把握」。 2026-09-22 实测：BambooHR 把候选来源整串列在句尾括号里（「(Acquaintance, Nomad employee, Indeed, …)」），轻松超过原来钉的 80 字符，于是整条不中。放宽到 240——仍然有上限，括号无限长等于这一行随便写什么都算。",
+          "regex": {
+            "source": "^(?:please\\s+)?(?:tell\\s+us\\s+|let\\s+us\\s+know\\s+)?how (?:did|do) you (?:hear|find out|learn)(?:ed)? about (?:us|this (?:job|role|position|opportunity)|the (?:job|role|position|opportunity)|[a-z0-9&.\\- ]{1,24})[?.]?\\s*(?:\\([^)]{0,240}\\))?[?.]?$|^(?:please\\s+)?(?:tell\\s+us\\s+)?how you heard about (?:us|this (?:job|role|position|opportunity))[?.]?\\s*(?:\\([^)]{0,240}\\))?[?.]?$|^where did you (?:hear|learn) about [a-z0-9&.\\- ]{1,24}\\s*(?:\\([^)]{0,240}\\))?\\??$",
+            "flags": "i"
+          },
+          "key": "heardAboutSource"
+        },
+        {
+          "$comment": "实测语料命中 87 条。发的是 ISO 双字母码，内核 dict/regions.ts 负责码→名展开后匹配下拉选项。",
+          "regex": {
+            "source": "^country(?:\\s*(?:of\\s+residence|of\\s+location))?$|^what country are you based in\\??$",
+            "flags": "i"
+          },
+          "key": "addressCountry"
+        },
+        {
+          "$comment": "必须带 current/most recent 限定：光秃秃的 Title 多半是 Mr./Ms. 称谓栏，填进职位就错得很显眼。",
+          "regex": {
+            "source": "^(?:current|most recent|current\\s*/\\s*most recent|current or most recent)\\s+(?:job\\s+|position\\s+)?title$",
+            "flags": "i"
+          },
+          "key": "currentJobTitle"
+        },
+        {
+          "$comment": "Current / Most Recent Employer 一类：实测语料里 39 个必填字段栽在这里，锚定到整条标签，零误判。",
+          "regex": {
+            "source": "^(?:(?:current|most recent|current\\s*/\\s*most recent|current or most recent)\\s+)?(?:company|employer)(?:\\s+name)?$",
+            "flags": "i"
+          },
+          "key": "currentCompany"
+        },
+        {
+          "$comment": "Legal / Preferred 前缀的姓名变体：实测语料里 31 个必填字段栽在这里。",
+          "regex": {
+            "source": "\\b(legal|given)\\s+first\\s+name\\b",
+            "flags": "i"
+          },
+          "key": "firstName"
+        },
+        {
+          "regex": {
+            "source": "\\b(legal|preferred)\\s+(last|family)\\s+name\\b",
+            "flags": "i"
+          },
+          "key": "lastName"
+        },
+        {
+          "regex": {
+            "source": "linkedin",
+            "flags": "i"
+          },
+          "key": "linkedinUrl"
+        },
+        {
+          "regex": {
+            "source": "github",
+            "flags": "i"
+          },
+          "key": "githubUrl"
+        },
+        {
+          "regex": {
+            "source": "(portfolio|personal (web)?site|website)",
+            "flags": "i"
+          },
+          "key": "portfolioUrl"
+        },
+        {
+          "regex": {
+            "source": "^\\s*(mobile|cell|telephone|phone)(\\s*(phone|number))?\\s*$",
+            "flags": "i"
+          },
+          "key": "phone"
+        },
+        {
+          "regex": {
+            "source": "^\\s*city\\b",
+            "flags": "i"
+          },
+          "key": "city"
+        },
+        {
+          "regex": {
+            "source": "^\\s*(first|given)\\s*name\\s*$",
+            "flags": "i"
+          },
+          "key": "firstName"
+        },
+        {
+          "regex": {
+            "source": "^\\s*((last|family)\\s*name|surname)\\s*$",
+            "flags": "i"
+          },
+          "key": "lastName"
+        },
+        {
+          "regex": {
+            "source": "preferred (first )?name",
+            "flags": "i"
+          },
+          "key": "preferredName"
+        },
+        {
+          "$comment": "2026-09-22 真实页面实测：Lever/Palantir 六页问「Which university are you currently attending or did you last attend?」——答案就是教育段第一行的学校名，而规则里没有任何一条指向 education.school，六页全落「没把握，没敢填」。不在行容器里的行内角色按第 1 段读（见 candidatesFor 的 fieldRowIndex ?? 0）。只认点名 university / college 的问句：学位与专业是另外两道题。 2026-09-22 palantir 真实题干在 ? 之后还跟着一整句填写说明（Please select \"Other (School Not Listed)\" if your school is not listed.），原先在 ? 处 $ 锚死，六页全落「没把握，没敢填」。开头锚得很死（必须以 which/what university/college 起头），所以 ? 之后放宽到 240 字只是容纳说明，不会把别的题认成学校。",
+          "regex": {
+            "source": "^(?:which|what)\\s+(?:university|college)\\b[^?]{0,80}(?:\\?.{0,240})?$|^(?:which|what)\\s+school\\s+(?:did|do|are)\\b[^?]{0,80}(?:\\?.{0,240})?$",
+            "flags": "i"
+          },
+          "key": "education.school"
+        },
+        {
+          "$comment": "2026-09-22 清点发现：email 在十一份规则里一条 labelPatterns 都没有，全靠各家 attrMap（name=\"email\"）。在 ATS 自己域名上够用，但页面一旦认不出厂商（公司自建域）attrMap 整条路不成立，而它是 97 页语料里最常见的字段（170 次）。整条标签相等才认：「Referrer’s email」「Emergency contact email」这类他人信息栏不中。",
+          "regex": {
+            "source": "^e-?mail(?:\\s+address)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "email"
+        },
+        {
+          "$comment": "2026-09-22 同上（语料里 54 次）。要求整条标签相等，所以「Email address」不会落到这里；「Address Line 2」也不中——那是另一栏（公寓号之类），我们没有对应的键。",
+          "regex": {
+            "source": "^(?:street\\s+)?address(?:\\s+line\\s*1)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressLine1"
+        },
+        {
+          "$comment": "2026-09-22 同上（语料里 32 次）。覆盖 ZIP / Zip code / Postal code / ZIP / Postal code 四种写法。",
+          "regex": {
+            "source": "^(?:zip|postal)(?:\\s*/\\s*postal)?(?:\\s+code)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressPostalCode"
+        },
+        {
+          "$comment": "2026-09-22：纯标签下连名都认不出——各家全靠 attrMap 的 name 钩子（name=\"first_name\"），认不出厂商的页面上那条路不成立。标签取自 97 页语料（First Name 76 次、First name 27 次）。整条相等才认：「Preferred First Name」照旧落 preferredName，「Referrer’s first name」这类他人姓名不中。",
+          "regex": {
+            "source": "^(?:legal\\s+|given\\s+)?first\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^given\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "firstName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Last Name 76 次、Last name 27 次）。surname / family name 是同一栏的另外两种写法。",
+          "regex": {
+            "source": "^(?:legal\\s+|family\\s+)?last\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^surname(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^family\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "lastName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Full Name 34 次、Full name 33 次）。刻意**不认**光秃秃的「Name」：那一栏在公司名、学校名、推荐人姓名上同样叫 Name，认错一个写进去的就是别人的资料。",
+          "regex": {
+            "source": "^(?:legal\\s+)?full\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "fullName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Phone 137 次、Phone Number 11 次）。句尾允许缀区号：带旗标的号码框把它写进标签（Phone+1 / Phone +1，语料里 22 次）。分机、区号、号码类型另有 isPhoneMetaField 守卫，这里的正则也不认它们。",
+          "regex": {
+            "source": "^(?:mobile\\s+|cell\\s+|home\\s+|work\\s+|primary\\s+|personal\\s+)?phone(?:\\s+number)?\\s*(?:\\+\\d{1,4})?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "phone"
+        },
+        {
+          "$comment": "2026-09-22 jobvite 实测原话是「How did you hear this job?」——句中**没有 \"about\"**，而现有那条正则把 about 写死了，于是整条落空。这一条把 about 放成可选，并且要求紧跟 us/this/the，「have you heard of us before?」仍然不中（那是问听没听说过，不是问从哪听说的）。",
+          "regex": {
+            "source": "^(?:please\\s+)?(?:tell\\s+us\\s+|let\\s+us\\s+know\\s+)?(?:how|where)\\s+(?:did|do)\\s+you\\s+(?:hear|find|learn)(?:\\s+out)?(?:ed)?\\s+(?:about\\s+)?(?:us|this|the)\\b[^?]{0,60}\\??\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "heardAboutSource"
+        },
+        {
+          "$comment": "2026-09-22 jobvite 实测原话就是光秃秃的「State」。`addressRegion` 在后端下发的 35 键放行名单里、档案里也有值，而十家规则**一条对应的正则都没有**——这一栏从来没有被填上过。两端锚定是必需的：「employment status」「visa status」「please state your reason」都带 state 字样，一条都不许中。",
+          "regex": {
+            "source": "^(?:state|province|region)(?:\\s*(?:/|,|or)\\s*(?:state|province|region))?\\s*\\*?$|^state\\s+or\\s+province\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressRegion"
+        }
+      ]
+    },
+    {
+      "$comment": "2026-09-15 实测：Location 的 autocomplete 输入框既无 id 也无 name，<label for=\"_systemfield_location\"> 找不到可关联的 id，标签只剩 placeholder \"Start typing...\"，任何标签 pattern 都够不到它。它的字段 wrapper div.ashby-application-form-field-entry 带 data-field-path=\"_systemfield_location\"——与 attrMap 里的 _systemfield_name / _systemfield_email 同一套跨公司稳定的系统字段名。ancestorAttrMap 对最近一个带该属性的祖先做闭集查表，值不在表里即 NO_KEY，而每个 Ashby 字段都在这样的 wrapper 里，所以这一步**必须排在最后**：前面的 name 表与标签兜底照常先跑。",
+      "type": "ancestorAttrMap",
+      "attr": "data-field-path",
+      "confidence": 1,
+      "map": {
+        "_systemfield_location": "location"
+      }
+    }
+  ]
+}

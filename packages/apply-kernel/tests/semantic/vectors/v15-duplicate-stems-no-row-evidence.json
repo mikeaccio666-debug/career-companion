@@ -1,0 +1,86 @@
+{
+  "id": "V15-duplicate-stems-root",
+  "scenarioClass": "repeated-rows",
+  "title": "Two root-scope questions with the same stem and no row evidence are flagged as ambiguous",
+  "todayBehavior": "Both fields match the same canonical field, so the same profile value is written into both, or arbitration hides one of them entirely.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "sidecar": false,
+      "controls": [
+        {
+          "ref": "company_a",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true
+        },
+        {
+          "ref": "title_a",
+          "shape": "TEXT",
+          "label": "Title"
+        },
+        {
+          "ref": "company_b",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true
+        },
+        {
+          "ref": "title_b",
+          "shape": "TEXT",
+          "label": "Title"
+        },
+        {
+          "ref": "email",
+          "shape": "EMAIL",
+          "label": "Email",
+          "autocomplete": [
+            "email"
+          ],
+          "required": true
+        }
+      ],
+      "ua2": {
+        "company_a": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "title_a": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "JOB_TITLE"
+        },
+        "company_b": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "title_b": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "JOB_TITLE"
+        },
+        "email": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "EMAIL"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "nodeCount": 5,
+    "classifications": {
+      "company_a": {
+        "duplicateRootStem": true,
+        "canonicalField": "ORGANIZATION"
+      },
+      "company_b": {
+        "duplicateRootStem": true
+      },
+      "title_a": {
+        "duplicateRootStem": true
+      },
+      "email": {
+        "duplicateRootStem": false
+      }
+    }
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "id": "V16-stem-guards",
+  "scenarioClass": "classification-merge",
+  "title": "The kernel's existing negative tiers apply in the UA lane: other-person, job-dependent and phone-meta stems are marked",
+  "todayBehavior": "UA-2 has no negative tier, so an emergency-contact email and a phone extension both arrive as ordinary canonical fields and the guard text is hashed away before any later layer can re-run it.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "ec_email",
+          "shape": "EMAIL",
+          "label": "Emergency contact email",
+          "required": true
+        },
+        {
+          "ref": "sponsor",
+          "shape": "SELECT",
+          "label": "Will you require sponsorship for a work visa?",
+          "required": true,
+          "optionsPreset": "NO_YES"
+        },
+        {
+          "ref": "ext",
+          "shape": "TEL",
+          "label": "Phone extension"
+        },
+        {
+          "ref": "phone",
+          "shape": "TEL",
+          "label": "Phone",
+          "autocomplete": [
+            "tel"
+          ],
+          "required": true
+        }
+      ],
+      "ua2": {
+        "ec_email": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "EMAIL",
+          "confidence": "MEDIUM"
+        },
+        "sponsor": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "ext": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "PHONE",
+          "confidence": "MEDIUM"
+        },
+        "phone": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "PHONE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "nodeCount": 4,
+    "classifications": {
+      "ec_email": {
+        "stemGuard": "OTHER_PERSON"
+      },
+      "sponsor": {
+        "stemGuard": "JOB_DEPENDENT"
+      },
+      "ext": {
+        "stemGuard": "PHONE_META",
+        "canonicalField": "PHONE"
+      },
+      "phone": {
+        "stemGuard": "NONE",
+        "canonicalField": "PHONE"
+      }
+    }
+  }
+}

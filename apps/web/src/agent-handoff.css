@@ -1,0 +1,7 @@
+.artifact-agent-action { display: flex; flex-wrap: wrap; gap: 7px 12px; padding: 10px 12px; border-top: 1px solid #e1e9d6; min-width: 0; }
+.artifact-agent-action .text-button { min-height: 44px; padding: 8px 0; font-size: 12px; white-space: normal; text-align: left; }
+.artifact-agent-action small { flex-basis: 100%; font-size: 11px; line-height: 1.8; color: #657755; overflow-wrap: anywhere; }
+.agent-handoff-notice { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 10px; padding: 10px 12px; background: #edf5e4; border: 1px solid #dce8cf; border-radius: 8px; color: #577345; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.agent-handoff-notice > span { flex: 1; min-width: 0; }
+.agent-handoff-notice .icon-button { width: 44px; min-width: 44px; height: 44px; flex-shrink: 0; }
+@media (max-width: 699px) { .artifact-agent-action { padding: 9px 10px; } .artifact-agent-action .text-button { font-size: 13px; } .agent-handoff-notice { padding: 9px 10px; } }

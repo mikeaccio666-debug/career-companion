@@ -1,0 +1,44 @@
+<!--
+  Workday 账号墙「注册」这一步的合成夹具（结构照 2026-09-28 nvidia.wd5 只读实测：点了「Create Account」这一视图切换，
+  没有输入、没有提交）。
+
+  实测记下的：密码要求写在 passwordRulesList 里（特殊字符、至少 8 位、数字、大写、字母、小写）；两个密码框都是
+  type=password、autocomplete=new-password；注册条款是 formField- 里的一个勾选框 createAccountCheckbox，标签只写
+  「I agree」，条款正文（维持唯一一份候选人档案、按条款与隐私说明存储资料）在旁边一段收着的 richText 里；提交按钮
+  createAccountSubmitButton 同样被 click_filter 罩着（aria-label「Create Account」）；「Sign In」切换钮不在 form 里。
+-->
+<div data-automation-id="applyFlowPage">
+  <div data-automation-id="signInContent">
+    <div dir="ltr">
+      <h2 id="authViewTitle">Create Account</h2>
+      <div data-automation-id="passwordRulesList"><div data-automation-id="richText">Password Requirements: A special character; A minimum of 8 characters; A numeric character; An uppercase character; An alphabetic character; A lowercase character</div></div>
+      <form data-automation-id="signInFormo">
+        <div data-automation-id="formField-email">
+          <label for="input-16"><span>Email Address<abbr aria-hidden="true">*</abbr></span></label>
+          <div><input type="text" data-automation-id="email" id="input-16" aria-required="true" autocomplete="email"></div>
+        </div>
+        <div data-automation-id="formField-password">
+          <label for="input-17"><span>Password<abbr aria-hidden="true">*</abbr></span></label>
+          <div><input type="password" data-automation-id="password" id="input-17" aria-required="true" autocomplete="new-password"></div>
+        </div>
+        <div data-automation-id="formField-verifyPassword">
+          <label for="input-18"><span>Verify New Password<abbr aria-hidden="true">*</abbr></span></label>
+          <div><input type="password" data-automation-id="verifyPassword" id="input-18" aria-required="true" autocomplete="new-password"></div>
+        </div>
+        <div data-automation-id="richText" aria-hidden="true">Each candidate keeps one profile. By selecting the checkbox, you agree to the Terms and Conditions and acknowledge the Applicant Privacy notice.</div>
+        <button type="button" data-automation-id="createAccountExpandButton">Read More</button>
+        <div data-automation-id="formField-">
+          <label for="input-19">I agree</label>
+          <input type="checkbox" data-automation-id="createAccountCheckbox" id="input-19" aria-checked="false">
+        </div>
+        <div data-automation-id="noCaptchaWrapper">
+          <div aria-label="Create Account" role="button" tabindex="0" data-automation-id="click_filter"></div>
+          <button type="submit" data-automation-id="createAccountSubmitButton" tabindex="-2" aria-hidden="true">Create Account</button>
+        </div>
+      </form>
+      <div>Already have an account?<button data-automation-id="signInLink">Sign In</button></div>
+      <div><button data-automation-id="forgotPasswordLink">Forgot your password?</button></div>
+    </div>
+  </div>
+</div>
+<input id="beecatcher-create" name="website" type="text" data-automation-id="beecatcher" style="width:1px;height:0">

@@ -1,0 +1,46 @@
+<!--
+  Rippling 申请页的最终提交（2026-10-04 只读实测：ats.rippling.com/<公司>/jobs/<uuid>/apply，rippling、peach-finance、
+  opendoor、arc、column、moov、gather 等 9 家公司的 12 个在招岗位；只读 DOM，没有输入、没有点击、没有提交）。合成夹具，只留结构与钩子。
+
+  实测记下的：表里唯一的原生提交是 <button type="submit" data-testid="Apply">Apply</button>，12 页都看得见，但必填没填好之前
+  一直挂着 aria-disabled="true"、data-disabled="true"（不是原生 disabled）。网站公开的前端代码说明了两件事：
+  ① 这颗按钮是表单组件自己的提交钮，isDisabled = 正在提交 ∨ 表单不成立，所以必填都过了它才放开；
+  ② 它上面的字是「后面还有页吗」决定的：还有就是「Continue」，没有了才是「Apply」——data-testid 就是那一行字。
+  所以规则只认 data-testid="Apply" 的那一颗：写着 Continue 的是翻页，不是最终提交。
+  另外三颗（Drop or select、Clear selection、Add comment）都是 type=button。
+-->
+<div id="__next">
+  <div>
+    <form>
+      <div data-testid="field">
+        <label for="field-4">Résumé</label>
+        <button type="button">Drop or select (.doc / .docx / .pdf)</button>
+        <input data-testid="input-resume" id="field-4" type="file" />
+      </div>
+      <div data-testid="field">
+        <label for="field-8">First name*</label>
+        <input data-testid="input-first_name" id="field-8" name="z7FRYsYUls" type="text" required />
+      </div>
+      <div data-testid="field">
+        <label for="field-12">Last name*</label>
+        <input data-testid="input-last_name" id="field-12" name="kRxpj8ayh3o" type="text" required />
+      </div>
+      <div data-testid="field">
+        <label for="field-16">Email*</label>
+        <input data-testid="input-email" id="field-16" name="nHpG1iQfETF" type="text" required />
+      </div>
+      <div data-testid="field">
+        <label for="field-31">Phone number*</label>
+        <input data-testid="input-phone_number" id="field-31" name="Vfu-KG_FTjf" type="text" required />
+      </div>
+      <div data-testid="field">
+        <button type="button">Clear selection</button>
+        <button type="button">Add comment</button>
+      </div>
+      <input name="cf-turnstile-response" type="hidden" />
+      <div>
+        <button type="submit" data-disabled="true" aria-disabled="true" data-testid="Apply" class="css-5e860b">Apply</button>
+      </div>
+    </form>
+  </div>
+</div>

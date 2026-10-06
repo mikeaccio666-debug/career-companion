@@ -1,0 +1,12 @@
+{
+  "name": "Openfield — AI workspace",
+  "short_name": "Openfield",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f2",
+  "theme_color": "#174d43",
+  "description": "A mobile-ready space for chat, voice, media and agent tasks. Remote models require a network connection.",
+  "icons": [{"src":"/mark.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]
+}

@@ -1,0 +1,10 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    // contracts 稳定包内部用 .ts 后缀 import；本包只 noEmit 检查，安全开启。
+    "allowImportingTsExtensions": true
+  }
+}

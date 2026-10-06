@@ -1,0 +1,75 @@
+{
+  "id": "V13-aria-role-buttons",
+  "scenarioClass": "proxy-native",
+  "title": "A button with a form-control role is a question; a typeless Next button stays an action",
+  "todayBehavior": "UA-1 coerces the button tag to inputType button/submit, so a role=checkbox or role=switch control is classified as a human action and never reaches a question at all.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "agree",
+          "role": "checkbox",
+          "inputType": "button",
+          "accessibleName": "I agree to be contacted",
+          "required": true
+        },
+        {
+          "ref": "remote",
+          "role": "switch",
+          "inputType": "button",
+          "accessibleName": "Open to remote work"
+        },
+        {
+          "ref": "next",
+          "shape": "SUBMIT",
+          "accessibleName": "Next"
+        }
+      ],
+      "ua2": {
+        "agree": {
+          "kind": "HUMAN_ACTION_REQUIRED"
+        },
+        "remote": {
+          "kind": "HUMAN_ACTION_REQUIRED"
+        },
+        "next": {
+          "kind": "HUMAN_ACTION_REQUIRED"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "CHECKBOX_SINGLE",
+        "members": [
+          "agree"
+        ],
+        "required": true
+      },
+      {
+        "kind": "SWITCH",
+        "members": [
+          "remote"
+        ]
+      },
+      {
+        "kind": "BUTTON",
+        "members": [
+          "next"
+        ]
+      }
+    ],
+    "nodeCount": 3,
+    "nodeKinds": {
+      "agree": "QUESTION",
+      "remote": "QUESTION",
+      "next": "ACTION"
+    },
+    "actionClasses": {
+      "next": "SUBMIT"
+    }
+  }
+}

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    bamboohr 填充率基准夹具。
+
+    出处：由 tests/apply-bamboohr-adapter.test.ts 的 mountBambooFixture() 提升而来。
+    那份结构的来源是 2026-08-23 对 touchstonetherapycenter.bamboohr.com/careers/33
+    真实在招岗位的只读实测（50-证据库 §F.8-d／§F.8-f）：点了一次「Apply for This Job」
+    把表单展开，未填任何字段、未提交。
+
+    与其余夹具同一性质：**静态快照，不是线上抓取**，也不代表该厂商全部表单形态。
+    引用基线数字时必须连 citationScope 一起转述。
+
+    ⚠️ 这份夹具的第一个控件是**蜜罐** nickname_hpcsaf（label 逐字是
+    Please leave this field blank）。它刻意保留 —— 填进去 = 整份申请被静默丢弃。
+    注意：本文件里它只靠 label 文案被接住；真实页面上它还藏在
+    position:absolute;left:-9999px 的父节点里，而那一层在 happy-dom 下量不到
+    （没有布局引擎），需要夹具方自己补 getBoundingClientRect。
+
+    2026-09-15 复测（touchstonetherapycenter.bamboohr.com/careers/21，只读 + 一次本地
+    DataTransfer 探针，未提交）补上两个文件栏：两个 input 的 aria-label 都只是 `file-input`，
+    唯一的区分是各自上方那段文字——简历栏上方是 `Resume*`（隔两层的前置兄弟），
+    第二个是自定义题（BIRP 示例附件）。"Choose File*" 按钮在 input 容器里再套两层，
+    不是直接子节点。收到文件后宿主在 change 处理器里同步卸掉 input、渲染文件名。
+  -->
+  <body>
+
+    <section>
+      <form id="job-application-form">
+        <!-- 蜜罐：实测的藏法就是把父节点推到视口外，元素自己 visibility:visible -->
+        <div style="position:absolute; left:-9999px; overflow:hidden; height:0; width:0;">
+          <label for="nickname_hpcsaf">Please leave this field blank</label>
+          <input id="nickname_hpcsaf" name="nickname_hpcsaf" type="text"
+                 autocomplete="newAppNicknameInput_hpcsaf" tabindex="-1"
+                 placeholder="Enter your text here" />
+        </div>
+        <label for="firstName">First Name *</label><input id="firstName" name="firstName" type="text" />
+        <label for="lastName">Last Name *</label><input id="lastName" name="lastName" type="text" />
+        <label for="email">Email *</label><input id="email" name="email" type="text" />
+        <label for="phone">Phone *</label><input id="phone" name="phone" type="text" />
+        <label for="sa">Address *</label><input id="sa" name="streetAddress.value" type="text" />
+        <label for="ci">City *</label><input id="ci" name="city.value" type="text" />
+        <label for="zp">ZIP *</label><input id="zp" name="zip.value" type="text" />
+        <div>
+          <div><span>Resume*</span></div>
+          <div>
+            <div>
+              <div>
+                <button type="button"><span>Choose File*</span></button>
+                <div><p>No file selected</p></div>
+              </div>
+              <input accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.tif,.tiff,.gif,.png,.bmp,.txt,.rtf"
+                     aria-invalid="false" aria-label="file-input" data-bi-id="-file-input"
+                     required tabindex="-1" type="file" />
+            </div>
+            <input name="resumeFileId" type="hidden" value="" />
+          </div>
+        </div>
+        <label for="wu">Website, Blog or Portfolio</label><input id="wu" name="websiteUrl" type="text" />
+        <label for="lu">LinkedIn URL</label><input id="lu" name="linkedinUrl" type="text" />
+        <label for="ei">College/University *</label><input id="ei" name="educationInstitutionName" type="text" />
+        <label for="rb">Who referred you for this position?</label><input id="rb" name="referredBy" type="text" />
+        <div>
+          <div><span>Do you have a recent example of a BIRP (Behavior, Intervention, Response, Plan) that you could share? Please change any client names or sensitive information as needed.*</span></div>
+          <div>
+            <div>
+              <div>
+                <button type="button"><span>Choose Files*</span></button>
+                <div><p>No files selected</p></div>
+              </div>
+              <input accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.tif,.tiff,.gif,.png,.bmp,.txt,.rtf"
+                     aria-invalid="false" aria-label="file-input" data-bi-id="-file-input"
+                     multiple required tabindex="-1" type="file" />
+            </div>
+            <input name="customQuestionAnswers.file_54" type="hidden" value="" />
+          </div>
+        </div>
+        <textarea id="gr" name="g-recaptcha-response"></textarea>
+      </form>
+    </section>
+  </body>
+</html>

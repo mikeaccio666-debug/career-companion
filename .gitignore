@@ -1,0 +1,33 @@
+# Local credentials and provider configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+.pnpm-store/
+.local/
+.next/
+dist/
+.vercel/
+__pycache__/
+.venv/
+.wxt/
+.output*/
+.assistant-preview*/
+coverage/
+*.tsbuildinfo
+playwright-report/
+test-results/
+e2e/**/results/
+e2e/**/profile/
+e2e/**/profiles/
+.artifacts/
+
+# Local user materials and exports
+private/
+uploads/
+exports/
+
+# OS files
+.DS_Store

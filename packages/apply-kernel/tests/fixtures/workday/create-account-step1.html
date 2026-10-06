@@ -1,0 +1,52 @@
+<!--
+  Workday 申请流程 step 1「Create Account」的**真实结构**。
+
+  取自 rochester.wd5.myworkdayjobs.com 的公开岗位申请页
+  （2026-08-21 只读实测；未登录、未输入任何数据、未创建任何账号）。
+  只保留结构与 data-automation-id，去掉全部品牌文案与无关节点。
+
+  当前 stable runtime **绝对不能碰**这一页：密码只有在 pending L2-P 的 origin-bound
+  local credential authority + durable per-occurrence release 全链批准后才可能走专用路径；
+  账号创建确认仍由用户本人操作。夹具锁的是批准前的 fail-closed 行为。
+-->
+<div data-automation-id="applyFlowPage">
+  <div data-automation-id="progressBar">
+    <div data-automation-id="progressBarActiveStep">1</div>
+    <div data-automation-id="progressBarInactiveStep">2</div>
+    <div data-automation-id="progressBarInactiveStep">3</div>
+    <div data-automation-id="progressBarInactiveStep">4</div>
+    <div data-automation-id="progressBarInactiveStep">5</div>
+    <div data-automation-id="progressBarInactiveStep">6</div>
+    <div data-automation-id="progressBarInactiveStep">7</div>
+    <div data-automation-id="progressBarInactiveStep">8</div>
+  </div>
+  <div data-automation-id="signInContent">
+    <form data-automation-id="signInFormo">
+      <div data-automation-id="formField-email">
+        <label for="input-4">Email Address*</label>
+        <input id="input-4" type="text" data-automation-id="email" aria-required="true" />
+      </div>
+      <div data-automation-id="formField-password">
+        <label for="input-5">Password*</label>
+        <input id="input-5" type="password" data-automation-id="password" aria-required="true" />
+      </div>
+      <div data-automation-id="formField-verifyPassword">
+        <label for="input-6">Verify New Password*</label>
+        <input id="input-6" type="password" data-automation-id="verifyPassword" aria-required="true" />
+      </div>
+      <div data-automation-id="formField-">
+        <label for="input-9">I consent to my information being maintained</label>
+        <input id="input-9" type="checkbox" data-automation-id="createAccountCheckbox" />
+      </div>
+      <!--
+        ⚠️ 活的蜜罐。实测原样：data-automation-id="beecatcher"、name="website"、
+        1×0 像素、id 是随机 UUID。
+
+        `name="website"` 不是巧合——它就是冲着 autofill 的 portfolio/website
+        正则来的。填了它，整份申请被静默判为 bot 流量丢弃，而界面还会显示"已填"。
+      -->
+      <input id="632b7715-d03a-4ba0-a241-2baca0ca06c4" name="website" type="text"
+             data-automation-id="beecatcher" style="width:1px;height:0" />
+    </form>
+  </div>
+</div>

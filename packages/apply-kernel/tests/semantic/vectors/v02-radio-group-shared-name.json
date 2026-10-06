@@ -1,0 +1,71 @@
+{
+  "id": "V02-radio-shared-name",
+  "scenarioClass": "radio-checkbox-group",
+  "title": "Three native radios sharing one name are one question, required if any member is",
+  "todayBehavior": "The name attribute never leaves UA-1, so UA-2 returns three independent STRUCTURED_CHOICE dispositions for one question and every count triples.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "sp_yes",
+          "shape": "RADIO",
+          "label": "Yes",
+          "legend": "Will you now or in the future require sponsorship?",
+          "required": false,
+          "groupKey": "sponsorship"
+        },
+        {
+          "ref": "sp_no",
+          "shape": "RADIO",
+          "label": "No",
+          "legend": "Will you now or in the future require sponsorship?",
+          "required": true,
+          "groupKey": "sponsorship"
+        },
+        {
+          "ref": "sp_maybe",
+          "shape": "RADIO",
+          "label": "Not sure",
+          "legend": "Will you now or in the future require sponsorship?",
+          "required": false,
+          "groupKey": "sponsorship"
+        }
+      ],
+      "ua2": {
+        "sp_yes": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "sp_no": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "sp_maybe": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "sp_yes",
+          "sp_no",
+          "sp_maybe"
+        ],
+        "grouping": "SHARED_NAME",
+        "required": true
+      }
+    ],
+    "nodeCount": 1,
+    "classifications": {
+      "sp_yes": {
+        "kind": "STRUCTURED_CHOICE",
+        "merge": "MEMBERS_AGREE",
+        "stemGuard": "JOB_DEPENDENT"
+      }
+    }
+  }
+}

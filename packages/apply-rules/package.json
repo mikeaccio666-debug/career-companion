@@ -1,0 +1,26 @@
+{
+  "name": "@edaix/apply-rules",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "ATS 适配规则源 JSON、版本化 release manifest 与 annotation-free immutable release",
+  "dependencies": {
+    "@edaix/contracts": "workspace:*"
+  },
+  "exports": {
+    "./release-manifest.json": "./release-manifest.json",
+    "./runtime-release": "./runtime-release.ts",
+    "./greenhouse.json": "./rules/greenhouse.json",
+    "./lever.json": "./rules/lever.json",
+    "./ashby.json": "./rules/ashby.json",
+    "./workable.json": "./rules/workable.json",
+    "./workday.json": "./rules/workday.json",
+    "./smartrecruiters.json": "./rules/smartrecruiters.json",
+    "./icims.json": "./rules/icims.json",
+    "./rippling.json": "./rules/rippling.json",
+    "./dover.json": "./rules/dover.json",
+    "./bamboohr.json": "./rules/bamboohr.json",
+    "./jobvite.json": "./rules/jobvite.json",
+    "./generic.json": "./rules/generic.json"
+  }
+}

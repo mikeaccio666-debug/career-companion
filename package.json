@@ -1,0 +1,32 @@
+{
+  "name": "career-companion",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@11.13.1",
+  "engines": { "node": "24.21.0" },
+  "scripts": {
+    "check": "pnpm -r --if-present check",
+    "test": "pnpm -r --if-present test",
+    "build:extension": "pnpm --filter @edaix/extension build",
+    "dev:extension": "pnpm --filter @edaix/extension dev",
+    "preview:extension-ui": "pnpm --filter @edaix/extension preview:ui",
+    "build:extension-ui": "pnpm --filter @edaix/extension build:ui",
+    "dev:application-service": "pnpm --filter @career/application-service dev",
+    "infra:up": "docker compose -f infra/platform/compose.yaml up -d postgres redis",
+    "infra:objects": "docker compose -f infra/platform/compose.yaml --profile object-storage up -d seaweedfs",
+    "infra:stop": "docker compose -f infra/platform/compose.yaml --profile object-storage stop",
+    "dev:platform": "node scripts/dev-platform.mjs",
+    "speech:prepare": "bash services/local-speech/setup.sh",
+    "speech:serve": "bash services/local-speech/run.sh",
+    "transcription:prepare": "bash services/local-transcription/setup.sh",
+    "transcription:serve": "bash services/local-transcription/run.sh",
+    "build:web": "pnpm --filter @companion/web build",
+    "build:platform-image": "docker build -f infra/platform/production/Dockerfile -t companion-platform:local-production .",
+    "check:platform": "pnpm --filter '@companion/*' --if-present check",
+    "test:platform": "pnpm --workspace-concurrency=1 --filter '@companion/*' --if-present test"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.7"
+  }
+}

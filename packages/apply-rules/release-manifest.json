@@ -1,0 +1,164 @@
+{
+  "$comment": "Default-off T10 release scaffolding. Digests bind annotation-free rulesets; production activation still requires the backend runtime-bundle authority and final convergence approval.",
+  "schemaVersion": 1,
+  "releaseVersion": "apply-rules-2026-10-04.4",
+  "releaseDigest": "sha256:4a704481dc9f1cc69f6a51f17a7b6e9498dc3831d23587dd10737f72cc89e35b",
+  "mappings": [
+    {
+      "atsProvider": "ASHBY",
+      "pathRuleId": "ashby-application-v1",
+      "vendor": "ashby",
+      "rulesetVersion": "ashby-rules-v19",
+      "rulesetDigest": "sha256:bc2fdb5a665a137e5f6258d0fb34a375a42022ab38ace766e673c4196cca3166"
+    },
+    {
+      "atsProvider": "BAMBOOHR",
+      "pathRuleId": "bamboohr-application-v1",
+      "vendor": "bamboohr",
+      "rulesetVersion": "bamboohr-rules-v11",
+      "rulesetDigest": "sha256:7582823d9db2c8861314697adcdec98bb39a4694d6f802b592e79253d3e55be9"
+    },
+    {
+      "atsProvider": "DOVER",
+      "pathRuleId": "dover-application-v1",
+      "vendor": "dover",
+      "rulesetVersion": "dover-rules-v11",
+      "rulesetDigest": "sha256:ecbef570842b720a8d2f1de922aa73b173e80acd6b6da43843ca6796fb4271e2"
+    },
+    {
+      "atsProvider": "GENERIC",
+      "pathRuleId": "generic-application-v1",
+      "vendor": "generic",
+      "rulesetVersion": "generic-rules-v5",
+      "rulesetDigest": "sha256:14218daa8e14a8cce8d43e56db85f0761ad02ed06a40f4f8fc7bcb1d8b14eb69"
+    },
+    {
+      "atsProvider": "GREENHOUSE",
+      "pathRuleId": "greenhouse-application-v1",
+      "vendor": "greenhouse",
+      "rulesetVersion": "greenhouse-rules-v23",
+      "rulesetDigest": "sha256:154bb5fe975e2e4d0dfdf3c9d3a6263c19d8084a7b040a003e7b77d2d1acd06e"
+    },
+    {
+      "atsProvider": "GREENHOUSE",
+      "pathRuleId": "greenhouse-application-v3",
+      "vendor": "greenhouse",
+      "rulesetVersion": "greenhouse-rules-v23",
+      "rulesetDigest": "sha256:154bb5fe975e2e4d0dfdf3c9d3a6263c19d8084a7b040a003e7b77d2d1acd06e"
+    },
+    {
+      "atsProvider": "ICIMS",
+      "pathRuleId": "icims-application-v1",
+      "vendor": "icims",
+      "rulesetVersion": "icims-rules-v10",
+      "rulesetDigest": "sha256:c272dd4a742887bef511e04829ec3815045634aa260cd8ef78e0952017735f85"
+    },
+    {
+      "atsProvider": "JOBVITE",
+      "pathRuleId": "jobvite-application-v1",
+      "vendor": "jobvite",
+      "rulesetVersion": "jobvite-rules-v12",
+      "rulesetDigest": "sha256:4b6879041e9802df5390456381d8fcd1d4774fdacc92f18b123b8ce782891734"
+    },
+    {
+      "atsProvider": "LEVER",
+      "pathRuleId": "lever-application-v1",
+      "vendor": "lever",
+      "rulesetVersion": "lever-rules-v16",
+      "rulesetDigest": "sha256:14d2e180013d1ff2234774178e1483636054fbdf4efb54e3314a11d2bad5f926"
+    },
+    {
+      "atsProvider": "RIPPLING",
+      "pathRuleId": "rippling-application-v1",
+      "vendor": "rippling",
+      "rulesetVersion": "rippling-rules-v12",
+      "rulesetDigest": "sha256:d52ff3aed0f70fd829c16ec9a13ac9d6bf9663714979293a4ce6f082cabb0b9b"
+    },
+    {
+      "atsProvider": "SMARTRECRUITERS",
+      "pathRuleId": "smartrecruiters-application-v1",
+      "vendor": "smartrecruiters",
+      "rulesetVersion": "smartrecruiters-rules-v13",
+      "rulesetDigest": "sha256:7885480166637b324277837140471c945220f3b0ae5f812c15371d262e46b36f"
+    },
+    {
+      "atsProvider": "WORKABLE",
+      "pathRuleId": "workable-application-v1",
+      "vendor": "workable",
+      "rulesetVersion": "workable-rules-v13",
+      "rulesetDigest": "sha256:13e6a251e452f14008839d3c18dc3a56f6cac9aa2e00df182e63eb32e8360699"
+    },
+    {
+      "atsProvider": "WORKDAY",
+      "pathRuleId": "workday-application-v1",
+      "vendor": "workday",
+      "rulesetVersion": "workday-rules-v17",
+      "rulesetDigest": "sha256:5062917aaaeb7b3a0a8b8368fa3dca343037764fbf64338eea8f7618151dac50"
+    }
+  ],
+  "unavailableAtsProviders": [
+    "INDEED_APPLY"
+  ],
+  "rulesets": [
+    {
+      "version": "ashby-rules-v19",
+      "digest": "sha256:bc2fdb5a665a137e5f6258d0fb34a375a42022ab38ace766e673c4196cca3166",
+      "vendor": "ashby"
+    },
+    {
+      "version": "bamboohr-rules-v11",
+      "digest": "sha256:7582823d9db2c8861314697adcdec98bb39a4694d6f802b592e79253d3e55be9",
+      "vendor": "bamboohr"
+    },
+    {
+      "version": "dover-rules-v11",
+      "digest": "sha256:ecbef570842b720a8d2f1de922aa73b173e80acd6b6da43843ca6796fb4271e2",
+      "vendor": "dover"
+    },
+    {
+      "version": "generic-rules-v5",
+      "digest": "sha256:14218daa8e14a8cce8d43e56db85f0761ad02ed06a40f4f8fc7bcb1d8b14eb69",
+      "vendor": "generic"
+    },
+    {
+      "version": "greenhouse-rules-v23",
+      "digest": "sha256:154bb5fe975e2e4d0dfdf3c9d3a6263c19d8084a7b040a003e7b77d2d1acd06e",
+      "vendor": "greenhouse"
+    },
+    {
+      "version": "icims-rules-v10",
+      "digest": "sha256:c272dd4a742887bef511e04829ec3815045634aa260cd8ef78e0952017735f85",
+      "vendor": "icims"
+    },
+    {
+      "version": "jobvite-rules-v12",
+      "digest": "sha256:4b6879041e9802df5390456381d8fcd1d4774fdacc92f18b123b8ce782891734",
+      "vendor": "jobvite"
+    },
+    {
+      "version": "lever-rules-v16",
+      "digest": "sha256:14d2e180013d1ff2234774178e1483636054fbdf4efb54e3314a11d2bad5f926",
+      "vendor": "lever"
+    },
+    {
+      "version": "rippling-rules-v12",
+      "digest": "sha256:d52ff3aed0f70fd829c16ec9a13ac9d6bf9663714979293a4ce6f082cabb0b9b",
+      "vendor": "rippling"
+    },
+    {
+      "version": "smartrecruiters-rules-v13",
+      "digest": "sha256:7885480166637b324277837140471c945220f3b0ae5f812c15371d262e46b36f",
+      "vendor": "smartrecruiters"
+    },
+    {
+      "version": "workable-rules-v13",
+      "digest": "sha256:13e6a251e452f14008839d3c18dc3a56f6cac9aa2e00df182e63eb32e8360699",
+      "vendor": "workable"
+    },
+    {
+      "version": "workday-rules-v17",
+      "digest": "sha256:5062917aaaeb7b3a0a8b8368fa3dca343037764fbf64338eea8f7618151dac50",
+      "vendor": "workday"
+    }
+  ]
+}

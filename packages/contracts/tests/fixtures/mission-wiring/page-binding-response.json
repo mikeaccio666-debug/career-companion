@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "binding": {
+    "missionId": "00000000-0000-4000-8000-00000000a001",
+    "missionRevision": "1",
+    "status": "QUEUED",
+    "job": {
+      "title": "Business Analyst",
+      "company": "Chain Fixture Co"
+    },
+    "target": {
+      "canonicalOrigin": "https://job-boards.greenhouse.io",
+      "pathname": "/argoland-chain-fixture/jobs/900000001",
+      "atsProvider": "GREENHOUSE"
+    },
+    "application": {
+      "canonicalJobId": "00000000-0000-4000-8000-00000000a006",
+      "canonicalJobStatus": "OPEN",
+      "lastVerifiedAt": "2026-09-24T10:00:00.000Z",
+      "applicationId": "00000000-0000-4000-8000-00000000a002",
+      "applicationBundleVersion": "1",
+      "applicationRevision": "1",
+      "submissionState": "ELIGIBLE"
+    },
+    "startApproval": "AVAILABLE"
+  }
+}

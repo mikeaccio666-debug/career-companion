@@ -1,0 +1,39 @@
+<!--
+  Greenhouse 申请表上的「Security code」（邮箱验证码）——合成夹具，只留结构与钩子。
+
+  出处（2026-10-04 只读）：job-boards.greenhouse.io 公开发给每个访客的前端代码 entry.client（组件里写死 8 格）与
+  locales/en/job_post 文案包；没有在真实岗位上触发过这一步（那要真的提交一份申请，负责人决定不在真实网站上提交）。
+  提交被反垃圾判成可疑时（接口回 captcha-failed 并带 security_code_recipient），表里在「Submit application」上方多出
+  div.email-verification：fieldset#email-verification 的 legend 写着验证码发到了哪个邮箱（服务器给的地址；这里换成
+  不像真邮箱的占位），label「Security code」指向第 0 格，下面 8 个 input#security-input-N（type=text、maxlength=1、
+  aria-errormessage 指向 email-verification-error）。验证码不对、过期时，服务器的那一句话写进
+  p#email-verification-error（这一段在夹具里不放，测试里按需要加）。
+-->
+<form id="application-form" class="application--form">
+  <label for="first_name">First Name*</label>
+  <input id="first_name" type="text" autocomplete="given-name" required />
+  <label for="last_name">Last Name*</label>
+  <input id="last_name" type="text" autocomplete="family-name" required />
+  <label for="email">Email*</label>
+  <input id="email" type="text" autocomplete="email" required />
+  <div class="email-verification">
+    <div class="divider" role="separator"></div>
+    <fieldset id="email-verification">
+      <legend>A verification code was sent to a••••@e••••.test. To submit your application, enter the 8-character code to confirm you're a human.</legend>
+      <label aria-hidden="true" class="label" id="email-verification-label" for="security-input-0">Security code</label>
+      <div class="email-verification__wrapper">
+        <input id="security-input-0" type="text" aria-invalid="false" aria-errormessage="email-verification-error" aria-required="true" maxlength="1" />
+        <input id="security-input-1" type="text" aria-invalid="false" aria-errormessage="email-verification-error" aria-required="true" maxlength="1" />
+        <input id="security-input-2" type="text" aria-invalid="false" aria-errormessage="email-verification-error" aria-required="true" maxlength="1" />
+        <input id="security-input-3" type="text" aria-invalid="false" aria-errormessage="email-verification-error" aria-required="true" maxlength="1" />
+        <input id="security-input-4" type="text" aria-invalid="false" aria-errormessage="email-verification-error" aria-required="true" maxlength="1" />
+        <input id="security-input-5" type="text" aria-invalid="false" aria-errormessage="email-verification-error" aria-required="true" maxlength="1" />
+        <input id="security-input-6" type="text" aria-invalid="false" aria-errormessage="email-verification-error" aria-required="true" maxlength="1" />
+        <input id="security-input-7" type="text" aria-invalid="false" aria-errormessage="email-verification-error" aria-required="true" maxlength="1" />
+      </div>
+    </fieldset>
+  </div>
+  <div class="application--submit">
+    <button type="submit">Submit application</button>
+  </div>
+</form>

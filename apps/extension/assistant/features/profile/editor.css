@@ -1,0 +1,28 @@
+.argo-profile-editor{flex:1;min-height:0;display:flex;flex-direction:column;color:var(--argo-ink)}
+.argo-profile-scroll{flex:1;min-height:0;overflow:auto;padding:4px 24px 20px}
+.argo-profile-heading small{font-size:11px;letter-spacing:2.4px;color:var(--argo-faint);font-weight:600}
+.argo-profile-heading h2{font-size:21px;font-weight:600;letter-spacing:-.4px;margin:6px 0;outline:none}
+.argo-profile-heading p,.argo-profile-hint{font-size:12px;line-height:1.65;color:var(--argo-muted);margin:8px 0 14px}
+.argo-profile-card{padding:16px;border:1px solid var(--argo-line);background:#fff;border-radius:18px;margin:12px 0;box-shadow:0 1px 2px rgba(10,17,40,.04);font-size:13px}
+.argo-profile-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:14px}
+.argo-profile-field{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:12px;color:var(--argo-muted)}
+.argo-profile-full{grid-column:1/-1}
+.argo-profile-field input:not([type=checkbox]),.argo-profile-field textarea,.argo-profile-field select{box-sizing:border-box;width:100%;min-width:0;border:1px solid var(--argo-line);border-radius:10px;background:#fff;color:var(--argo-ink);padding:10px 11px;font:inherit;font-size:13px;line-height:1.4}
+.argo-profile-field textarea{resize:vertical}
+.argo-profile-field input:focus-visible,.argo-profile-field select:focus-visible,.argo-profile-field textarea:focus-visible,.argo-profile-editor button:focus-visible{outline:2px solid #758dbc;outline-offset:2px}
+.argo-profile-field fieldset{border:1px solid var(--argo-line);border-radius:10px;display:flex;flex-wrap:wrap;gap:10px;padding:12px;margin:0}
+.argo-profile-choice{display:flex;align-items:flex-start;gap:7px;font-size:12px;line-height:1.6;color:var(--argo-ink)}
+.argo-profile-choice input{margin-top:3px;accent-color:var(--argo-ink)}
+.argo-profile-confirm{margin-top:18px;padding-top:14px;border-top:1px solid var(--argo-line)}
+.argo-profile-row-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px}
+.argo-profile-editor button{border:1px solid var(--argo-line);border-radius:10px;background:#fff;color:var(--argo-ink);padding:9px 12px;font:inherit;font-size:12px;cursor:pointer;line-height:1.5}
+.argo-profile-editor button:disabled,.argo-profile-editor input:disabled,.argo-profile-editor select:disabled,.argo-profile-editor textarea:disabled{opacity:.58;cursor:default}
+.argo-profile-editor .argo-profile-add{width:100%;border-style:dashed;background:transparent;padding:12px}
+.argo-profile-status{background:#fff2dc;border:1px solid #f1d8af;border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.6;margin:12px 0;color:#74532d}
+.argo-profile-footer{flex-shrink:0;border-top:1px solid var(--argo-line);padding:14px 24px 20px;display:flex;gap:10px;justify-content:space-between;background:rgba(255,255,255,.9)}
+.argo-profile-footer .argo-profile-primary{background:linear-gradient(180deg,#1b2542,var(--argo-ink));color:white;border:0;padding:12px 18px;font-weight:600}
+.argo-profile-compare{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:12px;margin:14px 0}
+.argo-profile-compare details{border:1px solid var(--argo-line);padding:12px;border-radius:10px;min-width:0}
+.argo-profile-comparison-row{margin:10px 0;padding-top:8px;border-top:1px solid var(--argo-line)}
+.argo-profile-comparison-row p{display:grid;gap:2px;margin:8px 0;overflow-wrap:anywhere;white-space:pre-wrap}
+.argo-profile-comparison-row p span:first-child{color:var(--argo-muted);font-size:11px}

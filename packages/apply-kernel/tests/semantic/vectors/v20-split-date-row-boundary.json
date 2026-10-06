@@ -1,0 +1,78 @@
+{
+  "id": "V20-split-date-row-boundary",
+  "scenarioClass": "date",
+  "title": "A month select and a year select in different rows are two questions, not one date",
+  "todayBehavior": "Nothing merges split dates at all. Merging them by adjacency alone would join the end of one education row to the start of the next, and a write would put one date across two rows.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "m_row0",
+          "shape": "SELECT",
+          "label": "Completion month",
+          "optionsPreset": "MONTHS",
+          "row": {
+            "group": "edu",
+            "ordinal": 0,
+            "shape": "edu",
+            "element": "U1"
+          }
+        },
+        {
+          "ref": "y_row1",
+          "shape": "SELECT",
+          "label": "Completion year",
+          "optionsPreset": "YEARS_6",
+          "row": {
+            "group": "edu",
+            "ordinal": 1,
+            "shape": "edu",
+            "element": "U2"
+          }
+        }
+      ],
+      "ua2": {
+        "m_row0": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "y_row1": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "m_row0"
+        ],
+        "dateShape": null
+      },
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "y_row1"
+        ],
+        "dateShape": null
+      }
+    ],
+    "nodeCount": 2,
+    "liveRows": 2,
+    "differentNode": [
+      [
+        "m_row0",
+        "y_row1"
+      ]
+    ],
+    "rowTokensDiffer": [
+      [
+        "m_row0",
+        "y_row1"
+      ]
+    ]
+  }
+}

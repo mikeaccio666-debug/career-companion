@@ -1,0 +1,97 @@
+{
+  "id": "V25-sidecar-state",
+  "scenarioClass": "proxy-native",
+  "title": "disabled, readOnly and multiple reach the logical control, and a multi-select is SELECT_MANY",
+  "todayBehavior": "None of the three leave UA-1, so a dependency-disabled control is classified and planned as writable, and a multi-select is indistinguishable from a single select.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "state",
+          "shape": "SELECT",
+          "label": "State",
+          "required": true,
+          "options": [
+            "Pick a state"
+          ],
+          "disabled": true
+        },
+        {
+          "ref": "handle",
+          "shape": "TEXT",
+          "label": "Candidate ID",
+          "readOnly": true
+        },
+        {
+          "ref": "skills",
+          "shape": "LISTBOX",
+          "label": "Skills",
+          "options": [
+            "Go",
+            "Rust"
+          ],
+          "multiple": true
+        },
+        {
+          "ref": "single",
+          "shape": "LISTBOX",
+          "label": "Seniority",
+          "options": [
+            "Junior",
+            "Senior"
+          ]
+        }
+      ],
+      "ua2": {
+        "state": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "handle": {
+          "kind": "UNRESOLVED",
+          "confidence": "LOW"
+        },
+        "skills": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "single": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "state"
+        ],
+        "disabled": true,
+        "readOnly": false
+      },
+      {
+        "kind": "TEXT_SINGLE",
+        "members": [
+          "handle"
+        ],
+        "readOnly": true,
+        "disabled": false
+      },
+      {
+        "kind": "SELECT_MANY",
+        "members": [
+          "skills"
+        ]
+      },
+      {
+        "kind": "SELECT_ONE",
+        "members": [
+          "single"
+        ]
+      }
+    ],
+    "nodeCount": 4
+  }
+}

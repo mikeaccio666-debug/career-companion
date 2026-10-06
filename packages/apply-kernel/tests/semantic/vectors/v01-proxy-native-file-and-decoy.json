@@ -1,0 +1,77 @@
+{
+  "id": "V01-proxy-native-file",
+  "scenarioClass": "proxy-native",
+  "title": "A proxy-rendered native file input is one question, and a suppressed honeypot still has a node",
+  "todayBehavior": "UA-1 emits one FILE control with the proxy label; the honeypot is dropped from the packet with no count, so no later layer can prove the observation set was complete.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "resume",
+          "shape": "FILE",
+          "label": "Upload resume",
+          "required": true
+        },
+        {
+          "ref": "email",
+          "shape": "EMAIL",
+          "label": "Email",
+          "autocomplete": [
+            "email"
+          ],
+          "required": true
+        }
+      ],
+      "suppressed": [
+        "hp_website"
+      ],
+      "ua2": {
+        "resume": {
+          "kind": "STRUCTURED_FILE"
+        },
+        "email": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "EMAIL"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "FILE",
+        "members": [
+          "resume"
+        ],
+        "grouping": "NONE",
+        "required": true
+      },
+      {
+        "kind": "TEXT_SINGLE",
+        "members": [
+          "email"
+        ]
+      }
+    ],
+    "nodeCount": 3,
+    "nodeKinds": {
+      "resume": "QUESTION",
+      "email": "QUESTION",
+      "hp_website": "DECOY"
+    },
+    "classifications": {
+      "resume": {
+        "kind": "STRUCTURED_FILE",
+        "merge": "SINGLE"
+      },
+      "email": {
+        "kind": "CANONICAL_FIELD",
+        "canonicalField": "EMAIL",
+        "merge": "SINGLE",
+        "stemGuard": "NONE"
+      }
+    }
+  }
+}

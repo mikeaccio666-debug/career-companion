@@ -1,0 +1,24 @@
+<!--
+  Workday 账号墙第一步「选怎么登录」的合成夹具（结构照 2026-09-28 nvidia.wd5 …/apply/applyManually 的只读实测：
+  未登录、未输入任何内容、未提交）。只留结构与 data-automation-id，文案是通用英文，不含任何品牌字样与资料。
+
+  实测记下的：容器 signInContent 在 applyFlowPage 里；Google、LinkedIn 两颗是 type=button；「Sign in with email」
+  没写 type、也不在任何 form 里（页面上此刻一张 form 都没有）。页头另有一颗 utilityButtonSignIn，它不在申请流程里，
+  账号墙的规则不认它。
+-->
+<div data-automation-id="utilityButtonBar"><button data-automation-id="utilityButtonSignIn">Sign In</button></div>
+<div data-automation-id="applyFlowPage">
+  <ol data-automation-id="progressBar">
+    <li data-automation-id="progressBarActiveStep"><label>current step 1 of 6</label><div>Create Account/Sign In</div></li>
+    <li data-automation-id="progressBarInactiveStep"><label>step 2 of 6</label><div>My Information</div></li>
+  </ol>
+  <div data-automation-id="signInContent">
+    <div dir="ltr">
+      <h2 id="authViewTitle">Sign In</h2>
+      <button type="button" aria-label="Sign in with Google" data-automation-id="GoogleSignInButton">Sign in with Google</button>
+      <button type="button" aria-label="Sign in with LinkedIn" data-automation-id="LinkedInSignInButton">Sign in with LinkedIn</button>
+      <div><span>OR</span></div>
+      <button data-automation-id="SignInWithEmailButton">Sign in with email</button>
+    </div>
+  </div>
+</div>

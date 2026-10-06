@@ -1,0 +1,48 @@
+name: companion
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: companion
+      POSTGRES_USER: companion
+      POSTGRES_PASSWORD: local-companion-dev-only
+    ports:
+      - "127.0.0.1:5442:5432"
+    volumes:
+      - companion-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U companion -d companion"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "local-companion-redis-only"]
+    ports:
+      - "127.0.0.1:6388:6379"
+    volumes:
+      - companion-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "local-companion-redis-only", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+  seaweedfs:
+    # SeaweedFS 4.48; development-only S3 compatibility fixture, pinned multi-arch digest.
+    image: chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    profiles: ["object-storage"]
+    command: ["mini", "-dir=/data", "-ip=127.0.0.1", "-ip.bind=0.0.0.0", "-master.telemetry=false", "-webdav=false", "-admin.ui=false", "-s3.iam=false", "-s3.port.iceberg=0", "-s3.port.lance=0", "-s3.autoCreateBucket=false", "-s3.allowDeleteBucketNotEmpty=false", "-volume.max=4", "-s3.readerCacheSizeMB=16"]
+    environment:
+      AWS_ACCESS_KEY_ID: local-companion-s3-access
+      AWS_SECRET_ACCESS_KEY: local-companion-s3-secret-only
+      S3_BUCKET: companion-dev
+    ports:
+      - "127.0.0.1:19000:8333"
+    volumes:
+      - companion-seaweed-objects:/data
+    mem_limit: 512m
+    cpus: 1
+volumes:
+  companion-postgres:
+  companion-redis:
+  companion-seaweed-objects:

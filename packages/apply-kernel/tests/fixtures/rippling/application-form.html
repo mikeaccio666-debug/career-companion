@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    rippling 填充率基准夹具。
+
+    出处：由 tests/apply-rippling-adapter.test.ts 的 mountRipplingFixture() 提升而来。
+    那份结构的来源是 2026-08-23 对 ats.rippling.com/peach-finance/jobs/<uuid>/apply
+    真实在招岗位的只读实测（50-证据库 §F.8-b／§F.8-c，两次页面加载对照）。
+
+    与其余四家夹具同一性质：**静态快照，不是线上抓取**，也不代表该厂商全部
+    表单形态。引用基线数字时必须连 citationScope 一起转述。
+
+    这一家的 name 刻意保持实测到的随机串：它们**每次页面加载都重新生成**，
+    任何靠 name 过的断言都没在测我们真正依赖的那条路（data-testid）。
+  -->
+  <body>
+
+<div id="__next">
+  <div>
+    <form>
+      <div data-testid="field">
+        <label for="field-4">Résumé</label>
+        <input data-testid="input-resume" id="field-4" type="file" />
+      </div>
+      <div data-testid="field">
+        <label for="field-8">First name*</label>
+        <input data-testid="input-first_name" id="field-8" name="z7FRYsYUls" type="text" required />
+      </div>
+      <div data-testid="field">
+        <label for="field-12">Last name*</label>
+        <input data-testid="input-last_name" id="field-12" name="kRxpj8ayh3o" type="text" required />
+      </div>
+      <div data-testid="field">
+        <label for="field-16">Email*</label>
+        <input data-testid="input-email" id="field-16" name="nHpG1iQfETF" type="text" required />
+      </div>
+      <div data-testid="field">
+        <label for="field-20">Pronouns</label>
+        <input data-testid="input-select-search-input" id="field-20" name="9c4Q2jDSQg1" type="text" role="combobox" />
+      </div>
+      <div data-testid="field">
+        <label for="field-27">Current company</label>
+        <input data-testid="input-current_company" id="field-27" name="AgUymFF1XW_" type="text" />
+      </div>
+      <div data-testid="field">
+        <label for="field-31">Phone number*</label>
+        <input data-testid="input-phone_number" id="field-31" name="Vfu-KG_FTjf" type="text" required />
+      </div>
+      <div data-testid="field">
+        <label for="field-42">Location*</label>
+        <input data-testid="input-undefined" id="field-42" name="K5QPDou5hfT" type="text" required />
+        <input data-testid="input-externalPlaceId" id="field-47" name="4r25Qj8oiZd" type="hidden" />
+      </div>
+      <div data-testid="field">
+        <label for="field-73">Please identify your race</label>
+        <input data-testid="input-select-search-input" id="field-73" name="cjqGEvFZvfz" type="text" role="combobox" />
+      </div>
+      <div data-testid="field">
+        <span>Yes - I consent to receiving text messages</span>
+        <input data-testid="radio-sms_opt_in" name="sms_opt_in" type="radio" value="yes" />
+        <input data-testid="radio-sms_opt_in" name="sms_opt_in" type="radio" value="no" />
+      </div>
+      <!--
+        2026-09-15 ats.rippling.com/peach-finance/jobs/b507c21b-2ee2-4ffc-8b58-250881fb6463/apply 只读实测：
+        自定义长文本题的真实形态。题干 <p> 在 div.marginY--36 > div.paddingX--16 > div.marginBottom--4 里，
+        **不在** div[data-testid=field] 里，textarea 没有 label / aria 名字；第二道题干超过附近文字级联的
+        120 字上限，没有规则时题干为空。emotion 哈希 class（css-xxxx）已去掉；题干文案为该 posting 原样。
+        规则 rippling.json 的 questionScopes 就是照这段声明的。
+      -->
+      <div class="marginY--36">
+        <div class="paddingX--16"><div class="marginBottom--4"><p>Describe your direct experience working on fintech, lending, credit, or payments products</p><div></div></div></div>
+        <div data-testid="field">
+          <div>
+            <div data-testid="customQuestions.69cff67c76048c38ec0491bb.f3b661bd-ff21-4b00-9713-0550c2c1ba93"><textarea maxlength="10000" required="" id="field-55" aria-multiline="true"></textarea></div>
+            <div data-testid="screen-reader-only" id="form-field-tip-54"></div>
+          </div>
+        </div>
+      </div>
+      <div class="marginY--36">
+        <div class="paddingX--16"><div class="marginBottom--4"><p>Tell us about a product you built or managed in a regulated environment. What specific compliance or regulatory requirements did you have to account for, and how did you incorporate them into the product?</p><div></div></div></div>
+        <div data-testid="field">
+          <div>
+            <div data-testid="customQuestions.69cff67c76048c38ec0491bb.dd11a52e-2ac6-4851-9e28-b734a9509c41"><textarea maxlength="10000" required="" id="field-59" aria-multiline="true"></textarea></div>
+            <div data-testid="screen-reader-only" id="form-field-tip-58"></div>
+          </div>
+        </div>
+      </div>
+      <input name="cf-turnstile-response" type="hidden" />
+    </form>
+  </div>
+</div>
+
+  </body>
+</html>

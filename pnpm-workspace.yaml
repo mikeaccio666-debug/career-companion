@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+  - services/*
+
+allowBuilds:
+  esbuild: true
+  '@scarf/scarf': false
+  spawn-sync: false
+  msgpackr-extract: false

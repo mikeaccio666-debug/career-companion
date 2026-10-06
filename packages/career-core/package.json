@@ -1,0 +1,9 @@
+{
+  "name": "@companion/career-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "check": "tsc --noEmit", "test": "node --import tsx --test test/*.test.ts" },
+  "devDependencies": { "@types/node": "^24.0.0", "typescript": "^5.9.3", "tsx": "^4.22.4" }
+}

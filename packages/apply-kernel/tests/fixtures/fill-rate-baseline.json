@@ -1,0 +1,119 @@
+{
+  "$comment": "填充率基准：给满档案跑真实页面夹具，真执行写入并读回 DOM 的实测计数。planned = 计划覆盖率（进入写入计划的条目数）；filled = 填充率（真写进去且校验通过）；envBlocked = 本环境量不到的条目数（见 citationScope）。掉点或涨点都会让门禁变红——涨了要显式锁住（重跑本文件带 UPDATE_FILL_RATE_BASELINE=1），否则日后悄悄退回不会被发现。对外引用这些数字时只能引这份文件，且必须完整转述 citationScope。",
+  "citationScope": [
+    "八家各有夹具（greenhouse 2 份，lever / ashby / workable / rippling / dover / bamboohr / jobvite 各 1 份）。lever / ashby / workable 三份由各自适配器测试里已对真实 posting 核实过的结构提升而来（2026-08-21），rippling / dover / bamboohr / jobvite 四份同理（2026-08-23），出处写在各夹具文件头。2026-09-15 lever / ashby / rippling / dover 四份各追加了当日真实 posting 只读实测的自定义题结构（题干容器、单选/复选组、下拉、长文本），出处同样写在各夹具文件头；dover / bamboohr 两份的文件栏同日按真实页面复测更新（react-dropzone 形状、上方的 Resume 标签块）。已接入但**没有**夹具的另有 smartrecruiters / icims，登记在 vendorsWithoutFixture——这份基线不覆盖它们。",
+    "样本是 9 个静态页面快照，不是线上抓取，也不代表该厂商全部表单形态；每家只有 1–2 种表单形状，不能当作该厂商的整体填充率。",
+    "skippedByReason 与 filled 同等重要，而且要把原因说对：workable 有 3 个、lever 有 4 个 LOW_CONFIDENCE，实测（2026-08-21 / 2026-09-15）它们的标签都很干净——Current company / Address / Postcode / Country / Years of experience，lever 的第 4 个是 2026-09-15 追加的下拉题 Please tell us how you heard about this opportunity。两家各有 1 道「Why do you want to work here?」、rippling 有 2 道 Describe / Tell us about 作文题，从 2026-09-21 起单独记 USER_ONLY（P4-15）：只有用户能答，不是认不出，别拿它去修选择器或加档案键。认不出来是因为**档案里没有这些字段**（11 键上限，CAP-AF-018 归 T3），既不是选择器腐烂，也不是标签推断缺口。同批追加的自定义题里，题干靠规则的 questionScopes 才读得到：lever 的 Preferred Name 题因此映到 preferredName（planned 7→8），工作授权单选题落 JOB_DEPENDENT、AI 记录同意题落 MANUAL_ONLY——题干读对了，守卫才拦得住它们；ashby 的 sponsorship yes/no 同理落 JOB_DEPENDENT。Workable 的 Cover letter 从 T9 Phase D2 起被识别为独立材料；基线没有 T9 exact body 与当次 target release 时按 UNSUPPORTED_CONTROL fail closed，不得退回档案字段或猜测正文。把这些原因读错会让人去修错的东西。",
+    "2026-09-15 同日 lever / workable 两份还按各自真实 apply 页只读实测补上了**标签内部结构**：workable 的图标 `<svg><desc>` 与 intl-tel-input 的国家区号表、lever typeahead 与简历上传的状态文案——都是 label 的 textContent 里有、用户读不到的文字。这份基线因此与生产一样注入了ScanRootOptions.readVisibility（类名藏起来的那部分属性层读不到）；不注入量到的是线上不存在的噪声标签。三处只改标签结构，控件的 id / name / 必填性一律未动，所以 discovered / planned / filled 三个数与 2026-09-15 前逐字相同。",
+    "分母是**适配器扫出的字段数**，不是页面上全部可填写控件数。",
+    "planned 是计划覆盖率，filled 才是填充率；引用时不许把 planned 说成填充率。",
+    "简历文件那一栏在本环境**量不到**（envBlocked）：happy-dom 没有布局引擎，所有元素报 0×0，而 setFile 的可见触发器检查刻意 fail-closed（src/write/setFile.ts 的\"Zero geometry fails closed\"）。这是测试环境限制，不是简历上传的产品缺口——引用 filled 时必须连 envBlocked 一起说，否则 3/4 会被读成\"简历上传坏了\"。这个归因本身被本文件最后一条用例锁住：补上几何后简历文件必须真挂上，否则那就不是环境限制。",
+    "当前数字不能代表产品整体填充率，不得单独写成\"填充率 100%\"。"
+  ],
+  "measuredAt": "2026-09-22",
+  "fixtures": {
+    "greenhouse/application-form-with-footer": {
+      "discovered": 4,
+      "planned": 4,
+      "filled": 3,
+      "envBlocked": 1,
+      "skippedByReason": {}
+    },
+    "greenhouse/legacy-embed-application-form": {
+      "discovered": 2,
+      "planned": 2,
+      "filled": 2,
+      "envBlocked": 0,
+      "skippedByReason": {}
+    },
+    "lever/application-form": {
+      "discovered": 18,
+      "planned": 9,
+      "filled": 7,
+      "envBlocked": 2,
+      "skippedByReason": {
+        "NO_VALUE": 2,
+        "LOW_CONFIDENCE": 2,
+        "CHOICE_NO_DATA": 2,
+        "USER_ONLY": 1,
+        "JOB_DEPENDENT": 1,
+        "MANUAL_ONLY": 1
+      }
+    },
+    "ashby/application-form": {
+      "discovered": 10,
+      "planned": 6,
+      "filled": 4,
+      "envBlocked": 2,
+      "skippedByReason": {
+        "CHOICE_NO_DATA": 3,
+        "JOB_DEPENDENT": 1
+      }
+    },
+    "workable/application-form": {
+      "discovered": 13,
+      "planned": 7,
+      "filled": 6,
+      "envBlocked": 1,
+      "skippedByReason": {
+        "NO_VALUE": 3,
+        "UNSUPPORTED_CONTROL": 1,
+        "JOB_DEPENDENT": 1,
+        "USER_ONLY": 1
+      }
+    },
+    "rippling/application-form": {
+      "discovered": 12,
+      "planned": 6,
+      "filled": 5,
+      "envBlocked": 1,
+      "skippedByReason": {
+        "NO_VALUE": 2,
+        "MANUAL_ONLY": 1,
+        "CHOICE_NO_DATA": 1,
+        "USER_ONLY": 2
+      }
+    },
+    "dover/application-form": {
+      "discovered": 8,
+      "planned": 6,
+      "filled": 5,
+      "envBlocked": 1,
+      "skippedByReason": {
+        "UNSUPPORTED_CONTROL": 1,
+        "CHOICE_NO_DATA": 1
+      }
+    },
+    "bamboohr/application-form": {
+      "discovered": 14,
+      "planned": 8,
+      "filled": 7,
+      "envBlocked": 1,
+      "skippedByReason": {
+        "HONEYPOT": 1,
+        "NO_VALUE": 2,
+        "LOW_CONFIDENCE": 1,
+        "OTHER_PERSON": 1,
+        "UNSUPPORTED_CONTROL": 1
+      }
+    },
+    "jobvite/application-form": {
+      "discovered": 11,
+      "planned": 6,
+      "filled": 5,
+      "envBlocked": 1,
+      "skippedByReason": {
+        "NO_VALUE": 2,
+        "LOW_CONFIDENCE": 1,
+        "UNSUPPORTED_CONTROL": 2
+      }
+    }
+  },
+  "vendorsWithoutFixture": [
+    "workday",
+    "avature",
+    "smartrecruiters",
+    "icims",
+    "generic"
+  ]
+}

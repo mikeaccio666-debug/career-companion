@@ -1,0 +1,183 @@
+{
+  "$comment": "BambooHR 适配规则。2026-08-23 对 <租户>.bamboohr.com/careers/<id> 真实在招岗位只读实测（50-证据库 §F.8-d／§F.8-f）。这一家的形态是「字段极好接、域归属极危险」：1) **候选人面与 HR 控制台共用同一个主机**——/careers/* 是求职者看的岗位页（点「Apply for This Job」原地展开申请表，路径不变），而同一个 <租户>.bamboohr.com 的其余路径是 HR／员工控制台，厂商总入口 app.bamboohr.com 也在这个后缀下。它一客户一子域、无法穷举精确主机，所以只能用后缀——而后缀正是 2026-07-29 greenhouse.io 事故的形状。放行它的前提是 gate/hostVeto.ts 的 SHARED_HOST_RULES 对这个后缀 deny by default、只放行实测过的候选人路径、路径未知也算否决；这条耦合由 apply-vendor-detect 的「candidateHostSuffixes 的硬条件」用例机器强制。2) 锚点是 form#job-application-form —— 逐租户稳定的语义 id，不是构建哈希。3) name 完全语义化（firstName / email / linkedinUrl / city.value…），是我们见过最干净的几家之一。4) 表单里挂着**蜜罐** nickname_hpcsaf（label 就是 Please leave this field blank，藏在 position:absolute;left:-9999px 的 0×0 父节点里）——填进去 = 申请被静默丢弃。我们的文案守卫与几何守卫都命中，apply-bamboohr-adapter 有实测结构的回归用例钉着。5) 同一个 form 里还有 g-recaptcha-response，按铁律 5 挡在扫描面之外。",
+  "schemaVersion": 2,
+  "vendor": "bamboohr",
+  "$comment.finalSubmitControl": "2026-10-04 在 nomadgcs、flchealth、kiln、youngliving、securitymetrics、mountainland 6 家公司的 12 个公开在招岗位只读复验（只点了 applyGate「Apply for This Job」把表展开，没有输入、没有提交）：「Submit Application」是原生 <button type=\"submit\" form=\"job-application-form\">，看得见、可用，但它住在表下方固定的操作栏里，不在 form 里，靠 form 属性认领这张表；表里一颗原生提交都没有，这张表名下的原生提交只有它一颗。同一栏的「Cancel」也写着 type=submit，但没有 form 属性、不属于任何 form，选择器认不到它。解释器在扫描根里找不到时，只认整棵树里恰好一颗、form 属性正好指着这张表、而且是这张表名下唯一一颗原生提交的那一颗（2026-10-04 起的内核才会这样找；更早的内核只在表里找，找不到就是 null，与从前一样不按）。",
+  "finalSubmitControl": {
+    "selector": "button[type=\"submit\"][form=\"job-application-form\"]",
+    "activation": "native-submit"
+  },
+  "applyPath": {
+    "$comment": "/careers/<数字 id> 是岗位页兼申请表（点 Apply 原地展开，路径不变）。/careers 列表页没有表单，故必须要求那个数字。legacy 的 /jobs/view.php 仍在流通。",
+    "source": "^\\/(?:careers\\/\\d+|jobs\\/(?:view|embed2)\\.php)\\/?$",
+    "flags": "i"
+  },
+  "anchors": [
+    "form#job-application-form"
+  ],
+  "excludeWithin": [
+    "footer",
+    "nav",
+    "[role=\"search\"]"
+  ],
+  "denyLabels": [
+    {
+      "source": "captcha",
+      "flags": "i"
+    }
+  ],
+  "denyNameSubstrings": [
+    "recaptcha",
+    "captcha",
+    "password"
+  ],
+  "widgetNames": [],
+  "keySteps": [
+    {
+      "$comment": "2026-09-22 真实在招岗位实测重写这条注释：原文说「地址那几栏与学历栏认得出但没有对应的档案键——APPLY_FIELD_KEYS 是 11 键闭集」。P1-5（2026-09-21）之后档案有 35 个键，地址三栏、国家与期望薪资都有各自的键了，所以这里按 name 精确映射补上：streetAddress.value / state.value / zip.value / countryId.value / desiredPay。学历那两栏（educationLevelId / educationInstitutionName）仍不映射——它们的答案在教育集合里、不是扁平键。蜜罐 nickname_* 依旧刻意不进表：它由 dict/guards 的文案层与几何层接住，写进映射反而等于承认它是个字段。",
+      "type": "attrMap",
+      "attr": "name",
+      "confidence": 1,
+      "map": {
+        "firstname": "firstName",
+        "lastname": "lastName",
+        "email": "email",
+        "phone": "phone",
+        "linkedinurl": "linkedinUrl",
+        "city.value": "city",
+        "websiteurl": "portfolioUrl",
+        "streetaddress.value": "addressLine1",
+        "state.value": "addressRegion",
+        "zip.value": "addressPostalCode",
+        "countryid.value": "addressCountry",
+        "desiredpay": "expectedSalaryAmount"
+      }
+    },
+    {
+      "$comment": "标签兜底只开给**没有 name 的控件**（BambooHR 的「Date Available」就是一个 FabricTextField-<n>，没有 name）与自定义问题。具名控件一律走上面的 attrMap，不进标签猜测。",
+      "type": "labelFallbackGate",
+      "nameRegex": {
+        "source": "^customquestionanswers\\."
+      },
+      "allowEmptyName": true
+    },
+    {
+      "$comment": "2026-09-22 真实实测补：Date Available 与「How did you learn about <公司>?」在档案里都有值，此前一律落 LOW_CONFIDENCE。只带这几条与 BambooHR 表单形态真实对应的。",
+      "type": "labelPatterns",
+      "confidence": 0.75,
+      "patterns": [
+        {
+          "$comment": "Date Available：BambooHR 的这一栏没有 name，只有标签。",
+          "regex": {
+            "source": "^(?:(?:earliest|preferred)\\s+)?(?:available\\s+)?start\\s+date(?:\\s*\\(.*\\))?\\??$|^date\\s+available\\??$|^(?:earliest\\s+)?availability(?:\\s+(?:date|to\\s+start))?\\??$|\\bwhen\\s+(?:can|could|would|are)\\s+you\\s+(?:be\\s+)?(?:available\\s+to\\s+)?start(?:\\s+work)?\\b|^available\\s+(?:to\\s+)?start(?:\\s+date)?\\??$",
+            "flags": "i"
+          },
+          "key": "earliestStartDate"
+        },
+        {
+          "$comment": "2026-09-22 真实环境实测放宽：原式要求标签以 how 开头、且公司名后不能跟括号，于是 Lever 的「Please tell us how you heard about this opportunity.」与 BambooHR 的「How did you learn about Nomad? (Acquaintance, Indeed…)」两条都不中，而档案里 heardAboutSource 是有值的。现在允许前面缀 please/tell us 一类引语、后面跟一段括号说明。 2026-09-22 真实页面实测：括号补充跟在问号**之后**（「… this opportunity? (Please be specific)」），原来的句尾只允许括号在问号之前，Ashby 六页全落「没把握」。 2026-09-22 实测：BambooHR 把候选来源整串列在句尾括号里（「(Acquaintance, Nomad employee, Indeed, …)」），轻松超过原来钉的 80 字符，于是整条不中。放宽到 240——仍然有上限，括号无限长等于这一行随便写什么都算。",
+          "regex": {
+            "source": "^(?:please\\s+)?(?:tell\\s+us\\s+|let\\s+us\\s+know\\s+)?how (?:did|do) you (?:hear|find out|learn)(?:ed)? about (?:us|this (?:job|role|position|opportunity)|the (?:job|role|position|opportunity)|[a-z0-9&.\\- ]{1,24})[?.]?\\s*(?:\\([^)]{0,240}\\))?[?.]?$|^(?:please\\s+)?(?:tell\\s+us\\s+)?how you heard about (?:us|this (?:job|role|position|opportunity))[?.]?\\s*(?:\\([^)]{0,240}\\))?[?.]?$|^where did you (?:hear|learn) about [a-z0-9&.\\- ]{1,24}\\s*(?:\\([^)]{0,240}\\))?\\??$",
+            "flags": "i"
+          },
+          "key": "heardAboutSource"
+        },
+        {
+          "$comment": "2026-09-22 清点发现：email 在十一份规则里一条 labelPatterns 都没有，全靠各家 attrMap（name=\"email\"）。在 ATS 自己域名上够用，但页面一旦认不出厂商（公司自建域）attrMap 整条路不成立，而它是 97 页语料里最常见的字段（170 次）。整条标签相等才认：「Referrer’s email」「Emergency contact email」这类他人信息栏不中。",
+          "regex": {
+            "source": "^e-?mail(?:\\s+address)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "email"
+        },
+        {
+          "$comment": "2026-09-22 同上（语料里 54 次）。要求整条标签相等，所以「Email address」不会落到这里；「Address Line 2」也不中——那是另一栏（公寓号之类），我们没有对应的键。",
+          "regex": {
+            "source": "^(?:street\\s+)?address(?:\\s+line\\s*1)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressLine1"
+        },
+        {
+          "$comment": "2026-09-22 同上（语料里 32 次）。覆盖 ZIP / Zip code / Postal code / ZIP / Postal code 四种写法。",
+          "regex": {
+            "source": "^(?:zip|postal)(?:\\s*/\\s*postal)?(?:\\s+code)?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressPostalCode"
+        },
+        {
+          "$comment": "2026-09-22：纯标签下连名都认不出——各家全靠 attrMap 的 name 钩子（name=\"first_name\"），认不出厂商的页面上那条路不成立。标签取自 97 页语料（First Name 76 次、First name 27 次）。整条相等才认：「Preferred First Name」照旧落 preferredName，「Referrer’s first name」这类他人姓名不中。",
+          "regex": {
+            "source": "^(?:legal\\s+|given\\s+)?first\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^given\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "firstName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Last Name 76 次、Last name 27 次）。surname / family name 是同一栏的另外两种写法。",
+          "regex": {
+            "source": "^(?:legal\\s+|family\\s+)?last\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^surname(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$|^family\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "lastName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Full Name 34 次、Full name 33 次）。刻意**不认**光秃秃的「Name」：那一栏在公司名、学校名、推荐人姓名上同样叫 Name，认错一个写进去的就是别人的资料。",
+          "regex": {
+            "source": "^(?:legal\\s+)?full\\s+name(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "fullName"
+        },
+        {
+          "$comment": "2026-09-22 同上（Phone 137 次、Phone Number 11 次）。句尾允许缀区号：带旗标的号码框把它写进标签（Phone+1 / Phone +1，语料里 22 次）。分机、区号、号码类型另有 isPhoneMetaField 守卫，这里的正则也不认它们。",
+          "regex": {
+            "source": "^(?:mobile\\s+|cell\\s+|home\\s+|work\\s+|primary\\s+|personal\\s+)?phone(?:\\s+number)?\\s*(?:\\+\\d{1,4})?(?:\\s*\\([^)]{0,80}\\))?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "phone"
+        },
+        {
+          "$comment": "2026-09-22 实测：rippling 与 lever 的申请页都问「Current company」，而十家里只有三家写了这条规则，于是那一栏落进「没把握，没敢填」——那句话的内核含义是 `!field.key`，也就是我们没认出来。正则取自 greenhouse 已验证的那一条：只认光秃秃的公司/雇主栏，「reference company」（推荐人的公司）与「which company are you applying to」都不中。",
+          "regex": {
+            "source": "^(?:(?:current|most recent|current\\s*/\\s*most recent|current or most recent)\\s+)?(?:company|employer)(?:\\s+name)?\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "currentCompany"
+        },
+        {
+          "$comment": "2026-09-22 jobvite 实测原话是「How did you hear this job?」——句中**没有 \"about\"**，而现有那条正则把 about 写死了，于是整条落空。这一条把 about 放成可选，并且要求紧跟 us/this/the，「have you heard of us before?」仍然不中（那是问听没听说过，不是问从哪听说的）。",
+          "regex": {
+            "source": "^(?:please\\s+)?(?:tell\\s+us\\s+|let\\s+us\\s+know\\s+)?(?:how|where)\\s+(?:did|do)\\s+you\\s+(?:hear|find|learn)(?:\\s+out)?(?:ed)?\\s+(?:about\\s+)?(?:us|this|the)\\b[^?]{0,60}\\??\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "heardAboutSource"
+        },
+        {
+          "$comment": "2026-09-22 jobvite 实测：光秃秃的「Country」，十家里只有四家认得。正则取自 greenhouse 已验证的那一条。",
+          "regex": {
+            "source": "^country(?:\\s*(?:of\\s+(?:residence|location|citizenship\\s+is\\s+not\\s+asked\\s+here)))?\\s*\\*?$|^what\\s+country\\s+are\\s+you\\s+(?:based|located|living)\\s+in\\??$",
+            "flags": "i"
+          },
+          "key": "addressCountry"
+        },
+        {
+          "$comment": "2026-09-22 jobvite 实测原话就是光秃秃的「State」。`addressRegion` 在后端下发的 35 键放行名单里、档案里也有值，而十家规则**一条对应的正则都没有**——这一栏从来没有被填上过。两端锚定是必需的：「employment status」「visa status」「please state your reason」都带 state 字样，一条都不许中。",
+          "regex": {
+            "source": "^(?:state|province|region)(?:\\s*(?:/|,|or)\\s*(?:state|province|region))?\\s*\\*?$|^state\\s+or\\s+province\\s*\\*?$",
+            "flags": "i"
+          },
+          "key": "addressRegion"
+        }
+      ]
+    }
+  ],
+  "$comment.resumeFileSelectors": "2026-09-16 于 nomadgcs.bamboohr.com 抓 DOM 实测：简历上传框是 <input type=file accept=\".pdf,.doc,.docx,...\" aria-label=\"file-input\" data-bi-id=\"-file-input\" required>，**六个身份属性一个都没有**（name/id/data-testid/data-automation-id/data-ui/data-qa 全缺），可见文案只有 \"Choose File*\"——RESUME_FILE 正则在文案与属性两侧都命不中，所以内核证明不了身份、如实拒绝。2026-09-16 全量批测：37 个 posting 共 40 个必填简历框全部卡在这里（requiredHandled 0/40）。锚点 #application 内只有这一个 file 控件，所以选择器就取它。声明只提供身份：蜜罐几何判据与 NON_RESUME 否决照常先跑，不豁免。",
+  "$comment.fileContextMaxDepth": "2026-09-16 于 nomadgcs.bamboohr.com 抓 DOM 实测：简历上传框的祖先链是 `Resume*` → Flex → FileUpload → FileUploadInput → FileUploadToggle → input，标题在内核默认的 4 层之外，所以够不着、认不出身份。2026-09-16 全量批测：37 个 posting 共 40 个必填简历框全部卡在这里（requiredHandled 0/40）。抬的是往上看多远，不是声明「这个就是简历」——本仓 apply-bamboohr-adapter 记着有的版式有两个 file 框（一个 Resume*、一个自定义附件题），唯一区分是各自上方的文字；身份声明会把两个都认成简历，抬深度不会：第二个框找到的仍是它自己的题干。",
+  "fileContextMaxDepth": 6,
+  "$comment.applyGate": "2026-09-22 实测（flchealth/334、nomadgcs/22 等八页）：/careers/<id> 上没有表单，只有一个 button[data-bi-id=careers-site-apply-button]「Apply for This Job」（type=button，不属于任何表单），点完 form#job-application-form 才出现、网址不变。2026-10-04 负责人（D8）：「自动填写」可以先替他点开它——那一下只把表单展开，不提交任何东西；内核只在申请表确实还没打开、这一颗唯一、可用、不是任何一张表的提交控件时交出它，扩展在翻页那一位（advance-step）开着时才按。没放行时照旧只把「规则的表单锚点没找到」换成「先点页面上的申请按钮」。钩子取 data-bi-id 而不是文案：文案随语言变，这个属性是 BambooHR 自己的埋点 id。",
+  "applyGate": {
+    "selector": "button[data-bi-id=\"careers-site-apply-button\"]"
+  }
+}

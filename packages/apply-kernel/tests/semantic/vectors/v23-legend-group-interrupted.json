@@ -1,0 +1,84 @@
+{
+  "id": "V23-legend-group-interrupted",
+  "scenarioClass": "radio-checkbox-group",
+  "title": "Without the sidecar, a non-radio control between two same-legend radios closes the group",
+  "todayBehavior": "Legend text is the only signal available with no sidecar. Continuing a group across an intervening free-text control would merge two questions on evidence that is already only structural; splitting them is recoverable downstream, merging them is not.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "sidecar": false,
+      "controls": [
+        {
+          "ref": "rel_yes",
+          "shape": "RADIO",
+          "label": "Yes",
+          "legend": "Are you willing to relocate?",
+          "required": true
+        },
+        {
+          "ref": "rel_note",
+          "shape": "TEXT",
+          "label": "Tell us more",
+          "legend": "Are you willing to relocate?"
+        },
+        {
+          "ref": "rel_no",
+          "shape": "RADIO",
+          "label": "No",
+          "legend": "Are you willing to relocate?",
+          "required": true
+        }
+      ],
+      "ua2": {
+        "rel_yes": {
+          "kind": "STRUCTURED_CHOICE"
+        },
+        "rel_note": {
+          "kind": "OPEN_QUESTION"
+        },
+        "rel_no": {
+          "kind": "STRUCTURED_CHOICE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "logicalControls": [
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "rel_yes"
+        ],
+        "grouping": "SHARED_FIELDSET_LEGEND"
+      },
+      {
+        "kind": "TEXT_SINGLE",
+        "members": [
+          "rel_note"
+        ],
+        "grouping": "NONE"
+      },
+      {
+        "kind": "RADIO_GROUP",
+        "members": [
+          "rel_no"
+        ],
+        "grouping": "SHARED_FIELDSET_LEGEND"
+      }
+    ],
+    "nodeCount": 3,
+    "differentNode": [
+      [
+        "rel_yes",
+        "rel_no"
+      ]
+    ],
+    "classifications": {
+      "rel_note": {
+        "kind": "OPEN_QUESTION",
+        "merge": "SINGLE"
+      }
+    }
+  }
+}

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    dover 填充率基准夹具。
+
+    出处：由 tests/apply-dover-adapter.test.ts 的 mountDoverFixture() 提升而来。
+    那份结构的来源是 2026-08-23 对 app.dover.com/apply/<slug>/<uuid> 真实在招岗位
+    的只读实测（50-证据库 §F.8-d）。
+
+    与其余夹具同一性质：**静态快照，不是线上抓取**，也不代表该厂商全部表单形态。
+    引用基线数字时必须连 citationScope 一起转述。
+
+    这一家的 label 刻意保留实测到的**零宽空格**：它没有可用的标签文案，
+    name 是唯一信号。任何靠标签过的断言都没在测真链路。
+
+    2026-09-15 复测（app.dover.com/apply/Dover/aa378aa1-79f3-4995-8667-b78a61c12b11/，
+    只读 + 一次本地 DataTransfer 探针，未提交）：两个文件栏都是 react-dropzone 形状——
+    `div[role=button]` 包着 `display:none` 的 input；第一个仍是厂商的简历解析器
+    （文案 Autofill from resume），真附件栏上方多了一个 `Resume *` 标签块（隔两层的
+    前置兄弟），dropzone 自己的文案里仍然一个 resume 字都没有。收到文件后宿主在下一个
+    宏任务里把整个 dropzone 换成 `Resume: <文件名>`。
+  -->
+  <body>
+
+    <div id="root">
+      <div class="InboundApplication__FormWrapper-cAfoSR">
+        <form>
+          <div>
+            <div role="button" tabindex="0">
+              <input type="file" accept=".pdf" multiple autocomplete="off" tabindex="-1" style="display: none;" />
+              <div><span>Autofill from resume</span><span>Drag &amp; drop or upload to autofill your application.</span><span>Upload file</span></div>
+            </div>
+          </div>
+          <label for="r3">​</label>
+          <input id="r3" name="firstName" type="text" required />
+          <label for="r4">​</label>
+          <input id="r4" name="lastName" type="text" required />
+          <label for="r5">​</label>
+          <input id="r5" name="email" type="email" required />
+          <label for="r6">​</label>
+          <input id="r6" name="linkedinUrl" type="text" required />
+          <label for="r7">​</label>
+          <input id="r7" name="phoneNumber" type="text" />
+          <div>
+            <div class="FormLabel">Resume *</div>
+            <div>
+              <div role="button" tabindex="0">
+                <input type="file" accept=".pdf" multiple autocomplete="off" tabindex="-1" style="display: none;" />
+                <div><span>Drag and drop file or browse computer(PDF, 5 MB maximum)</span></div>
+              </div>
+            </div>
+          </div>
+          <!--
+            2026-09-15 app.dover.com/apply/Dover/aa378aa1-79f3-4995-8667-b78a61c12b11/ 只读实测：
+            自定义单选题的真实形态（MUI）。题干是 styled-components 的 div.styles__FormLabel-<hash>，
+            和 MuiFormControl 一起装在最近的 div.MuiBox-root 里；div[role=radiogroup] 没有 aria-label，
+            也没有 legend，四个同名 radio 各自包在 label.MuiFormControlLabel-root 里。emotion class 已去掉，
+            styled-components 的哈希后缀保留原样（规则只认 styles__FormLabel 前缀）；选项文案为该 posting 原样。
+            规则 dover.json 的 questionScopes 就是照这段声明的；没有它，这组题干为空。
+          -->
+          <div class="MuiBox-root">
+            <div>
+              <div class="typography__BaseType-iAsBsJ typography__BodySmall-dSsCP styles__FormLabel-drdTQT">How many years of experience do you have reporting directly to a founder of a company? *</div>
+              <div class="MuiFormControl-root">
+                <div class="MuiFormGroup-root" role="radiogroup">
+                  <label class="MuiFormControlLabel-root"><span class="MuiButtonBase-root MuiRadio-root"><input class="PrivateSwitchBase-input" name="175bbfa0-6011-468c-9d02-faf41e4282cb" required="" type="radio" value="I haven't reported directly to a founder before."><span></span></span><span class="MuiTypography-root MuiFormControlLabel-label">I haven't reported directly to a founder before.</span></label>
+                  <label class="MuiFormControlLabel-root"><span class="MuiButtonBase-root MuiRadio-root"><input class="PrivateSwitchBase-input" name="175bbfa0-6011-468c-9d02-faf41e4282cb" required="" type="radio" value="< 1 year"><span></span></span><span class="MuiTypography-root MuiFormControlLabel-label">&lt; 1 year</span></label>
+                  <label class="MuiFormControlLabel-root"><span class="MuiButtonBase-root MuiRadio-root"><input class="PrivateSwitchBase-input" name="175bbfa0-6011-468c-9d02-faf41e4282cb" required="" type="radio" value="1 - 3 years"><span></span></span><span class="MuiTypography-root MuiFormControlLabel-label">1 - 3 years</span></label>
+                  <label class="MuiFormControlLabel-root"><span class="MuiButtonBase-root MuiRadio-root"><input class="PrivateSwitchBase-input" name="175bbfa0-6011-468c-9d02-faf41e4282cb" required="" type="radio" value="3+ years"><span></span></span><span class="MuiTypography-root MuiFormControlLabel-label">3+ years</span></label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <input name="cf-turnstile-response" type="hidden" />
+        </form>
+      </div>
+    </div>
+  </body>
+</html>

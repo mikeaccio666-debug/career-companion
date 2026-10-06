@@ -1,0 +1,115 @@
+{
+  "id": "V07-rows-add-by-us",
+  "scenarioClass": "repeated-rows",
+  "title": "A row we added is a new incarnation, and the first row keeps its identity across the rescan",
+  "todayBehavior": "Row identity is an ordinal, so the added row is indistinguishable from a host re-render and the first row's key can silently move.",
+  "epochs": [
+    {
+      "cause": "USER_TRIGGER",
+      "domGeneration": "g0",
+      "controls": [
+        {
+          "ref": "company0",
+          "shape": "TEXT",
+          "label": "Company",
+          "required": true,
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "E1"
+          }
+        },
+        {
+          "ref": "title0",
+          "shape": "TEXT",
+          "label": "Title",
+          "row": {
+            "group": "exp",
+            "ordinal": 0,
+            "shape": "exp",
+            "element": "E1"
+          }
+        }
+      ],
+      "ua2": {
+        "company0": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "title0": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "JOB_TITLE"
+        }
+      }
+    },
+    {
+      "cause": "POST_WRITE_RESCAN",
+      "domGeneration": "g1",
+      "attributedAddRowGroup": "exp",
+      "delta": {
+        "inherit": true,
+        "add": [
+          {
+            "ref": "company1",
+            "shape": "TEXT",
+            "label": "Company",
+            "required": true,
+            "row": {
+              "group": "exp",
+              "ordinal": 1,
+              "shape": "exp",
+              "element": "E2"
+            }
+          },
+          {
+            "ref": "title1",
+            "shape": "TEXT",
+            "label": "Title",
+            "row": {
+              "group": "exp",
+              "ordinal": 1,
+              "shape": "exp",
+              "element": "E2"
+            }
+          }
+        ]
+      },
+      "ua2": {
+        "company1": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "ORGANIZATION"
+        },
+        "title1": {
+          "kind": "CANONICAL_FIELD",
+          "canonicalField": "JOB_TITLE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "nodeCount": 4,
+    "liveRows": 2,
+    "retiredRows": 0,
+    "rowTokensDiffer": [
+      [
+        "company0",
+        "company1"
+      ]
+    ],
+    "differentNode": [
+      [
+        "company0",
+        "company1"
+      ]
+    ],
+    "rowOrigins": {
+      "company0": "HOST_PRESENT",
+      "company1": "ADDED_BY_US"
+    },
+    "rowRetired": {
+      "company0": false,
+      "company1": false
+    }
+  }
+}

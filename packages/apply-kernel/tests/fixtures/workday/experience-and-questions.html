@@ -1,0 +1,70 @@
+<!--
+  Workday 申请流程 step 3「My Experience」与 step 5「Application Questions」的
+  **真实结构**。
+
+  取自 rochester.wd5.myworkdayjobs.com 真实申请流程（2026-08-21 只读实测；
+  推进步骤时只是重新保存 Mike 自己已填的数据，未替他回答任何雇主问题，
+  未上传任何文件，未提交）。只保留结构与 automation-id，去掉全部品牌文案。
+-->
+<div data-automation-id="applyFlowPage">
+
+  <!-- ============ step 3：My Experience ============ -->
+  <div data-automation-id="applyFlowMyExpPage">
+    <h3>Work Experience</h3>
+    <button data-automation-id="add-button" type="button">Add</button>
+    <h3>Education</h3>
+    <button data-automation-id="add-button" type="button">Add</button>
+    <h3>Professional Licensure/Certification</h3>
+    <button data-automation-id="add-button" type="button">Add</button>
+    <h3>Languages</h3>
+    <button data-automation-id="add-button" type="button">Add</button>
+
+    <h3>Resume/CV</h3>
+    <div data-automation-id="attachments-FileUpload">
+      <!--
+        ⚠️ 真正的 <input type=file> 是 display:none / 0×0，可见的是拖放区与按钮。
+        这正是 setFile 的「有没有可见触发器」判据要处理的形态：
+        有可见触发器 → 可挂；没有 → TARGET_NOT_WRITABLE（本窗口新增的码）。
+      -->
+      <div data-automation-id="file-upload-drop-zone" style="width:272px;height:163px">
+        <button data-automation-id="select-files" type="button">Select files</button>
+        <input data-automation-id="file-upload-input-ref" type="file" multiple style="display:none" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ step 5：Application Questions 1 of 2 ============ -->
+  <!--
+    ⚠️ 这一页的 wrapper id 是**随机 hex GUID**，逐租户逐岗位不同——
+    与 step 2 的 `formField-legalName--firstName` 形成刺眼对比。
+    雇主自定义题**没有任何稳定钩子，唯一信号是标签文字**。
+  -->
+  <div data-automation-id="applyFlowQuestionsPage">
+    <div data-automation-id="formField-1cef6417bc1510015a7e6b1fac6c0001">
+      <label for="q1">I can start my new job on or after</label>
+      <input id="q1" autocomplete="off" />
+    </div>
+    <div data-automation-id="formField-1cef6417bc1510015a7e6bb98bf20000">
+      <label for="q2">I am looking for the following kind of job</label>
+      <button id="q2" type="button" aria-haspopup="listbox">Select One</button>
+    </div>
+    <div data-automation-id="formField-1cef6417bc1510015a7e6ced81680002">
+      <label for="q3">I am willing to travel</label>
+      <button id="q3" type="button" aria-haspopup="listbox">Select One</button>
+    </div>
+    <div data-automation-id="formField-1cef6417bc1510015a7e6d87198a0002">
+      <label for="q4">I am willing to relocate</label>
+      <button id="q4" type="button" aria-haspopup="listbox">Select One</button>
+    </div>
+    <div data-automation-id="formField-1cef6417bc1510015a7e6ebae4670001">
+      <label for="q5">I want to work the following shift(s)*</label>
+      <input id="q5" type="checkbox" aria-required="true" />
+    </div>
+    <div data-automation-id="formField-1cef6417bc1510015a7e6feeda660000">
+      <label for="q6">I want to work this number of hours (per week)</label>
+      <textarea id="q6" aria-required="false"></textarea>
+    </div>
+  </div>
+
+  <button data-automation-id="pageFooterNextButton" type="button">Save and Continue</button>
+</div>

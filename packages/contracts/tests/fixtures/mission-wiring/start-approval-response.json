@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "mission": {
+    "id": "00000000-0000-4000-8000-00000000a001",
+    "revision": "2",
+    "status": "READY_TO_EXECUTE"
+  },
+  "approval": {
+    "stepId": "00000000-0000-4000-8000-00000000a003",
+    "source": "START_APPLYING",
+    "fieldKeys": [
+      "addressCountry",
+      "addressLine1",
+      "city",
+      "email",
+      "firstName",
+      "fullName",
+      "githubUrl",
+      "lastName",
+      "linkedinUrl",
+      "location",
+      "phone",
+      "portfolioUrl"
+    ],
+    "allowedActions": [
+      "FILL"
+    ],
+    "expiresAt": "2026-09-24T10:10:00.000Z"
+  }
+}
