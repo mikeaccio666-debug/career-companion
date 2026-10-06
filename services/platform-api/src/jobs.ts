@@ -22,7 +22,7 @@ import { McpConnections, mcpApprovalMatches, mcpDefinitionHash, mcpJobInput, mcp
 import type { McpTransport } from './mcp-transport-port.ts';
 import { authorizeConversationTaskOrigin, conversationTaskRows, parseConversationTaskOrigin, saveConversationTaskOrigin, type ConversationTaskCreationOrigin } from './conversation-tasks.ts';
 import { authorizeGoalPlanTask, bindGoalPlanTask, recordGoalPlanTaskReceipt, type GoalPlanTaskOrigin } from './goal-plan-bindings.ts';
-import { assertGoalPlanImageBytes, readGoalPlanImage, resolveGoalPlanInputs, verifyGoalPlanImageSources } from './goal-plan-inputs.ts';
+import { assertGoalPlanImageBytes, readGoalPlanFile, readGoalPlanImage, readGoalPlanSourceFile, resolveGoalPlanInputs, verifyGoalPlanInputSources } from './goal-plan-inputs.ts';
 import { speechJobOptions, validateSpeechInput } from '../../../packages/ai-core/src/voice-input.ts';
 export { connectionFromUrl } from './queue-connection.ts';
 
@@ -192,7 +192,7 @@ export class JobService {
           if(prepared.input.provider==='kokoro'&&prepared.input.prompt.length>4000)throw new ApiError(413,'GOAL_PLAN_SOURCE_TOO_LARGE','The complete bound text exceeds the selected speech provider’s 4000-character limit. Text is never truncated.');
         }
         goalPlanInput={...planOrigin,templateHash:authorization.step.input_hash,effectiveInputHash:inputHash(prepared.input),inputSources:resolved.inputSources};
-        await verifyGoalPlanImageSources(client,this.storage,{user_id:userId,attachment_ids:prepared.input.attachmentIds,execution_policy:{goalPlanInput}},signal);
+        await verifyGoalPlanInputSources(client,this.storage,{user_id:userId,attachment_ids:prepared.input.attachmentIds,execution_policy:{goalPlanInput}},signal);
       }
       if(!prepared)throw invalid('The task input could not be prepared.');input=prepared.input;
       const {templateBinding,relayPolicy}=prepared;
@@ -315,7 +315,7 @@ export class JobService {
         validateExecutionTemplates(input,job.rows[0].execution_policy,undefined,completedWorkflowStepIndexes(workflowCheckpoint?.steps));
         assertExecutionTemplateApproval(input,approval.args);
         if(!approvalMatches(job.rows[0],approval.args))throw new ApiError(409,'JOB_DEFINITION_CHANGED','The task no longer matches the input submitted for review.');
-        await verifyGoalPlanImageSources(client,this.storage,job.rows[0]);
+        await verifyGoalPlanInputSources(client,this.storage,job.rows[0]);
       }
       const updated = await client.query('UPDATE platform_approvals SET status=$2,decided_at=now() WHERE id=$1 RETURNING *',[id,decision]);
       await client.query('UPDATE platform_jobs SET status=$2,updated_at=now() WHERE id=$1',[approval.job_id,decision==='approved'?'queued':'cancelled']);
@@ -324,8 +324,11 @@ export class JobService {
     });
   }
   async readAttachment(userId: string,id: string, goalPlanInput?:GoalPlanInputSnapshot, signal?:AbortSignal): Promise<ProviderAttachment> {
-    const source=goalPlanInput?.inputSources.find(item=>item.source==='reference_image'&&item.attachmentId===id);
+    const source=goalPlanInput?.inputSources.find(item=>(item.source==='reference_image'||item.source==='artifact_file')&&item.attachmentId===id);
     if(source?.source==='reference_image'){const image=await readGoalPlanImage(this.db,this.storage,userId,id,signal);assertGoalPlanImageBytes(source,image);return image;}
+    if(source?.source==='artifact_file')return readGoalPlanSourceFile(this.db,this.storage,userId,source,signal);
+    // Mixed CLI plans also bound static reads before allocation; only receipt files carry a frozen SHA.
+    if(goalPlanInput?.inputSources.some(item=>item.source==='artifact_file'))return readGoalPlanFile(this.db,this.storage,userId,id,signal);
     const result = await this.db.query('SELECT * FROM platform_uploads WHERE id=$1 AND user_id=$2',[id,userId]);
     if (!result.rowCount) throw notFound();
     const row=result.rows[0]; return {name:row.filename,mime:row.mime,bytes:await this.storage.get(row.storage_key)};
@@ -434,7 +437,7 @@ export async function processJob(jobs: JobService, id: string, generation: numbe
   const mcpBinding:McpExecutionBinding|undefined=row.kind==='mcp'?{jobId:id,userId:row.user_id,generation,leaseToken:token,input:jobInput(row),policy:row.execution_policy?.mcp,signal:abort.signal}:undefined;
   let mcpToolError=false;
   try {
-    await verifyGoalPlanImageSources(jobs.db,jobs.storage,row,abort.signal);
+    await verifyGoalPlanInputSources(jobs.db,jobs.storage,row,abort.signal);
     await fs.mkdir(workspaceDirectory,{recursive:true,mode:0o700});
     const input=jobInput(row);
     const workflowBinding:WorkflowBinding|undefined=row.kind==='workflow'?{jobId:id,userId:row.user_id,generation,leaseToken:token,definitionHash:workflowDefinitionHash(input),signal:abort.signal}:undefined;

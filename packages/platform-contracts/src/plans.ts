@@ -7,16 +7,22 @@ export const GOAL_PLAN_LIMIT = 50;
 export const GOAL_PLAN_GOAL_CHARACTERS = 8_000;
 export const GOAL_PLAN_INSTRUCTION_CHARACTERS = 6_000;
 export const GOAL_PLAN_RESULT_INDEX_MAX = 63;
-/** Indexes are zero-based; omitted artifact/image indexes select the first matching receipt result. */
+export const CLI_INPUT_MAX_FILES = 4;
+export const CLI_INPUT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const CLI_INPUT_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+/** Indexes are zero-based; prompt/image indexes select matching receipt results, file indexes select the full receipt order. */
 export interface GoalPlanPromptBinding { fromStep: number; source: 'analysis_text' | 'artifact_text'; artifactIndex?: number; mode: 'append' | 'replace' }
 export interface GoalPlanImageBinding { fromStep: number; imageIndex?: number }
-export interface GoalPlanTaskBindings { prompt?: GoalPlanPromptBinding; referenceImages?: GoalPlanImageBinding[] }
+/** Selects the full exact receipt artifact order, without filtering by MIME. CLI inputs only. */
+export interface GoalPlanFileBinding { fromStep: number; artifactIndex?: number }
+export interface GoalPlanTaskBindings { prompt?: GoalPlanPromptBinding; referenceImages?: GoalPlanImageBinding[]; artifactFiles?: GoalPlanFileBinding[] }
 export interface GoalPlanTaskInput { kind: 'task'; title: string; task: CreateJobInput; bindings?: GoalPlanTaskBindings }
 /** Full content is frozen into resolvedTask; these are factual, server-resolved provenance records. */
 export type GoalPlanInputSource =
   | { source: 'analysis_text'; fromStep: number; mode: 'append' | 'replace'; messageId: string; sha256: string; byteSize: number }
   | { source: 'artifact_text'; fromStep: number; mode: 'append' | 'replace'; artifactIndex: number; jobId: string; generation: number; artifactId: string; mime: string; sha256: string; byteSize: number }
-  | { source: 'reference_image'; fromStep: number; imageIndex: number; jobId: string; generation: number; artifactId: string; attachmentId: string; mime: string; sha256: string; byteSize: number };
+  | { source: 'reference_image'; fromStep: number; imageIndex: number; jobId: string; generation: number; artifactId: string; attachmentId: string; mime: string; sha256: string; byteSize: number }
+  | { source: 'artifact_file'; fromStep: number; artifactIndex: number; jobId: string; generation: number; artifactId: string; attachmentId: string; name: string; mime: string; sha256: string; byteSize: number };
 export interface GoalPlanInputSnapshot { planId: string; revision: number; stepIndex: number; templateHash: string; effectiveInputHash: string; inputSources: GoalPlanInputSource[] }
 export interface GoalPlanAgentInput { kind: 'agent_turn'; title: string; instruction: string; provider: string; model?: string }
 export type GoalPlanStepInput = GoalPlanTaskInput | GoalPlanAgentInput;

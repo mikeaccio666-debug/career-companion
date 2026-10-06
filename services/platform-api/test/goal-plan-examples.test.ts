@@ -16,6 +16,9 @@ test('model-facing examples satisfy actual plan, browser, MCP and workflow contr
   assert.equal(creative.length, 3);
   assert(creative[1].kind === 'task' && creative[1].bindings?.prompt?.fromStep === 0);
   assert(creative[2].kind === 'task' && creative[2].bindings?.referenceImages?.[0].fromStep === 1);
+  const combined = parsed.narratedVideo.steps[2];
+  assert(combined.kind === 'task' && combined.task.kind === 'cli');
+  assert.deepEqual(combined.bindings?.artifactFiles,[{fromStep:0},{fromStep:1}]);
   const description = goalPlanTools.find(tool => tool.name === 'propose_goal_plan')!.description;
   assert(description.includes('Every step needs its own title'));
   assert(description.includes(JSON.stringify(goalPlanExamples)));

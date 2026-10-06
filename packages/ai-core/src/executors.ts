@@ -10,6 +10,7 @@ import { mkdir, lstat, realpath, chown, open, opendir, mkdtemp, rm } from 'node:
 import { constants as fsConstants } from 'node:fs';
 import { join, basename, extname } from 'node:path';
 import type { CreateJobInput, GeneratedArtifact, JobExecutionContext, JobExecutionResult, BrowserCheckpoint, BrowserCheckpointEvent } from '@companion/platform-contracts';
+import { CLI_INPUT_MAX_FILES as MAX_INPUT_FILES, CLI_INPUT_MAX_FILE_BYTES as MAX_INPUT_FILE_BYTES, CLI_INPUT_MAX_TOTAL_BYTES as MAX_INPUT_TOTAL_BYTES } from '@companion/platform-contracts';
 import { ProviderError } from './errors.ts';
 import { executeCliRelay } from './cli-relay.ts';
 import { parseBrowserTaskOptions, browserDefinitionHash, performBrowserAction, captureBrowserResult } from './browser-actions.ts';
@@ -22,9 +23,6 @@ const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_REQUESTS = 80;
-const MAX_INPUT_FILES = 4;
-const MAX_INPUT_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_INPUT_TOTAL_BYTES = 20 * 1024 * 1024;
 const MAX_MATERIAL_FILES = 20;
 const MAX_MATERIAL_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_MATERIAL_TOTAL_BYTES = 32 * 1024 * 1024;
