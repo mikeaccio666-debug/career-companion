@@ -9,11 +9,25 @@
 | 位置 | 已实现 | 还需要接入 |
 | --- | --- | --- |
 | [ai-core/chat.ts](../../packages/ai-core/src/chat.ts) | 模型流式消息、受限工具循环、上传附件上下文；Agent 将工具和页面内容视为不可信数据 | 文档解析、检索索引、知识版本、联网搜索和邮件连接 |
-| [platform-api/app.ts](../../services/platform-api/src/app.ts) | 认证账号、私有 memories、上传、`read_artifact_text`、已保存的 `get_browser_observation` 等工具 | 职业知识/岗位工具的实际注册、OAuth 连接账户和同步服务 |
+| [platform-api/app.ts](../../services/platform-api/src/app.ts) | 认证账号、私有 memories、上传、成果读取、私有知识来源及 `search_knowledge` / `read_knowledge_passage` 工具 | 职业档案和岗位工具、OAuth 连接账户、组织语料授权和同步服务 |
 | [career-core/contracts.ts](../../packages/career-core/src/contracts.ts) | `CareerKnowledgePort`、`CareerJobsPort`、来源引用和求职证据契约 | 这些 ports 的真实实现；它们不是已经连接的 RAG 或 ATS |
 | [career-core/skills.ts](../../packages/career-core/src/skills.ts) | 技能所需的 `search_knowledge`、`search_jobs` 等工具声明 | 将声明映射到经过认证、限定权限的服务器工具 |
 
 现有 memory 是用户主动保存的短文本，附件是某次聊天的输入，文字成果读取工具是单文件读取；它们都不能替代可维护的知识库。现有浏览器观察工具读取已审批任务的私有结果，不会自行联网搜索。
+
+## 私有资料库的第一条接入路径
+
+网页资料页允许用户粘贴自己选择的纯文本或 Markdown，保存标题、来源说明和可选 HTTPS 来源链接。链接只是定位信息，服务器不会访问它，也不因此取得内部网站权限。当前来源只属于创建账号，不是共享的蔓藤课程目录；实际内部资料尚未导入。
+
+来源原文与确定分段一起保存到 PostgreSQL。每份资料最多 64 KiB UTF-8，每个账号最多 200 份；修改和删除均提交当前版本，冲突时保留网页草稿。更新后旧段落版本拒绝读取，删除会移除源内容和索引段落。已经发送到聊天中的摘录仍受聊天保留规则约束，删除来源不会撤回模型已处理的输入。
+
+`search_knowledge` 在认证账号的范围内进行词汇检索，返回至多八个段落。每段带来源 ID、当前版本、段落 ID、登记更新时间和 `untrusted_knowledge` 标记。`read_knowledge_passage` 只读取这个账号指定版本的段落，不生成建议或执行任务。检索没有命中时返回空结果；关键词相似不等于知识质量、事实核验或语义理解。
+
+网页可以先预览真实片段，再把引用追加到 Agent 草稿。用户明确发送后，模型才可调用只读工具；所读内容可能进入选定模型的上下文。存资料和点击带入草稿不会自行调用模型。资料中的提示词、成功案例或操作要求都不构成执行授权，也不会变成当前用户的经历。
+
+这一实现先走现有 PostgreSQL 和通用模型工具循环，保持供应商可以替换。PostgreSQL 提供全文解析、排序和 GIN 索引；中文连续文本还需要有界的字面匹配，不能据此宣称已经有完整中文语义检索。[查询与排序](https://www.postgresql.org/docs/17/textsearch-controls.html)、[全文索引](https://www.postgresql.org/docs/17/textsearch-indexes.html)。OpenAI 的托管 file search 是另一个可选 adapter，需要上传文件并创建 vector store；当前没有上传、购买或接入该托管服务。[官方 file search](https://developers.openai.com/api/docs/guides/tools-file-search)
+
+后续仍需补文档文件解析、授权课程目录、内部只读 API、召回评测及向量／混合检索。`CareerKnowledgePort` 的适配和职业比较状态也尚未挂入 runtime；通用资料库不代表首十五分钟求职体验已经完成。实际实现的验证范围见 [平台验证记录](../platform/verification.md)。
 
 ## RAG、聊天 SDK 和 MCP 的职责
 

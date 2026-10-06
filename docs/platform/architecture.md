@@ -11,6 +11,7 @@
 | packages/ai-core | 供应商协议、流式工具循环、媒体任务、浏览器和 CLI 执行器 |
 | packages/career-core | 七个版本化求职 skill、资料准备条件、来源 ports 和成长证据规则；尚未挂入求职 API/runtime |
 | services/platform-api | 身份、邮箱验证与密码找回、所有者校验、私有文件、消息保存、审批、用量、任务与邮件 worker |
+| 私有知识来源 | PostgreSQL 保存原文、版本和分段；网页管理资料，Agent 按账号检索与读取有来源的段落 |
 | services/local-speech | 独立 Python／Kokoro CPU 语音服务；显式准备固定资产，运行时不下载模型 |
 | services/local-transcription | 独立 Python／Faster Whisper CPU 转写；固定 tiny 与本地 VAD，20 MiB／120秒限制 |
 | infra/platform | 独立本地 PostgreSQL、Redis，及可选 SeaweedFS 开发对象存储 |
@@ -47,6 +48,8 @@ PostgreSQL 是任务状态的依据，Redis 负责分发任务。创建任务和
 | 插件投递 | 原扩展保留 | 新平台身份、档案、授权、租约和回执的桥接仍待设计；不后台提交申请 |
 
 供应商密钥仅在服务器环境中。界面如实展示是否配置和启用，不把固定回复当成模型。OpenAI 语音向浏览器下发短期会话凭据，长期 API key 不进入网页。商业调用默认关闭；测试使用虚构资料和本地协议服务。开源模型部署需要单独评估许可、推理资源和运维；请求不会自动下载权重。
+
+知识来源由用户在网页中明确保存；存资料不调用模型。Agent 的 `search_knowledge` 和 `read_knowledge_passage` 在检索前按认证账号过滤，返回真实段落、当前版本和来源信息；修改后的旧引用拒绝读取。来源链接不自动抓取，内容标为 `untrusted_knowledge`，不能改变工具权限或授予新行动。当前实现是有界的私有词汇检索，尚无蔓藤组织知识同步、向量检索或职业档案工具；详见 [知识接入](../career/data-integrations.md)。
 
 本次预览显式使用 `http://127.0.0.1:11434/v1` 的已安装 `qwen2.5:7b`，商业开关仍为0。实际 `/api/status` 确认该 Ollama 实例 `cloud.disabled=true`；这属于本机状态，不能推广到任意 Ollama 实例。平台环境里的开关不会改变另一个已运行 Ollama 服务的云设置。Ollama 接入阶段没有下载或修改其权重；本地接入成功也不证明内容质量或上线吞吐能力。
 

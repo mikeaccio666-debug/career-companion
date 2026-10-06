@@ -51,6 +51,31 @@ export interface Message {
   attachments?: Attachment[];
 }
 export interface Memory { id: string; content: string; createdAt: string; }
+/** Private user-selected knowledge. Source URLs are provenance metadata, never fetched. */
+export const KNOWLEDGE_SOURCE_MAX_BYTES = 64 * 1024;
+export const KNOWLEDGE_SOURCE_LIMIT = 200;
+export const KNOWLEDGE_PASSAGE_MAX_CHARACTERS = 1200;
+export const KNOWLEDGE_SEARCH_MAX_RESULTS = 8;
+export const KNOWLEDGE_RESULT_MAX_BYTES = 48 * 1024;
+export interface KnowledgeSourceInput {
+  title: string; content: string; sourceLabel?: string; sourceUrl?: string;
+}
+export interface KnowledgeSourceSummary {
+  id: string; title: string; sourceLabel?: string; sourceUrl?: string;
+  revision: number; passageCount: number; byteSize: number;
+  createdAt: string; updatedAt: string;
+}
+export interface KnowledgeSource extends KnowledgeSourceSummary { content: string; }
+export interface KnowledgeSearchInput { query: string; limit?: number; sourceIds?: string[]; }
+export interface KnowledgePassageInput { sourceId: string; revision: number; passageId: string; }
+/** A citation identifies the exact current version; stale versions must fail instead of mixing text. */
+export interface KnowledgePassage extends KnowledgePassageInput {
+  title: string; passageIndex: number; text: string; updatedAt: string;
+  sourceLabel?: string; sourceUrl?: string; provenance: 'untrusted_knowledge';
+}
+export interface KnowledgeSearchResult {
+  query: string; method: 'lexical'; matches: KnowledgePassage[];
+}
 export interface Attachment { id: string; name: string; mime: string; size: number; url: string; }
 export type VoiceRecordSource = 'realtime_transcript' | 'transcription_excerpt' | 'speech_excerpt';
 export interface VoiceRecordInput {

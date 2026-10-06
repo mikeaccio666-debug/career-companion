@@ -32,6 +32,7 @@ All paths start with `/api/platform`. Public routes are `GET /health`, `GET /cap
 - Jobs: `GET/POST /jobs`, `GET /jobs/:id`, `POST /jobs/:id/cancel`, `POST /jobs/:id/retry`.
 - Approvals: `GET /approvals`, `POST /approvals/:id/decision` with `decision: approved` or `rejected`.
 - Explicit saved context: `GET/POST /memories`, `DELETE /memories/:id`.
+- Private knowledge: `GET/POST /knowledge-sources`, `GET/PUT/DELETE /knowledge-sources/:id`, and `POST /knowledge-search`. Source creation/update accepts `title`, `content`, optional `sourceLabel` and `sourceUrl`; update/delete requires the current `revision`. URLs are HTTPS provenance metadata and are never fetched. Search accepts `query`, optional `limit` and `sourceIds`; results contain bounded current-version passages, citations and `untrusted_knowledge` provenance. Agent mode exposes the same owner-filtered `search_knowledge` and `read_knowledge_passage` readers; there is no model tool to write knowledge sources.
 - Private uploads: `POST /uploads` multipart file (maximum 20 MB), `GET/HEAD /uploads/:id`, `GET/HEAD /artifacts/:id`. Authenticated downloads support bounded streaming and a single byte Range; HEAD reads metadata without opening the body.
 - Reusable private images: `GET /artifacts/:id/reference-attachment` returns `{attachment,source:{artifactId,jobId}}`.
 - Private text/code reading: `GET /artifacts/:id/text` returns a bounded UTF-8 page with source IDs, version and continuation metadata.
