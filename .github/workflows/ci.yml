@@ -15,6 +15,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-alpine
@@ -43,11 +44,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @companion/ai-core exec playwright install --with-deps chromium
+      - run: node --test scripts/ci/prepare-chromium-sandbox.test.mjs
+      - run: node scripts/ci/prepare-chromium-sandbox.mjs
       - run: node infra/platform/harness/build.mjs
       - run: pnpm check
       - run: pnpm test
         env:
           # Synthetic Responses only; Docker remains disconnected and provider calls stay off.
+          NODE_OPTIONS: --test-reporter=tap
           PLATFORM_TEST_REAL_HARNESS: "1"
           PLATFORM_TEST_CLI_EXTERNAL_SANDBOX: "1"
       - run: pnpm build:extension
