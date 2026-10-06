@@ -1,5 +1,6 @@
 import { createElement as h, type ChangeEvent } from 'react';
-import { goalBindingOptions, goalBindingProblem, goalBindingResultLimit, goalPromptTarget, goalReferenceImageTarget, type GoalBindingStep, type GoalTaskBindings } from './goal-plan-bindings.ts';
+import { CLI_INPUT_MAX_FILES, CLI_INPUT_MAX_FILE_BYTES, CLI_INPUT_MAX_TOTAL_BYTES } from '@companion/platform-contracts';
+import { goalArtifactFileTarget, goalArtifactTextSource, goalBindingOptions, goalBindingProblem, goalBindingResultLimit, goalPromptTarget, goalReferenceImageTarget, type GoalBindingStep, type GoalTaskBindings } from './goal-plan-bindings.ts';
 
 export interface GoalBindingFieldsProps {
   steps: readonly GoalBindingStep[]; index: number; bindings?: GoalTaskBindings; attachmentCount: number;
@@ -9,15 +10,16 @@ export interface GoalBindingFieldsProps {
 export function GoalBindingFields({ steps, index, bindings, attachmentCount, disabled = false, onChange }: GoalBindingFieldsProps) {
   const humanIndex = (value = 0) => value === -1 || !Number.isFinite(value) ? '' : value + 1;
   const resultIndex = (value: string) => value.trim() ? Number(value) - 1 : -1;
-  const step = steps[index], promptAllowed = goalPromptTarget(step), imageAllowed = goalReferenceImageTarget(step);
+  const step = steps[index], promptAllowed = goalPromptTarget(step), imageAllowed = goalReferenceImageTarget(step), fileAllowed = goalArtifactFileTarget(step);
   const problem = goalBindingProblem({ ...step, bindings }, index, steps, attachmentCount), choices = goalBindingOptions(steps, index);
   const images = bindings?.referenceImages || [], priorTasks = steps.slice(0, index).map((source, fromStep) => ({ source, fromStep })).filter(({ source }) => source.kind === 'task');
-  const update = (next: GoalTaskBindings) => onChange(next.prompt || next.referenceImages?.length ? next : undefined);
+  const files = bindings?.artifactFiles || [], fileSources = priorTasks.filter(({ source }) => goalArtifactTextSource(source));
+  const update = (next: GoalTaskBindings) => onChange(next.prompt || next.referenceImages?.length || next.artifactFiles?.length ? next : undefined);
   const promptValue = bindings?.prompt ? `${bindings.prompt.fromStep}:${bindings.prompt.source}` : '';
   const promptExists = choices.some((choice) => `${choice.fromStep}:${choice.source}` === promptValue);
   return h('section', { className: 'goal-input-bindings', 'aria-label': `第 ${index + 1} 步前序成果绑定` },
     h('h4', null, '使用前序成果'),
-    h('p', { className: 'goal-note' }, '只选择这份计划更早的步骤。这里保存使用规则；准备本步时才核对成功成果、固定实际正文与参考图，再由你独立审阅批准。缺少指定成果会停止，不会换用另一份。'),
+    h('p', { className: 'goal-note' }, '只选择这份计划更早的步骤。这里保存使用规则；准备本步时才核对成功成果、固定实际正文、参考图与文件，再由你独立审阅批准。缺少指定成果会停止，不会换用另一份。'),
     problem ? h('p', { className: 'goal-blocked', role: 'alert' }, problem) : null,
     h('label', { className: 'goal-binding-toggle' }, h('input', { type: 'checkbox', checked: !!bindings?.prompt, disabled: disabled || !promptAllowed && !bindings?.prompt, onChange: (event: ChangeEvent<HTMLInputElement>) => update({ ...bindings, prompt: event.target.checked ? { fromStep: -1, source: 'analysis_text', mode: 'append' } : undefined }) }), '将前序文字用于任务正文'),
     !promptAllowed ? h('p', { className: 'goal-note' }, '正文绑定支持图片、视频、语音和终端任务。其他任务的外层要求不是实际执行参数。') : null,
@@ -33,5 +35,12 @@ export function GoalBindingFields({ steps, index, bindings, attachmentCount, dis
         h('label', null, '第几份图片成果', h('input', { type: 'number', min: 1, max: goalBindingResultLimit, value: humanIndex(image.imageIndex), disabled, 'aria-label': `第 ${index + 1} 步参考图 ${imageSlot + 1} 序号`, onChange: (event: ChangeEvent<HTMLInputElement>) => update({ ...bindings, referenceImages: images.map((entry, slot) => slot === imageSlot ? { ...entry, imageIndex: resultIndex(event.target.value) } : entry) }) })),
         h('button', { type: 'button', className: 'text-button', disabled, onClick: () => update({ ...bindings, referenceImages: images.filter((_, slot) => slot !== imageSlot) }) }, `移除参考图 ${imageSlot + 1}`))),
       h('button', { type: 'button', className: 'secondary', disabled: disabled || !imageAllowed || !priorTasks.length || images.length + attachmentCount >= 4, onClick: () => update({ ...bindings, referenceImages: [...images, { fromStep: -1 }] }) }, '添加前序参考图')) : null,
+    files.length || fileAllowed ? h('div', { className: 'goal-binding-files' },
+      h('p', { className: 'goal-note' }, `终端文件按来源成功回执中全部成果的顺序选择，不按图片、视频、音频或文字筛选；第一份的序号是 1。只支持前序普通任务，不支持分析、浏览器或外部工具。固定附件与这些文件合计最多 ${CLI_INPUT_MAX_FILES} 个，每个最多 ${CLI_INPUT_MAX_FILE_BYTES / 1024 / 1024} MiB，合计最多 ${CLI_INPUT_MAX_TOTAL_BYTES / 1024 / 1024} MiB；准备时核对大小与私有文件访问权限。`),
+      ...files.map((file, fileSlot) => h('div', { className: 'goal-binding-row', key: fileSlot },
+        h('label', null, `文件 ${fileSlot + 1} 来源`, h('select', { value: String(file.fromStep), disabled, 'aria-label': `第 ${index + 1} 步文件 ${fileSlot + 1} 来源`, onChange: (event: ChangeEvent<HTMLSelectElement>) => update({ ...bindings, artifactFiles: files.map((entry, slot) => slot === fileSlot ? { fromStep: Number(event.target.value) } : entry) }) }, h('option', { value: '-1' }, '选择前序普通任务'), !fileSources.some((entry) => entry.fromStep === file.fromStep) && file.fromStep >= 0 ? h('option', { value: String(file.fromStep), disabled: true }, '当前来源不可用，请重新选择') : null, ...fileSources.map(({ source, fromStep }) => h('option', { key: fromStep, value: String(fromStep) }, `第 ${fromStep + 1} 步「${source.title || '未命名'}」`)))),
+        h('label', null, '第几份成果文件（全部成果顺序）', h('input', { type: 'number', min: 1, max: goalBindingResultLimit, value: humanIndex(file.artifactIndex), disabled, 'aria-label': `第 ${index + 1} 步文件 ${fileSlot + 1} 序号`, onChange: (event: ChangeEvent<HTMLInputElement>) => update({ ...bindings, artifactFiles: files.map((entry, slot) => slot === fileSlot ? { ...entry, artifactIndex: resultIndex(event.target.value) } : entry) }) })),
+        h('button', { type: 'button', className: 'text-button', disabled, onClick: () => update({ ...bindings, artifactFiles: files.filter((_, slot) => slot !== fileSlot) }) }, `移除文件 ${fileSlot + 1}`))),
+      h('button', { type: 'button', className: 'secondary', disabled: disabled || !fileAllowed || !fileSources.length || files.length + attachmentCount >= CLI_INPUT_MAX_FILES, onClick: () => update({ ...bindings, artifactFiles: [...files, { fromStep: -1 }] }) }, '添加前序成果文件')) : null,
     bindings ? h('button', { type: 'button', className: 'text-button', disabled, onClick: () => onChange(undefined) }, '取消全部前序绑定') : null);
 }

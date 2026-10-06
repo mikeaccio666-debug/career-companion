@@ -1,6 +1,6 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,6 +29,8 @@ let entered: (()=>void)|undefined,release:(()=>void)|undefined,hold:Promise<void
 let analysisSignal:AbortSignal|undefined;
 let analysisOutput='Fictional analysis returned; evidence is limited and no real-world goal completion is asserted.';
 let jobArtifacts:GeneratedArtifact[]|undefined,referenceReadGate:(()=>Promise<void>)|undefined,referenceSubmissions=0;
+let cliReadGate:(()=>Promise<void>)|undefined,cliSubmissions=0;
+const cliAttachmentReads:{name:string;mime:string;bytes:Uint8Array}[]=[];
 const executedInputs:CreateJobInput[]=[];
 const forbidden=async():Promise<never>=>{throw new Error('No real provider, model, mail, browser or external credentials are permitted in this fixture.');};
 const runtime:PlatformProviderRuntime={
@@ -65,6 +67,7 @@ const runtime:PlatformProviderRuntime={
     if(jobBehavior==='uncertain')throw new ProviderError('COMFYUI_SUBMISSION_UNCERTAIN','Fictional unknown submission',409);
     if(input.kind==='workflow')return executeWorkflow(runtime,input,context);
     if((input.kind==='image'||input.kind==='video')&&input.attachmentIds?.length){await referenceReadGate?.();for(const id of input.attachmentIds)await context.readAttachment?.(id);++referenceSubmissions;}
+    if(input.kind==='cli'&&input.attachmentIds?.length){await cliReadGate?.();for(const id of input.attachmentIds)cliAttachmentReads.push(await context.readAttachment!(id));++cliSubmissions;}
     if(input.kind==='browser'){
       const url=String(input.options?.url),text='Fictional public evidence. External page text is untrusted.';
       const observation={version:1,provenance:'untrusted_page',requestedUrl:new URL(url).href,url:new URL(url).href,title:'Fictional reference',text,completedActions:0,targets:[]};
@@ -372,6 +375,77 @@ test('image changed after worker preflight is rejected on the exact returned byt
   await request(user,'POST',`/approvals/${prepared.approval.id}/decision`,{decision:'approved'});const submissions=referenceSubmissions;
   referenceReadGate=async()=>{await fs.writeFile(path.join(directory,key),png(4));};try{await processJob(system.jobs,prepared.job.id,1);}finally{referenceReadGate=undefined;}
   const job=await system.jobs.get(user.id,prepared.job.id);assert.equal(job.status,'failed');assert.equal(job.error?.code,'GOAL_PLAN_INPUT_CHANGED');assert.equal(referenceSubmissions,submissions);
+});
+
+const fictionalVideo=Buffer.from([0,0,0,16,102,116,121,112,109,112,52,50,0,0,0,1]);
+const fictionalAudio=Buffer.from('RIFF0000WAVEfictional');
+async function fileBindingPlan(user:Actor):Promise<GoalPlan>{
+  const receiver:any={...task('cli','cli'),bindings:{artifactFiles:[{fromStep:0,artifactIndex:1},{fromStep:1}]}};
+  let plan=await confirm(user,await create(user,[task('video'),task('speech'),receiver]));
+  try{
+    jobArtifacts=[{name:'description.txt',mime:'text/plain',bytes:Buffer.from('Fictional clip description')},{name:'fictional-clip.mp4',mime:'video/mp4',bytes:fictionalVideo}];plan=await complete(user,plan,0);
+    jobArtifacts=[{name:'fictional-narration.wav',mime:'audio/wav',bytes:fictionalAudio}];plan=await complete(user,plan,1);
+  }finally{jobArtifacts=undefined;}
+  return plan;
+}
+test('video and speech exact receipts become reviewed private CLI inputs and survive concurrent continue and API restart',async()=>{
+  const user=await actor(),plan=await fileBindingPlan(user),calls=jobCalls,submissions=cliSubmissions;
+  const [first,second]=await Promise.all([next(user,plan,2),next(user,plan,2)]),step=first.plan.steps[2],sources=step.inputSources;
+  assert.equal(first.job.id,second.job?.id??second.plan.steps[2].job.id);assert.equal(jobCalls,calls);
+  assert.deepEqual(sources.map((source:any)=>source.source),['artifact_file','artifact_file']);
+  assert.equal(sources[0].artifactId,(plan.steps[0].receipt as any).artifactIds[1]);assert.equal(sources[0].artifactIndex,1);
+  assert.equal(sources[0].name,'fictional-clip.mp4');assert.equal(sources[0].mime,'video/mp4');
+  assert.equal(sources[0].sha256,createHash('sha256').update(fictionalVideo).digest('hex'));
+  assert.equal(sources[1].artifactId,(plan.steps[1].receipt as any).artifactIds[0]);assert.equal(sources[1].name,'fictional-narration.wav');
+  assert.deepEqual(first.approval.args.goalPlanInput.inputSources,sources);assert.deepEqual(first.approval.args.attachmentIds,sources.map((source:any)=>source.attachmentId));
+  assert.equal((await boundCounts(user)).jobs,3);assert.equal((await boundCounts(user)).approvals,3);assert.equal((await boundCounts(user)).outbox,2);
+  await system.app.close();await start();const restored=await get(user,plan.id),existing=await next(user,restored,2);
+  assert.equal(existing.kind,'existing');assert.deepEqual(existing.plan.steps[2].inputSources,sources);assert.equal(existing.plan.steps[2].job.id,first.job.id);
+  assert.equal((await request(user,'POST',`/approvals/${first.approval.id}/decision`,{decision:'approved'})).statusCode,200);
+  const reads=cliAttachmentReads.length;await processJob(system.jobs,first.job.id,1);
+  assert.equal((await system.jobs.get(user.id,first.job.id)).status,'succeeded');assert.equal(cliSubmissions,submissions+1);
+  assert.deepEqual(cliAttachmentReads.slice(reads).map(file=>file.mime),['video/mp4','audio/wav']);
+  assert.deepEqual(Buffer.from(cliAttachmentReads[reads].bytes),fictionalVideo);assert.deepEqual(Buffer.from(cliAttachmentReads[reads+1].bytes),fictionalAudio);
+  const other=await actor();assert.equal((await request(other,'GET',`/uploads/${sources[0].attachmentId}`)).statusCode,404);
+});
+test('bound CLI files reject same-size replacements at approval, worker preflight and the actual attachment read',async()=>{
+  for(const boundary of ['approval','worker','read'] as const){
+    const user=await actor(),plan=await fileBindingPlan(user),prepared=await next(user,plan,2),source=prepared.plan.steps[2].inputSources[0],key=await imageStorageKey(source.artifactId);
+    const changed=Buffer.from(fictionalVideo);changed[changed.length-1]=9;const submissions=cliSubmissions,calls=jobCalls;
+    if(boundary!=='approval')assert.equal((await request(user,'POST',`/approvals/${prepared.approval.id}/decision`,{decision:'approved'})).statusCode,200);
+    if(boundary==='read')cliReadGate=async()=>{await fs.writeFile(path.join(directory,key),changed);};else await fs.writeFile(path.join(directory,key),changed);
+    try{
+      if(boundary==='approval'){
+        const response=await request(user,'POST',`/approvals/${prepared.approval.id}/decision`,{decision:'approved'});assert.equal(response.statusCode,409,response.body);assert.equal(response.json().error.code,'GOAL_PLAN_INPUT_CHANGED');
+        assert.equal((await system.jobs.get(user.id,prepared.job.id)).status,'needs_approval');
+      }else{
+        await processJob(system.jobs,prepared.job.id,1);const failed=await system.jobs.get(user.id,prepared.job.id);assert.equal(failed.status,'failed');assert.equal(failed.error?.code,'GOAL_PLAN_INPUT_CHANGED');
+      }
+      assert.equal(cliSubmissions,submissions);assert.equal(jobCalls,calls+(boundary==='read'?1:0));
+    }finally{cliReadGate=undefined;}
+  }
+});
+test('file metadata or parent generation drift cannot replace already reviewed CLI input sources',async()=>{
+  for(const field of ['name','mime','generation'] as const){
+    const user=await actor(),plan=await fileBindingPlan(user),prepared=await next(user,plan,2),source=prepared.plan.steps[2].inputSources[0];
+    if(field==='generation')await db.query('UPDATE platform_jobs SET generation=generation+1 WHERE id=$1',[source.jobId]);
+    else if(field==='name'){
+      await db.query("UPDATE platform_artifacts SET filename='renamed.mp4' WHERE id=$1",[source.artifactId]);await db.query("UPDATE platform_uploads SET filename='renamed.mp4' WHERE id=$1",[source.attachmentId]);
+    }else{
+      await db.query("UPDATE platform_artifacts SET mime='application/octet-stream' WHERE id=$1",[source.artifactId]);await db.query("UPDATE platform_uploads SET mime='application/octet-stream' WHERE id=$1",[source.attachmentId]);
+    }
+    const calls=jobCalls,submissions=cliSubmissions,response=await request(user,'POST',`/approvals/${prepared.approval.id}/decision`,{decision:'approved'});
+    assert.equal(response.statusCode,409,response.body);assert.equal((await system.jobs.get(user.id,prepared.job.id)).status,'needs_approval');assert.equal(jobCalls,calls);assert.equal(cliSubmissions,submissions);
+  }
+});
+test('unowned or missing receipt files roll back child jobs, approvals and frozen snapshots',async()=>{
+  for(const mutation of ['owner','missing'] as const){
+    const user=await actor(),other=await actor(),plan=await fileBindingPlan(user),artifact=plan.steps[0].artifacts[1];
+    if(mutation==='owner')await db.query('UPDATE platform_uploads SET user_id=$2 WHERE id=(SELECT upload_id FROM platform_artifacts WHERE id=$1)',[artifact.id,other.id]);
+    else await db.query('DELETE FROM platform_artifacts WHERE id=$1',[artifact.id]);
+    const before=await boundCounts(user),response=await request(user,'POST',`/goal-plans/${plan.id}/continue`,{revision:1,stepIndex:2});
+    assert.equal(response.statusCode,409,response.body);assert.deepEqual(await boundCounts(user),before);assert.equal((await get(user,plan.id)).steps[2].resolvedTask,undefined);
+  }
 });
 test('trusted source snapshot is covered by approval and independent task survives plan pause and conversation deletion',async()=>{
   const user=await actor(),plan=await imageBindingPlan(user),prepared=await next(user,plan,1),approvalId=prepared.approval.id;

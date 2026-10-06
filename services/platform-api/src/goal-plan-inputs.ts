@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { ARTIFACT_TEXT_MIME_TYPES, GOAL_PLAN_RESULT_INDEX_MAX, type CreateJobInput, type GoalPlanInputSource, type GoalPlanStepInput, type GoalPlanTaskBindings, type GoalPlanTaskInput } from '@companion/platform-contracts';
+import { ARTIFACT_TEXT_MIME_TYPES, CLI_INPUT_MAX_FILES, CLI_INPUT_MAX_FILE_BYTES, CLI_INPUT_MAX_TOTAL_BYTES, GOAL_PLAN_RESULT_INDEX_MAX, type CreateJobInput, type GoalPlanInputSource, type GoalPlanStepInput, type GoalPlanTaskBindings, type GoalPlanTaskInput } from '@companion/platform-contracts';
 import { validateMediaReferenceImages } from '@companion/ai-core';
 import type { Database } from './database.ts';
 import type { BlobStorage } from './storage.ts';
@@ -18,7 +18,7 @@ function index(value: unknown, maximum: number, name: string): number {
   return value;
 }
 export function parseGoalPlanTaskBindings(value: unknown): GoalPlanTaskBindings {
-  const data = object(value); fields(data, ['prompt', 'referenceImages']);
+  const data = object(value); fields(data, ['prompt', 'referenceImages', 'artifactFiles']);
   const result: GoalPlanTaskBindings = {};
   if (data.prompt !== undefined) {
     const prompt = object(data.prompt); fields(prompt, ['fromStep', 'source', 'artifactIndex', 'mode']);
@@ -33,7 +33,13 @@ export function parseGoalPlanTaskBindings(value: unknown): GoalPlanTaskBindings 
       return { fromStep: index(image.fromStep, 7, 'fromStep'), ...(image.imageIndex === undefined ? {} : { imageIndex: index(image.imageIndex, GOAL_PLAN_RESULT_INDEX_MAX, 'imageIndex') }) }; });
     if (new Set(result.referenceImages.map(item => `${item.fromStep}:${item.imageIndex ?? 0}`)).size !== result.referenceImages.length) throw invalid('Choose distinct previous-result reference images.');
   }
-  if (!result.prompt && !result.referenceImages) throw invalid('Choose at least one explicit previous-result input binding.');
+  if (data.artifactFiles !== undefined) {
+    if (!Array.isArray(data.artifactFiles) || !data.artifactFiles.length || data.artifactFiles.length > CLI_INPUT_MAX_FILES) throw invalid('Select between one and four previous-result files.');
+    result.artifactFiles = data.artifactFiles.map(value => { const file = object(value); fields(file, ['fromStep', 'artifactIndex']);
+      return { fromStep: index(file.fromStep, 7, 'fromStep'), ...(file.artifactIndex === undefined ? {} : { artifactIndex: index(file.artifactIndex, GOAL_PLAN_RESULT_INDEX_MAX, 'artifactIndex') }) }; });
+    if (new Set(result.artifactFiles.map(item => `${item.fromStep}:${item.artifactIndex ?? 0}`)).size !== result.artifactFiles.length) throw invalid('Choose distinct previous-result files.');
+  }
+  if (!result.prompt && !result.referenceImages && !result.artifactFiles) throw invalid('Choose at least one explicit previous-result input binding.');
   return result;
 }
 export function validateGoalPlanBindings(steps: GoalPlanStepInput[]): void {
@@ -50,7 +56,63 @@ export function validateGoalPlanBindings(steps: GoalPlanStepInput[]): void {
       if ((step.task.attachmentIds?.length ?? 0) + step.bindings.referenceImages.length > 4) throw invalid('Static and previous-result references together may contain at most four images.');
       for (const binding of step.bindings.referenceImages) if (earlier(binding.fromStep).kind !== 'task') throw invalid('Reference images must come from an earlier task result.');
     }
+    if (step.bindings.artifactFiles) {
+      if (step.task.kind !== 'cli') throw invalid('Only CLI tasks accept previous-result files.');
+      if ((step.task.attachmentIds?.length ?? 0) + step.bindings.artifactFiles.length > CLI_INPUT_MAX_FILES) throw invalid('Static and previous-result files together may contain at most four files.');
+      for (const binding of step.bindings.artifactFiles) {
+        const source = earlier(binding.fromStep);
+        if (source.kind !== 'task' || ['browser','mcp'].includes(source.task.kind)) throw invalid('Files must come from an earlier ordinary task; browser and MCP results require their dedicated readers.');
+      }
+    }
   }
+}
+
+type SavedFile = { name: string; mime: string; bytes: Buffer };
+type FileSource = Extract<GoalPlanInputSource,{source:'artifact_file'}>;
+function validFileMetadata(name: unknown, mime: unknown): boolean {
+  return typeof name === 'string' && Boolean(name.trim()) && name.length <= 200 && !/[\u0000-\u001f\u007f]/.test(name) &&
+    typeof mime === 'string' && mime.length <= 150 && /^[a-z0-9][a-z0-9.+_-]*\/[a-z0-9][a-z0-9.+_-]*$/i.test(mime);
+}
+/** Private CLI file read, pinned to a strong storage version and bounded before allocation. */
+export async function readGoalPlanFile(db: Pick<Database,'query'>, storage: BlobStorage, userId: string, attachmentId: string, signal?: AbortSignal): Promise<SavedFile> {
+  signal?.throwIfAborted();
+  const row = (await db.query('SELECT * FROM platform_uploads WHERE id=$1 AND user_id=$2', [attachmentId,userId])).rows[0], size = Number(row?.byte_size);
+  if (!row || !validFileMetadata(row.filename,row.mime) || !Number.isSafeInteger(size) || size <= 0 || size > CLI_INPUT_MAX_FILE_BYTES) throw planBlocked('The exact saved file is unavailable or exceeds the CLI input limit.');
+  const stat = await storage.stat(row.storage_key,signal);
+  if (stat.size !== size || typeof stat.etag !== 'string' || !/^"[\x21\x23-\x7e]{0,200}"$/.test(stat.etag)) throw planBlocked('The saved file has no consistent immutable version.');
+  const opened = await storage.openRead(row.storage_key,{expected:stat,signal}), stream = opened.stream;
+  let cleanupError:unknown, failed=false;
+  const onError=(error:unknown)=>{cleanupError=error;}; stream.on('error',onError);
+  const closed=stream.closed?Promise.resolve():new Promise<void>(resolve=>stream.once('close',resolve));
+  try {
+    if (opened.length !== size) throw planBlocked('The saved file could not be read consistently.');
+    const chunks:Buffer[]=[]; let total=0;
+    for await (const chunk of stream) { signal?.throwIfAborted(); if (!(chunk instanceof Uint8Array) || (total+=chunk.byteLength)>size) throw planBlocked('The saved file bytes no longer match their metadata.'); chunks.push(Buffer.from(chunk)); }
+    signal?.throwIfAborted(); if (total!==size) throw planBlocked('The saved file response ended early.');
+    return {name:row.filename,mime:row.mime,bytes:Buffer.concat(chunks,total)};
+  } catch(error) { failed=true; throw error; }
+  finally { stream.destroy(); await closed; stream.removeListener('error',onError); signal?.throwIfAborted(); if (!failed&&cleanupError) throw planBlocked('The saved file could not be read consistently.'); }
+}
+
+async function receiptFile(client: Pick<Database,'query'>, userId:string, artifactId:string, jobId:string, generation:number): Promise<any> {
+  const saved=(await client.query(`SELECT a.job_id,a.mime,a.filename,a.upload_id,u.mime AS upload_mime,u.filename AS upload_filename,
+    u.byte_size,j.kind AS job_kind,j.generation,j.status FROM platform_artifacts a JOIN platform_uploads u ON u.id=a.upload_id
+    JOIN platform_jobs j ON j.id=a.job_id AND j.user_id=$2 WHERE a.id=$1 AND a.user_id=$2 AND u.user_id=$2 FOR SHARE OF a,u`,[artifactId,userId])).rows[0];
+  if (!saved || saved.job_id!==jobId || saved.generation!==generation || saved.status!=='succeeded' || ['browser','mcp'].includes(saved.job_kind) ||
+      saved.mime!==saved.upload_mime || saved.filename!==saved.upload_filename || !validFileMetadata(saved.filename,saved.mime)) throw planBlocked('The exact receipt file metadata is unavailable.');
+  return saved;
+}
+
+/** Re-check the parent receipt as well as the exact private bytes before any approved CLI execution. */
+export async function readGoalPlanSourceFile(db: Pick<Database,'query'>, storage: BlobStorage, userId:string, source:FileSource, signal?:AbortSignal):Promise<SavedFile> {
+  signal?.throwIfAborted();
+  const saved=await receiptFile(db,userId,source.artifactId,source.jobId,source.generation);
+  if (saved.upload_id!==source.attachmentId || saved.filename!==source.name || saved.mime!==source.mime || Number(saved.byte_size)!==source.byteSize) throw changedFile();
+  const file=await readGoalPlanFile(db,storage,userId,source.attachmentId,signal); assertGoalPlanFileBytes(source,file); return file;
+}
+function changedFile():ApiError { return new ApiError(409,'GOAL_PLAN_INPUT_CHANGED','The saved file changed after preparation. The frozen task cannot execute with different content.'); }
+export function assertGoalPlanFileBytes(source:FileSource,file:{name:string;mime:string;bytes:Uint8Array}):void {
+  if (file.name!==source.name || file.mime!==source.mime || file.bytes.byteLength!==source.byteSize || digest(file.bytes)!==source.sha256) throw changedFile();
 }
 export function boundPrompt(base: string, source: string, mode: 'append'|'replace'): string {
   const prompt = mode === 'replace' ? source : `${base}\n\n${source}`;
@@ -108,7 +170,31 @@ export async function resolveGoalPlanInputs(client: PoolClient, storage: BlobSto
     const image=await readGoalPlanImage(client,storage,userId,saved.upload_id,signal);(input.attachmentIds??=[]).push(saved.upload_id);
     inputSources.push({source:'reference_image',fromStep:binding.fromStep,imageIndex,jobId:row.receipt.jobId,generation:row.receipt.generation,artifactId:artifact.id,attachmentId:saved.upload_id,mime:image.mime,sha256:digest(image.bytes),byteSize:image.bytes.byteLength});
   }
-  if(new Set(input.attachmentIds??[]).size!==(input.attachmentIds??[]).length)throw invalid('A static and bound image must not refer to the same private upload.');
+  if (bindings.artifactFiles) {
+    if (input.kind!=='cli' || (input.attachmentIds?.length??0)+bindings.artifactFiles.length>CLI_INPUT_MAX_FILES) throw invalid('Only CLI tasks accept up to four combined static and bound files.');
+    let total=0;
+    for (const attachmentId of input.attachmentIds??[]) {
+      const saved=(await client.query('SELECT byte_size FROM platform_uploads WHERE id=$1 AND user_id=$2 FOR SHARE',[attachmentId,userId])).rows[0], size=Number(saved?.byte_size);
+      if (!saved || !Number.isSafeInteger(size) || size<=0 || size>CLI_INPUT_MAX_FILE_BYTES) throw planBlocked('A static CLI input is unavailable or exceeds its byte limit.');
+      total+=size;
+    }
+    if (total>CLI_INPUT_MAX_TOTAL_BYTES) throw planBlocked('The combined CLI inputs exceed their total byte limit.');
+    for (const binding of bindings.artifactFiles) {
+      const row=rows[binding.fromStep], artifactIndex=binding.artifactIndex??0;
+      if (row?.receipt?.kind!=='task') throw planBlocked('This source has no exact successful task receipt.');
+      const artifactId=row.receipt.artifactIds[artifactIndex], artifact=(row.artifacts??[]).find((file:any)=>file.id===artifactId);
+      if (!artifactId || !artifact) throw planBlocked('No saved file exists at this exact receipt index.');
+      const saved=await receiptFile(client,userId,artifactId,row.receipt.jobId,row.receipt.generation);
+      const size=Number(saved.byte_size);
+      if (!Number.isSafeInteger(size) || size<=0 || size>CLI_INPUT_MAX_FILE_BYTES || total+size>CLI_INPUT_MAX_TOTAL_BYTES) throw planBlocked('The combined CLI inputs exceed their byte limits.');
+      const file=await readGoalPlanFile(client,storage,userId,saved.upload_id,signal);
+      if (file.mime!==saved.mime || file.name!==saved.filename || file.bytes.byteLength!==Number(saved.byte_size)) throw planBlocked('The saved file no longer matches its receipt metadata.');
+      total+=file.bytes.byteLength; if (total>CLI_INPUT_MAX_TOTAL_BYTES) throw planBlocked('The combined CLI inputs exceed their total byte limit.');
+      (input.attachmentIds??=[]).push(saved.upload_id);
+      inputSources.push({source:'artifact_file',fromStep:binding.fromStep,artifactIndex,jobId:row.receipt.jobId,generation:row.receipt.generation,artifactId,attachmentId:saved.upload_id,name:file.name,mime:file.mime,sha256:digest(file.bytes),byteSize:file.bytes.byteLength});
+    }
+  }
+  if(new Set(input.attachmentIds??[]).size!==(input.attachmentIds??[]).length)throw invalid('Static and bound files must not refer to the same private upload.');
   signal?.throwIfAborted();return {input,inputSources};
 }
 function receiptArtifacts(row:any):any[]{
@@ -118,9 +204,10 @@ function receiptArtifacts(row:any):any[]{
 export function assertGoalPlanImageBytes(source: Extract<GoalPlanInputSource,{source:'reference_image'}>, image:{mime:string;bytes:Uint8Array}):void{
   if(image.mime!==source.mime||image.bytes.byteLength!==source.byteSize||digest(image.bytes)!==source.sha256)throw new ApiError(409,'GOAL_PLAN_INPUT_CHANGED','The reference image bytes changed after preparation. The frozen task cannot execute with different content.');
 }
-export async function verifyGoalPlanImageSources(db:Pick<Database,'query'>,storage:BlobStorage,row:any,signal?:AbortSignal):Promise<void>{
-  for(const source of row.execution_policy?.goalPlanInput?.inputSources??[])if(source.source==='reference_image'){
-    if(!(row.attachment_ids??[]).includes(source.attachmentId))throw new ApiError(409,'GOAL_PLAN_INPUT_CHANGED','The frozen image is no longer part of this reviewed task.');
-    assertGoalPlanImageBytes(source,await readGoalPlanImage(db,storage,row.user_id,source.attachmentId,signal));
+export async function verifyGoalPlanInputSources(db:Pick<Database,'query'>,storage:BlobStorage,row:any,signal?:AbortSignal):Promise<void>{
+  for(const source of row.execution_policy?.goalPlanInput?.inputSources??[])if(source.source==='reference_image'||source.source==='artifact_file'){
+    if(!(row.attachment_ids??[]).includes(source.attachmentId))throw new ApiError(409,'GOAL_PLAN_INPUT_CHANGED','The frozen file is no longer part of this reviewed task.');
+    if(source.source==='reference_image')assertGoalPlanImageBytes(source,await readGoalPlanImage(db,storage,row.user_id,source.attachmentId,signal));
+    else await readGoalPlanSourceFile(db,storage,row.user_id,source,signal);
   }
 }

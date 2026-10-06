@@ -1,8 +1,9 @@
-import { GOAL_PLAN_RESULT_INDEX_MAX, type GoalPlanTaskInput, type JobKind } from '@companion/platform-contracts';
+import { CLI_INPUT_MAX_FILES, GOAL_PLAN_RESULT_INDEX_MAX, type GoalPlanTaskInput, type JobKind } from '@companion/platform-contracts';
 
 export type GoalTaskBindings = NonNullable<GoalPlanTaskInput['bindings']>;
 export type GoalPromptBinding = NonNullable<GoalTaskBindings['prompt']>;
 export type GoalImageBinding = NonNullable<GoalTaskBindings['referenceImages']>[number];
+export type GoalFileBinding = NonNullable<GoalTaskBindings['artifactFiles']>[number];
 export interface GoalBindingStep { kind: 'task' | 'agent_turn'; title: string; taskKind?: JobKind; bindings?: GoalTaskBindings }
 export const goalBindingResultLimit = GOAL_PLAN_RESULT_INDEX_MAX + 1;
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -11,6 +12,7 @@ const position = (value: unknown, limit: number): value is number => Number.isSa
 export function goalArtifactTextSource(step: GoalBindingStep): boolean { return step.kind === 'task' && !!step.taskKind && !['browser', 'mcp'].includes(step.taskKind); }
 export function goalPromptTarget(step: GoalBindingStep): boolean { return step.kind === 'task' && ['image', 'video', 'speech', 'cli'].includes(step.taskKind || ''); }
 export function goalReferenceImageTarget(step: GoalBindingStep): boolean { return step.kind === 'task' && ['image', 'video'].includes(step.taskKind || ''); }
+export function goalArtifactFileTarget(step: GoalBindingStep): boolean { return step.kind === 'task' && step.taskKind === 'cli'; }
 export interface GoalBindingChoice { fromStep: number; source: 'analysis_text' | 'artifact_text'; label: string }
 export function goalBindingOptions(steps: readonly GoalBindingStep[], target: number): GoalBindingChoice[] {
   return steps.slice(0, target).flatMap<GoalBindingChoice>((step, fromStep) => step.kind === 'agent_turn'
@@ -19,9 +21,9 @@ export function goalBindingOptions(steps: readonly GoalBindingStep[], target: nu
 }
 /** Invalid references are retained in the editor and rejected, never silently mapped to another step. */
 export function parseGoalTaskBindings(value: unknown, index: number, steps: readonly GoalBindingStep[], attachmentCount = 0): GoalTaskBindings | undefined {
-  if (value === undefined) return;
   const fail = (message: string): never => { throw new Error(`第 ${index + 1} 步的前序成果绑定：${message}`); };
-  if (!object(value) || !ownKeys(value, ['prompt', 'referenceImages']) || value.prompt === undefined && value.referenceImages === undefined) return fail('请重新选择来源，或明确取消绑定。');
+  if (value === undefined) return;
+  if (!object(value) || !ownKeys(value, ['prompt', 'referenceImages', 'artifactFiles']) || value.prompt === undefined && value.referenceImages === undefined && value.artifactFiles === undefined) return fail('请重新选择来源，或明确取消绑定。');
   if (steps[index]?.kind !== 'task') return fail('分析步骤不接受执行任务的输入绑定，请明确取消。');
   const sourceStep = (fromStep: unknown) => {
     if (!position(fromStep, index)) return fail('只能选择本计划更早的步骤。');
@@ -48,7 +50,19 @@ export function parseGoalTaskBindings(value: unknown, index: number, steps: read
     });
     if (new Set(referenceImages.map((item) => `${item.fromStep}:${item.imageIndex ?? 0}`)).size !== referenceImages.length) return fail('同一份参考图只能选择一次。');
   }
-  return { ...(prompt ? { prompt } : {}), ...(referenceImages ? { referenceImages } : {}) };
+  let artifactFiles: GoalFileBinding[] | undefined;
+  if (value.artifactFiles !== undefined) {
+    if (!goalArtifactFileTarget(steps[index])) return fail('只有终端任务可以接收前序成果文件，请明确取消文件绑定。');
+    if (!Array.isArray(value.artifactFiles) || !value.artifactFiles.length || value.artifactFiles.length + attachmentCount > CLI_INPUT_MAX_FILES) return fail(`终端的固定附件与前序成果文件合计最多 ${CLI_INPUT_MAX_FILES} 个，不能保存空的文件规则。`);
+    artifactFiles = value.artifactFiles.map((item) => {
+      if (!object(item) || !ownKeys(item, ['fromStep', 'artifactIndex'])) return fail('文件来源不完整，请重新选择。');
+      const source = sourceStep(item.fromStep);
+      if (!goalArtifactTextSource(source) || item.artifactIndex !== undefined && !position(item.artifactIndex, goalBindingResultLimit)) return fail('文件须来自前序普通执行任务，不能来自浏览器或外部工具；成果序号也需有效。');
+      return { fromStep: Number(item.fromStep), ...(item.artifactIndex !== undefined ? { artifactIndex: Number(item.artifactIndex) } : {}) };
+    });
+    if (new Set(artifactFiles.map((item) => `${item.fromStep}:${item.artifactIndex ?? 0}`)).size !== artifactFiles.length) return fail('同一份成果文件只能选择一次。');
+  }
+  return { ...(prompt ? { prompt } : {}), ...(referenceImages ? { referenceImages } : {}), ...(artifactFiles ? { artifactFiles } : {}) };
 }
 export function goalBindingProblem(step: GoalBindingStep, index: number, steps: readonly GoalBindingStep[], attachmentCount = 0): string {
   try { parseGoalTaskBindings(step.bindings, index, steps, attachmentCount); return ''; } catch (error) { return error instanceof Error ? error.message : '前序成果绑定不完整，请重新选择。'; }
@@ -57,7 +71,7 @@ export function goalBindingProblem(step: GoalBindingStep, index: number, steps: 
 export function removeGoalStep<T extends GoalBindingStep>(steps: readonly T[], index: number): T[] {
   const affected = steps.flatMap((step, target) => {
     if (target === index || !step.bindings) return [];
-    const sources = [step.bindings.prompt?.fromStep, ...(step.bindings.referenceImages || []).map((item) => item.fromStep)].filter((item): item is number => item !== undefined);
+    const sources = [step.bindings.prompt?.fromStep, ...(step.bindings.referenceImages || []).map((item) => item.fromStep), ...(step.bindings.artifactFiles || []).map((item) => item.fromStep)].filter((item): item is number => item !== undefined);
     return sources.some((source) => source >= index) ? [target + 1] : [];
   });
   if (affected.length) throw new Error(`第 ${affected.join('、')} 步使用了此步或其后步骤的成果。请先在这些步骤取消或重新选择来源，再移除第 ${index + 1} 步；其他编辑已保留。`);
@@ -67,5 +81,6 @@ export function goalBindingRuleSummary(bindings: GoalTaskBindings): string[] {
   const rules: string[] = [];
   if (bindings.prompt) { const input = bindings.prompt; rules.push(`任务正文${input.mode === 'append' ? '追加' : '使用全文替换'}：第 ${input.fromStep + 1} 步的${input.source === 'analysis_text' ? '分析正文' : `第 ${(input.artifactIndex ?? 0) + 1} 份文字成果`}。`); }
   for (const image of bindings.referenceImages || []) rules.push(`参考图：第 ${image.fromStep + 1} 步的第 ${(image.imageIndex ?? 0) + 1} 份图片成果。`);
+  for (const file of bindings.artifactFiles || []) rules.push(`终端输入文件：第 ${file.fromStep + 1} 步成功回执中全部成果的第 ${(file.artifactIndex ?? 0) + 1} 份（不按文件类型筛选）。`);
   return rules;
 }

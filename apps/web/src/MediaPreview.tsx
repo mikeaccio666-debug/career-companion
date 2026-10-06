@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { usePlatformAccountClient } from './account-client';
 import { clearPrivateMedia, holdPrivateResource } from './private-media';
+import type { VoicePlaybackController } from './voice-playback';
 import './media-preview.css';
 
-export default function MediaPreview({ url, name, kind }: { url: string; name?: string; kind: 'video' | 'audio' }) {
+export default function MediaPreview({ url, name, kind, voicePlayback }: { url: string; name?: string; kind: 'video' | 'audio'; voicePlayback?: VoicePlaybackController }) {
   const media = useRef<HTMLMediaElement | null>(null);
   const client = usePlatformAccountClient();
   // Capture the rendered account's URL before any delayed effect runs.
@@ -18,14 +19,15 @@ export default function MediaPreview({ url, name, kind }: { url: string; name?: 
     const element = media.current;
     if (!element) return;
     setFailed(!source);
-    const stop = holdPrivateResource(client, () => clearPrivateMedia(element));
+    const unregister = kind === 'audio' && voicePlayback ? voicePlayback.register(element) : () => {};
+    const stop = holdPrivateResource(client, () => { unregister(); clearPrivateMedia(element); });
     element.crossOrigin = 'use-credentials';
     if (source && client?.isCurrent()) {
       try { element.src = source; element.load(); }
       catch { stop(); if (client.isCurrent()) setFailed(true); }
     }
     return stop;
-  }, [source, client, kind, reload]);
+  }, [source, client, kind, reload, voicePlayback]);
 
   if (!client?.isCurrent()) return <p role="status">登录状态已变化，媒体预览已关闭。</p>;
 

@@ -12,12 +12,13 @@ const expectations = [
   'array_1_4_reference_images', 'valid_previous_result_binding', 'earlier_step_index',
   'text_binding_for_image_video_speech_cli', 'matching_analysis_or_task_text_source',
   'reference_images_for_image_video', 'at_most_4_combined_reference_images', 'earlier_task_step_index',
+  'array_1_4_artifact_files', 'artifact_files_for_cli', 'at_most_4_combined_artifact_files', 'earlier_ordinary_task_step_index',
 ] as const;
 export type GoalPlanInputExpected = typeof expectations[number];
 export interface GoalPlanInputDiagnostic { path: string; reason: GoalPlanInputReason; expected: GoalPlanInputExpected }
 const reasons = new Set<GoalPlanInputReason>(['missing','type','empty','too_long','too_many','out_of_range','unsupported_field','invalid_value']);
 // Paths are code-owned field names and bounded indexes, never keys supplied by a user.
-const pathPattern = /^(?:\$|title|goal|steps|steps\[[0-7]\](?:\.(?:title|kind|instruction|provider|model|task(?:\.(?:kind|provider|prompt|model|options|attachmentIds|executionTemplate))?|bindings(?:\.(?:prompt(?:\.(?:fromStep|source|artifactIndex|mode))?|referenceImages(?:\[[0-3]\](?:\.(?:fromStep|imageIndex))?)?))?))?)$/;
+const pathPattern = /^(?:\$|title|goal|steps|steps\[[0-7]\](?:\.(?:title|kind|instruction|provider|model|task(?:\.(?:kind|provider|prompt|model|options|attachmentIds|executionTemplate))?|bindings(?:\.(?:prompt(?:\.(?:fromStep|source|artifactIndex|mode))?|referenceImages(?:\[[0-3]\](?:\.(?:fromStep|imageIndex))?)?|artifactFiles(?:\[[0-3]\](?:\.(?:fromStep|artifactIndex))?)?))?))?)$/;
 
 class GoalPlanInputDiagnosticError extends ApiError {
   readonly diagnostic: Readonly<GoalPlanInputDiagnostic>;
@@ -80,7 +81,7 @@ export function taskInputDiagnostic(value: unknown, path: string): GoalPlanInput
 export function bindingInputDiagnostic(value: unknown, path: string): GoalPlanInputDiagnostic {
   const at = (field: string, reason: GoalPlanInputReason, expected: GoalPlanInputExpected) => ({ path: field ? `${path}.${field}` : path, reason, expected });
   if (!record(value)) return at('',value === undefined ? 'missing' : 'type','object');
-  if (extra(value,['prompt','referenceImages'])) return at('','unsupported_field','allowed_fields_only');
+  if (extra(value,['prompt','referenceImages','artifactFiles'])) return at('','unsupported_field','allowed_fields_only');
   const indexHint = (item: unknown, field: string, maximum: 7 | 63): GoalPlanInputDiagnostic | undefined =>
     typeof item !== 'number' || !Number.isSafeInteger(item) || item < 0 || item > maximum ? at(field,item === undefined ? 'missing' : typeof item !== 'number' ? 'type' : 'out_of_range',maximum === 7 ? 'integer_0_7' : 'integer_0_63') : undefined;
   if (value.prompt !== undefined) {
@@ -104,6 +105,15 @@ export function bindingInputDiagnostic(value: unknown, path: string): GoalPlanIn
       if (image.imageIndex !== undefined) { const imageIndex = indexHint(image.imageIndex,`referenceImages[${index}].imageIndex`,63); if (imageIndex) return imageIndex; }
     }
   }
+  if (value.artifactFiles !== undefined) {
+    if (!Array.isArray(value.artifactFiles) || !value.artifactFiles.length || value.artifactFiles.length > 4) return at('artifactFiles',!Array.isArray(value.artifactFiles) ? 'type' : !value.artifactFiles.length ? 'empty' : 'too_many','array_1_4_artifact_files');
+    for (const [index,file] of value.artifactFiles.entries()) {
+      if (!record(file)) return at(`artifactFiles[${index}]`,'type','object');
+      if (extra(file,['fromStep','artifactIndex'])) return at(`artifactFiles[${index}]`,'unsupported_field','allowed_fields_only');
+      const fromStep = indexHint(file.fromStep,`artifactFiles[${index}].fromStep`,7); if (fromStep) return fromStep;
+      if (file.artifactIndex !== undefined) { const artifactIndex = indexHint(file.artifactIndex,`artifactFiles[${index}].artifactIndex`,63); if (artifactIndex) return artifactIndex; }
+    }
+  }
   return at('','invalid_value','valid_previous_result_binding');
 }
 /** Locate the first invalid dependency after the authoritative semantic validator fails. */
@@ -125,6 +135,15 @@ export function semanticBindingDiagnostic(steps: GoalPlanStepInput[]): GoalPlanI
         const source = steps[image.fromStep];
         if (image.fromStep >= index || !source) return {path:`${path}.referenceImages[${imageIndex}].fromStep`,reason:'out_of_range',expected:'earlier_step_index'};
         if (source.kind !== 'task') return {path:`${path}.referenceImages[${imageIndex}].fromStep`,reason:'invalid_value',expected:'earlier_task_step_index'};
+      }
+    }
+    if (step.bindings.artifactFiles) {
+      if (step.task.kind !== 'cli') return {path:`${path}.artifactFiles`,reason:'invalid_value',expected:'artifact_files_for_cli'};
+      if ((step.task.attachmentIds?.length ?? 0) + step.bindings.artifactFiles.length > 4) return {path:`${path}.artifactFiles`,reason:'too_many',expected:'at_most_4_combined_artifact_files'};
+      for (const [fileIndex,file] of step.bindings.artifactFiles.entries()) {
+        const source = steps[file.fromStep];
+        if (file.fromStep >= index || !source) return {path:`${path}.artifactFiles[${fileIndex}].fromStep`,reason:'out_of_range',expected:'earlier_step_index'};
+        if (source.kind !== 'task' || ['browser','mcp'].includes(source.task.kind)) return {path:`${path}.artifactFiles[${fileIndex}].fromStep`,reason:'invalid_value',expected:'earlier_ordinary_task_step_index'};
       }
     }
   }

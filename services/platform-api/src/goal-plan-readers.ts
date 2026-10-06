@@ -105,7 +105,8 @@ const stepSQL = `SELECT s.step_index,s.input->>'kind' AS kind,s.input->'task'->>
   CASE WHEN s.step_index=$4 THEN char_length(CASE WHEN s.input->>'kind'='task' THEN s.input->'task'->>'prompt' ELSE s.input->>'instruction' END) END AS selected_text_characters,
   CASE WHEN s.step_index=$4 AND jsonb_typeof(s.input->'task'->'attachmentIds')='array' THEN jsonb_array_length(s.input->'task'->'attachmentIds') ELSE 0 END AS static_attachment_count,
   CASE WHEN s.step_index=$4 AND s.input->'bindings'->'prompt' IS NOT NULL THEN 1 ELSE 0 END +
-    CASE WHEN s.step_index=$4 AND jsonb_typeof(s.input->'bindings'->'referenceImages')='array' THEN jsonb_array_length(s.input->'bindings'->'referenceImages') ELSE 0 END AS binding_count
+    CASE WHEN s.step_index=$4 AND jsonb_typeof(s.input->'bindings'->'referenceImages')='array' THEN jsonb_array_length(s.input->'bindings'->'referenceImages') ELSE 0 END +
+    CASE WHEN s.step_index=$4 AND jsonb_typeof(s.input->'bindings'->'artifactFiles')='array' THEN jsonb_array_length(s.input->'bindings'->'artifactFiles') ELSE 0 END AS binding_count
   FROM platform_goal_plan_steps s JOIN platform_goal_plans p ON p.id=s.plan_id
   LEFT JOIN platform_jobs j ON j.id=s.job_id AND j.user_id=p.user_id
   LEFT JOIN platform_messages m ON m.id=s.message_id AND m.conversation_id=p.conversation_id AND m.role='assistant'
