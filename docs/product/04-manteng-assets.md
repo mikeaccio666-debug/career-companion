@@ -1,7 +1,7 @@
 # 04 蔓藤资产如何变成体验
 
-> 状态：v2，依据共享产品简报 v3 与总编辑裁决｜日期：2026-10-06｜分期以 07 为准，插件以 11 为准，声线以 12 为准，付费规则与订单以 06 为准。
-> 代码以 `965db09` 之后的 main 为准，引用写文件和函数名。示例用户林舟（01 Persona A），「墨」是他给主理人起的名字。标「假设」的数字，验证方法见第 9 节。
+> 状态：v2，依据共享产品简报 v3 与总编辑裁决｜日期：2026-10-06｜本文只交叉引用：分期 07；队员、工具白名单、待确认、交接包 03；流程 05；价格、订单、内推商业与法务 06；视觉 08；迁移 09；Discord 10；插件 11；声线 12。
+> 代码以 `965db09` 之后的 main 为准（MCP 按 `1c26b3a`），引用写文件和函数名。示例用户林舟（01 Persona A），「墨」是他给主理人起的名字。标「假设」的数字，验证方法见第 9 节。
 
 ## 这份文档回答什么问题
 
@@ -18,8 +18,7 @@
 - 篇数、比例和出处标签只由服务端按工具结果和 citation 渲染，模型不能自己写「蔓藤面经」或频率（D2）。
 - 付费推荐全部按 06 §7：只由主理人在对话里提出；信件卡片、晨报、三件事和作战简报里没有付费内容。
 - 代码上新建与 014 私有资料库并列的组织共享库和 `OrgKnowledge`，复用版本与墓碑语义；`CareerKnowledgePort` 用一条「知识访问引用」接上 `prepareCareerRun`。
-
-本文只交叉引用、不展开：队员、工具白名单、待确认状态机、交接包与导师授权（03）；流程与路由（05）；价格、触发、订单、内推商业与法务（06）；首批范围与阈值（07）；视觉（08）；迁移与排期（09）；Discord（10）；插件（11）；声线（12）。
+- 授权语料仍导入组织库；导师可约时段、课程目录、合作机会、导师网络这类实时数据，P1b 起可由蔓藤以 MCP 只读交付，由我方核授权、渲染出处（4.12）。
 
 ---
 
@@ -31,15 +30,13 @@
 | 样本层 | 学员简历（及蔓藤历年结果数据） | 第三方个人信息，只以去标识化、改写或聚合的形态出现，原件不进系统 |
 | 人与资源层 | 真人导师一对一、内推、导师网络、小企业内推资源 | 可预约的人和可转递的机会，走履约状态机 |
 
-**P0 实际上线（07 P0-11、P0-12）**：题库与 rubric、方法卡第一批 5 张、对话模式卡（不展示）、真人入口最小版（意向表 → `requested → matched → scheduled → completed`，没有交接包和评阅回流）、导入脚本、访问日志与配额、运营只读列表（脚本加只读列表，不是运营台）。其余见第 7 节。
-
 **五条硬规则**
 
 1. **先授权，再导入。** `license_id` 为空不能发布；学员来源还必须带 `consent_id`。
-2. **出处可见，由服务端渲染。** 每条蔓藤内容都带出处标签，点开能看到来源类型、版本、收录时间、去标识化状态；标签和统计数字只按本轮真实的 citation 与统计结果生成。
+2. **出处可见，由服务端渲染。** 标签和统计数字只按本轮真实的 citation 与统计结果生成（2.1）。
 3. **没有就说没有。** 库里没有就说「这家我们还没有面经」，不让模型补写，不贴蔓藤标签。
 4. **蔓藤内容是数据，不是指令；别人的经历不会变成用户的经历。** 样本只教改法，不提供可照抄的事实。
-5. **真人与付费以 06 §7、§8 为准。** 只由主理人提出，永远同时给免费路径；不卖「付费即内推」。
+5. **真人与付费以 06 §7、§8 为准。** 永远同时给免费路径；不卖「付费即内推」。
 
 ---
 
@@ -76,6 +73,7 @@
 | 蔓藤合作企业 · 书面说明 {yyyy-mm} | 合作机会 | 日期必显示 |
 | 真人 · 蔓藤导师 | 真人导师的消息和评阅 | 与 AI 队员样式明确区分（08） |
 | 公开资料 | 岗位原文、公司公开页 | 带观察时间 |
+| {来源名} · 查询于 {MM-DD HH:mm} | 外部实时来源（03 §2.8）；蔓藤 MCP 来源沿用对应的蔓藤标签 | 由目录条目配置 |
 | 你的资料 | 用户私人资料库 | — |
 | 通用（没有蔓藤依据） | 模型的一般知识 | 主要依靠一般知识时必须标出 |
 
@@ -256,7 +254,7 @@ P1b： packet_drafting → packet_pending_confirm → requested → … → comp
 
 `requested` 时用户看到「收到了，运营会在 48 小时内为你匹配蔓藤导师（真人）」（假设时限）；`matched` / `scheduled` 由运营推进，旅程里出现预约卡（导师称呼、时间、会议链接）；`completed` 后请用户评分。
 
-**数据** `platform_mentor_sessions`（09 的 024）：`id`、`user_id`、`mentor_id`（匹配后填）、`kind`（`free_diagnosis` / `mock_interview` / `resume_direction` / `offer_negotiation`）、`intent_note`、`order_id`（→ 06 `platform_mentor_orders`）、`packet_id`（P1b）、`status`、`scheduled_at`、`duration_min`、`meeting_url`、`review_id`、时间戳。不含价格和支付字段。
+**数据** `platform_mentor_sessions`（09 的 026）：`id`、`user_id`、`mentor_id`（匹配后填）、`kind`（`free_diagnosis` / `mock_interview` / `resume_direction` / `offer_negotiation`）、`intent_note`、`order_id`（→ 06 `platform_mentor_orders`）、`packet_id`（P1b）、`status`、`scheduled_at`、`duration_min`、`meeting_url`、`review_id`、时间戳。不含价格和支付字段。
 
 **导师守则**（06 §8.5 之外再加）
 
@@ -396,25 +394,25 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 
 ### 4.2 三层知识的边界
 
-组织共享库（面经、题目、方法卡、模式卡、写法样本、路径统计、课程、合作机会）归蔓藤，存新表（4.3）；用户私人库沿用 014，语义不变；用户结构化数据（档案、故事、简历版本、看板）存求职数据表（05、09）。组织内容不会变成用户的数据：「收藏」一篇面经存的是引用，不是副本。
+组织共享库（面经、题目、方法卡、模式卡、写法样本、路径统计、课程、合作机会）归蔓藤，存新表（4.3）；用户私人库沿用 014，语义不变；用户结构化数据（档案、故事、简历版本、看板）存求职数据表（05、09）。组织内容不会变成用户的数据：「收藏」一篇面经存的是引用，不是副本。第四类外部实时数据（4.12）不进组织库，只存为有保留期的私有结果。
 
 ### 4.3 新建：组织共享库的数据模型
 
-表名带 `platform_` 前缀，迁移编号由 09 分配。**P0 只建 09 §3C（019）和第 8B 步（024）列出的表。**
+表名带 `platform_` 前缀，迁移编号由 09 分配。**P0 只建 09 §3C（021）和第 8B 步（026）列出的表。**
 
 | 表 | 关键字段 | 分期 |
 |---|---|---|
-| `platform_orgs` | `id`、`slug`（`manteng`）、`display_name`；只有一行 | P0（024） |
-| `platform_org_roles` | `org_id`、`user_id`、`role`（`content_editor` / `content_reviewer` / `mentor` / `ops` / `org_admin` / `safety_reviewer`）、`granted_by`、`granted_at`、`revoked_at`。**决定**：员工账号与求职账号分开 | P0（024） |
-| `platform_content_licenses` | `org_id`、`asset_class`、`agreement_ref`（合同存私有文件）、`allowed_uses[]`（`retrieve` / `model_context` / `display_excerpt` / `display_full` / `aggregate`，没有「训练」）、`audience`（`all_users` / `cohort` / `entitled` / `staff_only`）、`valid_from`、`valid_until`、`revoked_at`、`revocation_reason` | P0（019） |
-| `platform_org_knowledge_sources` | `org_id`、`asset_class`、`title`、`body`（≤ 64 KiB）、`structured` jsonb、`language`、`role_families[]`、`company_key`、`season`、`tags[]`、`license_id` NOT NULL、`consent_id`、`deid_status`、`deid_version`、`review_status`、`editor_id`、`reviewer_id`（CHECK ≠ `editor_id`）、`reviewed_at`、`valid_until`、`revision`、`content_hash`、`publish_batch`（全局单调递增整数）、`retired_at`、`withdrawn_at`；revision 与墓碑语义同 014 | P0（019） |
-| `platform_org_knowledge_passages` | `source_id`、`revision`、`passage_id`、`passage_index`、`content`、`search_vector`；分段沿用 `splitKnowledgePassages` | P0（019） |
-| `platform_user_entitlements` | `user_id`、`org_id`、`audience_grants[]`、`granted_at`、`expires_at`、`revoked_at`；首批全部授予 `cohort`，会员同步见 06 | P0（019） |
-| `platform_knowledge_access_log` | `user_id`、`source_id`、`revision`、`passage_id`、`asset_class`、`speaker`、`conversation_id`、`message_id`、`purpose`（`battle_brief` / `practice` / `chat_answer` / `morning_brief` / `view_source`…）、`created_at`；保留 180 天（假设），由 09 的 `retention` 任务清理 | P0（019） |
+| `platform_orgs` | `id`、`slug`（`manteng`）、`display_name`；只有一行 | P0（026） |
+| `platform_org_roles` | `org_id`、`user_id`、`role`（`content_editor` / `content_reviewer` / `mentor` / `ops` / `org_admin` / `safety_reviewer`）、`granted_by`、`granted_at`、`revoked_at`。**决定**：员工账号与求职账号分开 | P0（026） |
+| `platform_content_licenses` | `org_id`、`asset_class`、`agreement_ref`（合同存私有文件）、`allowed_uses[]`（`retrieve` / `model_context` / `display_excerpt` / `display_full` / `aggregate`，没有「训练」）、`audience`（`all_users` / `cohort` / `entitled` / `staff_only`）、`valid_from`、`valid_until`、`revoked_at`、`revocation_reason` | P0（021） |
+| `platform_org_knowledge_sources` | `org_id`、`asset_class`、`title`、`body`（≤ 64 KiB）、`structured` jsonb、`language`、`role_families[]`、`company_key`、`season`、`tags[]`、`license_id` NOT NULL、`consent_id`、`deid_status`、`deid_version`、`review_status`、`editor_id`、`reviewer_id`（CHECK ≠ `editor_id`）、`reviewed_at`、`valid_until`、`revision`、`content_hash`、`publish_batch`（全局单调递增整数）、`retired_at`、`withdrawn_at`；revision 与墓碑语义同 014 | P0（021） |
+| `platform_org_knowledge_passages` | `source_id`、`revision`、`passage_id`、`passage_index`、`content`、`search_vector`；分段沿用 `splitKnowledgePassages` | P0（021） |
+| `platform_user_entitlements` | `user_id`、`org_id`、`audience_grants[]`、`granted_at`、`expires_at`、`revoked_at`；首批全部授予 `cohort`，会员同步见 06 | P0（021） |
+| `platform_knowledge_access_log` | `user_id`、`source_id`、`revision`、`passage_id`、`asset_class`、`speaker`、`conversation_id`、`message_id`、`purpose`（`battle_brief` / `practice` / `chat_answer` / `morning_brief` / `view_source`…）、`created_at`；保留 180 天（假设），由 09 的 `retention` 任务清理 | P0（021） |
 | `platform_data_consents` | `org_id`、`subject_kind`（`student` / `mentor` / `user`）、`subject_ref`（蔓藤侧编号的哈希或 `user_id`）、`scopes[]`（`interview_report` / `resume_pattern` / `outcome_aggregate` / `profile_display`）、`consent_text_revision`、`granted_at`、`withdrawn_at`、`evidence_ref`；不存姓名 | P1a（P1-4） |
 | `platform_content_feedback` | `user_id`、`source_id`、`revision`、`kind`（`hit` / `miss` / `wrong` / `outdated` / `disagree_score`）、`note`、`created_at`；个人数据（5.1）。「这像推销」记在 06 的 `platform_paid_suggestions` | P1a（P1-4） |
 | `platform_contribution_reach` | `source_id`、`reach_count`；不含用户 id（5.3） | P1b（P1-9） |
-| `platform_mentor_sessions` | 3.5；订单是 06 的 `platform_mentor_orders` | P0（024） |
+| `platform_mentor_sessions` | 3.5；订单是 06 的 `platform_mentor_orders` | P0（026） |
 | `platform_mentor_profiles` / `platform_referral_assessments` | 3.7 / 3.6 | P1b / 法务通过后 |
 
 各 asset_class 的 `structured` schema 以纯函数校验器放在 `packages/career-core/src/assets/`（新目录），`role_family` 常量也在 career-core。
@@ -436,8 +434,8 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 | `search_org_knowledge` | `assetClass`、`query?`、`filters{company?, roleFamily?, stage?, questionType?, topics?, season?}`、`limit ≤ 8`、`includeOlder?` | 段落、引用、覆盖档位 | 面、前、投（P0）；教、规（P1b） |
 | `read_org_knowledge_passage` | `sourceId`、`revision`、`passageId` | 单段；版本变化或撤回时返回安全错误 | 同上 |
 | `summarize_interview_coverage` | `company`、`roleFamily` | **确定性统计**：篇数、半年范围、各考点 n/m、档位 | 面（P1-4） |
-| `find_mentors` | `need`、`roleFamily`、`language` | 匹配服务返回的导师 id 和公开字段 | 主理人、前（P1b）；脉（P2） |
-| `search_partner_opportunities` | `roleFamily`、`location?` | 合作机会 | 投（P1b）；脉（P2） |
+| `find_mentors` | `need`、`roleFamily`、`language` | 匹配服务返回的导师 id 和公开字段；P1b 起可由蔓藤 MCP 只读提供（4.12） | 主理人、前（P1b）；脉（P2） |
+| `search_partner_opportunities` | `roleFamily`、`location?` | 合作机会；同上 | 投（P1b）；脉（P2） |
 
 现有 `search_knowledge` 保持只查私人库；方法卡和模式卡由上下文组装注入，不走检索。工具抽成对话轮次服务后按发言者挂载（03、09）。
 
@@ -472,13 +470,14 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
   - `mentor-request set-status <id> <status> [--mentor --at --url]`：P0 运营推进真人请求。
 - **P0 运营只读列表**：看真人请求、下架记录和安全上报；唯一的写操作是「安全上报」（转给 `safety_reviewer`）。
 - **P1b（P1-9）运营台**：网页编辑、审核、版本差异；改状态、看交接包（P1-10）、下架、纠错队列。
+- **P2（M2-2）**：蔓藤 MCP 只读导出工具也可作为来源（员工账号、逐次审批，03 §9.5），结果导入为 `in_review`，其余规则不变。
 
 守卫：`app.ts` 新增按 `platform_org_roles` 判断的 `staffOnly`，**叠加在 `secure` 之上**（同样要求 `x-companion-account`）；员工操作写 `platform_staff_audit`（09 第 8B 步）。
 
 ### 4.9 审计与安全
 
-- 组织内容是 `untrusted_knowledge`，永远不是指令；`app.ts` 现在只对 agent 模式生效的这条说明，并入平台策略层，对所有发言者生效。
-- 不提供导出接口。突发限流新增 scope `org-knowledge`：同时改 013 的 `platform_request_limits_scope_check`、`platform_request_limits_check` 和 `UserRequestLimitScope`，建议随 019 一次做完（09）；每日全文配额按访问日志计，不挂在限流表上。
+- 组织内容是 `untrusted_knowledge`（蔓藤 MCP 结果是同级的 `untrusted_mcp`），永远不是指令；`app.ts` 现在只对 agent 模式生效的这条说明，并入平台策略层，对所有发言者生效。
+- 不提供导出接口。突发限流新增 scope `org-knowledge`：同时改 013 的 `platform_request_limits_scope_check`、`platform_request_limits_check` 和 `UserRequestLimitScope`，建议随 021 一次做完（09）；每日全文配额按访问日志计，不挂在限流表上。
 - 员工操作（发布、撤回、看交接包、改状态）写审计。员工看不到用户的私人库、记忆和对话；P1-10 起导师只看到用户确认寄出的交接包。
 - 发给商业模型供应商：`allowed_uses` 必须含 `model_context`，写进隐私说明；学员来源段落发送前再做一次 PII 扫描。
 - 撤回沿用墓碑语义；缓存键含 `revision` 和 `publish_batch`。
@@ -517,6 +516,23 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 | `platform_mentor_orders`（06） | 只按 06 的财务保留期保留金额和 `payment_ref`，与账号断开 | 是 |
 
 删除确认页文案：「你留下的面经默认会一起撤回；也可以保留匿名版，让后来的人继续看到。寄给蔓藤导师（真人）的交接包会删除，但对方已经看过的内容没办法收回。」
+
+### 4.12 以 MCP 交付：选项与取舍
+
+MCP 接入（`docs/platform/mcp.md`）是专家读外部数据的唯一通道（03 §2.8）：审阅过的目录、连接授权、调用回执、私有结果、`untrusted_mcp` 标记。限制：目录全局一份，服务凭据共用，远端看不到是哪位用户；每次调用前重新发现工具，会话上限 15 秒；只读。
+
+| 资产 | 走法 | 理由 |
+|---|---|---|
+| 题库与 rubric、方法卡、对话模式卡、面经、写法样本、路径统计 | 导入组织库（4.3），查询不走 MCP；P2 起摄取可经 MCP（4.8） | 下列四点 |
+| 导师可约时段（`find_mentors`）、导师网络（M1-3）、课程目录（M1-4）、合作机会（M1-5） | P1b 起，蔓藤有在用的系统时以 MCP 只读交付（`org` 来源）；没有就导入 | 每天在变，导出很快过期；不含学生数据。预约与订单仍在我方表（3.5、06） |
+
+授权语料不走实时 MCP：
+1. **授权与 `license_id`**：我方按条目的 license、`allowed_uses`、audience 和 entitlement 过滤（4.4），撤回走墓碑；远端结果没有逐条 `license_id` 和 `revision`，D2 的 citation 校验和 `STALE_REVISION` 都做不了。
+2. **去标识化**：入库前蔓藤侧去标识化、我方扫描复核、编辑与审核分离；实时调用会绕过 `in_review`。
+3. **统计与配额**：覆盖档位要对全量面经确定性计数，`thin` 档防反推；每日全文配额和访问日志都在我方。远端给的统计只能标「该来源称」，不进档位。
+4. **回流与延迟**：命中反馈、纠错、贡献触达都挂在 `source_id` + `revision` 上；回流不经 MCP，仍按第 5 节。面试间同步出题要本地读取。
+
+走 MCP 的来源：目录条目登记 `orgId`、`licenseId`、`audience`，调用前在我方核 entitlement 和 `allowed_uses`（含 `retrieve`、`model_context`）；出站只发分配表列出的字段，不含学生个人信息；导师只返回本人同意公开的字段（3.7），不返回招聘联系人；结果存为私有结果（7 天，假设），不进组织库、不写 `sponsorship`（4.7），license 撤回后旧结果不可读。学生第一次用到时在小组里授权（03 §2.8）。
 
 ---
 
@@ -603,13 +619,13 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 |---|---|---|---|
 | M1-1 | 简历写法样本（模板 D），由蔓藤导师在蔓藤侧从已授权简历改写，按岗位家族分布 | 150–300 条 | 前、投的简历建议（P1-9） |
 | M1-2 | 历年学员结果聚合：2023–2026 各半年，按「学位 × 专业族 × 有无美国实习 × 目标岗位家族」分组，给人数、开始投递月份、首个面试用时的四分位数与中位数、offer 用时中位数；n < 5 合并 | 每半年 1 张 | 路径统计（P1-6、P1-9）、飞轮基线 |
-| M1-3 | 导师网络目录（3.7 字段）与每月答疑排期 | 30–100 位 | 左栏「真人与社区」 |
-| M1-4 | AI 课程目录：课程 → 单元 → 技能标签 → 时长 → 练习 → `included` / `paid` 与价格 | 以现有为准 | 教、三件事（P1-7） |
-| M1-5 | 小企业内推资源（3.9 字段），含审核记录、招聘联系人、是否向企业收费 | 10–30 家 | 机会卡（P1-9） |
+| M1-3 | 导师网络目录（3.7 字段）与每月答疑排期；有在用的系统时可改为 MCP 只读（6.3） | 30–100 位 | 左栏「真人与社区」 |
+| M1-4 | AI 课程目录：课程 → 单元 → 技能标签 → 时长 → 练习 → `included` / `paid` 与价格；同上 | 以现有为准 | 教、三件事（P1-7） |
+| M1-5 | 小企业内推资源（3.9 字段），含审核记录、招聘联系人、是否向企业收费；机会状态同上，联系人只交运营 | 10–30 家 | 机会卡（P1-9） |
 | M1-6 | 内推评估的法务意见；导师雇主内推政策声明 | — | 内推评估（D6，法务通过后） |
 | M1-7 | 方法卡第二批：`direction.two_track`、`project.sprint_2w`、`offer.compare` | 3 张 | 规、教 |
 
-**P2**：M2-1 已授权、在蔓藤侧去标识化的学员简历 100–200 份加导师打分（前的评审校准）；M2-2 内部系统只读接口（限定字段、ACL 映射、撤回同步）；M2-3 Discord 社区运营人力、答疑排期、同期伙伴人选池、`outreach.*` 方法卡；M2-4 EE、ME 方向的面经和导师（01 Persona C）；M2-5 授权允许检索的课程转写稿。
+**P2**：M2-1 已授权、在蔓藤侧去标识化的学员简历 100–200 份加导师打分（前的评审校准）；M2-2 内部系统只读接口，以 MCP 服务交付（6.3；限定字段、ACL 映射、撤回同步）；M2-3 Discord 社区运营人力、答疑排期、同期伙伴人选池、`outreach.*` 方法卡；M2-4 EE、ME 方向的面经和导师（01 Persona C）；M2-5 授权允许检索的课程转写稿。
 
 ### 6.2 交付模板（列名可直接做成表格）
 
@@ -649,6 +665,15 @@ escalate_when: [用户两次练习仍无法给出可量化结果, 涉及真实�
 
 `pattern_ref, role_family, experience_type, skill_tags, before_text, after_text, principle, numbers_generalized, consent_ref, editor, reviewer`
 
+### 6.3 以 MCP 交付时的要求（可选）
+
+适用于导师可约时段、M1-3、M1-4、M1-5（P1b）和 M2-2（P2）。M0-2 的授权和 `license_id` 照常，MCP 只改变交付方式（4.12）。
+
+- 公网 HTTPS 域名，不能是 IP、内网或本机；只读工具。
+- 每个工具的名称、完整输入与输出 schema、示例；schema 变更提前通知（一变旧连接即失效）。单次结果不超过 64 KiB，按单条或分页返回。
+- 服务凭据经我们指定的密钥通道交付，不经聊天和邮件；写明限流、可用时段、故障与停用联系人、内容保留和费用条款。
+- 不返回学生个人信息和招聘联系人；导师只返回本人同意公开的字段。
+
 ---
 
 ## 7. 分期汇总（以 07 为准）
@@ -665,7 +690,8 @@ escalate_when: [用户两次练习仍无法给出可量化结果, 涉及真实�
 | 规划师话术 | 对话模式卡、`considering_agency` 评测、披露（P0-11） | — | 规使用（P1-6）；半年复审 | — |
 | 小企业内推 | — | — | 机会卡、邮件转递（P1-9） | — |
 | AI 课程 | — | — | 目录与外链（P1-7） | 转写稿检索 |
-| 代码底座 | 019：授权、组织库表、entitlements、访问日志、`OrgKnowledge`、`career-knowledge.ts`、结构化筛选、导入脚本、配额；024：员工角色、`platform_mentor_sessions`、只读列表、`staffOnly` | `platform_data_consents`、`platform_content_feedback`、二元切分检索、`summarize_interview_coverage` | 运营台、`platform_mentor_profiles`、`platform_contribution_reach`；检索阶段 B（视评测） | 内部只读接口 |
+| MCP 来源（4.12） | — | — | 导师可约时段、导师网络、课程目录、合作机会（蔓藤提供时） | M2-2 同步进组织库 |
+| 代码底座 | 021：授权、组织库表、entitlements、访问日志、`OrgKnowledge`、`career-knowledge.ts`、结构化筛选、导入脚本、配额；026：员工角色、`platform_mentor_sessions`、只读列表、`staffOnly` | `platform_data_consents`、`platform_content_feedback`、二元切分检索、`summarize_interview_coverage` | 运营台、`platform_mentor_profiles`、`platform_contribution_reach`；检索阶段 B（视评测） | 内部只读接口 |
 
 ---
 
@@ -692,6 +718,7 @@ escalate_when: [用户两次练习仍无法给出可量化结果, 涉及真实�
 - [ ] 删除账号按 4.11 处理；导出含贡献、反馈、交接包、授权记录和真人服务记录。
 - [ ] 学生接口都要求 `x-companion-account`；员工接口无角色返回 `STAFF_ROLE_REQUIRED` 并写审计。
 - [ ] Discord 私信和导师可见内容中不出现面经全文、交接包内容、身份信息或第三方联系人姓名。
+- [ ] 蔓藤 MCP 来源调用前核 entitlement 与 `allowed_uses`；结果不进组织库、不写 `sponsorship`，license 撤回后不可读。
 
 ---
 
@@ -720,3 +747,4 @@ escalate_when: [用户两次练习仍无法给出可量化结果, 涉及真实�
 6. **规划师话术（问蔓藤）**：能否提供去标识化文本而非原始记录？是否接受「销售内容一律剔除，并在隐私说明里披露主理人参考了蔓藤规划师的咨询与陪伴经验」？
 7. **AI 课程（问蔓藤）**：是 AI/ML 技能课还是 AI 辅助的课程？哪些单元对首批是 `included`，哪些单独收费、价格多少？托管在哪？能否授权转写稿用于检索？
 8. **小企业内推资源（问蔓藤）**：现有多少家、什么行业？有无书面工作授权说明和招聘联系人？怎么审核？是否向企业或候选人收费（决定是否显示推荐费披露）？
+9. **MCP 交付（问蔓藤）**：导师排期、课程、合作机会有没有可开放的在线系统？能否按 6.3 以 MCP 交付、由谁托管、是否收费？默认按 6.1 的表格导入。
