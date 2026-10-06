@@ -8,7 +8,8 @@ import MediaPreview from './MediaPreview';
 import ExecutionTemplateDetails from './ExecutionTemplateDetails';
 import { taskExecutionTemplates } from './execution-template';
 import ArtifactAgentAction from './ArtifactAgentAction';
-import { privateFileUrl } from './api';
+import { usePlatformAccountClient } from './account-client';
+import { holdPrivateResource } from './private-media';
 import PrivateFileLink from './PrivateFileLink';
 import PrivateImage from './PrivateImage';
 import './agent-handoff.css';
@@ -33,6 +34,7 @@ export function ProviderSelect({ providers, value, onChange, capability, disable
   return <label className="provider-select"><span className={`connection-dot ${isProviderReady(options.find((p) => p.id === value), capability) ? 'online' : ''}`} /><select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}><option value="">选择模型服务</option>{value && !options.some((provider) => provider.id === value) && <option value={value}>{value} · 当前不可用</option>}{options.map((provider) => <option value={provider.id} key={provider.id}>{provider!.name || provider!.id}{isProviderReady(provider, capability) ? '' : provider.keyConfigured ? ' · 已停用' : ' · 待配置'}</option>)}</select></label>;
 }
 export function ArtifactView({ artifact, onUseImage, imageActionsDisabled = false, onBringToAgent, handoffDisabled = false }: { artifact: Artifact; onUseImage?: (artifact: Artifact, kind: CreativeKind) => void; imageActionsDisabled?: boolean; onBringToAgent?: (artifact: Artifact) => void; handoffDisabled?: boolean }) {
+  const client = usePlatformAccountClient();
   const type = artifact.mime || '';
   const reusableImage = ['image/png', 'image/jpeg', 'image/webp'].includes(type);
   const browserObservation = artifact.name === 'browser-observation.json' && type === 'application/json';
@@ -40,23 +42,22 @@ export function ArtifactView({ artifact, onUseImage, imageActionsDisabled = fals
   const video = type.startsWith('video') || /\.(mp4|webm|mov)(\?|$)/i.test(artifact.url);
   const audio = type.startsWith('audio') || /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(artifact.url);
   const isText = !browserObservation && (type.startsWith('text/') || type === 'application/json');
-  const [text, setText] = useState<string | null>(null);
-  const [textError, setTextError] = useState(false);
-  const fileUrl = privateFileUrl(artifact.url);
+  const fileUrl = client?.privateFileUrl(artifact.url);
+  const [preview, setPreview] = useState<{ client: typeof client; url: string | undefined; text: string | null; failed: boolean } | null>(null);
   useEffect(() => {
-    if (!isText) return;
-    setText(null); setTextError(!fileUrl);
-    if (!fileUrl) return;
+    setPreview(null);
+    if (!isText || !fileUrl || !client?.isCurrent()) return;
     const controller = new AbortController();
-    fetch(fileUrl, { credentials: 'include', redirect: 'error', signal: controller.signal }).then(async (response) => {
-      if (!response.ok) throw new Error('Artifact unavailable');
-      const content = await response.text();
-      if (!controller.signal.aborted) setText(content.slice(0, 100_000));
-    }).catch(() => { if (!controller.signal.aborted) setTextError(true); });
-    return () => controller.abort();
-  }, [fileUrl, isText]);
+    const stop = holdPrivateResource(client, () => { controller.abort(); if (!client.isCurrent()) setPreview(null); });
+    client.readPrivateFileText(artifact.url, controller.signal).then((content) => {
+      if (!controller.signal.aborted && client.isCurrent()) setPreview({ client, url: fileUrl, text: content.slice(0, 100_000), failed: false });
+    }).catch(() => { if (!controller.signal.aborted && client.isCurrent()) setPreview({ client, url: fileUrl, text: null, failed: true }); });
+    return stop;
+  }, [client, fileUrl, artifact.url, isText]);
+  const currentPreview = preview?.client === client && preview?.url === fileUrl ? preview : null;
+  if (!client?.isCurrent()) return <div className="artifact" role="status">登录状态已变化，产物预览已关闭。</div>;
   if (browserObservation) return <div className="artifact"><div className="file-result"><ArrowUpRight size={22} /><span>可供 Agent 读取的网页线索</span></div><PrivateFileLink className="artifact-download" url={artifact.url} download name={artifact.name}><Download size={14} />下载网页线索</PrivateFileLink></div>;
-  return <div className={`artifact ${image ? 'image-artifact' : ''}`}>{image ? <PrivateImage url={artifact.url} alt={artifact.name || '生成的图片'} /> : video || audio ? <MediaPreview key={`${artifact.id || ''}:${artifact.url}`} url={artifact.url} name={artifact.name} kind={video ? 'video' : 'audio'} /> : isText ? <pre className="text-artifact">{text ?? (textError ? '暂时无法读取预览，可以打开产物重试。' : '正在读取产物…')}</pre> : <div className="file-result"><ArrowUpRight size={22} /><span>{artifact.name || '任务产物'}</span></div>}<PrivateFileLink className="artifact-download" url={artifact.url} download name={artifact.name}><Download size={14} />{artifact.name || '打开产物'}</PrivateFileLink><ArtifactAgentAction artifact={artifact} onBring={onBringToAgent} disabled={handoffDisabled} />{reusableImage && onUseImage && <div className="creative-artifact-actions"><button className="text-button" type="button" disabled={imageActionsDisabled} onClick={() => onUseImage(artifact, 'image')}>继续修改图片<ArrowUpRight size={13} /></button><button className="text-button" type="button" disabled={imageActionsDisabled} onClick={() => onUseImage(artifact, 'video')}>以此生成视频<ArrowUpRight size={13} /></button></div>}</div>;
+  return <div className={`artifact ${image ? 'image-artifact' : ''}`}>{image ? <PrivateImage url={artifact.url} alt={artifact.name || '生成的图片'} /> : video || audio ? <MediaPreview key={`${artifact.id || ''}:${artifact.url}`} url={artifact.url} name={artifact.name} kind={video ? 'video' : 'audio'} /> : isText ? <pre className="text-artifact">{currentPreview?.text ?? (!fileUrl || currentPreview?.failed ? '暂时无法读取预览，可以打开产物重试。' : '正在读取产物…')}</pre> : <div className="file-result"><ArrowUpRight size={22} /><span>{artifact.name || '任务产物'}</span></div>}<PrivateFileLink className="artifact-download" url={artifact.url} download name={artifact.name}><Download size={14} />{artifact.name || '打开产物'}</PrivateFileLink><ArtifactAgentAction artifact={artifact} onBring={onBringToAgent} disabled={handoffDisabled} />{reusableImage && onUseImage && <div className="creative-artifact-actions"><button className="text-button" type="button" disabled={imageActionsDisabled} onClick={() => onUseImage(artifact, 'image')}>继续修改图片<ArrowUpRight size={13} /></button><button className="text-button" type="button" disabled={imageActionsDisabled} onClick={() => onUseImage(artifact, 'video')}>以此生成视频<ArrowUpRight size={13} /></button></div>}</div>;
 }
 export function isJobActive(job: Job) { return ['queued', 'pending', 'running', 'awaiting_approval', 'needs_approval', 'waiting', 'processing'].includes(job.status); }
 export function statusLabel(status: string) { return ({ queued: '排队中', pending: '等待中', running: '执行中', processing: '处理中', succeeded: '已完成', completed: '已完成', failed: '失败', cancelled: '已取消', awaiting_approval: '等待批准', needs_approval: '等待批准', uncertain: '状态待确认', waiting: '等待中' } as Record<string, string>)[status] || status; }

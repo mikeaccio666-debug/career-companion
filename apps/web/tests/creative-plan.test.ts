@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ProviderStatus } from '@companion/platform-contracts';
+import { createPlatformClient } from '../src/api.ts';
+import { AccountRequestContext } from '../src/account-context.ts';
+import { createPlatformEndpoints } from '../src/platform-endpoints.ts';
 import { referenceCreativeArtifact } from '../src/creative-api.ts';
 import { CREATIVE_IMAGE_BYTES, creativeAspectRatios, creativePlanJob, creativeReadiness, creativeReferencePolicy, freshCreativeDraft, moveCreativeReference, serializeCreativeDraft, validateCreativeFiles, validateCreativeReferences, type CreativeReference } from '../src/creative-plan.ts';
 import { CreativeOperationScope } from '../src/creative-session.ts';
@@ -147,14 +150,16 @@ test('owned artifact resolution uses the real API alias and rejects mismatched s
   const selected = reference();
   let source = { artifactId: 'fictional-artifact', jobId: 'fictional-job' };
   globalThis.fetch = (async (url, init) => { calls.push({ url: String(url), init }); return new Response(JSON.stringify({ attachment: selected.attachment, source }), { status: 200 }); }) as typeof fetch;
+  const context = new AccountRequestContext(); context.changeSession('11111111-1111-4111-8111-111111111111');
+  const api = createPlatformClient(createPlatformEndpoints(), undefined, context).capture();
   try {
-    const result = await referenceCreativeArtifact('fictional-artifact', 'fictional-job');
+    const result = await referenceCreativeArtifact('fictional-artifact', 'fictional-job', undefined, api.request);
     assert.equal(result.attachment.id, 'fictional-upload');
     assert.deepEqual(result.source, { kind: 'artifact', artifactId: 'fictional-artifact', jobId: 'fictional-job' });
     assert.equal(calls[0].url, '/api/platform/artifacts/fictional-artifact/reference-attachment');
     assert.equal(calls[0].init?.body, undefined); assert.equal(calls[0].init?.credentials, 'include');
     source = { ...source, jobId: 'wrong-fictional-job' };
-    await assert.rejects(() => referenceCreativeArtifact('fictional-artifact', 'fictional-job'), /完整参考记录/);
+    await assert.rejects(() => referenceCreativeArtifact('fictional-artifact', 'fictional-job', undefined, api.request), /完整参考记录/);
   } finally { globalThis.fetch = original; }
 });
 
@@ -171,4 +176,13 @@ test('late upload or alias results cannot update a different account or release 
   const departed = scope.begin()!; scope.dispose();
   assert.equal(scope.isCurrent(departed), false); assert.equal(scope.begin(), undefined);
   scope.mount('fictional-account-b'); assert.equal(scope.isCurrent(departed), false);
+});
+
+
+test('a retained creative reference callback never adopts the next account', async () => {
+  const context = new AccountRequestContext(); context.changeSession('11111111-1111-4111-8111-111111111111'); let requests = 0;
+  const client = createPlatformClient(createPlatformEndpoints(), async () => { ++requests; return Response.json({}); }, context).capture();
+  context.changeSession('22222222-2222-4222-8222-222222222222');
+  await assert.rejects(referenceCreativeArtifact('fictional-artifact', 'fictional-job', undefined, client.request), { name: 'AbortError' });
+  assert.equal(requests, 0);
 });

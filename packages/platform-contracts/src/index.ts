@@ -1,3 +1,4 @@
+export { PLATFORM_ACCOUNT_HEADER, PLATFORM_ACCOUNT_QUERY, platformAccountId } from './account-context.ts';
 export const CHAT_MODES = ['chat', 'companion', 'agent'] as const;
 export type ChatMode = typeof CHAT_MODES[number];
 export const JOB_KINDS = ['image', 'video', 'speech', 'browser', 'cli', 'workflow'] as const;

@@ -23,13 +23,14 @@ export function PwaShell({ children }: { children: ReactNode }) {
   return <div className="pwa-shell"><PwaStatus /><div className="pwa-page-content">{children}</div></div>;
 }
 
-export function PublicConnectionView({ online, connecting, onRetry }: { online: boolean; connecting: boolean; onRetry(): void }) {
+export function PublicConnectionView({ online, connecting, notice, onRetry }: { online: boolean; connecting: boolean; notice?: string; onRetry(): void }) {
   const copy = publicConnectionCopy(online, connecting);
   return <main className="public-connection">
     <Brand />
     <section aria-labelledby="public-connection-title" aria-busy={connecting}>
       <div className="public-connection-icon" aria-hidden="true">{online && connecting ? <Loader2 size={25} className="spin" /> : <CloudOff size={25} />}</div>
       <h1 id="public-connection-title">{copy.title}</h1>
+      {notice && <p role="status">{notice}</p>}
       <p role={connecting ? 'status' : 'alert'}>{copy.text}</p>
       <button className="primary" type="button" disabled={connecting} onClick={onRetry}><RefreshCw size={16} aria-hidden="true" />{connecting ? '正在连接…' : '重试连接'}</button>
       <small>不会自动发送消息、重试任务或提交申请。</small>

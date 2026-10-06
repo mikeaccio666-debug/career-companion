@@ -3,12 +3,16 @@ import { createServer } from 'node:http';
 import test from 'node:test';
 import { createPlatformClient, type StreamEvent } from '../src/api.ts';
 import { createPlatformEndpoints } from '../src/platform-endpoints.ts';
+import { AccountRequestContext } from '../src/account-context.ts';
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { transcribeAudio } from '../src/voice-transcription.ts';
 import { selectedConversationProvider, VoiceConversationSession, voiceAnswerSpeechProblem, voiceConversationFor, voiceConversationModels, voiceConversationProviderReady, type VoiceConversationTransport } from '../src/voice-conversation.ts';
 import { voicePersona } from '../src/voice-personality.ts';
 import type { Conversation, Provider } from '../src/types.ts';
 
 const id = '52f32796-d5c5-4319-9e89-8e9f1132626a', messageId = '816b2f3b-8409-4fda-a218-04f62bdf5d63', audioId = '717b61b4-6127-4b1e-819e-d5af42d9658d';
+const accountId = '799c7d39-2d4d-4c43-8004-71872d3a021a';
+function accountContext() { const context = new AccountRequestContext(); context.changeSession(accountId); return context; }
 const conversation: Conversation = { id, title: 'Fictional speech practice', mode: 'chat', createdAt: '2026-10-06T00:00:00Z', updatedAt: '2026-10-06T00:00:00Z' };
 const chat: Provider = { id: 'ollama', name: 'Fictional local chat', enabled: true, keyConfigured: true, capabilities: ['chat', 'agent'], models: ['fixture-chat', 'wrong-image'], modelsByCapability: { chat: ['fixture-chat'], image: ['wrong-image'] }, envVariables: [] };
 const speech: Provider = { id: 'kokoro', name: 'Fictional English speech', enabled: true, keyConfigured: true, capabilities: ['speech'], models: ['kokoro-82m'], speechLanguages: ['en-US'], envVariables: [] };
@@ -38,6 +42,7 @@ test('capability choices select available services independently and preserve an
 test('actual loopback transport connects explicit transcription, reviewed normal message, saved UTF-8 reply and separate speech request', async () => {
   const requests: Array<{ path: string; body: unknown }> = [];
   const server = createServer(async (request, response) => {
+    assert.equal(request.headers[PLATFORM_ACCOUNT_HEADER], accountId);
     let bytes = ''; for await (const chunk of request) bytes += chunk.toString();
     requests.push({ path: request.url!, body: request.url?.endsWith('/transcribe') ? bytes : JSON.parse(bytes) });
     if (request.url === '/api/platform/voice/transcribe') {
@@ -58,7 +63,7 @@ test('actual loopback transport connects explicit transcription, reviewed normal
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const address = server.address(); assert.ok(address && typeof address !== 'string');
-    const client = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`));
+    const client = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`), undefined, accountContext());
     const draft = await transcribeAudio(new Blob(['Fictional audio bytes.'], { type: 'audio/wav' }), transcription.id, new AbortController().signal, client.request);
     assert.equal(requests.length, 1); // Transcription itself did not send a model message.
     const turn = session(); let refreshed = '';
@@ -124,6 +129,7 @@ test('unexpected tool or approval events stop the chat-only turn rather than gra
 test('actual HTTP cancellation closes the response socket and does not publish late deltas or repeat a message', async () => {
   const started = deferred<void>(), closed = deferred<void>(); let calls = 0;
   const server = createServer(async (request, response) => {
+    assert.equal(request.headers[PLATFORM_ACCOUNT_HEADER], accountId);
     calls++; for await (const _ of request) { /* Consume the fictional JSON. */ }
     response.once('close', () => closed.resolve());
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -133,7 +139,7 @@ test('actual HTTP cancellation closes the response socket and does not publish l
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const address = server.address(); assert.ok(address && typeof address !== 'string');
-    const client = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`)), turn = session();
+    const client = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`), undefined, accountContext()), turn = session();
     const pending = turn.answer(input(), client); await started.promise;
     // Wait until the real streaming reader has published the first text.
     if (!turn.getSnapshot().answer) await new Promise<void>((resolve) => { const unsubscribe = turn.subscribe(() => { if (turn.getSnapshot().answer) { unsubscribe(); resolve(); } }); });

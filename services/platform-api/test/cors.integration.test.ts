@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -60,7 +61,7 @@ function exchange(route: string, actor?: Actor, options: {
   return new Promise((resolve, reject) => {
     const body = options.body;
     const request = http.request({ host: '127.0.0.1', port, path: (options.outsidePrefix ? '' : prefix) + route, method: options.method ?? 'GET', agent: false,
-      headers: { ...(actor ? { cookie: actor.cookie } : {}), ...(body !== undefined ? { 'content-length': Buffer.byteLength(body) } : {}), ...options.headers } }, response => {
+      headers: { ...(actor ? { cookie: actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id } : {}), ...(body !== undefined ? { 'content-length': Buffer.byteLength(body) } : {}), ...options.headers } }, response => {
       const chunks: Buffer[] = [];
       response.on('data', (chunk: Buffer) => { chunks.push(chunk); options.onData?.(Buffer.concat(chunks), response.headers); });
       response.on('error', reject);
@@ -129,12 +130,12 @@ after(async () => {
 
 test('credentialed exact-origin preflight permits only the reviewed API methods and headers without executing business work', async () => {
   const saved = await state(), calls = modelCalls, puts = storage.putCalls, stats = storage.statCalls, opens = storage.openCalls;
-  const headers = 'cOnTeNt-TyPe, Accept, RANGE, if-match, If-Range';
+  const headers = `cOnTeNt-TyPe, Accept, RANGE, if-match, If-Range, ${PLATFORM_ACCOUNT_HEADER.toUpperCase()}`;
   for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']) {
     const response = await exchange(`/artifacts/${artifactId}`, undefined, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': method, 'access-control-request-headers': headers } });
     assert.equal(response.status, 204, response.bytes.toString()); assert.equal(response.bytes.length, 0); cors(response.headers);
     assert(tokens(response.headers['access-control-allow-methods']).includes(method.toLowerCase()));
-    assert.deepEqual(new Set(tokens(response.headers['access-control-allow-headers'])), new Set(['content-type', 'accept', 'range', 'if-match', 'if-range']));
+    assert.deepEqual(new Set(tokens(response.headers['access-control-allow-headers'])), new Set(['content-type', 'accept', 'range', 'if-match', 'if-range', PLATFORM_ACCOUNT_HEADER]));
     assert.equal(response.headers['set-cookie'], undefined);
   }
   const registration = await exchange('/auth/register', undefined, { method: 'OPTIONS', headers: { origin: secondOrigin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' } });
@@ -253,7 +254,7 @@ test('SSE errors retain raw CORS headers and client disconnect still cancels the
   await new Promise<void>((resolve, reject) => {
     const body = JSON.stringify({ content: 'fixture-cancel', provider: 'cors-fixture', mode: 'chat' });
     const request = http.request({ host: '127.0.0.1', port, path: `${prefix}/conversations/${id}/messages`, method: 'POST', agent: false,
-      headers: { origin, cookie: alice.cookie, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, response => {
+      headers: { origin, cookie: alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.id, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, response => {
       cors(response.headers); let text = '';
       response.on('data', chunk => { text += chunk.toString(); if (text.includes('event: delta')) { request.destroy(); response.destroy(); resolve(); } }); response.on('error', () => {});
     });

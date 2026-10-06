@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -36,7 +37,7 @@ const runtime:PlatformProviderRuntime={capabilities:()=>[],streamChat:async func
 const lifecycle:{request:IncomingMessage;response:http.ServerResponse}[]=[];
 function exchange(route:string,actor?:Actor,options:{method?:string;headers?:Record<string,string>;body?:Buffer|string;slow?:boolean}={}):Promise<{status:number;headers:http.IncomingHttpHeaders;bytes:Buffer}>{
   return new Promise((resolve,reject)=>{
-    const body=options.body;const req=http.request({host:'127.0.0.1',port,path:prefix+route,method:options.method??'GET',agent:false,headers:{...(actor?{cookie:actor.cookie}:{}),...(body?{'content-length':Buffer.byteLength(body)}:{}),...options.headers}},res=>{
+    const body=options.body;const req=http.request({host:'127.0.0.1',port,path:prefix+route,method:options.method??'GET',agent:false,headers:{...(actor?{cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id}:{}),...(body?{'content-length':Buffer.byteLength(body)}:{}),...options.headers}},res=>{
       const chunks:Buffer[]=[];res.on('data',(chunk:Buffer)=>{chunks.push(chunk);if(options.slow){res.pause();setTimeout(()=>res.resume(),2);}});res.on('error',reject);res.on('end',()=>resolve({status:res.statusCode!,headers:res.headers,bytes:Buffer.concat(chunks)}));
     });req.on('error',reject);req.setTimeout(10_000,()=>req.destroy(new Error('Private HTTP fixture timed out.')));if(body)req.write(body);req.end();
   });
@@ -123,7 +124,7 @@ test('a slow real HTTP reader receives streamed bytes with backpressure and all 
 test('repeated client disconnects abort and destroy real local streams without retained listeners or buffered get',async()=>{
   for(let index=0;index<3;index++){
     const opened=storage.opened.length;
-    await new Promise<void>((resolve,reject)=>{const req=http.get({host:'127.0.0.1',port,path:prefix+`/artifacts/${large.artifactId}`,agent:false,headers:{cookie:alice.cookie}},res=>{res.once('data',()=>{res.pause();req.destroy();res.destroy();resolve();});res.on('error',()=>{});});req.on('error',reject);req.setTimeout(5000,()=>req.destroy(new Error('Disconnect fixture timed out.')));});
+    await new Promise<void>((resolve,reject)=>{const req=http.get({host:'127.0.0.1',port,path:prefix+`/artifacts/${large.artifactId}`,agent:false,headers:{cookie:alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.id}},res=>{res.once('data',()=>{res.pause();req.destroy();res.destroy();resolve();});res.on('error',()=>{});});req.on('error',reject);req.setTimeout(5000,()=>req.destroy(new Error('Disconnect fixture timed out.')));});
     await until(()=>storage.opened.length>opened&&storage.opened.slice(opened).every(item=>item.closed));for(const item of storage.opened.slice(opened)){assert.equal(item.signal?.aborted,true);assert.equal(item.stream.destroyed,true);assert.equal(getEventListeners(item.signal!,'abort').length,0);}
   }assert.equal(storage.getCalls,0);
   for(const item of lifecycle){assert(!item.request.listeners('aborted').some(listener=>listener.name==='interrupted'));assert(!item.response.listeners('close').some(listener=>listener.name==='closed'));assert(!item.response.listeners('finish').some(listener=>listener.name==='cleanup'));}
@@ -132,7 +133,7 @@ test('repeated client disconnects abort and destroy real local streams without r
 test('disconnect during metadata lookup cancels before opening any storage stream',async()=>{
   let began!:()=>void,signal:AbortSignal|undefined;const started=new Promise<void>(resolve=>{began=resolve;});const opens=storage.openCalls;
   storage.beforeStat=async(_key,value)=>{signal=value;began();await new Promise<void>(resolve=>value!.addEventListener('abort',()=>resolve(),{once:true}));throw new ApiError(499,'STORAGE_ABORTED','Fictional cancelled metadata read');};
-  let req:ClientRequest;try{req=http.get({host:'127.0.0.1',port,path:prefix+`/uploads/${video.uploadId}`,agent:false,headers:{cookie:alice.cookie}});req.on('error',()=>{});await started;req.destroy();await until(()=>signal?.aborted===true);assert.equal(storage.openCalls,opens);}finally{storage.beforeStat=undefined;}
+  let req:ClientRequest;try{req=http.get({host:'127.0.0.1',port,path:prefix+`/uploads/${video.uploadId}`,agent:false,headers:{cookie:alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.id}});req.on('error',()=>{});await started;req.destroy();await until(()=>signal?.aborted===true);assert.equal(storage.openCalls,opens);}finally{storage.beforeStat=undefined;}
 });
 
 test('a storage error or short EOF after first bytes aborts the HTTP response instead of reporting a complete partial file',async()=>{
@@ -141,7 +142,7 @@ test('a storage error or short EOF after first bytes aborts the HTTP response in
     storage.beforeOpen=async()=>({length:8,stream:Readable.from((async function*(){yield Buffer.from([41,42]);await new Promise(resolve=>setTimeout(resolve,10));if(mode==='error')throw new Error('private provider-secret-path');})())});
     try{
       const response=await new Promise<{status:number;complete:boolean;bytes:Buffer}>((resolve,reject)=>{
-        const req=http.get({host:'127.0.0.1',port,path:prefix+`/uploads/${video.uploadId}`,agent:false,headers:{cookie:alice.cookie,range:'bytes=0-7'}},res=>{
+        const req=http.get({host:'127.0.0.1',port,path:prefix+`/uploads/${video.uploadId}`,agent:false,headers:{cookie:alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.id,range:'bytes=0-7'}},res=>{
           const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(chunk));res.on('error',()=>{});res.once('close',()=>resolve({status:res.statusCode!,complete:res.complete,bytes:Buffer.concat(chunks)}));
         });req.on('error',reject);req.setTimeout(5000,()=>req.destroy(new Error('Short HTTP fixture timed out.')));
       });

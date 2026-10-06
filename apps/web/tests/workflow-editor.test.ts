@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ProviderStatus, WorkflowTemplate } from '@companion/platform-contracts';
 import { canChangeWorkflowKind, draftFromTemplate, insertWorkflowPlaceholder, moveWorkflowStep, newWorkflowStep, nextWorkflowImageReference, removeWorkflowStep, serializeWorkflowDraft, workflowJob, workflowReadiness, type WorkflowDraft } from '../src/workflow-editor.ts';
+import { createPlatformClient } from '../src/api.ts';
+import { AccountRequestContext } from '../src/account-context.ts';
+import { createPlatformEndpoints } from '../src/platform-endpoints.ts';
 import { listWorkflowTemplates, saveWorkflowTemplate } from '../src/workflow-api.ts';
 
 const providers: ProviderStatus[] = [
@@ -113,10 +116,12 @@ test('template requests use private session routes and preserve optimistic updat
   const calls: { url: string; init?: RequestInit }[] = [];
   const template: WorkflowTemplate = { ...serializeWorkflowDraft(draft()), id: 'fixture-id', revision: 4, createdAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z' };
   globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init }); return Response.json(init?.method ? { template } : { templates: [template] }); };
+  const context = new AccountRequestContext(); context.changeSession('11111111-1111-4111-8111-111111111111');
+  const transport = createPlatformClient(createPlatformEndpoints(), undefined, context).capture();
   try {
-    assert.equal((await listWorkflowTemplates())[0].id, template.id);
-    await saveWorkflowTemplate(serializeWorkflowDraft(draft()), { id: template.id, revision: 3 });
-    await saveWorkflowTemplate(serializeWorkflowDraft(draft()));
+    assert.equal((await listWorkflowTemplates(transport))[0].id, template.id);
+    await saveWorkflowTemplate(serializeWorkflowDraft(draft()), { id: template.id, revision: 3 }, transport);
+    await saveWorkflowTemplate(serializeWorkflowDraft(draft()), undefined, transport);
     assert.equal(calls[0].url, '/api/platform/workflow-templates');
     assert.equal(calls[0].init?.credentials, 'include');
     assert.equal(calls[1].init?.method, 'PUT');
@@ -125,4 +130,14 @@ test('template requests use private session routes and preserve optimistic updat
     assert.equal('revision' in JSON.parse(String(calls[2].init?.body)), false);
     assert.ok(calls.every((call) => !call.url.includes('openai')));
   } finally { globalThis.fetch = originalFetch; }
+});
+
+
+test('a retained workflow callback cannot list or save under a later account', async () => {
+  const context = new AccountRequestContext(); context.changeSession('11111111-1111-4111-8111-111111111111'); let requests = 0;
+  const transport = createPlatformClient(createPlatformEndpoints(), async () => { ++requests; return Response.json({}); }, context).capture();
+  context.changeSession('22222222-2222-4222-8222-222222222222');
+  await assert.rejects(listWorkflowTemplates(transport), { name: 'AbortError' });
+  await assert.rejects(saveWorkflowTemplate(serializeWorkflowDraft(draft()), undefined, transport), { name: 'AbortError' });
+  assert.equal(requests, 0);
 });

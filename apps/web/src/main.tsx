@@ -3,7 +3,9 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import { PwaShell } from './PwaStatus';
 import { pwaRuntime } from './pwa-runtime';
+import { startSessionNotifications } from './session-events';
 import './styles.css';
+const stopSessionNotifications = startSessionNotifications();
 pwaRuntime.start({
   production: import.meta.env.PROD,
   supported: 'serviceWorker' in navigator,
@@ -17,4 +19,4 @@ pwaRuntime.start({
   clearTimer: (timer) => window.clearTimeout(timer as number),
 });
 createRoot(document.getElementById('root')!).render(<React.StrictMode><PwaShell><App /></PwaShell></React.StrictMode>);
-if (import.meta.hot) import.meta.hot.dispose(() => pwaRuntime.dispose());
+if (import.meta.hot) import.meta.hot.dispose(() => { pwaRuntime.dispose(); stopSessionNotifications(); });

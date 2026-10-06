@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -59,7 +60,7 @@ const runtime = createProviderRuntime({ env: { PLATFORM_ALLOW_PROVIDER_CALLS: '1
 function exchange(route: string, actor?: Actor, options: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const body = options.body === undefined ? undefined : JSON.stringify(options.body);
-    const request = http.request({ host: '127.0.0.1', port, path: prefix + route, agent: false, method: options.method ?? 'GET', headers: { ...(actor ? { cookie: actor.cookie } : {}), ...(body ? { origin, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}), ...options.headers } }, response => {
+    const request = http.request({ host: '127.0.0.1', port, path: prefix + route, agent: false, method: options.method ?? 'GET', headers: { ...(actor ? { cookie: actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id } : {}), ...(body ? { origin, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}), ...options.headers } }, response => {
       const chunks: Buffer[] = []; response.on('data', chunk => chunks.push(chunk)); response.on('error', reject); response.on('end', () => resolve({ status: response.statusCode!, headers: response.headers, body: Buffer.concat(chunks).toString('utf8') }));
     }); request.on('error', reject); request.setTimeout(10000, () => request.destroy(new Error('Fictional HTTP fixture timed out.'))); if (body) request.write(body); request.end();
   });
@@ -198,7 +199,7 @@ test('real HTTP disconnect aborts a slow text read, destroys its stream and reje
     return { stream, length: source.bytes.length };
   };
   try {
-    const count = storage.opened.length, request = http.get({ host: '127.0.0.1', port, path: prefix + `/artifacts/${source.artifactId}/text`, agent: false, headers: { cookie: alice.cookie } }); request.on('error', () => {});
+    const count = storage.opened.length, request = http.get({ host: '127.0.0.1', port, path: prefix + `/artifacts/${source.artifactId}/text`, agent: false, headers: { cookie: alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.id } }); request.on('error', () => {});
     await until(() => storage.opened.length > count); const active = storage.opened.at(-1)!; request.destroy();
     await until(() => destroyed && active.closed && !!active.signal?.aborted); assert.equal(storage.getCalls, 0);
   } finally { storage.beforeOpen = undefined; }
@@ -224,7 +225,7 @@ test('actual HTTP cancellation closes the real local file descriptor before the 
   };
   let request: http.ClientRequest | undefined;
   try {
-    request = http.get({ host: '127.0.0.1', port, path: prefix + `/artifacts/${source.artifactId}/text`, agent: false, headers: { cookie: alice.cookie } }); request.on('error', () => {});
+    request = http.get({ host: '127.0.0.1', port, path: prefix + `/artifacts/${source.artifactId}/text`, agent: false, headers: { cookie: alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.id } }); request.on('error', () => {});
     await until(() => !!native && fd >= 0); fs.open = originalOpen; assert.equal(fstatSync(fd).isFile(), true);
     request.destroy(); await until(() => !!signal?.aborted && !!native?.stream.closed && sourceClosed);
     assert.throws(() => fstatSync(fd), (error: any) => error.code === 'EBADF'); release();

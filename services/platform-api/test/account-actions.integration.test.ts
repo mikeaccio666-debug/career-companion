@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, afterEach, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -70,7 +71,7 @@ function exchange(instance:number,route:string,actor?:Actor,options:{method?:str
   return new Promise((resolve,reject)=>{
     const body=options.body===undefined?undefined:JSON.stringify(options.body);
     const request=http.request({host:'127.0.0.1',port:ports[instance],path:prefix+route,method:options.method??'GET',agent:false,
-      headers:{...(!options.omitOrigin?{origin:options.origin??origin}:{}),...(actor?{cookie:actor.cookie}:{}),...(body!==undefined?{'content-type':'application/json','content-length':Buffer.byteLength(body)}:{}),...options.headers}},response=>{
+      headers:{...(!options.omitOrigin?{origin:options.origin??origin}:{}),...(actor?{cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id}:{}),...(body!==undefined?{'content-type':'application/json','content-length':Buffer.byteLength(body)}:{}),...options.headers}},response=>{
       const chunks:Buffer[]=[];response.on('data',(chunk:Buffer)=>chunks.push(chunk));response.on('error',reject);
       response.on('end',()=>resolve({status:response.statusCode!,headers:response.headers,bytes:Buffer.concat(chunks)}));
     });request.on('error',reject);request.setTimeout(10_000,()=>request.destroy(new Error('Account HTTP fixture timed out.')));

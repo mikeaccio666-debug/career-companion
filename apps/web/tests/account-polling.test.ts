@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ApiError, createPlatformClient, retryAfterMilliseconds } from '../src/api.ts';
 import { createPlatformEndpoints } from '../src/platform-endpoints.ts';
+import { AccountRequestContext } from '../src/account-context.ts';
 import { AccountOperationScope, refreshAccountData } from '../src/account-operations.ts';
 import { ACCOUNT_POLL_INTERVAL_MS, ACCOUNT_POLL_MAX_BACKOFF_MS, ACCOUNT_POLL_MAX_TIMER_DELAY_MS, AccountPollingController } from '../src/account-polling.ts';
 
@@ -137,7 +138,8 @@ test('Retry-After seconds and HTTP dates are parsed without coercing malformed h
   assert.equal(retryAfterMilliseconds('Tuesday, 06-Oct-26 00:02:30 GMT', now), 150_000);
   assert.equal(retryAfterMilliseconds('Tue Oct  6 00:02:30 2026', now), 150_000);
   for (const value of [null, '', '-1', '1.5', '1e3', 'Infinity', 'tomorrow', '2026-10-06', '999999999999999999999']) assert.equal(retryAfterMilliseconds(value, now), undefined);
-  const client = createPlatformClient(createPlatformEndpoints(), async () => Response.json({ error: { code: 'INVALID_REQUEST', message: 'Fictional throttled.' } }, { status: 429, headers: { 'Retry-After': '90' } }));
+  const context = new AccountRequestContext(); context.changeSession('20000000-0000-4000-8000-000000000002');
+  const client = createPlatformClient(createPlatformEndpoints(), async () => Response.json({ error: { code: 'INVALID_REQUEST', message: 'Fictional throttled.' } }, { status: 429, headers: { 'Retry-After': '90' } }), context);
   await assert.rejects(client.request('/jobs'), (error) => error instanceof ApiError && error.status === 429 && error.code === 'INVALID_REQUEST' && error.retryAfterMs === 90_000);
 });
 

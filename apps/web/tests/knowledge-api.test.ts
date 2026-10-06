@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createServer } from 'node:http';
 import { createPlatformClient } from '../src/api.ts';
 import { createPlatformEndpoints } from '../src/platform-endpoints.ts';
+import { AccountRequestContext } from '../src/account-context.ts';
 import { createKnowledgeClient } from '../src/knowledge-api.ts';
 import type { KnowledgeSource } from '@companion/platform-contracts';
 
@@ -18,7 +19,8 @@ test('actual loopback HTTP uses private CRUD/search routes, optimistic revisions
     response.end(JSON.stringify(request.method === 'DELETE' ? { ok: true } : request.url?.endsWith('/knowledge-search') ? { query: 'fictional', method: 'lexical', matches: [] } : request.url?.endsWith('/knowledge-sources') && request.method === 'GET' ? { sources: [{ ...source, content: undefined }] } : { source }));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); assert.ok(address && typeof address !== 'string');
-  const transport = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`));
+  const context = new AccountRequestContext(); context.changeSession('20000000-0000-4000-8000-000000000002');
+  const transport = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`), undefined, context);
   const client = createKnowledgeClient(transport.request);
   try {
     assert.equal((await client.list())[0].id, id); assert.equal((await client.read(id)).content, source.content);

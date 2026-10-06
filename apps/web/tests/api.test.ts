@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { ApiError, createPlatformClient, type StreamEvent } from '../src/api.ts';
+import { ApiError, createPlatformClient as createRawPlatformClient, type StreamEvent } from '../src/api.ts';
 import { createPlatformEndpoints } from '../src/platform-endpoints.ts';
+import { AccountRequestContext } from '../src/account-context.ts';
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
+
+const accountId = '10000000-0000-4000-8000-000000000001';
+function createPlatformClient(...args: Parameters<typeof createRawPlatformClient>) {
+  const context = new AccountRequestContext(); context.changeSession(accountId);
+  return createRawPlatformClient(args[0], args[1], context);
+}
 
 test('the production request client applies the configured origin and credential policy and preserves supplied headers', async () => {
   let calls = 0;
@@ -12,7 +20,7 @@ test('the production request client applies the configured origin and credential
     assert.equal(init?.credentials, 'include'); assert.equal(init?.redirect, 'error');
     assert.equal(init?.method, 'POST'); assert.equal(init?.body, '{"prompt":"Fictional project."}');
     const headers = new Headers(init?.headers);
-    assert.equal(headers.get('Content-Type'), 'application/json'); assert.equal(headers.get('X-Fictional'), 'fixture');
+    assert.equal(headers.get(PLATFORM_ACCOUNT_HEADER), accountId); assert.equal(headers.get('Content-Type'), 'application/json'); assert.equal(headers.get('X-Fictional'), 'fixture');
     return Response.json({ job: { id: 'fictional-job' } });
   });
   assert.deepEqual(await client.request('/jobs', { method: 'POST', headers: { 'X-Fictional': 'fixture' }, body: '{"prompt":"Fictional project."}', credentials: 'omit', redirect: 'follow' }), { job: { id: 'fictional-job' } });
@@ -84,7 +92,7 @@ test('multipart boundaries remain browser-owned and a canceled request retains i
   const controller = new AbortController(); const form = new FormData(); form.append('provider', 'fixture');
   const client = createPlatformClient(createPlatformEndpoints('https://api.example.test'), async (_, init) => {
     assert.equal(init?.body, form); assert.equal(new Headers(init?.headers).has('Content-Type'), false);
-    assert.equal(init?.signal, controller.signal);
+    assert.notEqual(init?.signal, controller.signal); assert.equal(init?.signal?.aborted, false);
     controller.abort(); throw new DOMException('Fixture canceled.', 'AbortError');
   });
   await assert.rejects(client.request('/voice/transcribe', { method: 'POST', body: form, signal: controller.signal }), { name: 'AbortError' });
@@ -103,7 +111,7 @@ test('SSE uses configured credentials, abort signal and endpoint while parsing c
   const chunks = ['event: delta\r', '\ndata: {"text":"fixture"}\r\n\r', '\nevent: done\ndata: [DONE]'];
   const client = createPlatformClient(createPlatformEndpoints('https://api.example.test'), async (input, init) => {
     assert.equal(input, 'https://api.example.test/api/platform/conversations/fictional-id/messages');
-    assert.equal(init?.credentials, 'include'); assert.equal(init?.redirect, 'error'); assert.equal(init?.signal, controller.signal);
+    assert.equal(init?.credentials, 'include'); assert.equal(init?.redirect, 'error'); assert.notEqual(init?.signal, controller.signal); assert.equal(init?.signal?.aborted, false);
     assert.equal(new Headers(init?.headers).get('Accept'), 'text/event-stream');
     return new Response(new ReadableStream({ start(stream) { for (const chunk of chunks) stream.enqueue(new TextEncoder().encode(chunk)); stream.close(); } }), { headers: { 'Content-Type': 'text/event-stream' } });
   });
@@ -128,7 +136,7 @@ test('SSE distinguishes HTTP rejection, early EOF and a genuine terminal error e
 test('canceling an active SSE request propagates abort and does not invent a completion event', async () => {
   const controller = new AbortController(); const events: StreamEvent[] = [];
   const client = createPlatformClient(createPlatformEndpoints('https://api.example.test'), async (_, init) => {
-    assert.equal(init?.signal, controller.signal);
+    assert.notEqual(init?.signal, controller.signal); assert.equal(init?.signal?.aborted, false);
     return new Response(new ReadableStream({ start(stream) {
       stream.enqueue(new TextEncoder().encode('event: delta\ndata: {"text":"partial"}\n\n'));
       init!.signal!.addEventListener('abort', () => stream.error(new DOMException('Canceled.', 'AbortError')), { once: true });

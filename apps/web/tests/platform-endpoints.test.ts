@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createPlatformEndpoints } from '../src/platform-endpoints.ts';
 
+const accountId = '10000000-0000-4000-8000-000000000001';
+const binding = `?expectedAccount=${accountId}`;
 const artifact = '/api/platform/artifacts/12345678-1234-1234-1234-123456789abc';
 const upload = '/api/platform/uploads/abcdef12-3456-7890-abcd-123456789abc';
 
@@ -10,16 +12,16 @@ test('the default routes stay relative while an explicit deployment origin route
     const endpoints = createPlatformEndpoints(setting);
     assert.equal(endpoints.origin, undefined);
     assert.equal(endpoints.apiUrl('/auth/me'), '/api/platform/auth/me');
-    assert.equal(endpoints.privateFileUrl(artifact), artifact);
-    assert.equal(endpoints.privateFileUrl(upload, { download: true }), `${upload}?download=1`);
+    assert.equal(endpoints.privateFileUrl(artifact, { accountId }), `${artifact}${binding}`);
+    assert.equal(endpoints.privateFileUrl(upload, { download: true, accountId }), `${upload}${binding}&download=1`);
     assert.ok(Object.isFrozen(endpoints));
   }
   for (const origin of ['https://api.example.test', 'https://api.example.test:8443', 'http://localhost:4320', 'http://127.0.0.1:4320', 'http://[::1]:4320']) {
     const endpoints = createPlatformEndpoints(origin);
     assert.equal(endpoints.origin, origin);
     assert.equal(endpoints.apiUrl('/voice/records?conversationId=fictional'), `${origin}/api/platform/voice/records?conversationId=fictional`);
-    assert.equal(endpoints.privateFileUrl(artifact), `${origin}${artifact}`);
-    assert.equal(endpoints.privateFileUrl(upload, { download: true }), `${origin}${upload}?download=1`);
+    assert.equal(endpoints.privateFileUrl(artifact, { accountId }), `${origin}${artifact}${binding}`);
+    assert.equal(endpoints.privateFileUrl(upload, { download: true, accountId }), `${origin}${upload}${binding}&download=1`);
   }
 });
 
@@ -32,9 +34,18 @@ test('an origin is exact and deployment-owned: reject insecure remote addresses,
 test('source URLs cannot choose a host, API path, query or escaped file route even when matching the configured origin', () => {
   const endpoints = createPlatformEndpoints('https://api.example.test');
   for (const source of [undefined, null, {}, 3, '', 'https://attacker.example.test/private', `https://api.example.test${artifact}`, `//api.example.test${artifact}`, 'data:image/png;base64,AA', 'blob:https://api.example.test/fake', 'javascript:alert(1)', '/api/platform/capabilities', '/api/platform/uploads/not-a-uuid', '/api/platform/artifacts/../../auth/me', `${artifact}?download=1`, `${artifact}#fragment`, `${artifact}\n`, `${artifact}/`, artifact.replace('/artifacts/', '/%61rtifacts/'), artifact.replace('/artifacts/', '/artifacts%2f'), artifact.replace('/artifacts/', '\\artifacts\\')]) {
-    assert.equal(endpoints.privateFileUrl(source), undefined, `source must not select a credential destination: ${String(source)}`);
+    assert.equal(endpoints.privateFileUrl(source, { accountId }), undefined, `source must not select a credential destination: ${String(source)}`);
   }
-  assert.equal(endpoints.privateFileUrl(artifact), `https://api.example.test${artifact}`);
+  assert.equal(endpoints.privateFileUrl(artifact, { accountId }), `https://api.example.test${artifact}${binding}`);
+});
+
+test('native private file URLs require one valid explicit account assertion and never accept query injection', () => {
+  const endpoints = createPlatformEndpoints('https://api.example.test');
+  assert.equal(endpoints.privateFileUrl(artifact), undefined);
+  for (const invalid of ['', 'fictional', `${accountId}&download=1`, `${accountId}\n`, null]) assert.equal(endpoints.privateFileUrl(artifact, { accountId: invalid as any }), undefined);
+  const url = new URL(endpoints.privateFileUrl(upload, { accountId, download: true })!);
+  assert.deepEqual([...url.searchParams], [['expectedAccount', accountId], ['download', '1']]);
+  assert.equal(endpoints.privateFileUrl(`${upload}?expectedAccount=${accountId}`, { accountId }), undefined);
 });
 
 test('internal API suffixes cannot escape the fixed API prefix or hide traversal in encoding', () => {

@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -56,14 +57,14 @@ async function register(name:string){
   assert.match(cookie as string,/HttpOnly/);assert.match(cookie as string,/SameSite=Lax/);
   return {user:response.json().user,cookie:(cookie as string).split(';')[0]};
 }
-async function request(actor:{cookie:string},method:'GET'|'POST'|'DELETE',url:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+url,headers:{origin,cookie:actor.cookie},payload});}
-async function create(actor:{cookie:string},kind='image',prompt='success'){const result=await request(actor,'POST','/jobs',{kind,provider:'local-test',prompt});assert.equal(result.statusCode,201,result.body);return result.json();}
+async function request(actor:{cookie:string;user:{id:string}},method:'GET'|'POST'|'DELETE',url:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+url,headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.user.id},payload});}
+async function create(actor:{cookie:string;user:{id:string}},kind='image',prompt='success'){const result=await request(actor,'POST','/jobs',{kind,provider:'local-test',prompt});assert.equal(result.statusCode,201,result.body);return result.json();}
 
 test('real sessions, login, logout, CSRF protection and password storage',async()=>{
   const alice=await register('AuthAlice');
   const stored=await db.query('SELECT password_hash FROM platform_users WHERE id=$1',[alice.user.id]);assert.match(stored.rows[0].password_hash,/^scrypt:/);assert(!stored.rows[0].password_hash.includes('Synthetic-password'));
   assert.equal((await request(alice,'GET','/auth/me')).json().user.id,alice.user.id);
-  const bad=await system.app.inject({method:'POST',url:prefix+'/memories',headers:{origin:'https://evil.invalid',cookie:alice.cookie},payload:{content:'must be rejected'}});assert.equal(bad.statusCode,403);
+  const bad=await system.app.inject({method:'POST',url:prefix+'/memories',headers:{origin:'https://evil.invalid',cookie:alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.user.id},payload:{content:'must be rejected'}});assert.equal(bad.statusCode,403);
   const wrong=await system.app.inject({method:'POST',url:prefix+'/auth/login',headers:{origin},payload:{email:alice.user.email,password:'incorrect-password'}});assert.equal(wrong.statusCode,401);
   const login=await system.app.inject({method:'POST',url:prefix+'/auth/login',headers:{origin},payload:{email:alice.user.email,password:'Synthetic-password-123'}});assert.equal(login.statusCode,200);
   assert.equal((await request(alice,'POST','/auth/logout')).statusCode,200);
@@ -79,7 +80,7 @@ test('ownership applies to conversations, memories, uploads and message creation
   assert.equal((await request(bob,'DELETE',`/memories/${memory.id}`)).statusCode,404);assert.equal((await request(bob,'GET','/memories')).json().memories.length,0);
   const boundary='synthetic-boundary';
   const payload=Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="synthetic.txt"\r\nContent-Type: text/plain\r\n\r\nSynthetic document\r\n--${boundary}--\r\n`);
-  const upload=await system.app.inject({method:'POST',url:prefix+'/uploads',headers:{origin,cookie:alice.cookie,'content-type':`multipart/form-data; boundary=${boundary}`},payload});assert.equal(upload.statusCode,201,upload.body);
+  const upload=await system.app.inject({method:'POST',url:prefix+'/uploads',headers:{origin,cookie:alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.user.id,'content-type':`multipart/form-data; boundary=${boundary}`},payload});assert.equal(upload.statusCode,201,upload.body);
   const attachment=upload.json().attachment;
   assert.equal((await request(bob,'GET',`/uploads/${attachment.id}`)).statusCode,404);
   const forbidden=await request(bob,'POST',`/conversations/${conversation.id}/messages`,{content:'test',provider:'local-test',mode:'chat'});assert.equal(forbidden.statusCode,404);

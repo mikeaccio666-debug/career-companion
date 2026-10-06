@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -22,7 +23,7 @@ interface Actor{user:{id:string};cookie:string;ip:string;}
 async function actor():Promise<Actor>{
   const ip=`127.0.2.${++actors}`;const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:ip,headers:{origin},payload:{name:'Fictional workflow designer',email:`workflow-${randomUUID()}@example.invalid`,password:'Fictional-password-123'}});assert.equal(response.statusCode,201,response.body);return {user:response.json().user,cookie:(response.headers['set-cookie'] as string).split(';')[0],ip};
 }
-async function request(user:Actor,method:'GET'|'POST'|'PUT'|'DELETE',route:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+route,remoteAddress:user.ip,headers:{origin,cookie:user.cookie},payload});}
+async function request(user:Actor,method:'GET'|'POST'|'PUT'|'DELETE',route:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+route,remoteAddress:user.ip,headers:{origin,cookie:user.cookie, [PLATFORM_ACCOUNT_HEADER]: user.user.id},payload});}
 function draft(overrides:Record<string,unknown>={}){return {name:'Fictional article workflow',description:'A saved plan, not an execution.',steps:[{kind:'chat',provider:'not-configured-yet',prompt:'Draft an article: {{input}}'},{kind:'speech',provider:'openai',prompt:'{{previous}}',options:{voice:'marin'}}],...overrides};}
 
 test('saved workflow templates are owner-isolated and can use providers that are not configured',async()=>{
@@ -31,7 +32,7 @@ test('saved workflow templates are owner-isolated and can use providers that are
   assert.deepEqual((await request(alice,'GET','/workflow-templates')).json().templates,[template]);assert.deepEqual((await request(bob,'GET','/workflow-templates')).json().templates,[]);
   assert.equal((await request(bob,'PUT',`/workflow-templates/${template.id}`,{...draft(),revision:1})).statusCode,404);
   assert.equal((await request(bob,'DELETE',`/workflow-templates/${template.id}`)).statusCode,404);
-  const csrf=await system.app.inject({method:'PUT',url:prefix+`/workflow-templates/${template.id}`,headers:{origin:'https://fictional-evil.invalid',cookie:alice.cookie},payload:{...draft(),revision:1}});assert.equal(csrf.statusCode,403);
+  const csrf=await system.app.inject({method:'PUT',url:prefix+`/workflow-templates/${template.id}`,headers:{origin:'https://fictional-evil.invalid',cookie:alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.user.id},payload:{...draft(),revision:1}});assert.equal(csrf.statusCode,403);
   const anonymous=await system.app.inject({method:'GET',url:prefix+'/workflow-templates'});assert.equal(anonymous.statusCode,401);
   const removed=await request(alice,'DELETE',`/workflow-templates/${template.id}`);assert.equal(removed.statusCode,200);assert.deepEqual((await request(alice,'GET','/workflow-templates')).json().templates,[]);
   assert((await db.query('SELECT deleted_at FROM platform_workflow_templates WHERE id=$1',[template.id])).rows[0].deleted_at);

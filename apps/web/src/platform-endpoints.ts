@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_QUERY, platformAccountId } from '@companion/platform-contracts';
 const prefix = '/api/platform';
 const privatePath = /^\/api\/platform\/(?:uploads|artifacts)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const configurationError = '工作台 API 地址配置无效。请使用完整 HTTPS origin，或 HTTP localhost、127.0.0.1、[::1] origin，不含路径、凭据或查询参数。';
@@ -5,8 +6,9 @@ const configurationError = '工作台 API 地址配置无效。请使用完整 H
 export interface PlatformEndpoints {
   readonly origin?: string;
   apiUrl(path: string): string;
-  privateFileUrl(value: unknown, options?: { download?: boolean }): string | undefined;
+  privateFileUrl(value: unknown, options?: PrivateFileOptions): string | undefined;
 }
+export interface PrivateFileOptions { download?: boolean; accountId?: string; }
 
 /** Deployment-owned origin only. Response data never selects a credential destination. */
 export function createPlatformEndpoints(configuredOrigin?: unknown): PlatformEndpoints {
@@ -31,9 +33,11 @@ export function createPlatformEndpoints(configuredOrigin?: unknown): PlatformEnd
         || decoded.split('/').some(part => part === '.' || part === '..')) throw new Error('工作台请求路径无效。');
       return `${origin ?? ''}${prefix}${path}`;
     },
-    privateFileUrl(value: unknown, options?: { download?: boolean }) {
-      if (typeof value !== 'string' || /[\x00-\x20\x7f]/.test(value) || !privatePath.test(value)) return undefined;
-      return `${origin ?? ''}${value}${options?.download ? '?download=1' : ''}`;
+    privateFileUrl(value: unknown, options?: PrivateFileOptions) {
+      if (typeof value !== 'string' || /[\x00-\x20\x7f]/.test(value) || !privatePath.test(value) || !platformAccountId(options?.accountId)) return undefined;
+      const query = new URLSearchParams({ [PLATFORM_ACCOUNT_QUERY]: options.accountId });
+      if (options.download) query.set('download', '1');
+      return `${origin ?? ''}${value}?${query}`;
     },
   });
 }

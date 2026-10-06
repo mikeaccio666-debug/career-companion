@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -59,7 +60,7 @@ function exchange(instance: number, route: string, actor?: Actor, options: {
   return new Promise((resolve, reject) => {
     const body = options.body;
     const request = http.request({ host: '127.0.0.1', port: ports[instance], path: prefix + route, method: options.method ?? 'GET', agent: false,
-      headers: { origin, ...(actor ? { cookie: actor.cookie } : {}), ...(body !== undefined ? { 'content-length': Buffer.byteLength(body) } : {}), ...options.headers } }, response => {
+      headers: { origin, ...(actor ? { cookie: actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id } : {}), ...(body !== undefined ? { 'content-length': Buffer.byteLength(body) } : {}), ...options.headers } }, response => {
       const chunks: Buffer[] = [];
       response.on('data', (chunk: Buffer) => chunks.push(chunk)); response.on('error', reject);
       response.on('end', () => resolve({ status: response.statusCode!, headers: response.headers, bytes: Buffer.concat(chunks) }));

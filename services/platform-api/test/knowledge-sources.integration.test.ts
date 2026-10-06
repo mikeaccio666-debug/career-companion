@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -52,7 +53,7 @@ const runtime = createProviderRuntime({ env: { PLATFORM_ALLOW_PROVIDER_CALLS: '1
 function exchange(route: string, actor?: Actor, options: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const body = options.body === undefined ? undefined : JSON.stringify(options.body);
-    const request = http.request({ host: '127.0.0.1', port, path: prefix + route, agent: false, method: options.method ?? 'GET', headers: { ...(actor ? { cookie: actor.cookie } : {}), ...(body !== undefined ? { origin, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}), ...options.headers } }, response => {
+    const request = http.request({ host: '127.0.0.1', port, path: prefix + route, agent: false, method: options.method ?? 'GET', headers: { ...(actor ? { cookie: actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id } : {}), ...(body !== undefined ? { origin, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}), ...options.headers } }, response => {
       const chunks: Buffer[] = []; response.on('data', chunk => chunks.push(chunk)); response.on('error', reject); response.on('end', () => resolve({ status: response.statusCode!, headers: response.headers, body: Buffer.concat(chunks).toString('utf8') }));
     }); request.on('error', reject); request.setTimeout(15000, () => request.destroy(new Error('Synthetic knowledge HTTP fixture timed out.'))); if (body !== undefined) request.write(body); request.end();
   });
