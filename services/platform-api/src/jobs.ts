@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { Worker } from 'bullmq';
-import type { CreateJobInput, Job, PlatformProviderRuntime, Artifact, ProviderAttachment, GeneratedArtifact } from '@companion/platform-contracts';
+import type { CreateJobInput, Job, PlatformProviderRuntime, Artifact, ProviderAttachment, GeneratedArtifact, ConversationTaskPage } from '@companion/platform-contracts';
 import type { PoolClient } from 'pg';
 import { Database } from './database.ts';
 import type { BlobStorage } from './storage.ts';
@@ -20,6 +20,7 @@ import { assertExecutionTemplateApproval, bindExecutionTemplates, safeJobExecuti
 import { connectionFromUrl, ProducerQueue, QUEUE_DISPATCH_TIMEOUT_MS, QUEUE_RECONCILE_INTERVAL_MS } from './queue-connection.ts';
 import { McpConnections, mcpApprovalMatches, mcpDefinitionHash, mcpJobInput, mcpSummary, parseMcpJob, type McpExecutionBinding } from './mcp-connections.ts';
 import type { McpTransport } from './mcp-transport-port.ts';
+import { authorizeConversationTaskOrigin, conversationTaskRows, parseConversationTaskOrigin, saveConversationTaskOrigin, type ConversationTaskCreationOrigin } from './conversation-tasks.ts';
 export { connectionFromUrl } from './queue-connection.ts';
 
 export function parseJob(value: unknown): CreateJobInput {
@@ -134,7 +135,10 @@ export class JobService {
   constructor(readonly db: Database, readonly config: PlatformConfig, readonly runtime: PlatformProviderRuntime, readonly storage: BlobStorage, readonly relayOptions?:ModelRelayOptions, mcpTransport?:McpTransport) {
     this.mcp=new McpConnections(db,config.mcp,mcpTransport,storage);
   }
-  async create(userId: string, input: CreateJobInput): Promise<{ job: Job; approval?: any }> {
+  async create(userId: string, input: CreateJobInput, originValue?: ConversationTaskCreationOrigin, signal?: AbortSignal): Promise<{ job: Job; approval?: any }> {
+    signal?.throwIfAborted();
+    const origin = originValue === undefined ? undefined : parseConversationTaskOrigin(originValue);
+    if(origin&&(origin.tool==='prepare_browser_task'&&input.kind!=='browser'||origin.tool==='prepare_mcp_task'&&input.kind!=='mcp'))throw invalid('The server origin tool does not match the prepared task kind.');
     if(input.kind==='mcp')input=mcpJobInput(parseMcpJob(input));else providerAvailable(this.runtime,input.provider,input.kind);
     if(input.kind==='workflow')input=normalizeWorkflowInput(input,this.runtime.capabilities());
     if(input.kind==='browser')input=normalizeBrowserInput(input,this.runtime);
@@ -148,8 +152,13 @@ export class JobService {
     const relayPolicy=input.kind==='cli'&&input.provider==='cli'?configuredModelRelayPolicy(this.relayOptions?.env):undefined;
     if(relayPolicy){if(input.model&&input.model!==relayPolicy.model)throw invalid('The CLI model is fixed by the server.');input={...input,model:relayPolicy.model};}
     return this.db.transaction(async client => {
+      signal?.throwIfAborted();
       await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[userId]);
+      signal?.throwIfAborted();
+      if(origin)await authorizeConversationTaskOrigin(client,userId,origin);
+      signal?.throwIfAborted();
       const mcpPolicy=input.kind==='mcp'?await this.mcp.normalize(client,userId,input):undefined;
+      signal?.throwIfAborted();
       const active = await client.query("SELECT count(*)::integer AS count FROM platform_jobs WHERE user_id=$1 AND status IN ('needs_approval','queued','running')",[userId]);
       if (active.rows[0].count >= this.config.maxActiveJobs) throw new ApiError(429,'ACTIVE_JOB_LIMIT','Finish or cancel an active task before creating another.');
       await verifyAttachments(client,userId,input.attachmentIds ?? []);
@@ -162,6 +171,9 @@ export class JobService {
       let approval;
       if (approvalRequired) approval = await this.addApproval(client,userId,id,input,1);
       else await enqueueJob(client,id,1);
+      signal?.throwIfAborted();
+      if(origin)await saveConversationTaskOrigin(client,userId,id,1,origin);
+      signal?.throwIfAborted();
       return { job: mapJob(result.rows[0]), approval };
     });
   }
@@ -175,6 +187,16 @@ export class JobService {
   async list(userId: string): Promise<Job[]> {
     const result = await this.db.query('SELECT j.*,c.steps AS workflow_step_states,c.definition_hash AS workflow_definition_hash,c.revision AS workflow_checkpoint_revision,b.state AS browser_checkpoint_state,b.revision AS browser_checkpoint_revision,b.next_index AS browser_next_index FROM platform_jobs j LEFT JOIN platform_workflow_checkpoints c ON c.job_id=j.id LEFT JOIN platform_browser_checkpoints b ON b.job_id=j.id WHERE j.user_id=$1 ORDER BY j.created_at DESC LIMIT 100',[userId]);
     return Promise.all(result.rows.map(async row => mapJob(row,await this.artifacts(userId,row.id))));
+  }
+  async conversationTasks(userId: string, conversationId: string, query: unknown): Promise<ConversationTaskPage> {
+    const page = await conversationTaskRows(this.db,userId,conversationId,query);
+    return { tasks: page.rows.map(row => ({
+      origin: { conversationId: row.origin_conversation_id, messageId: row.origin_message_id, tool: row.origin_tool,
+        createdGeneration: row.origin_generation, createdAt: new Date(row.origin_created_at).toISOString() },
+      job: mapJob(row,row.task_artifacts.map((artifact: any) => ({ ...artifact, size: artifact.size == null ? undefined : Number(artifact.size) }))),
+      generation: row.generation,
+      ...(row.current_approval ? { approval: { ...mapApproval(row.current_approval), generation: Number(row.current_approval.generation) } } : {}),
+    })), nextBefore: page.nextBefore };
   }
   async get(userId: string, id: string): Promise<Job> {
     const result = await this.db.query('SELECT j.*,c.steps AS workflow_step_states,c.definition_hash AS workflow_definition_hash,c.revision AS workflow_checkpoint_revision,b.state AS browser_checkpoint_state,b.revision AS browser_checkpoint_revision,b.next_index AS browser_next_index FROM platform_jobs j LEFT JOIN platform_workflow_checkpoints c ON c.job_id=j.id LEFT JOIN platform_browser_checkpoints b ON b.job_id=j.id WHERE j.user_id=$1 AND j.id=$2',[userId,id]);

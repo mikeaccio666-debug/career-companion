@@ -33,6 +33,7 @@ Private requests additionally require `x-companion-account: <window-confirmed us
 
 - Identity: `GET /auth/me`, `POST /auth/logout`.
 - Conversations: `GET/POST /conversations`, `GET/DELETE /conversations/:id`, `POST /conversations/:id/messages`. The message response streams named SSE events `start`, `delta`, `tool`, `approval`, `done`, `error`.
+- Conversation tasks: `GET /conversations/:id/tasks?limit=20&before=<jobId>` returns owner-scoped `ConversationTaskPage`, current job generations and only matching pending approvals. Origins are fixed by the authenticated chat handler and committed atomically with jobs; model/HTTP task bodies cannot claim an origin. Deleting a conversation removes links while keeping its independent tasks. See [conversation task design](../../docs/platform/conversation-tasks.md).
 - Jobs: `GET/POST /jobs`, `GET /jobs/:id`, `POST /jobs/:id/cancel`, `POST /jobs/:id/retry`.
 - Approvals: `GET /approvals`, `POST /approvals/:id/decision` with `decision: approved` or `rejected`.
 - Explicit saved context: `GET/POST /memories`, `DELETE /memories/:id`.

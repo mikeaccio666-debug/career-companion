@@ -1,5 +1,6 @@
 export { PLATFORM_ACCOUNT_HEADER, PLATFORM_ACCOUNT_QUERY, platformAccountId } from './account-context.ts';
 export * from './mcp.ts';
+export * from './conversation-tasks.ts';
 import type { McpTaskSummary } from './mcp.ts';
 export const CHAT_MODES = ['chat', 'companion', 'agent'] as const;
 export type ChatMode = typeof CHAT_MODES[number];

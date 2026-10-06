@@ -186,6 +186,7 @@ export async function buildApp(options:AppOptions={}) {
     const messages=await db.query("SELECT m.*,coalesce((SELECT jsonb_agg(jsonb_build_object('id',u.id,'name',u.filename,'mime',u.mime,'size',u.byte_size,'url','/api/platform/uploads/'||u.id)) FROM platform_uploads u WHERE u.user_id=$2 AND u.id IN (SELECT jsonb_array_elements_text(m.attachments)::uuid)), '[]'::jsonb) AS attachment_metadata FROM platform_messages m WHERE m.conversation_id=$1 ORDER BY m.ordinal",[id,userId(request)]);
     return {conversation:mapConversation(result.rows[0]),messages:messages.rows.map(mapMessage)};
   });
+  app.get(`${prefix}/conversations/:id/tasks`,secure,async request=>jobs.conversationTasks(userId(request),params(request),request.query));
   app.delete(`${prefix}/conversations/:id`,secure,async request=>{
     const result=await db.query('DELETE FROM platform_conversations WHERE id=$1 AND user_id=$2 RETURNING id',[params(request),userId(request)]);if(!result.rowCount)throw notFound();return {ok:true};
   });
@@ -201,7 +202,7 @@ export async function buildApp(options:AppOptions={}) {
     const modelName=string(data.model,'model',150,false)||selected?.modelsByCapability?.[capability]?.[0]||selected?.models[0]||undefined;
     const attachmentIds=attachments(data.attachmentIds),assistantId=randomUUID();
     const conversation=await db.transaction(async client=>{
-      const result=await client.query('SELECT * FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,uid]);if(!result.rowCount)throw notFound();
+      const result=await client.query('SELECT * FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR NO KEY UPDATE',[id,uid]);if(!result.rowCount)throw notFound();
       await verifyAttachments(client,uid,attachmentIds);
       const streaming=await client.query("SELECT id FROM platform_messages WHERE conversation_id=$1 AND status='streaming'",[id]);if(streaming.rowCount)throw new ApiError(409,'CONVERSATION_BUSY','Wait for the current response to finish.');
       await acquireRuntimeLease(client,uid,'chat',assistantId);
@@ -217,6 +218,7 @@ export async function buildApp(options:AppOptions={}) {
     reply.raw.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Connection':'keep-alive','X-Accel-Buffering':'no'});
     const send=(event:string,payload:unknown)=>{if(!reply.raw.destroyed)reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);};
     reply.raw.on('close',()=>{if(!finished)abort.abort();});
+    if(request.raw.aborted||reply.raw.destroyed)abort.abort();
     const keepalive=setInterval(()=>{if(!reply.raw.destroyed)reply.raw.write(': keepalive\n\n');void Promise.all([db.query("UPDATE platform_messages SET lease_until=now()+interval '120 seconds',content=$2 WHERE id=$1 AND status='streaming'",[assistantId,answer]),db.query("UPDATE platform_runtime_leases SET expires_at=now()+interval '120 seconds' WHERE id=$1",[assistantId])]).catch(()=>abort.abort());},15_000);keepalive.unref();
     send('start',{messageId:assistantId});
     try{
@@ -237,19 +239,19 @@ export async function buildApp(options:AppOptions={}) {
         executeTool:async(name:string,args:Record<string,unknown>)=>{
           if(name==='list_jobs')return {jobs:await jobs.list(uid)};
           if(name==='read_saved_memories'){const result=await db.query('SELECT id,content FROM platform_memories WHERE user_id=$1 ORDER BY created_at DESC LIMIT 30',[uid]);return {memories:result.rows};}
-          if(name==='create_job'){const created=await jobs.create(uid,parseJob(args));if(created.approval)send('approval',created.approval);return created;}
+          if(name==='create_job'){const created=await jobs.create(uid,parseJob(args),{conversationId:id,messageId:assistantId,tool:'create_job'},abort.signal);if(created.approval)send('approval',created.approval);return created;}
           if(name==='get_artifact_reference'){if(Object.keys(args).some(key=>key!=='artifactId'))throw invalid('Unsupported artifact reference field.');return jobs.referenceAttachment(uid,identifier(args.artifactId));}
           if(name==='read_artifact_text'){
             try{return await jobs.artifactText(uid,args,abort.signal);}
             catch(error){if(abort.signal.aborted||!(error instanceof ApiError))throw error;return {error:{code:error.code,message:error.publicMessage}};}
           }
-          if(name==='prepare_browser_task'){if(Object.keys(args).some(key=>!['goal','url','actions'].includes(key)))throw invalid('Unsupported browser preparation field.');const created=await jobs.create(uid,parseJob({kind:'browser',provider:'browser',prompt:string(args.goal,'goal',20000),options:{url:args.url,...(args.actions!==undefined?{actions:args.actions}:{})}}));if(created.approval)send('approval',created.approval);return created;}
+          if(name==='prepare_browser_task'){if(Object.keys(args).some(key=>!['goal','url','actions'].includes(key)))throw invalid('Unsupported browser preparation field.');const created=await jobs.create(uid,parseJob({kind:'browser',provider:'browser',prompt:string(args.goal,'goal',20000),options:{url:args.url,...(args.actions!==undefined?{actions:args.actions}:{})}}),{conversationId:id,messageId:assistantId,tool:'prepare_browser_task'},abort.signal);if(created.approval)send('approval',created.approval);return created;}
           if(name==='get_browser_observation'){if(Object.keys(args).some(key=>key!=='jobId'))throw invalid('Unsupported browser observation field.');return jobs.browserObservation(uid,identifier(args.jobId));}
           if(name==='list_mcp_tools'||name==='prepare_mcp_task'||name==='read_mcp_result'){
             try{
               if(name==='list_mcp_tools')return await jobs.mcp.agentTools(uid,args);
               if(name==='read_mcp_result')return await jobs.mcp.result(uid,args,abort.signal);
-              const created=await jobs.create(uid,mcpJobInput(args));if(created.approval)send('approval',created.approval);return created;
+              const created=await jobs.create(uid,mcpJobInput(args),{conversationId:id,messageId:assistantId,tool:'prepare_mcp_task'},abort.signal);if(created.approval)send('approval',created.approval);return created;
             }catch(error){if(abort.signal.aborted||!(error instanceof ApiError))throw error;return {error:{code:error.code,message:error.publicMessage}};}
           }
           if(name==='search_knowledge'||name==='read_knowledge_passage'){
