@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Clapperboard, FolderOpen, Image, Loader2, Paperclip, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
 import type { CreateJobInput } from '@companion/platform-contracts';
 import { errorText } from './api';
+import { useRequiredPlatformAccountClient } from './account-client';
 import { referenceCreativeArtifact } from './creative-api';
 import { CreativeOperationScope, type CreativeOperationToken } from './creative-session';
 import { CREATIVE_IMAGE_MIMES, creativeAspectRatios, creativeModels, creativePlanJob, creativeReadiness, creativeReferencePolicy, freshCreativeDraft, moveCreativeReference, serializeCreativeDraft, validateCreativeFiles, validateCreativeReferences, type CreativeDraft, type CreativeKind, type CreativePlan } from './creative-plan';
@@ -18,6 +19,7 @@ export default function CreativePanel({ accountId, providers, jobs, onCreate, on
   onCancel: (job: Job) => void; onRetry: (job: Job) => void; onUpload: (file: File) => Promise<Upload>; onRefreshCapabilities: () => Promise<void>; onError: (text: string) => void;
   onBringArtifactToAgent?: (job: Job, artifact: Artifact) => void; handoffDisabled?: boolean;
 }) {
+  const accountClient = useRequiredPlatformAccountClient();
   const freshDrafts = () => ({ image: freshCreativeDraft(providers), video: freshCreativeDraft(providers, 'video') });
   const [kind, setKind] = useState<CreativeKind>('image');
   const [drafts, setDrafts] = useState<Record<CreativeKind, CreativeDraft>>(freshDrafts);
@@ -101,7 +103,7 @@ export default function CreativePanel({ accountId, providers, jobs, onCreate, on
     const controller = new AbortController(); referenceRequest.current = controller;
     try {
       if (!selectedPolicy) throw new Error(`当前没有支持参考图片的${target === 'image' ? '图片' : '视频'}服务，请配置对应服务后再带入作品。`);
-      const reference = await referenceCreativeArtifact(artifact.id, job.id, controller.signal); if (!current(token)) return;
+      const reference = await referenceCreativeArtifact(artifact.id, job.id, controller.signal, accountClient.request); if (!current(token)) return;
       if (reference.source.kind === 'artifact') reference.source.jobPrompt = job.prompt;
       const references = next.references.some((item) => item.attachment.id === reference.attachment.id) ? next.references : [...next.references, reference];
       validateCreativeReferences(references, selectedPolicy);

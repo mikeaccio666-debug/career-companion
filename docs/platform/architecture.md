@@ -103,6 +103,12 @@ OpenAI 官方公告 Sora 2 和 Videos API 于 2026 年 9 月 24 日关闭，因�
 
 ## 从本地走向多用户服务
 
+私人请求绑定发起窗口已确认的账号。服务端先验证真实登录 Cookie，再将 `x-companion-account` 与会话用户比较；缺少断言返回409，账号改变返回409，格式错误或重复断言返回400，匿名请求仍返回401。这个 UUID 只表达窗口预期的账号，不是凭据，也不授予文件所有权、任务授权或租约。公共健康、能力与登录初始化接口保留明确例外；其余私人 HTTP／SSE 在领域读写、计数和供应商调用前检查。原生图片、音视频及下载无法设置该 header，只在私人 uploads／artifacts 字节 GET／HEAD 使用 `expectedAccount` query，同样验证 Cookie 和所有者；Range 不绕过检查。边界定义见 [account-context.ts](../../services/platform-api/src/account-context.ts) 与 [共享契约](../../packages/platform-contracts/src/account-context.ts)。
+
+网页的私人组件树持有固定的 `accountId + generation` 客户端，不在旧组件或迟到回调中重新读取另一个全局账号。即使同一账号重新登录，新代次也使旧请求失效；请求、完整响应正文和 SSE 均检查代次，失效后取消读取并丢弃旧结果。私人文件 URL 在对应账号的 render 上下文生成，旧图片、媒体来源和成果文本立即清理；语音清理中止录音、轨道、播放及 RTC。退出与语音租约释放的窄清理通道仍携带原账号断言，不会用换号后的 Cookie 操作新账号；外部 Realtime SDP 只使用供应商凭据，不附平台账号 header。实现见 [固定客户端](../../apps/web/src/api.ts)、[组件桥](../../apps/web/src/account-client.tsx) 与 [媒体清理](../../apps/web/src/private-media.ts)。这不会撤销此前已经接受的服务端任务。
+
+跨窗口通知通过 BroadcastChannel 与 storage 备选通道发送仅含 `authChanged` 的失效消息，不传身份或令牌、不自动选择新账号。收到通知或当前请求确认401／账号断言409后，网页清空私人状态并返回公共连接入口；只有用户明确点击“重试连接”才重新读取真实 `/auth/me`。通知不可用时，服务器的每请求断言仍阻止旧窗口操作新账号。当前273项网页测试、生产构建及真实 Cookie 的 HTTP 集成已通过；本轮真实Chrome跨账号双窗、旧图片移除、合成SSE取消与重连界面、storage备用通知和无通知时旧写请求拒绝已通过，详见 [验证记录](verification.md#跨窗口账号断言与旧资源清理)。
+
 账号接口已实现邮箱验证和密码找回。公开的 `GET /api/platform/auth/options` 返回 `AuthOptions` 的 `emailActionsEnabled` 与 `requireVerifiedEmail`，身份响应提供真实 `emailVerified`。`POST /auth/password-reset/request` 接受 `{email}`，`/auth/password-reset/complete` 接受 `{token,password}`；验证申请 `/auth/email-verification/request` 接受 `{}`，完成 `/auth/email-verification/complete` 接受 `{token}`，两者均要求当前账号会话。上述 POST 路径均以 `/api/platform` 为前缀，并校验固定应用 Origin；请求不能选择他人 owner、邮件服务或跳转地址。完整返回与错误语义见 [API 说明](../../services/platform-api/README.md#account-email-and-recovery)。
 
 开发默认关闭邮件，也不强制邮箱验证；显式开启 `PLATFORM_ALLOW_ACCOUNT_EMAIL=1` 才读取服务端 Resend key、发件人、允许列表中的精确网页 origin 和独立32字节加密密钥。非 loopback 网页 origin 必须 HTTPS。模型调用开关与邮件开关独立。生产配置强制邮箱已验证、拒绝关闭此要求，并要求邮件配置完整；新账号和旧账号不会被迁移自动标为已验证。未验证会话可以查看自己的身份、请求／完成验证和退出；其他产品访问在模型或任务执行前被拒绝。
@@ -127,7 +133,7 @@ OpenAI 官方公告 Sora 2 和 Videos API 于 2026 年 9 月 24 日关闭，因�
 
 公开上线前还有明确缺口：真实邮件配置与投递、商业用量计费与全平台额度、生产限流负载及边缘防滥用、对象存储生命周期、生产数据／文件迁移、备份恢复、监控、数据库连接预算、部署 ingress、HTTPS 和网络出口策略。邮箱验证／找回和共享限流的代码与虚构资料集成验证已经完成，不能据此推断这些生产运维项或账号服务已验收。当前开发实例只监听本机。模型输入读取、文件上传和供应商产物接收仍受现有字节上限约束；下载流式化不等于这些路径已经全部流式化，也没有证明生产并发容量。
 
-手机网页已使用响应式布局和 PWA 静态缓存。真机安装、HTTPS 麦克风、WebRTC 稳定性与移动浏览器兼容性仍需设备测试。手机审批属于平台任务授权，不会替代原插件要求的可信点击。
+手机网页采用响应式布局和 Vite PWA／Workbox 构建生成的公开资源预缓存，全部条目校验 integrity；私人接口不缓存、不后台重放。新版提示用户保存或复制内容、关闭所有工作台窗口后自然激活，相关离线、双窗更新和失败安装验收见 [手机网页与 PWA](mobile-web.md)。真机安装、HTTPS 麦克风、WebRTC、软键盘与系统后台音频仍需设备测试。共享 Cookie 的账号漂移已加入上述服务端断言、固定客户端和通知失效边界，跨账号真实浏览器验收尚未完成；历史同账号 PWA 双窗更新不证明账号隔离。手机审批属于平台任务授权，不会替代原插件要求的可信点击。
 
 本地检查、浏览器任务、语音摘录和手机尺寸界面的验证范围见 [验证记录](verification.md)。当前语音没有自动保存全部录音或同步全部通话内容；提供的是明确保存与带回草稿。
 

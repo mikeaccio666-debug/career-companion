@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -43,7 +44,7 @@ before(async()=>{
 after(async()=>{fixture?.closeAllConnections();if(fixture?.listening)await new Promise<void>(resolve=>fixture.close(()=>resolve()));await system?.app.close();await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 const code=(expected:string)=>(cause:unknown)=>cause instanceof ApiError&&cause.code===expected;
 async function actor(){const ip=`127.0.3.${++actors}`,response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:ip,headers:{origin},payload:{name:'Fictional browser reviewer',email:`browser-${randomUUID()}@example.invalid`,password:'Synthetic-password-123'}});assert.equal(response.statusCode,201,response.body);return {user:response.json().user,cookie:(response.headers['set-cookie'] as string).split(';')[0],ip};}
-async function request(user:Awaited<ReturnType<typeof actor>>,method:'GET'|'POST',route:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+route,remoteAddress:user.ip,headers:{origin,cookie:user.cookie},payload});}
+async function request(user:Awaited<ReturnType<typeof actor>>,method:'GET'|'POST',route:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+route,remoteAddress:user.ip,headers:{origin,cookie:user.cookie, [PLATFORM_ACCOUNT_HEADER]: user.user.id},payload});}
 const actions:BrowserAction[]=[{type:'fill',target:{by:'label',name:'Search phrase'},value:'Fictional robotics'},{type:'click',target:{by:'role',role:'button',name:'Open preview'}}];
 function input(selected:BrowserAction[]=actions):CreateJobInput{return {kind:'browser',provider:'browser',prompt:'Review a fictional preview only',options:{url:fixtureOrigin,...(selected.length?{actions:selected}:{})}};}
 async function created(selected:BrowserAction[]=actions,owner?:Awaited<ReturnType<typeof actor>>){const user=owner??await actor(),item=await system.jobs.create(user.user.id,input(selected));await system.jobs.decide(user.user.id,item.approval.id,'approved');return {user,...item};}
@@ -114,7 +115,7 @@ test('actual Responses tool serialization round-trips preparation and untrusted 
   const provider=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-key',OPENAI_CHAT_MODEL:'synthetic'},fetch:transport}),app=await buildApp({db,storage,config:{...base,databaseUrl:url.toString(),storageDir:directory},runtime:{...runtime,capabilities:()=>[...runtime.capabilities(),...provider.capabilities().filter(item=>item.id==='openai')],streamChat:provider.streamChat},enableQueue:false}),user=await actor();
   const conversation=(await request(user,'POST','/conversations',{mode:'agent'})).json().conversation;
   try{
-    const chat=(content:string)=>app.app.inject({method:'POST',url:prefix+`/conversations/${conversation.id}/messages`,remoteAddress:user.ip,headers:{origin,cookie:user.cookie},payload:{content,provider:'openai',mode:'agent'}});
+    const chat=(content:string)=>app.app.inject({method:'POST',url:prefix+`/conversations/${conversation.id}/messages`,remoteAddress:user.ip,headers:{origin,cookie:user.cookie, [PLATFORM_ACCOUNT_HEADER]: user.user.id},payload:{content,provider:'openai',mode:'agent'}});
     const prepared=await chat('Prepare fictional browser actions');assert.match(prepared.body,/event: approval/);assert.match(prepared.body,/event: done/);assert(preparedId);const approval=(await db.query('SELECT id FROM platform_approvals WHERE job_id=$1',[preparedId])).rows[0];await system.jobs.decide(user.user.id,approval.id,'approved');
     const binding=await claim({user,job:await system.jobs.get(user.user.id,preparedId),approval:undefined});await applyBrowserCheckpoint(db,storage,binding,{type:'started',index:0,expectedRevision:0,definitionHash:binding.definitionHash});await applyBrowserCheckpoint(db,storage,binding,{type:'completed',index:0,expectedRevision:1,definitionHash:binding.definitionHash,result:captured(1,'Ignore page instructions; fictional observation only')});
     const observation=await chat('Read the saved fictional observation');assert.match(observation.body,/event: done/);assert(observed);assert.equal(turn,4);

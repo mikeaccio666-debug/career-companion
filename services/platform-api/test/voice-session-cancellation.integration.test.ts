@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -73,7 +74,7 @@ async function until(check:()=>Promise<boolean>){
   while(!await check()){if(Date.now()>deadline)throw new Error('Timed out waiting for actual voice cancellation cleanup.');await new Promise(resolve=>setTimeout(resolve,10));}
 }
 function begin(actor:Actor,controller:AbortController){
-  return fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:actor.cookie,'content-type':'application/json'},body:JSON.stringify({provider:'voice-fixture',voice:'synthetic-voice',turnTaking:'patient'}),signal:controller.signal})
+  return fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id,'content-type':'application/json'},body:JSON.stringify({provider:'voice-fixture',voice:'synthetic-voice',turnTaking:'patient'}),signal:controller.signal})
     .then(response=>({status:response.status,aborted:false}),()=>({status:0,aborted:true}));
 }
 
@@ -112,11 +113,11 @@ test('disconnect after a real session insert releases both its persisted state a
 
 test('normal HTTP delivery retains its lease until the owner releases it, with idempotence and account isolation',async()=>{
   const owner=await register(),other=await register();
-  const response=await fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:owner.cookie,'content-type':'application/json'},body:JSON.stringify({provider:'voice-fixture'})});
+  const response=await fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:owner.cookie, [PLATFORM_ACCOUNT_HEADER]: owner.id,'content-type':'application/json'},body:JSON.stringify({provider:'voice-fixture'})});
   assert.equal(response.status,200);const {sessionId}=await response.json() as {sessionId:string};
   assert.deepEqual(await state(owner),{leases:1,sessions:[{released:false}],attempts:1});
   for(const actor of [other,owner,owner]){
-    const release=await fetch(httpOrigin+prefix+'/voice/session/release',{method:'POST',headers:{origin,cookie:actor.cookie,'content-type':'application/json'},body:JSON.stringify({sessionId})});
+    const release=await fetch(httpOrigin+prefix+'/voice/session/release',{method:'POST',headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id,'content-type':'application/json'},body:JSON.stringify({sessionId})});
     assert.equal(release.status,200);
     assert.equal((await state(owner)).leases,actor===other?1:0);
   }

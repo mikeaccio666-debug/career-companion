@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, BookOpen, Check, FileText, Loader2, Plus, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
 import type { KnowledgePassage, KnowledgeSearchResult, KnowledgeSource, KnowledgeSourceSummary } from '@companion/platform-contracts';
 import { KNOWLEDGE_SOURCE_MAX_BYTES, KNOWLEDGE_SOURCE_LIMIT } from '@companion/platform-contracts';
 import { errorText } from './api';
+import { useRequiredPlatformAccountClient } from './account-client';
 import { createKnowledgeClient } from './knowledge-api';
 import { KnowledgeOperationScope, isKnowledgeRevisionConflict, knowledgeAgentDraft, knowledgeContentBytes, knowledgeDraftFingerprint, knowledgeDraftFromSource, knowledgeSearchInput, newKnowledgeDraft, serializeKnowledgeDraft, type KnowledgeDraft } from './knowledge-editor';
 import { Badge, Empty } from './ui';
 import './knowledge.css';
 
-const api = createKnowledgeClient();
 type ReplaceRequest = { id: string; title: string } | 'new';
 export default function KnowledgePanel({ accountId, onBringToAgent, handoffDisabled, onError }: { accountId: string; onBringToAgent: (draft: string) => void; handoffDisabled?: boolean; onError: (error: unknown) => void }) {
+  const accountClient = useRequiredPlatformAccountClient();
+  const api = useMemo(() => createKnowledgeClient(accountClient.request), [accountClient]);
   const [sources, setSources] = useState<KnowledgeSourceSummary[]>([]), [listLoading, setListLoading] = useState(true);
   const [draft, setDraft] = useState<KnowledgeDraft>(newKnowledgeDraft), [current, setCurrent] = useState<Pick<KnowledgeSource, 'id' | 'revision'> | null>(null);
   const [savedFingerprint, setSavedFingerprint] = useState(() => knowledgeDraftFingerprint(newKnowledgeDraft()));
@@ -43,7 +45,7 @@ export default function KnowledgePanel({ accountId, onBringToAgent, handoffDisab
   useEffect(() => {
     mutationBusy.current = false; scope.current.mount(accountId); refreshList();
     return () => { scope.current.dispose(); mutationBusy.current = false; };
-  }, [accountId]);
+  }, [accountId, api]);
   useEffect(() => {
     if (!dirty) return;
     const leave = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };

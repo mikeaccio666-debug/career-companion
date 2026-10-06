@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'node:http';
 import { createPlatformClient } from '../src/api.ts';
 import { createPlatformEndpoints } from '../src/platform-endpoints.ts';
+import { AccountRequestContext } from '../src/account-context.ts';
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { VoiceAudioLabel, VoicePersonalityPicker, VoiceSoundPicker, VoiceTurnTakingPicker } from '../src/VoicePersonalityControls.ts';
 import { VOICE_PERSONALITIES, copyVoicePreferences, defaultVoicePreferences, retainedVoice, voiceAudioConfiguration, voiceOptionState, voicePersona, voicePersonality, voiceRealtimeBody, voiceSelectionProblem, voiceSpeechBody, type VoicePreferences } from '../src/voice-personality.ts';
 import { VoiceConversationSession, type VoiceConversationTransport } from '../src/voice-conversation.ts';
@@ -17,6 +19,7 @@ const provider: Provider = { id: 'fictional-voice', name: 'Fictional voice', key
 const kokoro: Provider = { id: 'kokoro', name: 'Fictional local speech', keyConfigured: true, enabled: true, capabilities: ['speech'], models: ['kokoro-82m'], envVariables: [], voiceOptions: { speech: { voices: ['af_heart'], defaultVoice: 'af_heart', instructions: false } } };
 const chat: Provider = { id: 'ollama', name: 'Fictional text', keyConfigured: true, enabled: true, capabilities: ['chat'], models: ['fixture-model'], envVariables: [] };
 const conversationId = '56e12235-7f30-4a0e-acce-45527a42c9cd', messageId = '0efb31eb-bb8b-43c3-af79-b8c70a620e05', audioId = '598f7b05-43d8-424d-a55d-6d579677c6d1';
+const accountId = '799c7d39-2d4d-4c43-8004-71872d3a021a';
 const audio = { id: audioId, name: 'fictional-speech.wav', mime: 'audio/wav', url: `/api/platform/uploads/${audioId}` };
 const turnInput = () => ({ text: 'Fictional practice question.', roleId: 'warm' as const, provider: chat, model: 'fixture-model', ensureConversation: async () => conversationId });
 const transport = (): VoiceConversationTransport => ({ async streamMessage(_, __, ___, receive) { receive({ event: 'start', data: { messageId } }); receive({ event: 'done', data: { message: { id: messageId, conversationId, role: 'assistant', status: 'complete', content: 'Fictional complete reply.' } } }); }, async request() { return { attachment: audio }; } });
@@ -133,10 +136,12 @@ test('an answer freezes its role before awaiting conversation creation and speec
 
 test('creation request cancellation propagates to actual loopback HTTP without microphone or provider execution', async () => {
   const started = deferred<void>(), closed = deferred<void>(); let requestBody: any;
-  const server = createServer(async (incoming, response) => { let body = ''; for await (const bytes of incoming) body += bytes.toString(); requestBody = JSON.parse(body); response.once('close', () => closed.resolve()); started.resolve(); });
+  const server = createServer(async (incoming, response) => { assert.equal(incoming.headers[PLATFORM_ACCOUNT_HEADER], accountId); let body = ''; for await (const bytes of incoming) body += bytes.toString(); requestBody = JSON.parse(body); response.once('close', () => closed.resolve()); started.resolve(); });
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   try {
-    const address = server.address(); assert.ok(address && typeof address !== 'string'); const client = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`));
+    const address = server.address(); assert.ok(address && typeof address !== 'string');
+    const context = new AccountRequestContext(); context.changeSession(accountId);
+    const client = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`), undefined, context);
     const controller = new AbortController(), preferences = defaultVoicePreferences();
     const pending = requestVoiceSession(voiceRealtimeBody(provider, preferences), controller.signal, () => true, client.request, () => assert.fail('No acknowledged lease to release.'));
     await started.promise; assert.equal(requestBody.voice, 'marin'); assert.equal(requestBody.persona, voicePersona('warm')); assert.equal(requestBody.turnTaking, 'patient');

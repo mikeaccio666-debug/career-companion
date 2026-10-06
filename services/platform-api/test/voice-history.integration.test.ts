@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -36,7 +37,7 @@ async function register():Promise<Actor>{
   assert.equal(response.statusCode,201,response.body);
   return {user:response.json().user,cookie:(response.headers['set-cookie'] as string).split(';')[0],ip};
 }
-async function request(actor:Actor,method:'GET'|'POST'|'DELETE',route:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+route,remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie},payload});}
+async function request(actor:Actor,method:'GET'|'POST'|'DELETE',route:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+route,remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.user.id},payload});}
 async function conversation(actor:Actor){const response=await request(actor,'POST','/conversations',{title:'Synthetic voice excerpts'});assert.equal(response.statusCode,201,response.body);return response.json().conversation;}
 function excerpt(overrides:Record<string,unknown>={}){return {clientRecordId:randomUUID(),source:'transcription_excerpt',role:'user',text:'Synthetic excerpt selected by the user',...overrides};}
 async function seedRecords(actor:Actor,conversations:string[],count:number,textBytes=1){

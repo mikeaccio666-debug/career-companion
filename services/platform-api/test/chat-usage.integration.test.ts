@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -70,7 +71,7 @@ async function register() {
 }
 type Actor = Awaited<ReturnType<typeof register>>;
 async function request(actor: Actor, method: 'GET' | 'POST' | 'DELETE', route: string, payload?: unknown) {
-  return system.app.inject({ method, url: prefix + route, headers: { cookie: actor.cookie, origin }, payload: payload as any });
+  return system.app.inject({ method, url: prefix + route, headers: { cookie: actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.userId, origin }, payload: payload as any });
 }
 async function conversation(actor: Actor) {
   const result = await request(actor, 'POST', '/conversations', { title: 'Synthetic usage conversation' });
@@ -147,7 +148,7 @@ test('accounting rejects ownership, lease, index, model and malformed count chan
 test('real HTTP disconnect cancels a pending call and releases its runtime lease', async () => {
   const actor = await register(), id = await conversation(actor), abort = new AbortController();
   const begin = new Promise<void>(resolve => { started = resolve; });
-  const response = await fetch(httpOrigin + prefix + `/conversations/${id}/messages`, { method: 'POST', headers: { cookie: actor.cookie, origin, 'Content-Type': 'application/json' },
+  const response = await fetch(httpOrigin + prefix + `/conversations/${id}/messages`, { method: 'POST', headers: { cookie: actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.userId, origin, 'Content-Type': 'application/json' },
     body: JSON.stringify({ content: 'wait', provider: 'usage-fixture', mode: 'chat' }), signal: abort.signal });
   assert.equal(response.status, 200); await begin;
   const pending = (await summary(actor)).chat; assert.equal(pending.pendingCalls, 1); assert.equal(pending.inputTokens, null);

@@ -20,6 +20,7 @@ import { servePrivateFile } from './private-files.ts';
 import { ARTIFACT_TEXT_PAGE_BYTES, ARTIFACT_TEXT_SOURCE_BYTES, parseArtifactTextQuery } from './artifact-text.ts';
 import { configureStaticWeb } from './static-web.ts';
 import { configurePlatformHttp } from './http-policy.ts';
+import { requireAccountContext } from './account-context.ts';
 import { accountUsage, chatAccounting, validTokenCount } from './chat-usage.ts';
 import { RequestLimits, type RequestLimitsOptions, type UserRequestLimitScope, type AnonymousRequestLimitScope, type RequestLimitDecision } from './request-limits.ts';
 
@@ -104,9 +105,10 @@ export async function buildApp(options:AppOptions={}) {
   async function verifiedAccount(request:FastifyRequest){
     if(config.requireVerifiedEmail && !(request as AuthRequest).platformUser.emailVerified)throw new ApiError(403,'EMAIL_VERIFICATION_REQUIRED','Verify your email to use the workspace.');
   }
-  const secured=(scope:UserRequestLimitScope)=>({preHandler:[authenticated,verifiedAccount,authenticatedLimit(scope)]});
-  const limitedAccount={preHandler:[authenticated,authenticatedLimit('control')]};
-  const secure=secured('api'),control=secured('control');
+  const accountContext=(allowFileQuery=false)=>async(request:FastifyRequest)=>requireAccountContext(request,userId(request),allowFileQuery);
+  const secured=(scope:UserRequestLimitScope,allowFileQuery=false)=>({preHandler:[authenticated,accountContext(allowFileQuery),verifiedAccount,authenticatedLimit(scope)]});
+  const limitedAccount={preHandler:[authenticated,accountContext(),authenticatedLimit('control')]};
+  const secure=secured('api'),control=secured('control'),secureFile=secured('api',true);
   function requestSignal(request:FastifyRequest,reply:FastifyReply){
     const controller=new AbortController();
     const abort=()=>{if(!reply.raw.writableFinished)controller.abort();};
@@ -301,8 +303,8 @@ export async function buildApp(options:AppOptions={}) {
   async function serveFile(request:FastifyRequest,reply:FastifyReply,artifact=false){
     return servePrivateFile(db,storage,request,reply,userId(request),params(request),artifact);
   }
-  app.route({method:['GET','HEAD'],url:`${prefix}/uploads/:id`,...secure,handler:async(request,reply)=>serveFile(request,reply)});
-  app.route({method:['GET','HEAD'],url:`${prefix}/artifacts/:id`,...secure,handler:async(request,reply)=>serveFile(request,reply,true)});
+  app.route({method:['GET','HEAD'],url:`${prefix}/uploads/:id`,...secureFile,handler:async(request,reply)=>serveFile(request,reply)});
+  app.route({method:['GET','HEAD'],url:`${prefix}/artifacts/:id`,...secureFile,handler:async(request,reply)=>serveFile(request,reply,true)});
   app.get(`${prefix}/artifacts/:id/reference-attachment`,secure,async request=>jobs.referenceAttachment(userId(request),params(request)));
   app.get(`${prefix}/artifacts/:id/text`,secure,async(request,reply)=>{
     const input=parseArtifactTextQuery(params(request),request.query),cancellation=requestSignal(request,reply);

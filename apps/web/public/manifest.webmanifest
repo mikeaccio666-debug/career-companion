@@ -8,5 +8,10 @@
   "background_color": "#f7f8f2",
   "theme_color": "#174d43",
   "description": "A mobile-ready space for chat, voice, media and agent tasks. Remote models require a network connection.",
-  "icons": [{"src":"/mark.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]
+  "icons": [
+    {"src":"/mark.svg","sizes":"any","type":"image/svg+xml","purpose":"any"},
+    {"src":"/icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"/icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
+    {"src":"/icons/maskable-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}
+  ]
 }

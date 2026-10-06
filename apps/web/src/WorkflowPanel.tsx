@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowRight, ArrowUp, Check, Copy, FolderOpen, Layers3, Loader2, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react';
 import type { CreateJobInput, WorkflowStep, WorkflowTemplate, WorkflowTemplateInput } from '@companion/platform-contracts';
+import { useRequiredPlatformAccountClient } from './account-client';
 import { ApiError, errorText } from './api';
 import { Badge, Empty, JobCard, ProviderSelect } from './ui';
 import type { Artifact, Job, Provider } from './types';
@@ -19,6 +20,7 @@ export default function WorkflowPanel({ providers, jobs, onCreate, onCancel, onR
   onBringArtifactToAgent?: (job: Job, artifact: Artifact) => void; handoffDisabled?: boolean;
 }) {
   const freshDraft = (): WorkflowDraft => ({ name: '我的第一个流程', description: '', steps: [newWorkflowStep('chat', providers)] });
+  const accountClient = useRequiredPlatformAccountClient();
   const [draft, setDraft] = useState<WorkflowDraft>(freshDraft);
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
   const [current, setCurrent] = useState<Pick<WorkflowTemplate, 'id' | 'revision'> | null>(null);
@@ -48,7 +50,7 @@ export default function WorkflowPanel({ providers, jobs, onCreate, onCancel, onR
     templateRefreshScope.current.mount('workflow-panel');
     let cancelled = false;
     const sequence = ++librarySequence.current;
-    listWorkflowTemplates().then((items) => { if (!cancelled && sequence === librarySequence.current) setTemplates(items); }).catch((error) => { if (!cancelled && sequence === librarySequence.current) onError(errorText(error)); }).finally(() => { if (!cancelled && sequence === librarySequence.current) setLoading(false); });
+    listWorkflowTemplates(accountClient).then((items) => { if (!cancelled && sequence === librarySequence.current) setTemplates(items); }).catch((error) => { if (!cancelled && sequence === librarySequence.current) onError(errorText(error)); }).finally(() => { if (!cancelled && sequence === librarySequence.current) setLoading(false); });
     return () => { cancelled = true; live.current = false; templateRefreshScope.current.dispose(); };
   }, []);
   useEffect(() => {
@@ -88,14 +90,14 @@ export default function WorkflowPanel({ providers, jobs, onCreate, onCancel, onR
   async function reloadTemplates(reloadCurrent = false) {
     const sequence = ++librarySequence.current;
     setLoading(true);
-    try { const items = await listWorkflowTemplates(); if (!live.current || sequence !== librarySequence.current) return; setTemplates(items); if (reloadCurrent && current) { const template = items.find((item) => item.id === current.id); if (template) loadTemplate(template); else { setCurrent(null); setSavedFingerprint(null); setConflict(false); setNotice('已保存模板被删除，你的草稿仍保留。'); } } }
+    try { const items = await listWorkflowTemplates(accountClient); if (!live.current || sequence !== librarySequence.current) return; setTemplates(items); if (reloadCurrent && current) { const template = items.find((item) => item.id === current.id); if (template) loadTemplate(template); else { setCurrent(null); setSavedFingerprint(null); setConflict(false); setNotice('已保存模板被删除，你的草稿仍保留。'); } } }
     catch (error) { onError(errorText(error)); } finally { if (live.current && sequence === librarySequence.current) setLoading(false); }
   }
   async function save() {
     try {
       const input = serializeWorkflowDraft(draft); const captured = fingerprint(draft);
       ++librarySequence.current; setLoading(false); setPending(true); setNotice('');
-      const template = await saveWorkflowTemplate(input, current || undefined);
+      const template = await saveWorkflowTemplate(input, current || undefined, accountClient);
       if (!live.current) return;
       setTemplates((items) => [template, ...items.filter((item) => item.id !== template.id)]);
       setCurrent({ id: template.id, revision: template.revision }); setSavedFingerprint(captured); setConflict(false); setNotice(`已保存私有模板 · 版本 ${template.revision}`);
@@ -105,7 +107,7 @@ export default function WorkflowPanel({ providers, jobs, onCreate, onCancel, onR
   async function deleteCurrent() {
     if (!current) return;
     const id = current.id; ++librarySequence.current; setLoading(false); setPending(true);
-    try { await deleteWorkflowTemplate(id); if (!live.current) return; setTemplates((items) => items.filter((item) => item.id !== id)); setCurrent(null); setSavedFingerprint(null); setConflict(false); setNotice('已删除保存的模板，当前草稿仍可编辑或重新保存。'); }
+    try { await deleteWorkflowTemplate(id, accountClient); if (!live.current) return; setTemplates((items) => items.filter((item) => item.id !== id)); setCurrent(null); setSavedFingerprint(null); setConflict(false); setNotice('已删除保存的模板，当前草稿仍可编辑或重新保存。'); }
     catch (error) { onError(errorText(error)); } finally { if (live.current) setPending(false); }
   }
   function prepareReview(event: React.FormEvent) {

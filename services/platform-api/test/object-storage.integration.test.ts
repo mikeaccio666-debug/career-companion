@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -50,7 +51,7 @@ test('real local S3 storage and private HTTP Range delivery', {skip:!enabled,tim
   let createdBucket=false,createdSchema=false,system:Awaited<ReturnType<typeof buildApp>>|undefined,appOrigin:URL;
   const forbidden=async()=>{throw new Error('No commercial calls are permitted in object-storage fixtures.');};
   const runtime:PlatformProviderRuntime={capabilities:()=>[],streamChat:async function*(){throw new Error('No model use');},executeJob:forbidden,createVoiceSession:forbidden,transcribe:forbidden,speech:forbidden};
-  const exchange=(route:string,actor?:Actor,options:{method?:string;headers?:Record<string,string>;body?:string}={})=>request(new URL(prefix+route,appOrigin),{...options,headers:{...(actor?{cookie:actor.cookie}:{}),...options.headers}});
+  const exchange=(route:string,actor?:Actor,options:{method?:string;headers?:Record<string,string>;body?:string}={})=>request(new URL(prefix+route,appOrigin),{...options,headers:{...(actor?{cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id}:{}),...options.headers}});
   const register=async(name:string):Promise<Actor>=>{
     const response=await exchange('/auth/register',undefined,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({name,email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'})});
     assert.equal(response.status,201);const payload=JSON.parse(response.bytes.toString());return {id:payload.user.id,cookie:response.headers['set-cookie']![0]!.split(';')[0]!};

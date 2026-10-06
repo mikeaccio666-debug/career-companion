@@ -1,3 +1,4 @@
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -51,7 +52,7 @@ async function register():Promise<Actor>{
   const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:ip,headers:{origin},payload:{name:'Synthetic provider-routing tester',email:`voice-provider-${randomUUID()}@example.invalid`,password:'Synthetic-password-123'}});
   assert.equal(response.statusCode,201,response.body);return {user:response.json().user,cookie:(response.headers['set-cookie'] as string).split(';')[0],ip};
 }
-async function request(actor:Actor,route:string,payload:Record<string,unknown>){return system.app.inject({method:'POST',url:prefix+route,remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie},payload});}
+async function request(actor:Actor,route:string,payload:Record<string,unknown>){return system.app.inject({method:'POST',url:prefix+route,remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.user.id},payload});}
 type Part={name:string;value:string;mime?:string}|{name:string;bytes:Buffer;filename?:string;mime?:string};
 async function multipart(actor:Actor,parts:Part[],route='/voice/transcribe'){
   const boundary=`synthetic-voice-${randomUUID()}`,chunks:Buffer[]=[];
@@ -61,7 +62,7 @@ async function multipart(actor:Actor,parts:Part[],route='/voice/transcribe'){
     chunks.push(file?part.bytes:Buffer.from(part.value));chunks.push(Buffer.from('\r\n'));
   }
   chunks.push(Buffer.from(`--${boundary}--\r\n`));
-  return system.app.inject({method:'POST',url:prefix+route,remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie,'content-type':`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat(chunks)});
+  return system.app.inject({method:'POST',url:prefix+route,remoteAddress:actor.ip,headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.user.id,'content-type':`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat(chunks)});
 }
 const audio:Part={name:'file',bytes:wav()};
 async function state(actor:Actor){return {leases:(await db.query('SELECT count(*)::integer AS n FROM platform_runtime_leases WHERE user_id=$1',[actor.user.id])).rows[0].n,usage:(await db.query('SELECT count(*)::integer AS n FROM platform_usage WHERE user_id=$1',[actor.user.id])).rows[0].n,sessions:(await db.query('SELECT count(*)::integer AS n FROM platform_voice_sessions WHERE user_id=$1',[actor.user.id])).rows[0].n};}
@@ -114,7 +115,7 @@ test('Kokoro speech selection reaches only its adapter and returns private audio
   assert.deepEqual(calls.slice(beforeCalls),[{kind:'speech',provider:'kokoro',input:{provider:'kokoro',text:'A fictional English narration.',voice:undefined,model:undefined}}]);
   const attachment=spoken.json().attachment;assert.equal(attachment.mime,'audio/wav');
   assert.equal((await db.query('SELECT user_id FROM platform_uploads WHERE id=$1',[attachment.id])).rows[0].user_id,actor.user.id);
-  const playback=await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip,headers:{cookie:actor.cookie}});assert.equal(playback.statusCode,200,playback.body);assert.deepEqual(playback.rawPayload,wav());
+  const playback=await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip,headers:{cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.user.id}});assert.equal(playback.statusCode,200,playback.body);assert.deepEqual(playback.rawPayload,wav());
   assert.deepEqual(await state(actor),{leases:0,usage:0,sessions:0});
   const beforeRejectedCalls=calls.length;
   const realtime=await request(actor,'/voice/session',{provider:'kokoro'});assert.equal(realtime.statusCode,503,realtime.body);assert.equal(realtime.json().error.code,'PROVIDER_UNAVAILABLE');
@@ -168,10 +169,10 @@ test('explicit OGG and FLAC uploads remain private downloads and do not call a v
     const bytes=Buffer.from(signature+'Synthetic uploaded container fixture.');
     const uploaded=await multipart(actor,[{name:'file',bytes,filename:`fictional.${extension}`,mime}],'/uploads');assert.equal(uploaded.statusCode,201,uploaded.body);
     const attachment=uploaded.json().attachment;assert.equal(attachment.mime,mime);assert.equal(attachment.size,bytes.length);
-    const read=await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip,headers:{cookie:actor.cookie}});
+    const read=await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip,headers:{cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.user.id}});
     assert.equal(read.statusCode,200,read.body);assert.deepEqual(read.rawPayload,bytes);assert.equal(read.headers['content-type'],mime);
     assert.equal(read.headers['cache-control'],'private, no-store');assert.equal(read.headers['x-content-type-options'],'nosniff');assert.match(String(read.headers['content-disposition']),/^attachment;/);
-    const denied=await system.app.inject({method:'GET',url:attachment.url,remoteAddress:other.ip,headers:{cookie:other.cookie}});assert.equal(denied.statusCode,404,denied.body);
+    const denied=await system.app.inject({method:'GET',url:attachment.url,remoteAddress:other.ip,headers:{cookie:other.cookie, [PLATFORM_ACCOUNT_HEADER]: other.user.id}});assert.equal(denied.statusCode,404,denied.body);
     assert.equal((await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip})).statusCode,401);
   }
   assert.equal(calls.length,beforeCalls);assert.deepEqual(await state(actor),{leases:0,usage:0,sessions:0});
@@ -237,8 +238,8 @@ test('speech expression is bounded, preserved for the selected runtime and priva
   assert.equal(spoken.statusCode,201,spoken.body);
   assert.deepEqual(calls[beforeCalls].input,{provider:'fixture-voice',text:'A fictional practice reply.',voice:'synthetic-fixed-voice',model:undefined,instructions});
   const attachment=spoken.json().attachment,other=await register();
-  assert.equal((await system.app.inject({method:'GET',url:attachment.url,remoteAddress:other.ip,headers:{cookie:other.cookie}})).statusCode,404);
-  assert.equal((await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip,headers:{cookie:actor.cookie}})).statusCode,200);
+  assert.equal((await system.app.inject({method:'GET',url:attachment.url,remoteAddress:other.ip,headers:{cookie:other.cookie, [PLATFORM_ACCOUNT_HEADER]: other.user.id}})).statusCode,404);
+  assert.equal((await system.app.inject({method:'GET',url:attachment.url,remoteAddress:actor.ip,headers:{cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.user.id}})).statusCode,200);
   assert.deepEqual(await state(actor),{leases:0,usage:0,sessions:0});
   const maximum=await request(actor,'/voice/speech',{provider:'fixture-voice',text:'Fictional bounded expression.',instructions:'x'.repeat(2000)});
   assert.equal(maximum.statusCode,201,maximum.body);assert.equal((calls.at(-1)!.input as SpeechInput).instructions?.length,2000);

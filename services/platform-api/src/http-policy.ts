@@ -2,10 +2,11 @@ import cors from '@fastify/cors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 
 const prefix = '/api/platform';
 const methods = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'];
-const allowedHeaders = ['Content-Type', 'Accept', 'Range', 'If-Range', 'If-Match'];
+const allowedHeaders = ['Content-Type', 'Accept', 'Range', 'If-Range', 'If-Match', PLATFORM_ACCOUNT_HEADER];
 const allowedHeaderNames = new Set(allowedHeaders.map(value => value.toLowerCase()));
 const exposedHeaders = ['Content-Range', 'Accept-Ranges', 'Content-Length', 'ETag', 'Content-Disposition', 'Retry-After'];
 

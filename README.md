@@ -94,7 +94,7 @@ pnpm build:web
 - [本地验证记录](docs/platform/verification.md)：平台测试、官方 Codex 隔离执行、语音摘录、手机尺寸界面和真实浏览器任务的结果，以及未验证的部分。
 - [网页说明](apps/web/README.md)、[API 说明](services/platform-api/README.md)、[执行器说明](packages/ai-core/README.md)。
 
-手机布局已提供抽屉导航和 PWA 清单。离线缓存只含静态界面，对话、语音和生成仍需联网。当前服务只监听本机，真机远程访问、HTTPS、安装与麦克风兼容性需要另行验证。
+手机布局已提供抽屉导航；PWA 使用 Vite PWA／Workbox 生成、完整性校验公开资源及提示后自然更新，离线新页提供公共连接入口。两版真实生产构建的离线／更新／失败保留旧版已通过本地 Chrome 验收，详见 [手机网页与 PWA](docs/platform/mobile-web.md)。对话、资料、语音和生成仍需联网；真机 HTTPS、安装、麦克风、键盘与 WebRTC 仍待设备测试。
 
 ## 求职产品与迁移背景
 

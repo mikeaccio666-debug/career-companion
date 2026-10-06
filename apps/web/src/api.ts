@@ -1,13 +1,27 @@
-import { createPlatformEndpoints, type PlatformEndpoints } from './platform-endpoints.ts';
+import { PLATFORM_ACCOUNT_HEADER, platformAccountId } from '@companion/platform-contracts';
+import { createPlatformEndpoints, type PlatformEndpoints, type PrivateFileOptions } from './platform-endpoints.ts';
+import { AccountRequestContext, AccountRequestInvalidated, platformAccountContext, type AccountRequestLease, type CapturedAccount } from './account-context.ts';
 const endpoints = createPlatformEndpoints(import.meta.env?.VITE_PLATFORM_API_ORIGIN);
 export const apiUrl = endpoints.apiUrl;
-export const privateFileUrl = endpoints.privateFileUrl;
+export function privateFileUrl(value: unknown, options: PrivateFileOptions & { account?: CapturedAccount } = {}): string | undefined {
+  if (options.account) return platformAccountContext.isCurrent(options.account) ? endpoints.privateFileUrl(value, { ...options, accountId: options.account.accountId }) : undefined;
+  return endpoints.privateFileUrl(value, { ...options, accountId: options.accountId ?? platformAccountContext.capture()?.accountId });
+}
 export class ApiError extends Error {
   status: number;
   code?: string;
   retryAfterMs?: number;
   constructor(message: string, status = 0, code?: string, retryAfterMs?: number) { super(message); this.name = 'ApiError'; this.status = status; this.code = code; this.retryAfterMs = retryAfterMs; }
 }
+export type SuccessfulAuthPath = '/auth/login' | '/auth/register' | '/auth/password-reset/complete';
+export interface SuccessfulAuthResponse { readonly path: SuccessfulAuthPath; }
+export interface PlatformClientOptions { onAuthResponseHeaders?: (event: SuccessfulAuthResponse) => void; }
+const authResponseListeners = new Set<(event: SuccessfulAuthResponse) => void>();
+/** Neutral notification port. No response identity or cookie value is supplied to subscribers. */
+export function subscribeAuthResponseHeaders(listener: (event: SuccessfulAuthResponse) => void): () => void {
+  authResponseListeners.add(listener); return () => authResponseListeners.delete(listener);
+}
+function publishAuthResponseHeaders(event: SuccessfulAuthResponse) { for (const listener of [...authResponseListeners]) { try { void Promise.resolve(listener(event)).catch(() => {}); } catch { /* A failed notification cannot reinterpret a completed authentication response. */ } } }
 /** HTTP delay seconds or an HTTP date; unavailable/malformed headers leave fallback timing to the caller. */
 export function retryAfterMilliseconds(value: string | null, now = Date.now()): number | undefined {
   if (!value) return undefined;
@@ -48,61 +62,165 @@ export function parseEventBlock(block: string): StreamEvent | null {
   if (content === '[DONE]') return { event: 'done', data: {} };
   try { return { event, data: JSON.parse(content) }; } catch { return { event, data: { text: content } }; }
 }
-async function readMessageStream(response: Response, onEvent: (event: StreamEvent) => void): Promise<void> {
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    const detail = error?.error ?? error;
-    throw new ApiError(typeof detail === 'string' ? detail : detail?.message || `请求失败 (${response.status})`, response.status, detail?.code, retryAfterMilliseconds(response.headers.get('Retry-After')));
-  }
+async function readMessageStream(response: Response, onEvent: (event: StreamEvent) => void, lease: AccountRequestLease): Promise<void> {
   if (!response.body) throw new ApiError('服务没有返回可读取的响应。');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let terminal = false;
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  lease.signal.addEventListener('abort', cancel, { once: true });
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      lease.assertCurrent();
+      const { value, done } = await lease.wait(reader.read());
       buffer += decoder.decode(value, { stream: !done });
       buffer = buffer.replace(/\r\n/g, '\n');
       let boundary = buffer.indexOf('\n\n');
       while (boundary !== -1) {
         const parsed = parseEventBlock(buffer.slice(0, boundary));
         buffer = buffer.slice(boundary + 2);
-        if (parsed) { onEvent(parsed); if (parsed.event === 'done' || parsed.event === 'error') terminal = true; }
+        if (parsed) { lease.assertCurrent(); onEvent(parsed); if (parsed.event === 'done' || parsed.event === 'error') terminal = true; }
         boundary = buffer.indexOf('\n\n');
       }
       if (done) break;
     }
-    if (buffer.trim()) { const parsed = parseEventBlock(buffer); if (parsed) { onEvent(parsed); terminal ||= parsed.event === 'done' || parsed.event === 'error'; } }
+    if (buffer.trim()) { const parsed = parseEventBlock(buffer); if (parsed) { lease.assertCurrent(); onEvent(parsed); terminal ||= parsed.event === 'done' || parsed.event === 'error'; } }
+    lease.assertCurrent();
     if (!terminal) throw new ApiError('响应连接提前结束。请刷新会话确认已保存的内容。');
-  } finally { reader.releaseLock(); }
+  } finally { lease.signal.removeEventListener('abort', cancel); if (!terminal || lease.signal.aborted) cancel(); reader.releaseLock(); }
 }
 
-/** The same transport is used in production and tests; uploads keep browser multipart boundaries. */
-export function createPlatformClient(target: PlatformEndpoints, transport: typeof fetch = (input, init) => fetch(input, init)) {
-  return {
-    async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-      const url = target.apiUrl(path);
-      const headers = new Headers(init.headers);
-      if (init.body != null && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-      let response: Response;
-      try { response = await transport(url, { ...init, credentials: 'include', redirect: 'error', headers }); }
-      catch (error) { if (init.signal?.aborted) throw error; throw new ApiError('无法连接工作台 API。请检查服务地址和网络连接。'); }
-      const body = await response.text();
-      let data: any = null;
-      try { data = body ? JSON.parse(body) : null; } catch { /* HTTP errors can be plain text. */ }
-      if (!response.ok) {
-        const detail = data?.error ?? data;
-        throw new ApiError(typeof detail === 'string' ? detail : detail?.message || `请求失败 (${response.status})`, response.status, detail?.code, retryAfterMilliseconds(response.headers.get('Retry-After')));
+export interface BoundPlatformClient {
+  readonly account: CapturedAccount;
+  isCurrent(): boolean;
+  subscribe(listener: () => void): () => void;
+  request<T>(path: string, init?: RequestInit): Promise<T>;
+  post<T>(path: string, body?: unknown): Promise<T>;
+  remove(path: string): Promise<unknown>;
+  streamMessage(id: string, body: unknown, signal: AbortSignal, onEvent: (event: StreamEvent) => void): Promise<void>;
+  privateFileUrl(value: unknown, options?: { download?: boolean }): string | undefined;
+  readPrivateFileText(value: unknown, signal?: AbortSignal): Promise<string>;
+  cleanup(path: '/auth/logout' | '/voice/session/release', init?: RequestInit): Promise<void>;
+}
+
+/** Exact method/path exemptions only; a public GET never grants access to a private POST. */
+export function isPublicPlatformRequest(path: string, method = 'GET'): boolean {
+  const verb = method.toUpperCase();
+  if (verb === 'GET' || verb === 'HEAD') return ['/health', '/capabilities', '/auth/options', '/auth/me'].includes(path);
+  return verb === 'POST' && ['/auth/login', '/auth/register', '/auth/password-reset/request', '/auth/password-reset/complete'].includes(path);
+}
+function parsedBody(body: string): any { try { return body ? JSON.parse(body) : null; } catch { return null; } }
+function responseError(response: Response, data: any): ApiError {
+  const detail = data?.error ?? data;
+  return new ApiError(typeof detail === 'string' ? detail : detail?.message || `请求失败 (${response.status})`, response.status, detail?.code, retryAfterMilliseconds(response.headers.get('Retry-After')));
+}
+function waitForSignal<T>(work: Promise<T>, signal?: AbortSignal | null): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) { void work.catch(() => {}); return Promise.reject(signal.reason); }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+    signal.addEventListener('abort', abort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
+/** All private work captures intent before its first await; it never adopts a later window account. */
+export function createPlatformClient(target: PlatformEndpoints, transport: typeof fetch = (input, init) => fetch(input, init), context: AccountRequestContext = platformAccountContext, options: PlatformClientOptions = {}) {
+  const capture = (): CapturedAccount => {
+    const account = context.capture();
+    if (!account) { context.invalidate('account-context-required'); throw new ApiError('请重新确认账号后继续。', 409, 'ACCOUNT_CONTEXT_REQUIRED'); }
+    return account;
+  };
+  const invalidation = (error: ApiError, account?: CapturedAccount) => {
+    if (!account || !context.isCurrent(account)) return;
+    if (error.status === 401) context.invalidate('authentication-required');
+    else if (error.status === 409 && error.code === 'ACCOUNT_CONTEXT_CHANGED') context.invalidate('account-context-changed');
+    else if (error.status === 409 && error.code === 'ACCOUNT_CONTEXT_REQUIRED') context.invalidate('account-context-required');
+  };
+  const headersFor = (init: RequestInit, account?: CapturedAccount) => {
+    const headers = new Headers(init.headers);
+    headers.delete(PLATFORM_ACCOUNT_HEADER);
+    if (account) headers.set(PLATFORM_ACCOUNT_HEADER, account.accountId);
+    if (init.body != null && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    return headers;
+  };
+  async function fetchResponse(url: string, init: RequestInit, lease?: AccountRequestLease): Promise<Response> {
+    lease?.assertCurrent(); init.signal?.throwIfAborted();
+    try { const work = transport(url, { ...init, credentials: 'include', redirect: 'error', ...(lease ? { signal: lease.signal } : {}) }); return lease ? await lease.wait(work) : await work; }
+    catch (error) { lease?.assertCurrent(); if (init.signal?.aborted) throw error; throw new ApiError('无法连接工作台 API。请检查服务地址和网络连接。'); }
+  }
+  async function requestCaptured<T>(path: string, init: RequestInit = {}, fixed?: CapturedAccount): Promise<T> {
+    const url = target.apiUrl(path), account = isPublicPlatformRequest(path, init.method) ? undefined : fixed ?? capture();
+    const requestSession = context.getSnapshot();
+    const changesCookie = init.method?.toUpperCase() === 'POST' && ['/auth/login', '/auth/register', '/auth/password-reset/complete'].includes(path);
+    const lease = account ? context.lease(account, init.signal) : undefined;
+    try {
+      const response = await fetchResponse(url, { ...init, headers: headersFor(init, account) }, lease);
+      // Set-Cookie takes effect at headers, before body parsing or the caller's mounted/live check.
+      if (response.ok && changesCookie) {
+        if (context.getSnapshot() !== requestSession) context.invalidate('local-auth-change');
+        try { void Promise.resolve(options.onAuthResponseHeaders?.(Object.freeze({ path: path as SuccessfulAuthPath }))).catch(() => {}); } catch { /* Notify failures do not adopt response identity or replay authentication. */ }
       }
+      const body = lease ? await lease.wait(response.text()) : await waitForSignal(response.text(), init.signal);
+      init.signal?.throwIfAborted(); lease?.assertCurrent();
+      if (response.ok && changesCookie && context.getSnapshot() !== requestSession) throw new AccountRequestInvalidated();
+      const data = parsedBody(body);
+      if (!response.ok) { const error = responseError(response, data); invalidation(error, account); throw error; }
       return data as T;
-    },
-    async streamMessage(id: string, body: unknown, signal: AbortSignal, onEvent: (event: StreamEvent) => void): Promise<void> {
-      const url = target.apiUrl(`/conversations/${encodeURIComponent(id)}/messages`);
-      const response = await transport(url, { method: 'POST', credentials: 'include', redirect: 'error', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(body), signal });
-      await readMessageStream(response, onEvent);
+    } finally { lease?.dispose(); }
+  }
+  async function streamCaptured(id: string, body: unknown, signal: AbortSignal, onEvent: (event: StreamEvent) => void, fixed?: CapturedAccount): Promise<void> {
+    const url = target.apiUrl(`/conversations/${encodeURIComponent(id)}/messages`), account = fixed ?? capture();
+    const lease = context.lease(account, signal);
+    try {
+      const init = { method: 'POST', body: JSON.stringify(body), headers: { Accept: 'text/event-stream' } };
+      const response = await fetchResponse(url, { ...init, headers: headersFor(init, account) }, lease);
+      if (!response.ok) { const error = responseError(response, parsedBody(await lease.wait(response.text()))); invalidation(error, account); throw error; }
+      await readMessageStream(response, onEvent, lease);
+    } finally { lease.dispose(); }
+  }
+  const client = {
+    request: requestCaptured,
+    streamMessage: streamCaptured,
+    capture(account: CapturedAccount = capture()): BoundPlatformClient {
+      if (!platformAccountId(account.accountId) || !Number.isSafeInteger(account.generation) || account.generation < 0) throw new Error('账号上下文无效。');
+      const fixed = Object.freeze({ accountId: account.accountId, generation: account.generation });
+      return Object.freeze({
+        account: fixed,
+        isCurrent: () => context.isCurrent(fixed),
+        subscribe: context.subscribe,
+        request: <T>(path: string, init: RequestInit = {}) => requestCaptured<T>(path, init, fixed),
+        post: <T>(path: string, body: unknown = {}) => requestCaptured<T>(path, { method: 'POST', body: JSON.stringify(body) }, fixed),
+        remove: (path: string) => requestCaptured(path, { method: 'DELETE' }, fixed),
+        streamMessage: (id: string, body: unknown, signal: AbortSignal, onEvent: (event: StreamEvent) => void) => streamCaptured(id, body, signal, onEvent, fixed),
+        privateFileUrl: (value: unknown, options?: { download?: boolean }) => context.isCurrent(fixed) ? target.privateFileUrl(value, { ...options, accountId: fixed.accountId }) : undefined,
+        async readPrivateFileText(value: unknown, signal?: AbortSignal): Promise<string> {
+          const url = target.privateFileUrl(value, { accountId: fixed.accountId });
+          if (!url) throw new Error('私人文件地址无效。');
+          const lease = context.lease(fixed, signal);
+          try {
+            const response = await fetchResponse(url, { signal, headers: headersFor({}, fixed) }, lease);
+            const text = await lease.wait(response.text());
+            if (!response.ok) { const error = responseError(response, parsedBody(text)); invalidation(error, fixed); throw error; }
+            lease.assertCurrent(); return text;
+          } finally { lease.dispose(); }
+        },
+        async cleanup(path: '/auth/logout' | '/voice/session/release', init: RequestInit = {}): Promise<void> {
+          if (!['/auth/logout', '/voice/session/release'].includes(path) || init.method && init.method.toUpperCase() !== 'POST') throw new Error('账号清理路径无效。');
+          // Cleanup is narrowly allowed after invalidation, always under A's assertion; no identity or private result is published.
+          const input = { ...init, method: 'POST', keepalive: true };
+          const response = await fetchResponse(target.apiUrl(path), { ...input, headers: headersFor(input, fixed) });
+          if (!response.ok) throw responseError(response, parsedBody(await response.text()));
+        },
+      });
     },
   };
+  return client;
 }
-const client = createPlatformClient(endpoints);
+const client = createPlatformClient(endpoints, undefined, platformAccountContext, { onAuthResponseHeaders: publishAuthResponseHeaders });
+export const capturePlatformClient = (account?: CapturedAccount): BoundPlatformClient | null => {
+  const captured = account ?? platformAccountContext.capture();
+  return captured ? client.capture(captured) : null;
+};
 export const streamMessage = (id: string, body: unknown, signal: AbortSignal, onEvent: (event: StreamEvent) => void): Promise<void> => client.streamMessage(id, body, signal, onEvent);

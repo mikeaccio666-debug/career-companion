@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowRight, AudioLines, Check, CircleStop, Headphones, MessageCircle, Mic, Play, Radio, Save, Upload, Volume2 } from 'lucide-react';
 import type { VoiceRecord, VoiceRecordInput } from '@companion/platform-contracts';
-import { entity, errorText, request, streamMessage } from './api';
+import { entity, errorText, type BoundPlatformClient } from './api';
+import { useRequiredPlatformAccountClient } from './account-client';
 import { ArtifactView, Badge, ProviderSelect } from './ui';
 import type { Artifact, Conversation, Provider } from './types';
 import VoiceRecords from './VoiceRecords';
@@ -11,6 +12,7 @@ import { disposeVoiceSession, microphoneErrorText, requestVoiceSession } from '.
 import { voiceCapabilities, voiceControls } from './voice-capabilities';
 import { appendTranscriptionText, transcribeAudio, TRANSCRIPTION_AUDIO_ACCEPT } from './voice-transcription';
 import { BrowserVoiceRecording, supportedRecordingMimeType } from './voice-recording';
+import { holdPrivateResource } from './private-media';
 import { selectedConversationProvider, voiceAnswerSpeechProblem, voiceConversationFor, voiceConversationModels, voiceConversationProviderReady } from './voice-conversation';
 import { copyVoicePreferences, retainedVoice, voiceAudioConfiguration, voicePersonality, voiceRealtimeBody, voiceSelectionProblem, voiceSpeechBody, type VoicePreferences } from './voice-personality';
 import { VoiceAudioLabel, VoicePersonalityPicker, VoiceSoundPicker, VoiceTurnTakingPicker } from './VoicePersonalityControls';
@@ -30,7 +32,9 @@ interface VoicePanelProps {
   onConversationChanged?: (conversationId: string) => void;
   onError: (error: string) => void;
 }
-export default function VoicePanel({ draft, providers, conversation, records, onEnsureConversation, onSaveRecord, onBringToChat, onOpenConversation, onConversationChanged, onError }: VoicePanelProps) {
+export default function VoicePanel({ draft, providers, conversation, records, onEnsureConversation, onSaveRecord, onBringToChat: bringToChat, onOpenConversation: openConversation, onConversationChanged, onError }: VoicePanelProps) {
+  const accountClient = useRequiredPlatformAccountClient();
+  const { request, streamMessage } = accountClient;
   const { providerId, transcriptionProviderId, speechProviderId, chatProviderId, chatModel, voicePreferences, text, hasTranscription, speechSnapshot, turns, inputTranscriptionEnabled, notice, savedClientIds } = useSyncExternalStore(draft.subscribe, draft.getSnapshot);
   const voiceConversation = useMemo(() => voiceConversationFor(draft), [draft]);
   const turn = useSyncExternalStore(voiceConversation.subscribe, voiceConversation.getSnapshot);
@@ -55,7 +59,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   const remoteAudio = useRef<HTMLAudioElement | null>(null);
   const connectionActive = useRef(false);
   const connectionAttempt = useRef(0);
-  const sessionLease = useRef<string | null>(null);
+  const sessionLease = useRef<{ sessionId: string; client: BoundPlatformClient } | null>(null);
   const sessionCreation = useRef<AbortController | null>(null);
   const leaseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editor = useRef(draft.edit());
@@ -86,6 +90,9 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   const answerSpeechProblem = speechVoiceProblem || voiceAnswerSpeechProblem(turn.answer, speechProvider);
   const allRealtimeInputs = turns.flatMap((turn) => turn.inputs);
   const hasUnsavedTurns = allRealtimeInputs.some((input) => !savedIds.has(input.clientRecordId));
+  const currentOrigin = (origin: VoiceDraftEditor) => accountClient.isCurrent() && origin.isCurrent();
+  const onBringToChat = (content: string) => { if (currentOrigin(editor.current)) bringToChat(content); };
+  const onOpenConversation = openConversation ? (id: string) => { if (currentOrigin(editor.current)) openConversation(id); } : undefined;
   function setProviderId(id: string) { editor.current.update((value) => ({ ...value, providerId: id })); }
   function setTranscriptionProviderId(id: string) { editor.current.update((value) => ({ ...value, transcriptionProviderId: id })); }
   function setSpeechProviderId(id: string) { editor.current.update((value) => ({ ...value, speechProviderId: id })); }
@@ -103,85 +110,97 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   }, [providers, providerId, transcriptionProviderId, speechProviderId, chatProviderId]);
   function releaseMedia() { const stream = microphone.current; microphone.current = null; disposeVoiceSession({ controllers: [], microphone: stream }); }
   function releaseLease() {
-    const sessionId = sessionLease.current; sessionLease.current = null;
+    const lease = sessionLease.current; sessionLease.current = null;
     if (leaseTimeout.current) { clearTimeout(leaseTimeout.current); leaseTimeout.current = null; }
-    if (sessionId) request('/voice/session/release', { method: 'POST', body: JSON.stringify({ sessionId }), keepalive: true }).catch(() => {});
+    if (lease) lease.client.cleanup('/voice/session/release', { body: JSON.stringify({ sessionId: lease.sessionId }) }).catch(() => {});
   }
-  function stopLive() { connectionAttempt.current++; sessionCreation.current?.abort(); sessionCreation.current = null; releaseLease(); connectionActive.current = false; activeWork.current.realtime = false; negotiation.current?.abort(); negotiation.current = null; peer.current?.close(); peer.current = null; if (remoteAudio.current) { remoteAudio.current.pause(); remoteAudio.current.srcObject = null; remoteAudio.current = null; } releaseMedia(); setLive('idle'); setStatus('实时会话已结束；收到的完整转写片段仍可保存'); }
+  function stopLive() {
+    connectionAttempt.current++; releaseLease(); connectionActive.current = false; activeWork.current.realtime = false;
+    disposeVoiceSession({ controllers: [...(sessionCreation.current ? [sessionCreation.current] : []), ...(negotiation.current ? [negotiation.current] : [])], peer: peer.current, microphone: microphone.current, audio: remoteAudio.current });
+    sessionCreation.current = null; negotiation.current = null; peer.current = null; remoteAudio.current = null; microphone.current = null;
+    if (accountClient.isCurrent()) { setLive('idle'); setStatus('实时会话已结束；收到的完整转写片段仍可保存'); }
+  }
   useEffect(() => {
     editor.current = draft.edit();
-    voiceConversation.activate(() => editor.current.isCurrent());
+    voiceConversation.activate(() => accountClient.isCurrent() && editor.current.isCurrent());
     const unsubscribe = draft.subscribe(() => { if (!draft.isCurrent()) voiceConversation.clear(); });
-    return () => {
-      const departure = voiceDepartureNotice(activeWork.current);
-      if (departure) draft.update((value) => ({ ...value, notice: departure }));
+    const dispose = () => {
       editor.current.close(); connectionAttempt.current++; releaseLease(); connectionActive.current = false;
-      unsubscribe(); voiceConversation.deactivate();
+      voiceConversation.deactivate();
       disposeVoiceSession({ controllers: [...pendingRequests.current, ...(negotiation.current ? [negotiation.current] : [])], recognition: recognition.current, recording: recorder.current, peer: peer.current, microphone: recorder.current ? null : microphone.current, audio: remoteAudio.current });
       pendingRequests.current.clear(); negotiation.current = null; transcriptionRequest.current = null; speechRequest.current = null; importChoice.current = null; recognition.current = null; recorder.current = null; peer.current = null; microphone.current = null; remoteAudio.current = null;
       activeWork.current = { recording: false, transcribing: false, speaking: false, recognizing: false, realtime: false };
     };
-  }, [draft, voiceConversation]);
+    const stopAccount = holdPrivateResource(accountClient, () => { dispose(); if (!accountClient.isCurrent()) voiceConversation.clear(); });
+    return () => {
+      const departure = accountClient.isCurrent() ? voiceDepartureNotice(activeWork.current) : '';
+      if (departure) draft.update((value) => ({ ...value, notice: departure }));
+      unsubscribe(); stopAccount();
+    };
+  }, [accountClient, draft, voiceConversation]);
   async function saveInputs(inputs: VoiceRecordInput[]) {
-    if (savingActive.current || !inputs.length || !draft.isCurrent()) return;
+    if (!accountClient.isCurrent() || savingActive.current || !inputs.length || !draft.isCurrent()) return;
     const origin = editor.current;
     savingActive.current = true; setSaving(true);
     try {
       const targetId = await onEnsureConversation();
+      if (!currentOrigin(origin)) return;
       let added = 0;
       for (const input of inputs) {
-        if (!draft.isCurrent()) return;
+        if (!currentOrigin(origin)) return;
         if (draft.getSnapshot().savedClientIds.includes(input.clientRecordId)) continue;
         await onSaveRecord(targetId, input);
+        if (!currentOrigin(origin)) return;
         draft.update((value) => ({ ...value, savedClientIds: [...value.savedClientIds, input.clientRecordId] })); added++;
       }
-      if (origin.isCurrent()) setStatus(added ? `已保存 ${added} 条语音摘录到会话历史` : '这些摘录已经保存');
-    } catch (error) { if (origin.isCurrent()) onError(`语音摘录未全部保存，可重试继续保存：${errorText(error)}`); }
-    finally { savingActive.current = false; if (origin.isCurrent()) setSaving(false); }
+      if (currentOrigin(origin)) setStatus(added ? `已保存 ${added} 条语音摘录到会话历史` : '这些摘录已经保存');
+    } catch (error) { if (currentOrigin(origin)) onError(`语音摘录未全部保存，可重试继续保存：${errorText(error)}`); }
+    finally { savingActive.current = false; if (currentOrigin(origin)) setSaving(false); }
   }
   function currentTranscriptInput() {
     return editor.current.transcript();
   }
   async function transcribe(audio: Blob, source: '录音' | '音频文件', origin: VoiceDraftEditor, chosenProvider: string) {
-    if (!origin.isCurrent() || transcriptionRequest.current || microphonePending.current) return;
+    if (!currentOrigin(origin) || transcriptionRequest.current || microphonePending.current) return;
     const capability = voiceCapabilities(providers.find((entry) => entry.id === chosenProvider)).transcription;
     if (!capability.available) { onError(capability.reason); return; }
     const controller = new AbortController(); transcriptionRequest.current = controller; pendingRequests.current.add(controller);
     activeWork.current.transcribing = true; setTranscribing(true); setStatus(`正在将${source}交给所选服务转写；原有文字会保留。`);
     try {
       const result = await transcribeAudio(audio, chosenProvider, controller.signal, request);
-      if (!result) { if (origin.isCurrent()) setStatus('没有检测到清晰的语音；原有文字已保留，没有新增摘录。'); return; }
+      if (!currentOrigin(origin)) return;
+      if (!result) { setStatus('没有检测到清晰的语音；原有文字已保留，没有新增摘录。'); return; }
       if (origin.update((value) => ({ ...value, text: appendTranscriptionText(value.text, result), hasTranscription: true, notice: '' }))) setStatus(`${source}已转成文字；请审阅后保存或带回对话草稿。`);
-    } catch (error) { if (origin.isCurrent()) { if (controller.signal.aborted) setStatus('转写已取消，原有文字已保留。'); else onError(errorText(error)); } }
+    } catch (error) { if (currentOrigin(origin)) { if (controller.signal.aborted) setStatus('转写已取消，原有文字已保留。'); else onError(errorText(error)); } }
     finally {
       pendingRequests.current.delete(controller);
       if (transcriptionRequest.current === controller) transcriptionRequest.current = null;
-      if (origin.isCurrent()) { activeWork.current.transcribing = false; setTranscribing(false); }
+      if (currentOrigin(origin)) { activeWork.current.transcribing = false; setTranscribing(false); }
     }
   }
   function chooseAudio() {
-    if (controls.importDisabled || microphonePending.current || !editor.current.isCurrent()) return;
+    if (controls.importDisabled || microphonePending.current || !currentOrigin(editor.current)) return;
     importChoice.current = { origin: editor.current, provider: transcriptionProviderId };
     audioInput.current?.click();
   }
   function importAudio(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0], choice = importChoice.current;
     event.currentTarget.value = ''; importChoice.current = null;
-    if (!file || !choice?.origin.isCurrent() || controls.importDisabled || microphonePending.current || choice.provider !== transcriptionProviderId) return;
+    if (!file || !choice || !currentOrigin(choice.origin) || controls.importDisabled || microphonePending.current || choice.provider !== transcriptionProviderId) return;
     void transcribe(file, '音频文件', choice.origin, choice.provider);
   }
   async function startRecording() {
-    if (microphonePending.current || transcriptionRequest.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
+    if (!currentOrigin(editor.current) || microphonePending.current || transcriptionRequest.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
     if (!canRecord) { onError(microphoneProblem); return; }
     if (!transcriptionCapabilities.transcription.available) { onError(transcriptionCapabilities.transcription.reason); return; }
     const origin = editor.current, chosenProvider = transcriptionProviderId;
     microphonePending.current = true; setRequestingMicrophone(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!origin.isCurrent() || voiceConversation.busy() || transcriptionRequest.current || Object.values(activeWork.current).some(Boolean)) { disposeVoiceSession({ controllers: [], microphone: stream }); return; }
+      if (!currentOrigin(origin) || voiceConversation.busy() || transcriptionRequest.current || Object.values(activeWork.current).some(Boolean)) { disposeVoiceSession({ controllers: [], microphone: stream }); return; }
       microphone.current = stream;
       const instance = new BrowserVoiceRecording(stream, {
-        isCurrent: () => origin.isCurrent(),
+        isCurrent: () => currentOrigin(origin),
         onStopped: () => {
           if (microphone.current === stream) microphone.current = null;
           if (recorder.current === instance) recorder.current = null;
@@ -193,29 +212,29 @@ export default function VoicePanel({ draft, providers, conversation, records, on
       recorder.current = instance;
       instance.start();
       if (recorder.current === instance) { activeWork.current.recording = true; setRecording(true); setStatus('正在录音。点击结束后会上传至转写服务；取消或离开本页会丢弃未转写音频。'); }
-    } catch (error) { if (origin.isCurrent()) { releaseMedia(); onError(microphoneErrorText(error)); } }
-    finally { microphonePending.current = false; if (origin.isCurrent()) setRequestingMicrophone(false); }
+    } catch (error) { if (currentOrigin(origin)) { releaseMedia(); onError(microphoneErrorText(error)); } }
+    finally { microphonePending.current = false; if (currentOrigin(origin)) setRequestingMicrophone(false); }
   }
   function cancelRecording() {
     const current = recorder.current; recorder.current = null; current?.cancel(); microphone.current = null;
     activeWork.current.recording = false; setRecording(false); setStatus('录音已取消，没有上传。原有文字仍在。');
   }
   function startRecognition() {
-    if (!recognitionType || microphonePending.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
+    if (!currentOrigin(editor.current) || !recognitionType || microphonePending.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
     const origin = editor.current;
     const instance = new recognitionType(); recognition.current = instance; instance.lang = 'zh-CN'; instance.continuous = true; instance.interimResults = false;
     instance.onresult = (event) => {
       let content = ''; for (let index = event.resultIndex; index < event.results.length; index++) if (event.results[index].isFinal) content += event.results[index][0].transcript;
-      if (!content || !origin.isCurrent()) return;
+      if (!content || !currentOrigin(origin)) return;
       try { origin.update((value) => ({ ...value, text: `${value.text}${value.text ? ' ' : ''}${content}`, hasTranscription: true, notice: '' })); }
       catch (failure) { instance.stop(); activeWork.current.recognizing = false; setRecognizing(false); onError(errorText(failure)); }
     };
-    instance.onerror = (event) => { if (origin.isCurrent()) { onError(`浏览器听写未完成：${event.error || '未知错误'}`); activeWork.current.recognizing = false; setRecognizing(false); } };
-    instance.onend = () => { if (origin.isCurrent()) { activeWork.current.recognizing = false; setRecognizing(false); } };
-    try { instance.start(); activeWork.current.recognizing = true; setRecognizing(true); setStatus('浏览器听写中；识别处理方式由浏览器提供商决定'); } catch (error) { if (origin.isCurrent()) onError(errorText(error)); }
+    instance.onerror = (event) => { if (currentOrigin(origin)) { onError(`浏览器听写未完成：${event.error || '未知错误'}`); activeWork.current.recognizing = false; setRecognizing(false); } };
+    instance.onend = () => { if (currentOrigin(origin)) { activeWork.current.recognizing = false; setRecognizing(false); } };
+    try { instance.start(); activeWork.current.recognizing = true; setRecognizing(true); setStatus('浏览器听写中；识别处理方式由浏览器提供商决定'); } catch (error) { if (currentOrigin(origin)) onError(errorText(error)); }
   }
   async function speak() {
-    if (microphonePending.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
+    if (!currentOrigin(editor.current) || microphonePending.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
     const spokenText = text.trim();
     if (!spokenText) return;
     if (!speechCapabilities.speech.available) { onError(speechCapabilities.speech.reason); return; }
@@ -226,33 +245,34 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     activeWork.current.speaking = true; setSpeaking(true);
     try {
       const result = entity<Artifact>(await request('/voice/speech', { method: 'POST', body: JSON.stringify(body), signal: controller.signal }), 'attachment');
+      if (!currentOrigin(origin)) return;
       if (!result.url || !result.id) throw new Error('语音服务没有返回音频记录。');
       if (origin.update((value) => ({ ...value, speechSnapshot: { audio: result, input: excerptInput('speech_excerpt', spokenText, [result.id]), audioConfiguration }, notice: '' }))) setStatus('语音已生成，可以播放，或明确保存朗读文本与音频');
-    } catch (error) { if (origin.isCurrent()) { if (controller.signal.aborted) setStatus('朗读生成已取消，原有文字和音频仍可查看。'); else onError(errorText(error)); } }
-    finally { pendingRequests.current.delete(controller); if (speechRequest.current === controller) speechRequest.current = null; if (origin.isCurrent()) { activeWork.current.speaking = false; setSpeaking(false); } }
+    } catch (error) { if (currentOrigin(origin)) { if (controller.signal.aborted) setStatus('朗读生成已取消，原有文字和音频仍可查看。'); else onError(errorText(error)); } }
+    finally { pendingRequests.current.delete(controller); if (speechRequest.current === controller) speechRequest.current = null; if (currentOrigin(origin)) { activeWork.current.speaking = false; setSpeaking(false); } }
   }
   async function answerQuestion() {
-    if (microphonePending.current || Object.values(activeWork.current).some(Boolean) || voiceConversation.busy()) return;
+    if (!currentOrigin(editor.current) || microphonePending.current || Object.values(activeWork.current).some(Boolean) || voiceConversation.busy()) return;
     const origin = editor.current;
     try {
       await voiceConversation.answer({ text, roleId: voicePreferences.roleId, provider: chatProvider, model: chatModel, conversation, ensureConversation: onEnsureConversation, onConversationChanged }, { request, streamMessage });
-    } catch (error) { if (origin.isCurrent()) onError(errorText(error)); }
+    } catch (error) { if (currentOrigin(origin)) onError(errorText(error)); }
   }
   async function speakAnswer() {
-    if (microphonePending.current || Object.values(activeWork.current).some(Boolean) || voiceConversation.busy()) return;
+    if (!currentOrigin(editor.current) || microphonePending.current || Object.values(activeWork.current).some(Boolean) || voiceConversation.busy()) return;
     const origin = editor.current;
     try {
       await voiceConversation.speak(speechProvider, { request, streamMessage }, speechVoice);
       const current = voiceConversation.getSnapshot();
-      if (origin.isCurrent() && current.audio && !current.speechError) {
+      if (currentOrigin(origin) && current.audio && !current.speechError) {
         const input = { ...excerptInput('speech_excerpt', current.answer, [current.audio.id]), role: 'assistant' as const };
         origin.update((value) => ({ ...value, speechSnapshot: { audio: current.audio!, input, ...(current.audioConfiguration ? { audioConfiguration: current.audioConfiguration } : {}) }, notice: '' }));
       }
     }
-    catch (error) { if (origin.isCurrent()) onError(errorText(error)); }
+    catch (error) { if (currentOrigin(origin)) onError(errorText(error)); }
   }
   async function startLive() {
-    if (microphonePending.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
+    if (!currentOrigin(editor.current) || microphonePending.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
     if (!capabilities.realtime.available) { onError(capabilities.realtime.reason); return; }
     if (realtimeVoiceProblem) { onError(realtimeVoiceProblem); return; }
     if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') { onError('当前浏览器不支持实时语音所需的麦克风或 WebRTC。'); return; }
@@ -260,19 +280,19 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     sessionCreation.current = controller; pendingRequests.current.add(controller);
     setLive('connecting'); connectionActive.current = true; activeWork.current.realtime = true;
     const attempt = ++connectionAttempt.current;
-    const stillActive = () => origin.isCurrent() && connectionActive.current && connectionAttempt.current === attempt;
+    const stillActive = () => currentOrigin(origin) && connectionActive.current && connectionAttempt.current === attempt;
     try {
       const sessionBody = voiceRealtimeBody(provider!, preferences);
-      const session = await requestVoiceSession(sessionBody, controller.signal, stillActive, request, (sessionId) => { request('/voice/session/release', { method: 'POST', body: JSON.stringify({ sessionId }), keepalive: true }).catch(() => {}); });
+      const session = await requestVoiceSession(sessionBody, controller.signal, stillActive, request, (sessionId) => { accountClient.cleanup('/voice/session/release', { body: JSON.stringify({ sessionId }) }).catch(() => {}); });
       if (!session) return;
-      sessionLease.current = session.sessionId || null;
+      sessionLease.current = session.sessionId ? { sessionId: session.sessionId, client: accountClient } : null;
       leaseTimeout.current = setTimeout(() => { stopLive(); setStatus('已达到 10 分钟会话时限。可以重新开始实时交流。'); }, 10 * 60 * 1000);
       const token = session.clientSecret;
       if (!token || !session.endpoint || !session.sessionId) throw new Error('服务没有返回有效的实时语音会话。');
       origin.update((value) => ({ ...value, inputTranscriptionEnabled: !!session.inputTranscriptionEnabled, notice: '' }));
       const buffer = new RealtimeTranscriptBuffer(session.sessionId), priorTurns = draft.getSnapshot().turns;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!stillActive()) { stream.getTracks().forEach((track) => track.stop()); return; }
+      if (!stillActive()) { disposeVoiceSession({ controllers: [], microphone: stream }); return; }
       microphone.current = stream;
       const pc = new RTCPeerConnection(); peer.current = pc;
       const speaker = new Audio(); speaker.autoplay = true; remoteAudio.current = speaker;
@@ -305,6 +325,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     } catch (error) { if (stillActive()) { stopLive(); onError(errorText(error)); } }
     finally { pendingRequests.current.delete(controller); if (sessionCreation.current === controller) sessionCreation.current = null; }
   }
+  if (!accountClient.isCurrent()) return <section className="feature-page"><p role="status">登录状态已变化，语音工作台已关闭。</p></section>;
   return <section className="feature-page voice-page">
     <div className="page-kicker"><AudioLines size={15} />VOICE STUDIO</div>
     <h1>有些想法，<span>说出来更好。</span></h1>

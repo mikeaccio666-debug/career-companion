@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowRight, Mail, ShieldCheck } from 'lucide-react';
 import { Brand, Badge } from './ui';
+import { useRequiredPlatformAccountClient } from './account-client';
 import { entity, request } from './api';
 import { accountActionFailure, emailActionsDisabledText, passwordResetAcceptedText, passwordResetValidation, type AccountActionLink, type AuthOptions } from './account-actions';
 import type { User } from './types';
@@ -36,15 +37,16 @@ export function PasswordResetRequest({ options, initialEmail = '', onBack }: { o
 }
 
 export function EmailVerificationControls({ user, options, token, onVerified, onDiscardToken, onLogout }: { user: User; options: AuthOptions; token?: string; onVerified: (user: User) => void; onDiscardToken?: () => void; onLogout?: () => void }) {
+  const accountClient = useRequiredPlatformAccountClient();
   const { pending, run } = useActionRequest(); const [message, setMessage] = useState(''), [error, setError] = useState('');
   function failed(failure: unknown) { const detail = accountActionFailure(failure); setError(detail.text); if (detail.discardToken) onDiscardToken?.(); }
   function resend() {
     if (!options.emailActionsEnabled) return; setMessage(''); setError('');
-    void run((signal) => actionPost<{ accepted: boolean }>('/auth/email-verification/request', {}, signal), (result) => { if (result.accepted !== true) { setError('服务没有接受申请，请重试。'); return; } setMessage('验证邮件申请已接受，请查看收件箱和垃圾邮件。'); }, failed);
+    void run((signal) => accountClient.request<{ accepted: boolean }>('/auth/email-verification/request', { method: 'POST', body: '{}', signal }), (result) => { if (result.accepted !== true) { setError('服务没有接受申请，请重试。'); return; } setMessage('验证邮件申请已接受，请查看收件箱和垃圾邮件。'); }, failed);
   }
   function verify() {
     if (!token || !options.emailActionsEnabled) return; setMessage(''); setError('');
-    void run((signal) => actionPost('/auth/email-verification/complete', { token }, signal), (data) => { const next = entity<User>(data, 'user'); if (!next?.id || next.id !== user.id || next.emailVerified !== true) { setError('服务没有确认这个账号的邮箱验证，请重试。'); return; } onVerified(next); }, failed);
+    void run((signal) => accountClient.request('/auth/email-verification/complete', { method: 'POST', body: JSON.stringify({ token }), signal }), (data) => { const next = entity<User>(data, 'user'); if (!next?.id || next.id !== user.id || next.emailVerified !== true) { setError('服务没有确认这个账号的邮箱验证，请重试。'); return; } onVerified(next); }, failed);
   }
   return <div className="account-verification"><p className="account-notice">{user.emailVerified ? '邮箱已验证。' : <>当前账号：<strong>{user.email}</strong><br />{token ? '请确认这是收到验证邮件的账号，然后点击完成验证。' : '请打开邮箱里的验证链接，再手动完成验证。'}</>}</p>{!options.emailActionsEnabled && !user.emailVerified && <p className="account-notice" role="status">{emailActionsDisabledText}</p>}{error && <div className="form-error" role="alert">{error}</div>}{message && <p className="account-notice" role="status">{message}</p>}<div className="account-action-buttons">{token && <button className="primary full" type="button" disabled={pending || !options.emailActionsEnabled} onClick={verify}>{pending ? '正在处理…' : '完成邮箱验证'}<ShieldCheck size={16} /></button>}{!user.emailVerified && <button className="secondary" type="button" disabled={pending || !options.emailActionsEnabled} onClick={resend}>{pending ? '正在处理…' : '重新发送验证邮件'}<Mail size={15} /></button>}{onLogout && <button className="text-button" type="button" disabled={pending} onClick={onLogout}>退出并切换账号</button>}</div></div>;
 }
