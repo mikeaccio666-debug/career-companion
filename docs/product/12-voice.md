@@ -1,343 +1,393 @@
 # 声线方案
 
-> 这份文档回答什么问题：主理人（中文陪伴）和面试官（英文实时面试）分别用什么声音、怎么让每位用户的主理人声音独特、开源与商用方案如何取舍、怎么验证。结论待盲测决定，盲测与付费调用需产品负责人批准。
+> 核实日期：2026-10-06。价格、榜单、延迟变化很快，以当天官方页面为准；厂商自报数字只作参考，最终以我们自己的盲听和压测为准。本文不是法律意见，合规部分需律师确认。型号、单价和来源只出现在附录 A、B 和环境变量示例里。
+>
+> 本文是声线的权威文档。分期以 07 为准，敏感度级别以 03 §8.5 为准，危机流程以 02 §10 为准，界面视觉以 08 为准。
 
-检索与核实日期：2026-10-06。所有排名、价格、延迟都变化很快，以下以当天官方页面为准；凡标「未公布」的，是官方没有给出数字。厂商自报的延迟和质量数字只能当参考，最终以我们自己的盲听和压测为准。本文不是法律意见，合规部分需要律师确认。本次没有调用任何付费接口，也没有改仓库代码。
+## 这份文档回答什么问题
+
+面试官和主理人分别用什么声音、走哪条链路、在哪一期上线；主理人的声音在产品里出现在哪里；每位用户的主理人声音怎么做到「专属」，以后也不变；声线数据存在哪里；怎么守住 AI 透明、不克隆真人和供应商数据条款；怎么用盲测选定供应商。
+
+结论：
+
+- P0 只有面试官出声。逐回合练习走朗读接口，全员共用一个固定预置声线 `PLATFORM_INTERVIEWER_VOICE`（`cedar` 或 `marin`，P0 前用小盲测二选一）；P1-11 的沉浸式实时面试读同一个值。
+- P0 的主理人只说文字。P1-12 上线主理人声线池（40–60 个设计声线，每人推荐 3 个）、点按朗读和「按住说话」的一问一答；连续语音对话和打断列为 P2 评估项。
+- 主理人 TTS 供应商首选 ElevenLabs，其次是 Gemini 和 Azure；开源自托管和「每人独有声线」放在 P2。最终以 §7 的盲测决定。
+- 任何 AI 声音第一次播放前，都先弹出 §6.1 的说明。不克隆任何真人。语音出故障时退回文字，不换声音。用户已绑定的声线，只有本人同意才更换。
+- P1-12 上线前要过数据闸门（§6.4）：拿到零保留之前，含身份信息的消息不送 TTS。
 
 ---
 
 ## 1. 结论
 
-### 1.1 首版推荐组合
+### 1.1 分期与组合
 
-| 角色 | 推荐方案 | 链路 | 声线怎么来 |
+| 角色 / 能力 | 分期（07） | 链路 | 声线 |
 |---|---|---|---|
-| **面试官**（英文实时模拟面试） | OpenAI Realtime `gpt-realtime-2.1`（仓库已经接好 WebRTC 和短期凭据） | 语音到语音，semantic VAD 轮转和打断 | 固定一个官方预置声线：`cedar` 或 `marin`，盲听后二选一。所有用户的面试官用同一个声线，不进主理人声线池 |
-| **主理人**（中文陪伴） | 首选 **ElevenLabs `eleven_v4_turbo` + Voice Design v3**；第二候选 **Gemini 3.8 Flash TTS**；隐私最稳的备选 **Azure zh-CN HD Flash** | 链式：语音识别 → 大模型 → 流式 TTS。逐回合朗读和语音对话走同一个 TTS，保证一个主理人只有一个声音 | 运营用「文字描述设计声音」预先做 40–60 个中文声线，按温度、语速、直接度打标签；每个用户按性格推荐 3 个，默认第 1 个 |
-| **开源并行线** | **Qwen3-TTS-12Hz-1.7B**（先用 VoiceDesign 生成参考音，再固化成克隆提示复用），经 vLLM-Omni 自托管 | 同上 | 首版只进盲测；通过后作为第二阶段「每个用户一个独有声线」和降成本的方案 |
-| **开发 / 离线兜底** | 现有本地 Kokoro `af_heart` | 只支持英文 | 只用于开发环境，不用于真实用户的主理人 |
+| 面试官 · 逐回合 | P0（P0-10） | 题目文字 → 朗读接口 `POST /voice/speech` → `speechOpenAI`；回答 → `POST /voice/transcribe`，固定英文 | `PLATFORM_INTERVIEWER_VOICE`，全员同一个，不进主理人声线池 |
+| 面试官 · 沉浸 | P1b（P1-11） | 面试官实时接口：`POST /voice/session` 签发短期凭据，浏览器经 WebRTC 直连，semantic VAD | 读同一个值；前提是通过 §7.1 A 的跨接口 AB 听测 |
+| 主理人声线池 + 点按朗读 + 按住说话的一问一答 | P1b（P1-12） | 链式：服务端转写 → 轮次服务 → 主理人 TTS 供应商按句流式朗读 | 设计声线池（B1，§2.3），存在 `platform_voice_presets`（§2.2） |
+| 主理人连续语音对话、打断 | P2 评估 | 需要客户端 VAD 和回声消除；现有 `VoicePanel.tsx` 只有浏览器听写 | 与 P1-12 相同的 `voice_preset` |
+| 开源自托管、每人独有声线（B2） | P2 | 自托管 TTS 适配器（§5.3） | 只给新用户和主动选择的老用户（§2.5） |
+| OpenAI 全双工实时接口 | P2 评估 | 接口和现有凭据流程不同，需要新适配 | — |
+| 本地朗读、本地转写 | 只用于开发 | `services/local-speech`（`KOKORO_*`）、`services/local-transcription`（`FASTER_WHISPER_*`） | 生产环境不配置（§5.2） |
+| 专家：前、投（P0），规、教（P1b 起），脉（P2 起） | 不出声 | — | `platform_voice_presets.role` 只有 `companion_pool` |
 
-最终选哪家，以第 7 节的一周盲测结果为准。上表是有依据的假设，还没有经过验证。
+供应商一列是有依据的假设，最终以 §7 的盲测结果为准。
 
-### 1.2 为什么这样选
+### 1.2 选型理由
 
-1. **面试官继续用 OpenAI Realtime。** 它的轮转和打断是现成最成熟的。仓库已经能签发短期凭据（`packages/ai-core/src/media.ts:52-64`），也接好了 semantic VAD（`packages/ai-core/src/voice-input.ts`）。英文本来就是它的强项。`/v1/realtime` 可以申请零数据保留（ZDR，需要审批）。面试官全员共用一个固定声线，没有「每人独特」的需求，所以不必走自定义声线。新出的 GPT-Live-1（全双工，$0.05/分钟，后端模型另计）放到第二阶段评估。来源：https://developers.openai.com/api/docs/guides/realtime-conversations ，https://developers.openai.com/api/docs/guides/your-data ，https://developers.openai.com/api/docs/models/gpt-live-1.md
-2. **主理人的难点是中文像真人、能大量造声线、供应商最好在美国。** ElevenLabs 同时满足这三点：
-   - Artificial Analysis 综合榜上，v4 Turbo 排第 1（1334），v4 排第 2（1321）。这个榜以英文为主，没有中文专项。
-   - 官方模型页列出支持普通话（cmn）和粤语。v4 Turbo 中位推理延迟约 100ms；官方自测的首个可听语音约 150ms，属于厂商自测。
-   - Voice Design v3 可以用文字描述造声线。Scale 和 Business 套餐可存 660 个自有声线。
-   - 是美国公司，可以谈企业版零保留（ZRM）。
+1. **面试官用 OpenAI 的朗读和实时接口。** 仓库已经接好：`packages/ai-core/src/media.ts` 里有 `speechOpenAI`、`realtimeOpenAI`、`transcribeOpenAI`。但这三条都从未真实调用过，要在 07 P0-13 一并验证。英文是它的强项，实时接口的轮转和打断也是现成方案里最成熟的。面试官全员共用一个声线，不需要定制。`cedar`、`marin` 同时在朗读和实时两个声线集合里（`voice-input.ts` 的 `OPENAI_SPEECH_VOICES`、`OPENAI_REALTIME_VOICES`），这是两种模式能共用一个声线的前提；同名声线在两个模型上听起来是否一样，要靠 §7.1 A 确认。
+2. **主理人的难点有三个：中文要像真人，要能批量造声线，供应商最好在美国。** ElevenLabs 三点都满足：综合榜第 1（这个榜以英文为主，没有中文专项），官方列出支持普通话，能用文字描述设计声线，是美国公司，可以谈企业零保留（ZRM）。Gemini 排第二：也能设计声线，价格低，付费层的数据不用于改进产品；短板是每个项目最多 200 个声线、延迟没有公布、Cloud 侧仍是 Preview，而且 2027-01-01 起涨价一倍。Azure 作为隐私兜底：用预置声线做实时合成时不存文本和音频，有陪伴类风格；但不能设计声线，zh-CN HD Flash 只有 14 个中文声线。
+3. **不用 OpenAI 预置声线做主理人。** 实时接口只有 10 个预置声线，不能设计，中文也没有官方评测。面试官已经用 OpenAI，主理人能选的声线更少，也更难和面试官区分。这个方案不用改代码，所以作为「零改造」对照组进盲测。
+4. **中文效果好的国产云服务只用虚构台词做对照。** 28 CFR 202 把「身处美国的任何人」算作 U.S. person，在美留学生也在内。把用户数据交给与受关注国家相关的实体处理，要先做法务评估。
+5. **开源不做 P1-12 的主力，但进盲测。** 我们没有 GPU 运维能力，高并发下的首包延迟也远高于宣传值（附录 A）。从长期看，开源是唯一能做到「声线数量不受供应商上限限制、数据留在自己环境」的路线，而且有权重为 Apache-2.0、可以商用的候选。所以 P1-12 就把它拉进盲测积累数据，P2 再决定是否上线。
+6. **最大的不确定性：** 没有一家供应商公布中文自然度评测，所以由 §7 的盲测决定最终选择。
 
-   来源：https://artificialanalysis.ai/text-to-speech/leaderboard ，https://elevenlabs.io/docs/overview/models ，https://elevenlabs.io/v4 ，https://elevenlabs.io/docs/api-reference/text-to-voice/design
-3. **Gemini 3.8 Flash TTS 作为第二候选。** 它也能按描述造声线，价格低：音频输出 $9/1M tokens，约 $0.0135/分钟，2027 年起翻倍。付费层的数据不用于改进产品。短板有三个：每个项目最多存 200 个声线；实时延迟没有公布；Cloud TTS 价格页上仍标为 Preview。来源：https://ai.google.dev/gemini-api/docs/speech-generation ，https://cloud.google.com/text-to-speech/pricing ，https://ai.google.dev/gemini-api/terms
-4. **Azure 作为隐私兜底。** 用预置声线做实时合成时，微软不存储输入文本和输出音频。zh-CN HD Flash 有 14 个中文声线，带 chat、empathetic、comforting、encouraging 等陪伴类风格。它的缺点是不能设计声线，声线池小。来源：https://learn.microsoft.com/en-us/azure/ai-foundry/responsible-ai/speech-service/text-to-speech/data-privacy-security ，https://learn.microsoft.com/en-us/azure/ai-services/speech-service/high-definition-voices
-5. **为什么不沿用产品文档里「主理人用 OpenAI 预置声线」的做法**（`docs/product/02-companion.md` §6.1）：Realtime 只有 10 个预置声线，而且不能设计；中文自然度官方没有评测；如果面试官也用 OpenAI，主理人能用的声线就更少了。它不用改代码，所以仍然放进盲测，作为「零改造」对照组。
-6. **为什么中文效果很好的国产云服务不做主力：** 阿里 Qwen-Audio-3.1 在 AA 榜排第 3，豆包 2.0 只要 3 元/万字符，但美国司法部规则 28 CFR 202 把「身处美国的任何人」都算作 U.S. person，在美留学生也在内。把用户数据交给与受关注国家相关的实体处理，需要先做法务评估。这两家首版只用于虚构台词的质量对照。来源：https://www.law.cornell.edu/cfr/text/28/202.256
-7. **为什么开源不做首版主力：** 我们目前没有 GPU 运维。官方宣传的首包延迟和高并发下的实测差得很远：vLLM 博客实测 Qwen3-TTS 在 H20×2 上，并发 1 时首包 70.61ms，并发 64 时约 1128ms。但从长期看，开源是唯一能做到「声线数量不受供应商上限限制 + 数据留在自己环境」的路线，而且 Qwen3-TTS 的代码和权重都是 Apache-2.0。所以首版就把它拉进盲测，提前积累数据。来源：https://vllm.ai/blog/2026-06-23-vllm-omni-tts ，https://github.com/QwenLM/Qwen3-TTS
-8. **最大的不确定性：** 没有一家供应商公布中文自然度评测，AA 榜也没有中文专项。所以第 7 节的盲测决定最终选择，需要预算和付费调用授权。
+### 1.3 已决定事项与需要同步的文档
 
-### 1.3 需要产品负责人拍板的事
+声线方向已决定（简报 v3 第 3 条，2026-10-06）：面试官沿用 OpenAI，全员共用一个固定预置声线；主理人首选设计声线池，候选供应商是 ElevenLabs、Gemini、Azure；开源自托管和每人独有声线放在 P2；最终以盲测决定，盲测与付费调用需产品负责人批准；始终标明 AI 声音；不克隆任何真人（包括创始人、蔓藤导师），除非有书面同意和撤回机制；语音故障时退回文字。创始人声音以 02 §6 为准，`README.md` 和 `docs/platform/personal-voice-recording.md` 由 09 第 0 步改写。
 
-- **盲测预算与授权。** 按 `AGENTS.md`，商业调用需要服务端显式开启，本轮也不调用付费模型。盲测需要单独批准；台词全部用虚构内容，不含用户数据。
-- **是否修改 `docs/product/02-companion.md` §6.1 和 §6.2。** 改动有两处：一是主理人声线从「OpenAI 预置声线池」改为「TTS 供应商的设计声线池 + 链式语音对话」；二是 §6.2 的说明文案「来自服务商提供的预设声线」改为「AI 生成的声音」。按 `AGENTS.md` 的约定，改产品方向要先提出，所以等您确认后再改文档。
-- **是否启动两项商务谈判：** ElevenLabs 企业版零保留（ZRM）和 OpenAI 的 ZDR 申请。
-- **是否批准一台 GPU，做开源 PoC。** 用于 Qwen3-TTS、CosyVoice3、VoxCPM2 的盲测和压测。
-- **创始人声音的定位。** `docs/platform/personal-voice-recording.md` 写的是「目标已确定：专业训练本人声音」，但 `docs/product/02-companion.md` §6.3 已把它降级到后续。两份文档互相矛盾，需要您确认以哪份为准。本方案按 §6.3 处理：首版主理人不用任何真人的声音。
+01 §8.10、02 §6 与 §15、05 面试间、07 P0-10、08 面试间、09 第 7 步与第 11 步已按本文对齐（2026-10-06）。
+
+---|---|---|
+| 02 §6 | 从供应商预设声线里挑，只用实时和朗读都支持的声线；按温度、轻松度、直接度匹配 | 声线来源、供应商、匹配方法见 12 §2；主理人不走实时接口，删去「两条链路都支持」的约束；标签维度为温度、语速、直接度 |
+| 02 §6 | 文案写「来自服务商提供的预设声线」；`voice_disclosed_at` 放在主理人上 | 文案引用 12 §6.1；字段移到用户级 |
+| 02 §6 | 商业调用关闭时回落到本地英文朗读 | 本地服务只用于开发（12 §5.2） |
+| 02 §15.1 实时语音一行 | 服务端按主理人档案生成指令，声线来自档案 | 面试官的指令和固定声线由服务端下发；主理人不走实时接口 |
+| 02 §15.2 `voice_preset` | 映射放在服务端配置 | 映射放在 `platform_voice_presets` 表（12 §2.2） |
+| 01 §8.10 | 语音用服务商的预设声线 | 声线见 12；始终标明 AI 声音；不克隆任何真人（例外见 12 §6.2，且不用于主理人）；故障时退回文字，不换声音 |
+| 05 面试间与实现对照表 | 「面试官指令和固定声线」的出处写作 02 §15.1；O9 自带一版说明文案 | 出处改为 12 §5.1；O9 和面试间的说明文案都引用 12 §6.1 |
+| 07 P0-10、08 面试间、09 第 7 步和第 11 步 | 面试官声线另有 `platform_voice_presets.role='interviewer'` 一个来源 | 只读 `PLATFORM_INTERVIEWER_VOICE`；`role` 只保留 `companion_pool`；字段按 12 §2.2；单次时长见 12 §5.1 |
 
 ---
 
-## 2. 「每位用户一个独特的主理人声音」怎么实现
+## 2. 主理人声线怎么做到「专属」
 
-### 2.1 三条路线对比
+### 2.1 路线
 
-| 路线 | 做法 | 独特程度 | 成本 | 主要风险 |
+| 路线 | 做法 | 独特程度 | 分期 |
+|---|---|---|---|
+| A 预设声线挑选 | 从供应商的现成声线里按性格挑 | 低，很多人会听到同一个声音 | 只作盲测对照 |
+| B1 设计声线池 | 运营用文字描述生成 40–60 个声线，试听筛选后打标签入池；每个用户按性格推荐 3 个，再叠加表达参数、名字和人设 | 中：声线多人共用，但组合起来基本唯一 | P1-12 |
+| B2 每人现做 | 按主理人性格自动写声音描述，生成 3 个候选，用户试听选 1 个后锁定 | 高 | P2（自托管没有名额上限） |
+| C 授权录音微调 | 用有授权的配音演员录音，微调出少量招牌声线 | 低，但单个声线质量最高 | 不用于主理人；只可能用于品牌旁白（§6.2） |
+
+### 2.2 声线表与按用户数选方案
+
+**存在哪：** 声线配方存在数据库表 `platform_voice_presets`（`027_voice_presets.sql`，09 第 11 步），密钥和供应商账号放在服务端配置。02 §15.2、09 第 11 步引用本节。
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 内部 id，`platform_companions.voice_preset` 引用它 |
+| `role` | 只有 `companion_pool`；面试官声线不入表（§5.1） |
+| `provider`、`provider_model` | 供应商和模型版本 |
+| `provider_voice_ref` | 供应商声线 id，或自托管的克隆提示 id；只在服务端使用 |
+| `design_prompt` | 设计描述文本，受 §2.3 的禁区约束 |
+| `reference_sha256` | 参考音的哈希 |
+| `expression_profile` jsonb | 默认表达参数（§5.5） |
+| `language` | `zh-CN`，可以混读英文 |
+| `tags` jsonb | 温度（暖 / 中性 / 冷静）、语速（慢 / 中 / 快）、直接度（委婉 / 中 / 直接） |
+| `gender`、`age_band` | `female` / `male` / `neutral`；`20s` / `30s` |
+| `status` | `candidate` → `active` → `retired` |
+| `reviewed_at`、`retired_reason` | 试听通过的时间；下线原因 |
+| `last_used_at` | 最近一次合成的时间，用于保活（§2.5） |
+
+**按用户数选方案。** 声线池占用的名额和用户数无关，只有「每人独有」时名额才随用户数增长。
+
+| 有主理人声线的用户数 | 方案 | 商用名额够不够 | 套餐月费 |
+|---|---|---|---|
+| ≤ 160（首批 60–100 人，见 07 待确认问题） | B1，池内 40–60 个；ElevenLabs Pro 的 160 个名额已经够 | 够 | 需核实 |
+| 160–660 | B1 不变；ElevenLabs Scale / Business 有 660 个名额，在这个规模下甚至能做到每人独有 | 够 | 需核实 |
+| > 660，且要每人独有 | B2：自托管（没有上限）；商用里只有名额最宽松的几家够用（附录 B），其中阿里需要法务评估 | 多数不够 | GPU 成本，需核实 |
+
+结论：首批不需要为了名额去养 GPU。P2 要不要自托管，取决于用户规模和「每人独有」的优先级。套餐里的字符额度，用 §7.2 实测的人均用量核对。其他供应商的名额：Gemini 每个项目 200 个，最后一次使用后保留 1 年；OpenAI 自定义声线每个组织 20 个，而且要声音提供者录同意书，不适用于声线池。
+
+### 2.3 声线池落地流程（B1 在 P1-12，B2 在 P2）
+
+1. **写描述。** 运营写 40–60 条中文声音描述，例如「二十多岁的普通话女声，语速偏慢，温和但不甜腻，句尾干脆」。描述有禁区：不写任何真人的姓名、明星或角色名；不写甜、撒娇、性感、磁性、宠溺；不做气声、耳语、ASMR 风格。主理人的声音像「靠谱的学长学姐」，不往情感依赖的方向走（01 §8.11、02 §11.2）。
+2. **配比。** 性别上女、男、中性大约各占 40%、40%、20%（假设）；年龄段以二十多岁到三十出头为主。用户可以按性别筛选，不只靠性格推荐。
+3. **生成。** 每条描述生成 3 个候选。设计结果每次都有波动，需要挑选。
+4. **试听筛选。** 用固定试听句「我是墨。今天我们先把一件事做完。」（「墨」是示例用户起的名字，实际换成用户起的名字），再加上 §7.1 C 的测试句。以下候选全部淘汰：发音错误、听起来像某位知名人物、情绪不稳、听起来暧昧或过度亲昵。通过的写入 `reviewed_at`，状态设为 `active`。
+5. **固化。** 商用 API 保存声线 id；自托管保存参考音和克隆提示，之后反复使用同一份。不拿商用 API 的输出当开源模型的参考音（§6.3）。
+6. **匹配。** 温度对应主理人维度里的 `warmth`，直接度对应 `directness`（02 §15.2）；语速默认推荐「中」，推进力为 −1 时推荐「慢」。推荐前 3 个，默认用第 1 个。入口是初见的 O9（可以跳过，见 05）和「我 → 主理人 → 声音」。
+7. **B2（P2）。** 开源盲测和压测通过后，把第 1–5 步自动化，为每个新用户现做 3 个候选，仍由用户试听后确认。相似度检查只和池内已有的合成声线比对，再加人工试听；不建立真人声纹的禁用名单（§6.2）。
+
+### 2.4 一致性与「像真人」
+
+- **一致性优先于花哨。** 同一个主理人在不同天、不同渠道里，声音必须一样。所以 TTS 出故障时退回文字，提示「语音暂时不可用」，不临时换成另一个声音，否则用户会以为换了一个人（07 P0-1）。
+- **写给耳朵听的文本。** 语音渠道让模型直接输出口语稿：短句、少括号、不用列表；数字、日期、金额先规范化；英文公司名和岗位名保持原样，并维护一份发音词典，例如 SWE、OA、OPT、LeetCode（文件位置见 09 第 11 步）。中英混读出错，大多数是文本侧的问题。
+- **按句流式。** 按句子或分句把文本流式送进 TTS，首句凑齐就开始合成。延迟目标统一用 §7.2 的数字。
+- **语气跟着上下文走。** 表达参数（§5.5）由说话方式卡和当前状态（例如被拒之后的 `post_rejection`）决定：同一个声线，不同的语气。
+
+### 2.5 换声线与迁移
+
+规则：用户已绑定的声线，只有在本人同意后才更换。
+
+- **换供应商，或从 B1 迁到 B2、自托管：** 保留旧实现，直到用户在「我 → 主理人 → 声音」试听并选定新声线。不允许按同一份描述「重新生成一个尽量接近的」再静默替换。
+- **声线即将下线**（供应商删除，或 `status=retired`）：至少提前 30 天（假设）通知用户，按标签距离加人工确认给出 3 个最接近的候选。示例文案：「墨现在的声音 11/30 之后就不能用了。这是最接近的 3 个，试听后选一个；不选的话，到期后墨先只说文字。」到期仍没选的，只显示文字，不自动换声。
+- **保活：** 池内状态为 `active` 的声线每月合成一次固定试听句，并更新 `last_used_at`，防止供应商按「长期未使用」删除（例如 Gemini 是 1 年）。
+- **B2 只用于新用户和主动选择的老用户。**
+
+---
+
+## 3. 声音在产品里出现在哪
+
+默认不自动播放：用户可能在图书馆、宿舍或免打扰时段。只有用户刚用语音发起的那一轮，回复才自动朗读。
+
+| 场景 | 分期 | 有没有声音 | 默认 | 入口 |
 |---|---|---|---|---|
-| A. 预设声线库挑选 | 从供应商的现成声线里挑，按性格匹配 | 低：很多用户会听到同一个声音 | 几乎为零 | 中文声线少（Azure zh-CN HD 约 16 个，OpenAI Realtime 共 10 个）；换供应商时声音会跟着变 |
-| B1. 声音设计 · 预制声线池（**首版推荐**） | 运营写性格描述，用文字描述生成 40–60 个声线，试听筛选后打标签入池；每个用户在池里匹配，再叠加语速、表达指令、名字和人设 | 中：声线会被多人共用，但组合起来基本唯一 | 一次性设计费用加运营试听人力；声线名额占用固定 | 设计结果每次都有波动，需要挑选；要保存「声线配方」，以便迁移 |
-| B2. 声音设计 · 每个用户现做（第二阶段） | 根据系统生成的主理人性格，自动写出声音描述，生成 3 个候选，用户试听选 1 个后锁定 | 高：音色本身就是独有的 | 商用 API 受声线名额限制；自托管开源没有上限，只有 GPU 成本 | 偶然生成出和某位真人相似的声音；生成失败或不好听；自动生成的描述可能带出偏见 |
-| C. 微调（LoRA 或 少样本） | 用获得授权的配音演员录音微调出几个「招牌声线」，例如 VoxCPM2 只需 5–10 分钟音频，GPT-SoVITS 约 1 分钟 | 低，但每个声线质量最高 | 配音演员合同、授权管理、训练和托管 | 必须有书面授权和撤回机制（见第 6 节）；数量少，做不到每人一个 |
+| 面试间 · 逐回合：题目、追问 | P0 | 面试官英文朗读 | 选了语音作答时自动朗读题目；选打字时点「听」才朗读 | 面试间 |
+| 面试间 · 沉浸 | P1-11 | 实时语音 | 点「开始」后出声 | 面试间里选「沉浸」 |
+| 面在小组里的发言、复盘、小结 | P0 | 无 | — | — |
+| 主理人的普通消息 | P1-12 | 点按朗读 | 不自动播放 | 消息上的「听」 |
+| 第一封信、晨报等信件卡片 | P1-12 | 点按朗读 | 不自动播放 | 信件卡片上的「听」 |
+| 按住说话（主理人） | P1-12 | 按住说 → 松手后转写 → 主理人回复 | 这一轮的回复自动朗读；可在「我 → 主理人 → 声音」关掉 | 输入框上的麦克风 |
+| 连续语音对话、打断 | P2 评估 | — | — | — |
+| 专家消息 | — | 无，也没有「听」按钮 | — | — |
+| 语音一问一答中有专家入场 | P1-12 | 专家消息只显示文字，朗读时跳过 | 主理人自己那一段照常朗读 | — |
+| 含 `restricted` 内容的消息 | P1-12 | 拿到 ZRM 之前不送 TTS | 显示「这条含身份信息，只显示文字」 | — |
+| 危机 L1、L2 | P0 起 | 立即停止当前播放；L2 模板和资源卡只显示文字（02 §10.3） | — | — |
+| Discord | — | 不发语音消息（02 §6、10） | — | — |
 
-### 2.2 各家声线名额（决定 B 路线能走多远）
-
-| 供应商 | 自定义声线上限 | 设计 / 克隆费用 | 来源 |
-|---|---|---|---|
-| ElevenLabs | Creator 30 / Pro 160 / Scale 660 / Business 660 | 设计调用费用未在本次核实范围内 | https://elevenlabs.io/docs/api-reference/text-to-voice/design |
-| Gemini 3.8 Flash TTS | 每个项目 200 个（描述生成和复刻共用），最后一次使用后保留 1 年，用了就续期 | 未公布单独费用 | https://ai.google.dev/gemini-api/docs/speech-generation |
-| OpenAI 自定义声线 | 每个组织 20 个，只开放给符合条件的客户，必须由声音提供者照固定文本录同意书 | 需联系销售 | https://developers.openai.com/api/docs/guides/custom-voices |
-| 阿里云 Model Studio | 每账户每模型族 1000 个，一年不用自动删除 | Qwen 声音设计 $0.2/个 | https://www.alibabacloud.com/help/en/model-studio/qwen-tts-voice-design |
-| Inworld | On-Demand 100 / Creator 500 / Growth 最高约 3 万 | 未核实 | https://inworld.ai/pricing |
-| MiniMax | 未公布 | 声音设计 $3/个，快速克隆 $1.5/个；克隆声线 7 天不用会被删 | https://platform.minimax.io/docs/guides/pricing-paygo.md |
-| 自托管 Qwen3-TTS / VoxCPM2 | 没有上限：参考音和克隆提示存在我们自己的数据库 | 只有 GPU 成本 | https://github.com/QwenLM/Qwen3-TTS ，https://github.com/OpenBMB/VoxCPM |
-
-结论：真正做到「每个用户一个独有音色」，商用 API 里只有 Inworld Growth（约 3 万个）和阿里（1000 个）的名额勉强够用，而阿里有合规顾虑。可持续的做法是自托管开源模型。首版先用 B1，并把以下「声线配方」存进我们自己的数据库：
-
-- 设计描述文本；
-- 供应商和模型版本；
-- 供应商的声线 id；
-- 参考音的哈希；
-- 试听标签（温度、语速、直接度）；
-- 表达指令模板。
-
-有了这份配方，换供应商或迁到自托管时，可以按同一份描述重新生成，再做人工比对，尽量让声音接近原来的样子。
-
-### 2.3 推荐的落地流程（B1 → B2）
-
-1. **写描述。** 运营按 `docs/product/02-companion.md` §6.1 的三个维度，写 40–60 条中文声音描述，例如「二十多岁的普通话女声，语速偏慢，温和但不甜腻，句尾干脆」。描述里**不写任何真人的姓名、明星或角色名**。
-2. **生成。** 每条描述生成 3 个候选。VoxCPM2 官方说明，设计结果每次都有波动，可能要生成 1–3 次；Qwen3-TTS 同理。
-3. **试听筛选。** 用固定试听句「我是墨。今天我们先把一件事做完。」加上第 7 节的测试句做内部试听。发音错误、听起来像某位知名人物、或情绪不稳的候选全部淘汰。
-4. **固化。** 商用 API 存下声线 id；自托管走 Qwen3-TTS README 推荐的流程：用 VoiceDesign 合成参考片段 → `create_voice_clone_prompt` → `generate_voice_clone`，之后反复使用同一份克隆提示。README 原文说这个流程「especially useful when you want a consistent character voice across many lines」。来源：https://github.com/QwenLM/Qwen3-TTS
-5. **匹配。** 按 §6.1 的规则推荐 3 个，用户可以随时更换。
-6. **第二阶段（B2）。** 开源盲测和压测通过后，把第 1–4 步自动化，为每个新用户现做。仍保留「用户试听后确认」这一步，并加相似度检查：新声线和池内已有声线、内部禁用名单的说话人相似度过高时就重新生成。
-
-### 2.4 让它「更像真人」：模型之外可以借鉴的做法
-
-听起来像不像真人，不只取决于选哪个 TTS 模型。开源界和头部产品的共同做法有这些：
-
-- **先固定声线，再实时合成。** 用设计或获得授权的录音得到参考音，固化后交给流式模型实时合成，同时用指令控制情绪和语气。Qwen3-TTS、VoxCPM2、CosyVoice3 都支持语气、语速、情绪指令，CosyVoice3 还能用拼音或 CMU 音素纠正发音。来源：https://github.com/FunAudioLLM/CosyVoice ，https://github.com/OpenBMB/VoxCPM
-- **让语气跟上下文走。** MOSS-TTS-Realtime 专为多轮语音 Agent 设计，生成时会参考历史文本和用户上一轮的语音来保持语气一致；Sesame CSM 也会参考上下文音频。这类思路值得借鉴，但 CSM 只支持英文。来源：https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Realtime ，https://github.com/SesameAILabs/csm
-- **写给耳朵听的文本。** 让大模型直接输出「口语稿」：短句、少括号、不用列表；数字、日期、金额先规范化；英文公司名和岗位名保持原样，并维护一份发音词典，例如 SWE、OA、OPT、LeetCode。中英混读出错，大多数是文本侧的问题。
-- **轮转节奏。** 链式方案按句子或分句切分，把文本流式送进 TTS（vLLM-Omni WebSocket 的 `split_granularity=sentence/clause` 就是做这个的）；用户一开口就立刻停止播放。端到端延迟一旦超过 1 秒左右，再好的音色也会显得「不像人」，需要实测校准。
-- **一致性优先于花哨。** 同一个主理人在不同天、不同通道里的声音必须一样。所以 TTS 出故障时，**宁可退回文字，并提示「语音暂时不可用」，也不要临时换成另一个声音**，否则用户会以为换了一个人。
+- 朗读文本超过 4,000 字（`/voice/speech` 的上限）时，按句分段请求。
+- 主理人的朗读不单独设额度，只受 06 的成本护栏约束（06 §5）。
 
 ---
 
-## 3. 开源方案
+## 4. 成本
 
-### 3.1 前几名（可商用、中英文都好、能流式）
+以下量级用于横向比较和校验 06 §5；单价见附录 B，以账单核对。
 
-| 模型 | 中文质量 | 英文质量 | 代码许可 | 权重许可 | 流式与延迟 | GPU 需求 | 造声线能力 |
-|---|---|---|---|---|---|---|---|
-| **Qwen3-TTS 12Hz 1.7B / 0.6B**（阿里通义，2026-01-22） | Seed-TTS-eval 中文 CER 1.22；第三方论文中 UTMOSv2 3.86 排第 1，多轮迭代后自然度最稳（4.27→3.79） | 英文 WER 1.23 | Apache-2.0 | Apache-2.0 | Dual-Track 流式。官方称「端到端合成延迟低至 97ms」，未说明测试硬件，属于理想值。vLLM 博客实测（H20×2，克隆模式）：并发 1 首包 70.61ms，并发 64 约 1128ms | 官方未公布；推荐使用 FlashAttention2 | VoiceDesign 只有 1.7B 版有；Base 版 3 秒克隆；CustomVoice 版有 9 个预置声线（中文 5 个）；可用指令控制语气、语速和情绪 |
-| **Fun-CosyVoice3-0.5B-2512**（阿里 FunAudioLLM，2025-12） | 中文 CER 1.21%；第三方 UTMOSv2 3.58 排第 2；RL 版说话人相似度最高；支持 18 种以上中文方言和口音 | 英文 WER 2.24% | Apache-2.0 | Apache-2.0 | 双向流式，宣传延迟低至 150ms（单路理想值）。仓库里由 NVIDIA 工程师贡献的 TensorRT-LLM 方案，在单卡 L20、4 路并发下首包平均 750ms，P99 1002ms。两个数字的测试条件不同 | 官方未公布 | **不能用文字设计声线**；可零样本克隆；可用指令控制方言、情绪、语速；支持拼音纠音 |
-| **VoxCPM2**（面壁 OpenBMB，2026-04，2B） | 官方自报中文 CER 0.97，相似度 79.5 | 英文 WER 1.84；InstructTTSEval-EN 84.2，表中最高 | Apache-2.0 | Apache-2.0（README 写明可商用） | 提供 `generate_streaming` API。RTX 4090 上 RTF 约 0.30，加速后约 0.13。**首包延迟官方未公布** | 约 8GB 显存；输出 48kHz | 可用文字设计声线，也可以可控克隆；用 5–10 分钟音频即可做 LoRA；设计结果每次都有波动 |
-| **MOSS-TTS-Realtime 1.7B + MOSS-VoiceGenerator 1.7B**（OpenMOSS，备选第 4） | 家族中文 CER 1.37–1.44%（官方） | 英文 WER 1.84–1.93% | Apache-2.0 | Apache-2.0 | L20 上首字节 180ms，RTF 0.51；会参考上一轮用户语音保持语气 | 未公布 | VoiceGenerator 可用文字设计声线 |
-| **GLM-TTS**（智谱，以中文为主） | RL 版 CER 0.89（官方自报） | 以中文为主，整段英文不是强项 | Apache-2.0 | MIT（示例音频仅限研究） | 支持流式，延迟未公布 | GPU 或昇腾 NPU | 3–10 秒克隆；不能用文字设计声线 |
+- **主理人朗读：** 按中文每分钟约 270 字估算，首选供应商约 $0.011/分钟，其他候选在 $0.003–0.027/分钟之间；转写约 $0.006/分钟（假设）。Gemini 2027-01-01 起涨价一倍，正好落在首批期内（06 假设首批持续到 2027-06-30）。
+- **P0 面试官朗读：** 每题的题面加追问约 30–60 秒音频，每题不超过约 $0.015（假设）。
+- **面试官实时接口（P1-11）：** 这是 06 里唯一按分钟计额度的能力，但它按 token 计价。折算假设如下：
 
-来源：
-- https://github.com/QwenLM/Qwen3-TTS ，https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign ，https://arxiv.org/abs/2601.15621
-- https://github.com/FunAudioLLM/CosyVoice ，https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512 ，https://github.com/FunAudioLLM/CosyVoice/blob/main/runtime/triton_trtllm/README.Cosyvoice3.md
-- https://github.com/OpenBMB/VoxCPM ，https://huggingface.co/openbmb/VoxCPM2
-- https://github.com/OpenMOSS/MOSS-TTS ，https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Realtime ，https://huggingface.co/OpenMOSS-Team/MOSS-VoiceGenerator
-- https://github.com/zai-org/GLM-TTS ，https://huggingface.co/zai-org/GLM-TTS
-- 第三方比较（南大、小米、港科大，11 个开源模型）：https://arxiv.org/html/2603.24430
-- vLLM-Omni 并发实测：https://vllm.ai/blog/2026-06-23-vllm-omni-tts
+| 项 | 假设（需核实） | 每分钟 |
+|---|---|---|
+| 用户音频输入 | 每分钟音频约 600 token；用户说话占 50% | 300 token × $32/1M ≈ $0.010 |
+| 面试官音频输出 | 每分钟音频约 1,200 token；面试官说话占 40% | 480 token × $64/1M ≈ $0.031 |
+| 上下文累积 | 一次 10 分钟、每分钟约 2 轮，每轮都重读全部历史，平均每分钟约 8,000 个音频 token | 全部命中缓存（缓存单价按 $0.40/1M）≈ $0.003；全部不命中 ≈ $0.26 |
+| 合计 | | 全部命中 ≈ $0.045；命中 80% ≈ $0.10；全部不命中 ≈ $0.30 |
 
-**排序理由：** Qwen3-TTS 第一。它在同一个模型家族里同时有「文字设计声线 → 固化 → 复用」的完整流程，这正是我们需要的预设声线库；第三方评测里它的自然度最高、多轮最稳；中文主理人和英文面试官可以共用一套服务。CosyVoice3 第二，中文流式最成熟，但必须借用别的模型来设计参考音。VoxCPM2 第三，单卡 8GB 就能跑，自托管成本最低，但首包延迟没有公开数据。
-
-**需要注意的细节：**
-- Qwen3-TTS README 的 vLLM 一节仍写着「只支持离线推理」，这已经过时，vLLM-Omni 现在已支持在线服务。
-- vLLM-Omni 的两种流式模式都要求 `response_format` 为 pcm 或 wav，且 `speed` 必须是 1.0。WebSocket 端点默认要等 `input.done` 才开始合成，必须设置 `split_granularity=sentence` 或 `clause` 才能降低首包延迟。来源：https://github.com/vllm-project/vllm-omni （docs/serving/speech_api.md）
-
-### 3.2 适合自托管的条件
-
-满足以下条件中的大部分时，才建议把开源方案升为主力：
-
-1. **有常驻 GPU，并有人负责运维。** 包括监控、扩缩容、模型版本固定和回滚。
-2. **在我们目标并发下压测达标。** 例如首包 P90 在可接受范围内，具体目标见第 7 节。官方数字不能直接用。
-3. **规模或需求上值得：** 「每用户独有声线」超出了供应商名额，或语音分钟数大到 API 费用超过 GPU 成本。这需要拿我们拿到的云 GPU 报价来测算，本次没有核实 GPU 价格。
-4. **有数据驻留要求：** 希望用户文本不出自有环境。补充一点：在我们自己的美国机房跑中国机构发布的开源权重，并不把用户数据交给对方，和调用阿里云或火山引擎 API 是两回事。但是否构成 28 CFR 202 的数据交易，仍请法务一并确认。
-
-### 3.3 只适合特定用途的开源模型
-
-| 模型 | 许可 | 适合 | 不适合 |
-|---|---|---|---|
-| Kokoro-82M v1.1-zh（103 个音色） | 代码和权重 Apache-2.0 | CPU 兜底 | 主理人主声线：不能克隆、没有情绪控制；v1.0 的 8 个普通话音色官方评级全是 D。来源：https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh ，https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md |
-| LongCat-AudioDiT（美团） | 代码和权重 MIT | 离线生成高质量参考音（说话人相似度最高） | 实时对话：扩散架构，没有流式说明。https://huggingface.co/meituan-longcat/LongCat-AudioDiT-3.5B |
-| 腾讯 AuK / AuK-Flash | 代码和权重 MIT | 离线设计和编辑声线，例如把同一句话改成不同情绪 | 实时链路：流式未公布。https://huggingface.co/tencent/AuK |
-| GPT-SoVITS | 代码和权重 MIT | 用约 1 分钟**授权录音**微调少量招牌声线，延迟低 | 高并发服务化。https://github.com/RVC-Boss/GPT-SoVITS |
-| 英文专用：Chatterbox Flash / Turbo（MIT，Flash 首包 103ms，输出自带 Perth 水印）、Orpheus 英文版（Apache-2.0，约 200ms）、Dia2（Apache-2.0）、Sesame CSM（Apache-2.0）、Kyutai TTS（权重 CC-BY-4.0，不能克隆任意声音） | 均可商用 | 自托管英文面试官的备选 | 中文主理人。https://huggingface.co/ResembleAI/chatterbox-flash ，https://github.com/canopyai/Orpheus-TTS ，https://github.com/nari-labs/dia2 ，https://github.com/SesameAILabs/csm ，https://github.com/kyutai-labs/delayed-streams-modeling |
-
-### 3.4 有条件可商用（使用前需法务通读）
-
-- **IndexTTS2 / 2.5（bilibili）**：代码和权重都受 bilibili Model Use License 约束。上月 MAU 超过 1 亿，或上一年营收超过 10 亿元人民币，就必须另外申请授权。许可证还另有限制：禁止用于医疗诊断、军事、大规模生物识别监控；不得用它来改进其他 AI 模型；必须保留版权声明。官方代码有**按分段的流式返回**（`infer_v2.py` 的 `stream_return=True`），不是 token 级的低延迟流式，也没有官方流式服务端。中文情感表现力强，适合离线生成鼓励或安慰类的预录语音。来源：https://github.com/index-tts/index-tts/blob/main/LICENSE
-- **Higgs TTS 2**（原名 Higgs Audio v2）：权重许可基于 Llama 3 社区许可证，上一年年活跃用户超过 10 万就要向 Boson 申请扩展许可。官方建议显存至少 24GB。来源：https://huggingface.co/bosonai/higgs-tts-2-3b-base/blob/main/LICENSE
-- **VibeVoice（微软）**：2025-09-05 移除的只是长篇多说话人的 VibeVoice-TTS 1.5B 代码。之后开源的 Realtime-0.5B 仍在仓库里，MIT 许可，但只支持英语和单说话人，不能自行克隆。官方声明：未经进一步测试和开发，不建议用于商业或真实应用。来源：https://github.com/microsoft/VibeVoice
-- **MegaTTS3（字节跳动）**：代码是 Apache-2.0，但编码器参数没有公开，无法自由定制声线。来源：https://github.com/bytedance/MegaTTS3
-- **Step-Audio-EditX（阶跃）**：代码 Apache-2.0，权重卡没有声明许可证，商用与否暂记为 unknown；也不支持流式。来源：https://huggingface.co/stepfun-ai/Step-Audio-EditX
-- **Orpheus 中文版**：模型名里标明是 research_release，不建议商用。来源：https://huggingface.co/canopylabs/3b-zh-ft-research_release
-
-### 3.5 看起来很好，但不能商用（明确排除）
-
-| 模型 | 为什么吸引人 | 为什么不能用 | 来源 |
-|---|---|---|---|
-| **Breeze TTS 2** | AA 开源权重榜第 1（Elo 1216），支持中英，H100 上首音低于 40ms | BreezeBlue Research and Non-Commercial License，自托管生成的输出也受限 | https://huggingface.co/BreezeBlue/Breeze-TTS-2 |
-| **Fish Audio S2 Pro / Fish Speech** | 开源质量可能最强之一（中文 CER 0.54），支持 15000 多种行内情绪标签 | FISH AUDIO RESEARCH LICENSE：任何商业用途都要另签书面许可，连企业内部使用也算商业用途 | https://github.com/fishaudio/fish-speech/blob/main/LICENSE |
-| OpenAudio S1-mini | 体积小 | 权重 CC-BY-NC-SA-4.0 | https://huggingface.co/fishaudio/s1-mini |
-| **F5-TTS** | 延迟低（L20 上 253ms） | 代码 MIT，但权重 CC-BY-NC（训练数据 Emilia 的限制） | https://github.com/SWivid/F5-TTS |
-| **Spark-TTS** | 中英混读，可按性别和音高创建声音 | 代码 Apache-2.0，权重 CC-BY-NC-SA-4.0 | https://huggingface.co/SparkAudio/Spark-TTS-0.5B |
-| **MaskGCT** | 零样本克隆 | 权重 CC-BY-NC-4.0 | https://huggingface.co/amphion/MaskGCT |
-| **OmniVoice** | 支持 600 多种语言和文字设计，vLLM-Omni 已支持 | 代码 Apache-2.0，预训练权重 CC-BY-NC | https://huggingface.co/k2-fsa/OmniVoice |
-| **XTTS-v2（Coqui）** | 社区常用，6 秒克隆 | CPML 只允许非商业使用，**输出也受限**；Coqui 已关闭，无处购买授权 | https://huggingface.co/coqui/XTTS-v2/blob/main/LICENSE.txt |
-| **Higgs TTS 3** | 支持 100 多种语言和流式 | Research and Non-Commercial License | https://github.com/boson-ai/higgs-audio |
-| **Voxtral-4B-TTS（Mistral）** | 大厂出品 | CC-BY-NC-4.0，而且不支持中文 | https://huggingface.co/mistralai/Voxtral-4B-TTS-2603 |
-
-共同的坑：这些模型的**代码**多半是 MIT 或 Apache，但**权重**受训练数据（Emilia 等）的限制。用同样的数据自己重训，也会继承同样的限制。挑选时必须把代码和权重分开看。
-
----
-
-## 4. 商用方案对比
-
-每分钟价格是按中文约每分钟 270 字估算的（4–5 字/秒），只用来比较量级。各家对汉字的计费口径要以账单核对。
-
-| 供应商 / 模型 | 质量（AA Elo；中文情况） | 声音设计 | 实时与延迟 | 价格量级 | 数据保留 | 首版定位 |
-|---|---|---|---|---|---|---|
-| **ElevenLabs v4 Turbo / v4** | 1334（第 1）/ 1321（第 2）；支持 cmn、yue，没有中文评测 | 有：Voice Design v3（`eleven_ttv_v3`），可传参考音 | v4 Turbo 中位推理约 100ms，厂商自测首个可听语音约 150ms。API 文档里 v4 Turbo 写在 Text to Dialogue WebSocket，v4 写在 Text to Dialogue API；ElevenAgents 里也能用 | v4 Turbo $0.04/1K 字符（约 $0.011/分钟），v4 $0.08/1K；10-12 前打 72% 折扣 | 隐私政策写明可能把个人数据用于训练，可在 Data use 里退出，但只对之后生效。声音相关数据最长保留到最后一次互动后 3 年。ZRM（`enable_logging=false`）只开放给部分企业客户，不覆盖语音克隆 | **主理人首选** |
-| **Gemini 3.8 Flash / Flash-Lite TTS** | 1275（第 5）/ 1242（第 9）；支持普通话和粤语 | 有：`POST /v1beta/voices`（type=prompted） | 可通过 Interactions API 或 WebSocket 流式输出；延迟未公布；Cloud 侧仍是 Preview | 输出 $9/1M 音频 tokens（约 $0.0135/分钟），2027-01-01 起 $18；Flash-Lite $6，之后 $12 | 付费层不用于改进产品，只为检测违规记录日志；免费层会用于改进产品，所以必须用付费层 | **主理人第二候选** |
-| **Azure zh-CN HD Flash / DragonHD** | 不在 AA 前 15；有 14 个 zh-CN HD Flash 声线，带陪伴类风格 | 无 | HD 延迟低于 300ms，只支持实时合成 | Neural HD $22/1M 字符（约 $0.006/分钟）；注意自定义声线的 CNV Neural HD 是 $48/1M | 实时 API 不存储文本和音频；batch 和长音频合成会存储 | **隐私兜底和中文对照** |
-| **OpenAI gpt-realtime-2.1** | 中文没有官方评测 | 无。自定义声线限符合条件的客户，每组织 20 个，需要同意书录音 | WebRTC，semantic VAD，打断成熟；会话开始出声后不能换声线 | 音频输入 $32/1M、输出 $64/1M tokens；mini 版 $10/$20 | API 数据默认不用于训练；滥用监控日志最长保留 30 天；`/v1/realtime` 和 `/v1/audio/speech` 可申请 ZDR | **面试官首选** |
-| OpenAI gpt-4o-mini-tts | 中文没有官方评测 | 无，有 13 个预置声线 + instructions | 流式输出 pcm 或 wav（24kHz） | 第三方折算约 $0.015/分钟 | 同上 | 盲测里的「零改造」对照 |
-| OpenAI GPT-Live-1 | — | 无 | 全双工，支持 WebRTC、WebSocket、SIP；Tier1 并发 25 | $0.05/分钟，后端模型另计 | 同上 | 第二阶段评估 |
-| **Cartesia Sonic 3.6** | 1278（第 4）；支持中文，没有公开的中文评测 | 官方文档里没找到按文字设计声线的功能 | 官方称首段音频低于 90ms | Startup $49/月含 125 万 credits（英文约 $0.03/分钟） | ZDR 只开放给企业，且不覆盖克隆；有 SOC 2 Type II | 英文链式备选 |
-| **Inworld TTS-2 / TTS-2 Flash** | 1251 / 1214；中文属于 15 个生产级语言之一 | 有，并支持克隆；声线上限最高约 3 万 | Flash 自称首段音频 20ms；有兼容 OpenAI 格式的 `/v1/audio/speech` | TTS-2 $25/M 字符（约 $0.007/分钟），Growth 档 $12.5 | ZDR 和保留政策都未核实 | 盲测备选（声线名额最宽松） |
-| 阿里云 Qwen3-TTS-Flash / Qwen-Audio-3.x | Qwen-Audio-3.1-TTS-Plus 1292（第 3）；中文第一梯队 | 有，$0.2/个，上限 1000 个 | qwen-audio-3.0-tts-flash 首包低于 200ms | Flash $0.1/万字符（约 $0.003/分钟） | 国际站选新加坡区域，静态数据存在新加坡；隐私声明称不用客户数据训练，另一份 FAQ 写的是「未经明确同意」不用 | **只做中文质量对照**，只用虚构台词；法务通过后再考虑 |
-| MiniMax speech-2.8 | 中文表现力强 | 有，$3/个 | WebSocket 流式；有美西接入点 | hd $100/M 字符（约 $0.027/分钟） | 第三方汇总称条款允许用输入和输出改进服务，没有公开的 ZDR；母公司在上海 | 只做原型和对照 |
-| 火山引擎 豆包 TTS 2.0 / BytePlus | 国内口碑好，没有统一评测 | 声音复刻 2.0（音色费 138 元/个） | 双向 WebSocket | 3 元/万字符（计费页更新于 2026-09-29）；BytePlus $30/M | 火山引擎的数据在中国境内处理 | 首版不发送任何含个人信息的文本 |
-| Fish Audio S2.1 Pro API | 质量高 | 有 | 厂商称首包约 70–90ms | $15/M UTF-8 字节。按字符算，中文是英文的 3 倍；按同样时长的音频算，两者成本大致相当（约 0.8–1.2 倍） | 条款明确允许用用户内容训练模型，看不到退出机制 | 只用于试听原型 |
-| Hume Octave / EVI | — | — | — | — | 2026-11-13 关停，之后账户数据会被删除 | **排除** |
-
-来源：
-- AA 榜单：https://artificialanalysis.ai/text-to-speech/leaderboard
-- ElevenLabs：https://elevenlabs.io/docs/overview/models ，https://elevenlabs.io/pricing/api ，https://elevenlabs.io/docs/eleven-api/resources/zero-retention-mode ，https://elevenlabs.io/privacy-policy
-- Gemini：https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash-tts ，https://ai.google.dev/gemini-api/docs/pricing ，https://cloud.google.com/text-to-speech/pricing
-- Azure：https://learn.microsoft.com/en-us/azure/ai-services/speech-service/high-definition-voices ，https://prices.azure.com/api/retail/prices
-- OpenAI：https://developers.openai.com/api/docs/guides/text-to-speech ，https://developers.openai.com/api/docs/pricing ，https://developers.openai.com/api/docs/guides/your-data
-- Cartesia：https://docs.cartesia.ai/build-with-cartesia/tts-models/latest ，https://cartesia.ai/pricing ，https://docs.cartesia.ai/enterprise/zero-data-retention.md
-- Inworld：https://docs.inworld.ai/docs/tts ，https://inworld.ai/pricing
-- 阿里云：https://www.alibabacloud.com/help/en/model-studio/qwen-tts ，https://www.alibabacloud.com/help/en/model-studio/model-pricing ，https://www.alibabacloud.com/help/en/model-studio/privacy-notice
-- MiniMax：https://platform.minimax.io/docs/guides/pricing-paygo.md ，https://standardcompute.com/providers/minimax
-- 火山引擎和 BytePlus：https://docs.volcengine.com/docs/6561/1359370 ，https://docs.byteplus.com/en/docs/byteplusvoice/TTS_Billing
-- Fish Audio：https://fish.audio/terms/ ，https://docs.fish.audio/developer-guide/models-pricing/pricing-and-rate-limits
-- Hume：https://dev.hume.ai/docs/text-to-speech-tts/overview
+06 §5 的规划值 $0.06/分钟，只在缓存命中率约 95% 以上时成立。P1-11 上线前按 §7.2 实测；如果明显偏高，就缩短单次时长或截断上下文。
 
 ---
 
 ## 5. 与现有代码的衔接
 
-### 5.1 OpenAI Realtime（面试官）：继续用，改三处
+### 5.1 面试官
 
-- **现状：** `packages/ai-core/src/media.ts:52-64` 调 `/v1/realtime/client_secrets` 签发短期凭据，默认模型 `gpt-realtime-2.1`；Realtime 声线白名单在 `packages/ai-core/src/voice-input.ts:7`（10 个）。
-- **要改的地方：**
-  1. 按产品文档，`services/platform-api/src/app.ts:312-329` 不再接受客户端传入的 `persona` 和 `voice`，改由服务端按「面试官专家」固定指令和声线下发（`docs/product/02-companion.md` 第 858 行）。
-  2. 面试官声线固定为 `cedar` 或 `marin`。会话开始出声后就不能再换声线，所以要在创建会话时一次定好。
-  3. 申请 `/v1/realtime` 的 ZDR。在审批通过之前，用户须知里要写明 OpenAI 会保留最长 30 天的滥用监控日志。
-- **第二阶段：** 评估 GPT-Live-1。它的接口是 `v1/live/sessions`，和现在的 client_secrets 流程不同，需要新的适配。
+`/voice/session`、`/voice/speech`、`/voice/transcribe` 都是 `secured(...)` 路由。网页请求要带 `x-companion-account` 头（经 `apps/web/src/api.ts` 的 `BoundPlatformClient`）；回放音频时，私有文件 GET 用 `expectedAccount` 查询参数。
 
-### 5.2 Kokoro（本地）：只作开发与英文兜底，不扩展成中文主声线
+**唯一声线来源。** 面试官声线只来自服务端配置 `PLATFORM_INTERVIEWER_VOICE`（`cedar` 或 `marin`）。逐回合朗读和实时会话都只读它，不读 `OPENAI_TTS_VOICE`、`OPENAI_REALTIME_VOICE`。启动时检查：这个值必须同时在 `OPENAI_SPEECH_VOICES` 和 `OPENAI_REALTIME_VOICES` 里；生产环境没有配置时拒绝启动，开发环境缺省为 `marin`（现有代码的默认值）。实时会话开始出声后就不能再换声线，所以要在创建会话时一次定好。
 
-- **现状：** `services/local-speech` 是 CPU 上的 Kokoro 82M Python 服务，只接受 `kokoro-82m` + `af_heart`。`packages/ai-core/src/kokoro.ts` 有以下限制：
-  - 只允许 loopback 地址（第 13 行）；
-  - 拒绝非拉丁字母文本（第 62 行）；
-  - 只接受 24kHz、单声道、16-bit 的 WAV（第 26 行）；
-  - 不支持表达指令。
-- **建议：** 保持现状，作为开发环境和商业调用关闭时的英文兜底。这和 `docs/product/02-companion.md` §6.4 一致。
-- **不建议在 Kokoro 适配器上硬改，去接 vLLM-Omni。** 原因有三：GPU 服务通常不在本机，loopback 限制会挡住它；Qwen3-TTS 和 VoxCPM2 的采样率不同（VoxCPM2 是 48kHz）；流式需要全新的返回路径。
-- 如果开发环境也想听中文，可以另外评估 Kokoro v1.1-zh。但需要改 `services/local-speech` 的模型和声线白名单、`assets.json` 哈希和中文 G2P，再放开适配器的拉丁字母限制。中文质量不够做主理人，优先级低。
+**表达。** 面试官的表达参数由服务端固定：`emotion=calm`、`rate=1.0`、`pause=normal`，听感是中性、清晰、不夸张。朗读模型支持表达指令时，把参数编译成 instructions（现有 `openAISpeechParameters` 只对支持的模型接受 instructions）；实时会话写进会话指令。两条链路用同一组参数。
 
-### 5.3 新增：自托管 TTS 适配器（vLLM-Omni，用于开源线）
+**客户端不能指定。** 学生端提交 `provider`、`model`、`voice`、`instructions`、`persona`、`turnTaking`，一律返回 400（09 §1.1 第 3 条）。现在 `voiceProvider` 在客户端不传时缺省为 `openai`，传了就照用；`/voice/speech` 也接受任意文本。改为：面试间按 `message_id` 请求朗读，正文由服务端读取。
 
-- **新建一个独立的适配器**，例如 `packages/ai-core/src/selfhosted-tts.ts`，和 Kokoro 分开。它要做到：
-  - 指向带鉴权的私有 GPU 服务，不是 loopback；
-  - 允许中文；
-  - 按模型配置采样率；
-  - 支持 PCM 流式，走 SSE 或 `/v1/audio/speech/stream` WebSocket，`split_granularity=sentence`；
-  - 「声线」用服务端保存的克隆提示 id，不接受客户端传入的音频。
-- vLLM-Omni 已用同一个 OpenAI 兼容接口 `/v1/audio/speech` 支持 Qwen3-TTS、CosyVoice3、VoxCPM2、MOSS-TTS-Nano，所以三家盲测只需要换模型和部署，不用改接口。来源：https://github.com/vllm-project/vllm-omni （docs/serving/speech_api.md）
+**P0 逐回合（P0-10）**
 
-### 5.4 ElevenLabs 适配器：要改造后才能用于主理人
+- 题目：`POST /voice/speech` → `runtime.speech` → `speechOpenAI`，返回整段 mp3。回答：`POST /voice/transcribe` → `transcribeOpenAI`，按 09 第 7 步加 `language=en`。
+- 现在每次朗读的结果都会被 `saveUpload` 存成用户的私有文件。改为按 `message_id` + 声线缓存 7 天（假设），删除消息或账号时一并删除。用户的回答只存转写，不存音频（07 P0-10）。
 
-现状（`packages/ai-core/src/elevenlabs.ts`）和要改的地方：
+**P1-11 沉浸**
 
-| 现状 | 问题 | 改造 |
-|---|---|---|
-| 全局只有一个 `ELEVENLABS_TTS_VOICE_ID`（第 14 行），请求里的 voice 必须等于它（第 87 行） | 不能做到每个主理人一个声线 | 服务端维护 `voice_preset → (provider, provider_voice_id, 表达模板)` 映射（`docs/product/02-companion.md` 第 877 行）；按发言者取声线，客户端不能指定 |
-| `POST /v1/text-to-speech/{voice}`，整段 `mp3_44100_128`（第 91-92 行） | 不能流式，首句要等整段生成完才能播放 | 主理人实时链路改用流式：v4 Turbo 走 Text to Dialogue WebSocket，按句子推送文本，返回 PCM |
-| 模型白名单没有 `eleven_v4_turbo`（第 10 行） | 首选模型不在白名单里 | 实测确认后加入，并单独写 WebSocket 调用路径 |
-| `eleven_v4` 用在 `/v1/text-to-speech` 上 | **文档说法有冲突**：代码注释称 2026-10-06 已按 Create speech 文档核实，但官方模型页写的是 v4 走 Text to Dialogue API | 必须用一次真实调用来确认，在付费调用获批后做 |
-| `enable_logging` 默认传 false（第 93 行） | 只有企业版 ZRM 才生效；非企业账号会返回什么不清楚 | 同样需要实测；如果商务上谈不下 ZRM，用户须知里要写明 ElevenLabs 会保留数据 |
-| — | Voice Design 不该在用户请求时实时调用 | 做成运营侧的离线脚本：生成、试听、入池，把声线 id 写进服务端配置 |
+- `POST /voice/session` → `realtimeOpenAI` 签发短期凭据，浏览器经 WebRTC 直连 OpenAI 的 calls 端点，服务端看不到对话内容。
+- 由服务端下发：面试官指令和题目计划（只用 `normal` 级别的内容，03 §8.5）、声线、`turnTaking`。`turnTaking` 固定为 `patient`（假设，在 §7.1 的试练中校准）；现有代码只有客户端传了它，semantic VAD 才会写进会话。
+- 时长：单次 10 分钟（`acquireRuntimeLease` 的 600 秒租约），每小时最多 4 次（按 `platform_usage` 计数）。08 面试间引用这两个数字。
+- **危机处理**（流程以 02 §10 为准）：
+  1. 服务端下发的面试官指令内置兜底：识别到自伤或自杀的表达，就停止练习，说出 988，并引导用户回小组。示例："Let's stop the practice here. If you're thinking about hurting yourself, you can call or text 988 right now. Your group is here for you." 屏幕上的资源卡由第 2 条触发。
+  2. 客户端把实时接口的输入转写逐句上送服务端分级（接口由 09 定）。L1、L2 时，服务端经订阅流通知客户端立即结束实时会话，面试间显示资源卡（08 `ResourceCard`）。
+  3. 输入转写不可用时（没有配置 `OPENAI_REALTIME_TRANSCRIBE_MODEL`，`inputTranscriptionEnabled=false`）不开放沉浸模式。转写模型不能用朗读转写那一路的默认模型，`realtimeOpenAI` 会拒绝。进入沉浸模式前说明：「实时练习中说的话会在转写后做安全检查。」面试间常驻「暂停，去小组」和「需要帮助」两个入口。
+  4. 会话结束后，客户端回传双方的转写；服务端补跑一遍分级，并按面试官的提问切成题，逐题复盘（05）。
+- 断线：5 秒内退到逐回合，声线不变（05）。
+- 零数据保留：提出申请（§6.4）。批下来之前，用户须知里写明 OpenAI 会保留最长 30 天的滥用监控日志。
 
-### 5.5 共用的改造
+### 5.2 本地服务：只用于开发
 
-- **TTS 接口抽象。** 在 `SpeechInput` 之外增加流式方法和 `voicePreset`，让 ElevenLabs、Gemini、Azure、自托管实现同一个接口，便于盲测和故障切换。故障切换只在**同一个声线有多份等价实现**时才切换，否则退回文字（见 2.4）。
-- **主理人语音对话走链式方案。** 复用现有的 Faster Whisper 或 OpenAI 转写，再加上大模型和流式 TTS。逐回合朗读和语音对话都用同一个 `voice_preset`，自然满足 §6.1「同一主理人在两条链路里声音一致」的要求；面试官用 OpenAI Realtime 的声线，也自然满足「面试官声线不进主理人声线池」。现有的 Faster Whisper 是 tiny 模型，中文识别准确率需要另行评估，本文不展开。
+- `services/local-speech`（适配器 `packages/ai-core/src/kokoro.ts`）只允许 loopback 地址，拒绝非拉丁字母文本，只接受 24kHz、单声道、16-bit 的 WAV，不支持表达指令。`services/local-transcription`（`local-transcription.ts`）是本机上的极小转写模型，不能指定语言。
+- `config.ts` 只要配置了 `KOKORO_*` 或 `FASTER_WHISPER_*` 就会启用对应服务，不受 `PLATFORM_ALLOW_PROVIDER_CALLS` 控制。所以生产环境不配置这两组变量，启动时检查，配置了就拒绝启动。
+- 不在本地朗读适配器上硬改去接自托管 GPU。原因有三：GPU 服务通常不在本机，loopback 限制会挡住它；各模型采样率不同；流式需要全新的返回路径。
+
+### 5.3 自托管 TTS 适配器（P2）
+
+新建一个独立的适配器，例如 `packages/ai-core/src/selfhosted-tts.ts`，和本地朗读适配器分开。它要做到：指向带鉴权的私有 GPU 服务；允许中文；按模型配置采样率；PCM 流式，按句切分；「声线」只用服务端保存的克隆提示 id，不接受客户端传入的音频。推理服务用 OpenAI 兼容的 `/v1/audio/speech`，换模型不用改接口（附录 A）。
+
+### 5.4 ElevenLabs 适配器改造（P1-12）
+
+| 现状（`packages/ai-core/src/elevenlabs.ts`） | 改造 |
+|---|---|
+| `elevenLabsConfiguration` 只认一个 `ELEVENLABS_TTS_VOICE_ID`；`speechElevenLabs` 要求请求里的 voice 等于它 | 按 `voice_preset` 查 `platform_voice_presets`，取 `provider_voice_ref`；客户端不能指定 |
+| 整段返回 `mp3_44100_128`，不能流式，首句要等整段生成完 | 主理人改用流式接口，按句推送文本，返回 PCM |
+| 首选模型不在 `ELEVENLABS_SPEECH_MODELS` 白名单里；官方把它写在对话 WebSocket 下 | 付费调用获批后，用一次真实调用确认，再加入白名单，并单独写流式调用路径 |
+| 收到 `instructions` 直接报错；`config.ts` 声明 `instructions:false` | 改为接收 §5.5 的表达参数，由适配器编译（用 `voice_settings` 还是文本内标记，需核实） |
+| `enable_logging` 取自 `ELEVENLABS_ALLOW_PROVIDER_HISTORY`，零保留只对企业账号生效 | 按 §6.4 的闸门处理 |
+| 声音设计不该在用户请求时实时调用 | 做成运营侧的离线脚本：生成、试听，写入 `platform_voice_presets` |
+
+### 5.5 共用改造
+
+- **接口：** `SpeechInput` 增加 `voicePreset`，`PlatformProviderRuntime` 增加流式朗读方法，各供应商实现同一个接口（09 第 11 步）。
+- **表达参数（与供应商无关）：** `rate`（0.85–1.15）、`emotion`（`calm` / `warm` / `encouraging` / `serious`）、`pause`（`short` / `normal` / `long`，指句间停顿）。各适配器自己编译：OpenAI 朗读编译成 instructions 文本；Azure 编译成 SSML 的风格和韵律；Gemini 编译成自然语言提示；自托管编译成指令文本；ElevenLabs 需核实。主理人的取值由说话方式卡和当前状态编译，取代 02 §6 的「表达指令」。
+- **主理人语音输入（P1-12）：** 按住说话 → `/voice/transcribe`，生产环境只用 OpenAI 转写。转写语言不固定（用户会中英混说），是否传 `zh` 由 §7.1 B 的混说测试决定。浏览器听写（`VoicePanel.tsx` 写死 `zh-CN`）的语言改为按场景设置（05）；它的音频由浏览器厂商处理，这一点要写进隐私说明。
+- **朗读不落盘：** 流式朗读不存文件。需要回放时，按 `message_id` + `voice_preset` 缓存 7 天（假设），删除消息或账号时一并删除。
+- **故障：** P1-12 不做跨实现切换，TTS 失败一律退回文字（§2.4）。
 
 ---
 
 ## 6. 伦理与合规
 
-### 6.1 始终标明是 AI 声音
+### 6.1 AI 声音说明（唯一文案来源）
 
-- 沿用 `docs/product/02-companion.md` §6.2：
-  - 第一次播放前弹出说明，记录 `voice_disclosed_at`；
-  - 面试间和播放器的标题区始终显示「AI 声音」标签；
-  - 用户问「你是真人吗」时，要如实回答。
-- 如果改用设计声线，说明文案要从「来自服务商提供的预设声线」改成「AI 生成的声音，不是任何真人的声音」。
-- 这不只是产品原则，也是供应商条款的硬性要求：ElevenLabs、OpenAI、Cartesia 都要求向用户明确告知对方是 AI。来源：https://elevenlabs.io/use-policy ，https://developers.openai.com/api/docs/guides/text-to-speech ，https://www.cartesia.ai/legal/disclosure-requirements
-- **加州 SB 243**（2026-01-01 生效）：主理人有拟人人设、跨多次交互维持关系，可能落入「companion chatbot」的定义。它要求：显著告知是 AI；有自伤和自杀危机转介机制；2027-07-01 起每年向公共卫生部报告；有私人诉权，每次违规按实际损失或 $1,000 取高。我们是否能按生产力工具获得豁免，需要律师判断。来源：https://www.gunder.com/en/news-insights/insights/client-insight-california-sb-243-new-compliance-requirements-for-operators-of-ai-companion-chatbots
+02 §6、05 O9、08 面试间都引用本节，不另写文案。
+
+```
+标题：这是 AI 的声音
+正文：你将听到的是 AI 生成的声音，不是任何真人的声音。主理人和面试官都是 AI。
+      朗读和语音输入由语音服务商处理，详见「我 → 隐私」。
+按钮：[知道了]
+```
+
+- 任何 AI 声音第一次播放前都弹出：P0 是面试官第一次朗读题目前；P1-12 是主理人第一次朗读前，或 O9 试听前。用户确认之前不播放，文字照常显示。
+- 确认后记录 `platform_users.voice_disclosed_at`。这是用户级字段，随 09 第 7 步的迁移加列，不挂在主理人上。
+- 面试间和播放器的标题区始终显示「AI 声音」标签。用户问「你是真人吗」时，如实回答。
+- 这也是供应商条款的要求：ElevenLabs、OpenAI 都要求明确告知用户对方是 AI。
+- 加州 SB 243 等法规是否适用，见 02 §11「适用法规」。如果适用，语音里也要能周期性地提示 AI 身份。
 
 ### 6.2 不克隆真人
 
-- **默认不克隆任何真人的声音**，包括创始人、蔓藤真人导师、用户本人、明星或公众人物。设计声线的描述里也不写真人姓名。`docs/product/01-vision-and-users.md` 第 525 行已把「用某位真人导师的声音说 AI 生成的话」列为反例。
-- **例外只能是**「非个性化的品牌旁白」这类场景（见 `docs/product/02-companion.md` §6.3），而且必须同时满足：
+- **不克隆任何真人的声音**，包括创始人、蔓藤导师和课程讲师（他们的录音和课程视频不得用作声线样本，见 04 §3.5）、用户本人、明星或公众人物。设计声线的描述里也不写真人姓名。
+- **例外只能是**非个性化的品牌旁白（02 §6；做不做见 §8 第 6 条），而且必须同时满足：
   1. 声音提供者签署书面同意，写明用途、范围、期限和报酬；
-  2. 有**撤回机制**：撤回后删除供应商侧的声线和我们保存的参考音及克隆提示，停止新的生成，并预先决定历史音频是下架还是保留；
+  2. 有撤回机制：撤回后删除供应商侧的声线，以及我们保存的参考音和克隆提示，停止新的生成，并事先决定历史音频是下架还是保留；
   3. 每次播放都标注「AI 合成的 ×× 的声音」；
   4. 不用于主理人，不对学生说个性化的话。
-- **不收集用户的声纹。** 伊利诺伊州 BIPA 把 voiceprint 列为生物识别信息，收集前需要书面授权。28 CFR 202 也把「登记进生物识别系统的声纹」列为敏感数据，过去 12 个月累计超过 1000 人就构成批量数据。我们的语音识别只转文字，不做说话人识别，也不存声纹向量。来源：https://lig.ilga.gov/legislation/ilcs/documents/074000140K10.htm ，https://www.law.cornell.edu/cfr/text/28/202.204 ，https://www.law.cornell.edu/cfr/text/28/202.205
+- **不收集声纹。** 语音识别只转文字，不做说话人识别，不存声纹向量。伊利诺伊州 BIPA 把 voiceprint 列为生物识别信息；28 CFR 202 把登记进生物识别系统的声纹列为敏感数据。B2 的相似度检查只和池内的合成声线比对（§2.3）。
 
-### 6.3 平台条款对克隆和输出的限制
+### 6.3 平台条款
 
-| 平台 / 模型 | 限制 |
-|---|---|
-| ElevenLabs | 未经同意不得复刻他人声音；**不得用输出去训练其他模型**；ZRM 不覆盖语音克隆。https://elevenlabs.io/use-policy |
-| OpenAI 自定义声线 | 只开放给符合条件的客户；声音提供者必须照官方固定文本录同意书（有中文版），样本不超过 30 秒；每组织最多 20 个。https://developers.openai.com/api/docs/guides/custom-voices |
-| Google 复刻声线（replicated） | 需要授权；第三方称在 IL、TX、EEA、英国、瑞士、印度受限。https://ai.google.dev/gemini-api/docs/speech-generation |
-| Azure Personal voice | 受限访问，每位用户都要录同意声明，微软会做说话人验证。https://learn.microsoft.com/en-us/azure/ai-foundry/responsible-ai/speech-service/text-to-speech/data-privacy-security |
-| Cartesia | ZDR 不覆盖克隆。https://docs.cartesia.ai/enterprise/zero-data-retention.md |
-| 开源模型 | Sesame CSM 和 Dia 的条款禁止冒充他人和欺骗性使用；Chatterbox 的输出自带 Perth 水印；XTTS-v2 和 Fish 的**输出**本身也受非商业或研究许可限制 |
+- ElevenLabs：未经同意不得复刻他人声音；不得用输出去训练其他模型；ZRM 不覆盖语音克隆。
+- OpenAI 自定义声线：只开放给符合条件的客户，声音提供者必须照官方固定文本录同意书，每个组织最多 20 个。
+- Google 复刻声线、Azure Personal voice：都需要授权或本人录同意声明，部分地区受限。
+- 开源模型：有的条款禁止冒充他人和欺骗性使用；有的输出自带水印；非商业许可的模型，连输出本身也受限（附录 A）。
+- **一个容易踩的坑：** 不要拿商用 API 设计出的声音当参考音，再去克隆或微调开源模型。ElevenLabs 禁止用输出训练其他模型；零样本克隆算不算「训练」有争议，LoRA 微调则基本可以确定算。开源线的参考音，由开源模型自己的声音设计功能生成，或者来自有授权的录音。
 
-**一个容易踩的坑：** 不要拿商用 API 设计出的声音（例如 ElevenLabs 的输出）当参考音，再去克隆或微调开源模型。ElevenLabs 禁止用输出训练其他模型；零样本克隆算不算「训练」有争议，LoRA 微调则基本可以确定算。开源线的参考音应该由开源模型自己的 VoiceDesign 生成，或者来自有授权的录音。
+### 6.4 数据流向与 P1-12 上线闸门
 
-### 6.4 数据流向
-
-- 首版 TTS 优先选美国厂商。阿里、火山、MiniMax、阶跃只接收虚构或不含个人信息的文本，要扩大使用范围必须先做 28 CFR 202 的法务评估。来源：https://www.justice.gov/nsd/data-security
-- 主理人的台词里可能出现用户的学校、公司、签证状态等信息。选供应商时要看它的保留政策：ElevenLabs 非企业版会保留数据，可能用于训练；Azure 实时合成不保存；OpenAI 和 Gemini 付费层默认不用于训练。最终的用户须知要和实际选定的供应商对应。
+- **转写是最敏感的一环**，因为它接收的是用户本人的声音。生产环境只用 OpenAI 转写（`transcribeOpenAI`，模型取自 `OPENAI_TRANSCRIBE_MODEL`，现在不传 language）。OpenAI API 的数据默认不用于训练，滥用监控日志最长保留 30 天。零数据保留的申请范围：`/v1/realtime`、`/v1/audio/speech`、`/v1/audio/transcriptions`（转写能否纳入，需核实）。
+- **语音指令只用 `normal`。** 实时会话指令和表达参数都只用 `normal` 级别的内容（03 §8.5）。
+- **国产云服务**（阿里、火山、MiniMax、阶跃）只接收虚构或不含个人信息的文本；要扩大使用范围，先做 28 CFR 202 的法务评估。
+- **隐私说明**列出朗读和转写的供应商及保留期，并和实际选定的供应商对应（01 §7.6、07 §9）。
+- **P1-12 上线闸门**（全部满足，才对用户开放主理人的声音）：
+  1. 第一笔生产调用之前，在 ElevenLabs 账号的 Data use 里关闭训练，截图存档，记录日期和操作人。
+  2. 拿到 ZRM 之前，含 `restricted` 内容（身份日期、签证）的消息只显示文字、不送 TTS，界面提示「这条含身份信息，只显示文字」。消息是否含 `restricted` 内容，按上下文组装记录的来源引用判定。
+  3. 生产环境的 `ELEVENLABS_ALLOW_PROVIDER_HISTORY` 固定为 `0`，启动时检查。
+  4. 用非企业账号实测 `enable_logging=false` 会返回什么。如果请求被拒，由产品负责人决定之后再改，不能静默放开。
+  5. 如果选用 Gemini，只用付费层（免费层的数据会用于改进产品）。
 
 ---
 
-## 7. 建议的验证方法
+## 7. 验证
 
-### 7.1 盲听评测（约一周）
+### 7.1 盲听与转写测试
 
-- **候选组：**
-  - 商用：ElevenLabs v4 Turbo、Gemini 3.8 Flash TTS、Gemini Flash-Lite、Azure zh-CN HD Flash、OpenAI gpt-4o-mini-tts（marin / cedar，零改造对照）、Inworld TTS-2（可选）。
-  - 开源：Qwen3-TTS 1.7B（VoiceDesign → 克隆提示）、Fun-CosyVoice3、VoxCPM2。
-  - 中文质量参照：Qwen-Audio-3.x，只送虚构台词。
-- **测试句（全部虚构，不含真实用户资料），每组 12–15 句：**
-  1. **中文陪伴句**：安慰、鼓励、催进度、给空间各若干句，混入数字、日期和金额。例如「被拒了三次，说明你在认真投，不是你不行。今晚先睡，明早我们只改一段。」
-  2. **英文面试句**：behavioral 题、追问、技术题。例如「Walk me through a time you had to make a trade-off between latency and consistency.」
-  3. **中英混读句**：例如「这周你投了 12 个 SWE new grad，Meta 那个 OA 记得 Friday 前做完，系统设计那轮多半会问 rate limiter。」重点听 OA、OPT、LeetCode、Kubernetes 这类词的读法。
-- **流程：**
-  - 所有候选合成同一批文本，统一响度，隐去供应商名称，随机打乱顺序；
-  - 评审：8–12 位目标用户（在美留学生）加团队成员，每人至少听完一组；
-  - 每条打分：自然度 1–5 分；「像真人吗」是/否；发音错误标记；情绪是否贴合；喜不喜欢这个声音；
-  - 另做两两偏好对比，前三名之间做 A/B。
-- **客观指标：**
-  - 用较大的识别模型转写合成结果，计算中文 CER 和英文 WER，用来发现读错和漏字；
-  - 用同一声线连续合成 20 句，检查音色漂移。开源模型尤其要查，第三方论文显示有些模型多轮之后会明显退化。
-- **通过标准（建议值，可以调整）：** 中文陪伴句自然度均分 ≥ 4.0，且和最佳候选的差距 ≤ 0.3；混读句里关键英文术语读错率 ≤ 5%；评审中觉得「像真人」的比例过半。
+**A. 面试官小盲测（P0 前，可以单独先跑）**
 
-### 7.2 延迟测量
+- `cedar`、`marin` 各一组：同一批 12 句英文面试句，分别用朗读接口和实时接口合成。
+- 评审听成对的片段，判断「是不是同一个人」，再说偏好。通过标准：两种接口的片段被判为同一个人的比例 ≥ 80%（假设）。通过之后才算满足 05「两种模式声线一致」的要求。两个声线都通过时按偏好选；都不通过时，P1-11 的断线回退方案要重新设计。
+- §5.1 的 `turnTaking` 取值，在同一轮目标用户试练中校准。
 
-- **测试位置：** 从美国东部和西部各测一次（贴近用户），记录供应商区域和网络路径。
-- **TTS 单项：** 从请求发出到客户端收到第一段音频的时间（TTFA）。流式和非流式分开测，每个候选至少 100 次，记录 P50、P90、P99。
-- **链式整轮：** 分段打点：用户说完 → VAD 判定结束 → 转写结果出来 → 大模型首个 token → TTS 首段音频 → 开始播放。看每段各占多少，以及整轮延迟。
-- **自托管压测：** 并发 1、4、16、64 各测一组，记录 GPU 型号、显存占用、首包和实时率。对照 vLLM 博客的 H20×2 数据：并发 1 首包 70.61ms，并发 64 约 1128ms。
-- **建议目标（待用户测试校准）：** TTS 首包 P50 低于 300ms、P90 低于 600ms；主理人链式整轮 P50 低于 1.5 秒。面试官走 Realtime，单独测「用户说完到听到回应」的时间。
-- **成本核对：** 同时记录每分钟实际消耗的字符数或 token 数，用来校正第 4 节的估算。
+**B. 转写测试（P0 前测英文，P1-12 前测中英混说）**
+
+- 请目标用户朗读虚构脚本并录音：中国口音的英文作答算 WER，中英混说算 CER，关键术语（公司名、技术词）的错误单独统计。录音前取得书面同意，测完即删。
+- 对比项：转写时传和不传 `language`；实时接口的输入转写。
+- 建议门槛（假设）：英文作答 WER ≤ 10%，混说 CER ≤ 8%。达不到时，面试官的反馈不评表达分，并提示用户可以点「转写有误」修正（05）。
+
+**C. 主理人盲测（P1-12 前，约一周）**
+
+- 候选：首选、第二候选、隐私兜底各一，OpenAI 朗读作为零改造对照，开源三家，再加一家国产云服务（只送虚构台词）。型号见附录。
+- 测试句全部虚构，不含真实用户资料，每组 12–15 句：
+  1. 中文陪伴句：安慰、鼓励、催进度、给空间各若干句，混入数字、日期和金额。例如「被拒了三次，说明你在认真投，不是你不行。今晚先睡，明早我们只改一段。」
+  2. 中英混读句：例如「这周你投了 12 个 SWE new grad，那个 OA 记得 Friday 前做完，系统设计那轮多半会问 rate limiter。」重点听 OA、OPT、LeetCode、Kubernetes 这类词的读法。
+  3. 一段 2–3 分钟的多轮虚构对话，单独打听感分。
+- 每个候选都生成「整段合成」和「按句流式拼接」两个版本；同一个声线至少在两组表达参数下各测一次。
+- 统一响度，隐去供应商名称，随机打乱顺序。评审是目标用户（在美留学生）加团队成员。每条打分：自然度 1–5 分；像不像真人；发音错误；情绪是否贴合；喜不喜欢这个声音。
+- 前三名之间用两两偏好比较，报告 95% 置信区间；区间跨过 50% 的视为分不出高下，这时选数据条款和成本更好的那一家。也可以把评审扩到 20 人以上。
+- 客观指标：用较大的识别模型转写合成结果，算 CER 和 WER；用同一个声线连续合成 20 句，检查音色漂移。
+- 通过标准（建议值）：中文陪伴句自然度均分 ≥ 4.0；混读句里关键英文术语的读错率 ≤ 5%；过半评审觉得「像真人」；多轮对话的听感均分 ≥ 3.5。
+
+### 7.2 延迟与成本测量
+
+- 从美国东部和西部各测一次，记录供应商区域。TTS 首包（TTFA）的流式和非流式分开测，每个候选至少 100 次，记录 P50、P90、P99。打点只记时间和 id，不记内容。
+- **主理人按住说话一轮的统一目标：从松手到开始播放，P50 ≤ 2.0 秒，P90 ≤ 3.5 秒**（假设，用 §7.1 C 的多轮听感校准）。分段预算：
+
+| 段 | P50 预算 |
+|---|---|
+| 松手 → 拿到转写（整段上传，现有转写不是流式） | 700ms |
+| 轮次服务：安全分级和上下文组装并行 | 400ms |
+| 模型首个 token | 500ms |
+| 首句凑齐 → TTS 首包 | 300ms |
+| 客户端开始播放 | 100ms |
+
+- 面试官：逐回合模式下，从题目文字出现到开始朗读 P50 ≤ 1.5 秒；沉浸模式单独测「用户说完到听到回应」的时间。
+- 自托管压测：并发 1、4、16、64 各测一组，记录 GPU 型号、显存占用、首包和实时率。
+- **成本（必测）：** 实时接口每分钟实际消耗的 token 数和缓存命中率，用来校正 §4 的折算；主理人朗读每分钟的字符数，以及人均每天的朗读分钟数。
 
 ### 7.3 前置条件
 
-- 盲测和延迟测试都要调用付费接口。按 `AGENTS.md`，需要服务端显式开启商业调用（`PLATFORM_ALLOW_PROVIDER_CALLS`），并且由您明确批准预算。
-- 开源候选需要一台 GPU：VoxCPM2 约 8GB 显存即可；Qwen3-TTS 1.7B 的显存需求官方没有给出，建议直接用 24GB 级别的卡。
-- 结果出来后，再定主供应商，然后修改 `docs/product/02-companion.md` §6，并按第 5 节改造适配器。
+- 盲测和测量都要调用付费接口：服务端要显式开启 `PLATFORM_ALLOW_PROVIDER_CALLS=1`，并由产品负责人批准预算（`AGENTS.md`）。台词全部虚构。
+- 开源候选需要一台 24GB 级别的 GPU。
+- 结果出来后，先定主供应商，再按第 5 节改造适配器。
+
+---
+
+## 8. 待确认问题
+
+| # | 问题 | 由谁回答 | 不回答时的默认 |
+|---|---|---|---|
+| 1 | 盲测预算与付费调用授权，包括 P0 前面试官 `cedar` / `marin` 的小盲测和转写测试 | 产品负责人 | P0 面试官用默认预置声线 `marin`；P1-12 不启动 |
+| 2 | ElevenLabs 选哪个套餐档位；是否谈企业零保留（ZRM） | 产品负责人 | 按首批规模选 Pro；不谈 ZRM 时，含 `restricted` 内容的消息一直只显示文字 |
+| 3 | OpenAI 零数据保留的申请范围（实时、朗读、转写） | 产品负责人 | 用户须知写明最长 30 天的滥用监控日志 |
+| 4 | 是否批准一台 GPU 做开源 PoC | 产品负责人 | 开源候选不进盲测，P2 再议 |
+| 5 | 盲测评审和转写录音的招募、同意书与报酬 | 蔓藤（协助招募）、产品负责人 | 只用团队成员，结论标注「样本不足」 |
+| 6 | 是否做非个性化的品牌旁白（§6.2 的四个条件） | 产品负责人 | 不做 |
+
+---
+
+## 附录 A 开源候选（核实于 2026-10-06）
+
+| 模型 | 许可（代码 / 权重） | 中文 | 流式与首包 | 造声线 | 排序 |
+|---|---|---|---|---|---|
+| Qwen3-TTS 12Hz 1.7B / 0.6B | Apache-2.0 / Apache-2.0 | CER 1.22；第三方评测自然度第 1，多轮最稳 | 官方称低至 97ms（理想值）；vLLM-Omni 实测 H20×2、克隆模式，并发 1 首包 70.61ms，并发 64 约 1128ms | 1.7B 版有 VoiceDesign → `create_voice_clone_prompt` → `generate_voice_clone`，复用同一份克隆提示 | 第一 |
+| Fun-CosyVoice3-0.5B-2512 | Apache-2.0 / Apache-2.0 | CER 1.21%；18 种以上方言和口音 | 宣传 150ms；TensorRT-LLM 方案单卡 L20、4 路并发首包均值 750ms | 不能用文字设计；零样本克隆；拼音纠音 | 第二 |
+| VoxCPM2（2B） | Apache-2.0 / Apache-2.0 | CER 0.97（自报） | 有 `generate_streaming`，首包未公布；RTX 4090 上 RTF 约 0.30 | 文字设计加可控克隆；5–10 分钟音频可做 LoRA；约 8GB 显存，输出 48kHz | 第三 |
+| MOSS-TTS-Realtime + MOSS-VoiceGenerator（1.7B） | Apache-2.0 / Apache-2.0 | CER 1.37–1.44% | L20 首字节 180ms；参考上一轮用户语音保持语气 | 文字设计 | 备选 |
+| GLM-TTS | Apache-2.0 / MIT | CER 0.89（自报） | 支持流式，延迟未公布 | 只能 3–10 秒克隆 | 备选 |
+
+- **只适合特定用途：** Kokoro-82M v1.1-zh（Apache-2.0；CPU 兜底，普通话音色官方评级低）；LongCat-AudioDiT（MIT；离线生成参考音）；腾讯 AuK（MIT；离线编辑声线）；GPT-SoVITS（MIT；用授权录音微调招牌声线）；英文专用的 Chatterbox（MIT，输出带水印）、Orpheus 英文版、Dia2、Sesame CSM（Apache-2.0）、Kyutai TTS（权重 CC-BY-4.0）。
+- **有条件可商用（使用前法务通读）：** IndexTTS2 / 2.5（bilibili 许可，MAU 超过 1 亿或年营收超过 10 亿元需另行授权；只有分段流式）；Higgs TTS 2（基于 Llama 3 社区许可，年活跃超过 10 万需扩展许可）；VibeVoice Realtime-0.5B（MIT，只支持英语，官方不建议商用）；MegaTTS3（编码器参数未公开）；Step-Audio-EditX（权重许可未声明）；Orpheus 中文版（research_release）。
+- **不能商用（排除）：** Breeze TTS 2、Fish Audio S2 Pro / Fish Speech、OpenAudio S1-mini、F5-TTS、Spark-TTS、MaskGCT、OmniVoice、XTTS-v2（输出也受限）、Higgs TTS 3、Voxtral-4B-TTS。共同的坑：代码多半是 MIT 或 Apache，但权重受训练数据（如 Emilia）的限制，挑选时必须分开看。
+- **vLLM-Omni：** 用同一个 `/v1/audio/speech` 支持 Qwen3-TTS、CosyVoice3、VoxCPM2；流式要求 `response_format` 为 pcm 或 wav、`speed` 为 1.0；WebSocket 必须设置 `split_granularity=sentence` 或 `clause` 才能降低首包延迟。
+- **开源升为主力的条件：** 有常驻 GPU 和运维；在目标并发下压测达标；「每人独有」超出商用名额，或 API 费用超过 GPU 成本；有数据驻留要求。在自己的美国机房跑中国机构发布的开源权重，不等于把用户数据交给对方，但是否构成 28 CFR 202 的数据交易，仍请法务确认。
+- **来源：** github.com/QwenLM/Qwen3-TTS；github.com/FunAudioLLM/CosyVoice；github.com/OpenBMB/VoxCPM；github.com/OpenMOSS/MOSS-TTS；github.com/zai-org/GLM-TTS；第三方比较 arxiv.org/html/2603.24430；vllm.ai/blog/2026-06-23-vllm-omni-tts；github.com/vllm-project/vllm-omni（docs/serving/speech_api.md）；各模型的 Hugging Face 页面与 LICENSE。
+
+## 附录 B 商用候选（核实于 2026-10-06）
+
+| 供应商 / 型号 | AA Elo | 声音设计与名额 | 延迟 | 价格 | 数据 | 定位 |
+|---|---|---|---|---|---|---|
+| ElevenLabs `eleven_v4_turbo` / `eleven_v4`；Voice Design v3 `eleven_ttv_v3` | 1334（第 1）/ 1321 | 有；Creator 30 / Pro 160 / Scale 660 / Business 660 | 中位推理约 100ms，厂商自测首个可听语音约 150ms；v4 Turbo 写在 Text to Dialogue WebSocket 下 | v4 Turbo $0.04/1K 字符（约 $0.011/分钟），v4 $0.08/1K | 可能用于训练，可在 Data use 退出（只对之后生效）；声音数据最长保留到最后一次互动后 3 年；ZRM 只对部分企业开放，不覆盖克隆 | 主理人首选 |
+| Gemini 3.8 Flash / Flash-Lite TTS | 1275 / 1242 | 有（`POST /v1beta/voices`）；每项目 200 个，1 年不用即删除 | 未公布；Cloud 侧仍是 Preview | 输出 $9/1M 音频 token（约 $0.0135/分钟），2027-01-01 起 $18；Flash-Lite $6，之后 $12 | 付费层不用于改进产品；免费层会用 | 主理人第二候选 |
+| Azure zh-CN HD Flash / DragonHD | 不在前 15 | 无；HD Flash 有 14 个中文声线，带 chat、empathetic、encouraging 等风格 | HD 低于 300ms | Neural HD $22/1M 字符（约 $0.006/分钟） | 实时合成不存储；batch 会存 | 隐私兜底 |
+| OpenAI `gpt-realtime-2.1`（`OPENAI_REALTIME_MODEL` 默认值） | — | 无；自定义声线每组织 20 个，需同意书 | WebRTC，semantic VAD | 音频输入 $32/1M、输出 $64/1M token；mini 版 $10 / $20 | 默认不用于训练；滥用监控日志最长 30 天；可申请 ZDR | 面试官 P1-11 |
+| OpenAI `gpt-4o-mini-tts`（`OPENAI_TTS_MODEL` 默认值） | — | 无；13 个预置声线，支持 instructions | 流式 pcm / wav | 约 $0.015/分钟（第三方折算） | 同上 | 面试官 P0；主理人零改造对照 |
+| OpenAI `gpt-transcribe`（`OPENAI_TRANSCRIBE_MODEL` 默认值） | — | — | 整段上传 | 需核实 | 同上 | 生产转写 |
+| OpenAI GPT-Live-1 | — | 无 | 全双工 | $0.05/分钟，后端模型另计 | 同上 | P2 评估 |
+| Cartesia Sonic 3.6 | 1278 | 没找到文字设计功能 | 自称首段低于 90ms | 英文约 $0.03/分钟 | ZDR 只对企业，不覆盖克隆 | 英文备选 |
+| Inworld TTS-2 / TTS-2 Flash | 1251 / 1214 | 有；最高约 3 万个 | Flash 自称 20ms | $25/M 字符（约 $0.007/分钟） | 未核实 | 名额最宽松 |
+| 阿里云 Qwen-Audio-3.x / Qwen3-TTS-Flash | 1292（第 3） | 有，$0.2/个，上限 1000 个 | 低于 200ms | 约 $0.003/分钟 | 新加坡区域；是否用于训练，两份文件说法不一 | 只做虚构台词对照 |
+| MiniMax speech-2.8 | — | $3/个；克隆声线 7 天不用即删除 | 流式 | 约 $0.027/分钟 | 条款允许用于改进服务 | 只做对照 |
+| 火山引擎 豆包 TTS 2.0 | — | 复刻 138 元/个 | 双向 WebSocket | 3 元/万字符 | 境内处理 | 不送个人信息 |
+| Fish Audio S2.1 Pro API | — | 有 | 约 70–90ms | $15/M UTF-8 字节 | 条款允许用于训练，没有退出机制 | 只做试听原型 |
+| Hume Octave / EVI | — | — | — | — | 2026-11-13 关停 | 排除 |
+
+**来源：** artificialanalysis.ai/text-to-speech/leaderboard；elevenlabs.io（docs/overview/models、pricing/api、zero-retention-mode、privacy-policy、use-policy）；ai.google.dev/gemini-api（speech-generation、pricing、terms）；learn.microsoft.com（Azure HD voices、TTS data privacy）；developers.openai.com/api/docs（realtime-conversations、text-to-speech、custom-voices、your-data、pricing）；docs.cartesia.ai；inworld.ai/pricing；alibabacloud.com/help/en/model-studio；platform.minimax.io；docs.volcengine.com/docs/6561/1359370；fish.audio/terms；dev.hume.ai；28 CFR 202（law.cornell.edu/cfr/text/28/202.204、202.205、202.256）；BIPA（740 ILCS 14）。
