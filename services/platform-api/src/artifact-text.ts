@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ARTIFACT_TEXT_MIME_TYPES, ARTIFACT_TEXT_SOURCE_MAX_BYTES, type ArtifactTextInput, type ArtifactTextResult } from '@companion/platform-contracts';
 import type { Database } from './database.ts';
 import type { BlobStorage } from './storage.ts';
@@ -50,6 +51,17 @@ function boundary(bytes: Buffer, offset: number): boolean { return offset === by
 function endBoundary(bytes: Buffer, offset: number, end: number): number { while (end > offset && !boundary(bytes, end)) --end; return end; }
 
 export async function readArtifactText(db: Database, storage: BlobStorage, userId: string, value: unknown, signal?: AbortSignal): Promise<ArtifactTextResult> {
+  return readPrivateArtifactText(db, storage, userId, value, signal);
+}
+
+/** Internal page reader after MCP receipt/approval validation; the public generic reader stays closed. */
+export async function readMcpArtifactTextPage(db: Database, storage: BlobStorage, userId: string, value: unknown,
+  expected: { jobId: string; responseHash: string }, signal?: AbortSignal): Promise<ArtifactTextResult> {
+  return readPrivateArtifactText(db, storage, userId, value, signal, expected);
+}
+
+async function readPrivateArtifactText(db: Database, storage: BlobStorage, userId: string, value: unknown, signal?: AbortSignal,
+  mcp?: { jobId: string; responseHash: string }): Promise<ArtifactTextResult> {
   const input = parseArtifactTextInput(value);
   aborted(signal);
   const found = await db.query('SELECT a.id,a.job_id,a.filename,a.mime,a.metadata,u.mime AS upload_mime,u.byte_size,u.storage_key,j.kind AS job_kind FROM platform_artifacts a JOIN platform_uploads u ON u.id=a.upload_id JOIN platform_jobs j ON j.id=a.job_id WHERE a.id=$1 AND a.user_id=$2 AND u.user_id=$2 AND j.user_id=$2', [input.artifactId, userId]);
@@ -57,6 +69,7 @@ export async function readArtifactText(db: Database, storage: BlobStorage, userI
   aborted(signal);
   const row = found.rows[0];
   if (row.job_kind === 'browser') throw new ApiError(415, 'ARTIFACT_TEXT_UNSUPPORTED', 'Use get_browser_observation for approved browser observations.');
+  if (row.job_kind === 'mcp' && (!mcp || mcp.jobId !== row.job_id) || mcp && row.job_kind !== 'mcp') throw new ApiError(415, 'ARTIFACT_TEXT_UNSUPPORTED', 'Use read_mcp_result for reviewed MCP results.');
   if (!textMimes.has(row.mime)) throw new ApiError(415, 'ARTIFACT_TEXT_UNSUPPORTED', 'This reader supports private UTF-8 text, Markdown, CSV and JSON artifacts.');
   if (row.mime !== row.upload_mime) throw new ApiError(409, 'ARTIFACT_METADATA_MISMATCH', 'The saved artifact media types do not match.');
   const size = Number(row.byte_size), name = row.filename;
@@ -99,6 +112,7 @@ export async function readArtifactText(db: Database, storage: BlobStorage, userI
     }
   }
   if (binaryPrefix(bytes)) throw new ApiError(415, 'ARTIFACT_TEXT_INVALID', 'The saved artifact contains binary data instead of supported text.');
+  if (mcp && createHash('sha256').update(bytes).digest('hex') !== mcp.responseHash) throw new ApiError(409, 'MCP_RESULT_CHANGED', 'The saved MCP result changed after its receipt was confirmed.');
   let fullText: string;
   try { fullText = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { throw new ApiError(415, 'ARTIFACT_TEXT_INVALID', 'The saved artifact is not valid UTF-8 text.'); }
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(fullText)) throw new ApiError(415, 'ARTIFACT_TEXT_INVALID', 'The saved artifact contains unsupported binary control characters.');

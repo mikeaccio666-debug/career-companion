@@ -19,7 +19,7 @@ export function canBringTextArtifact(artifact: Artifact): boolean {
 export function ownedTextArtifactReference(jobs: Job[], jobId: string, artifactId: string): ArtifactAgentReference | undefined {
   if (!uuid.test(jobId)) return;
   const job = jobs.find((item) => item.id === jobId), artifact = job?.artifacts.find((item) => item.id === artifactId);
-  if (!artifact || !canBringTextArtifact(artifact)) return;
+  if (job?.kind === 'mcp' || !artifact || !canBringTextArtifact(artifact)) return;
   return { jobId, artifactId: artifact.id, name: artifact.name, mime: artifact.mime };
 }
 export function artifactAgentDraft(reference: ArtifactAgentReference): string {

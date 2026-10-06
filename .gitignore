@@ -19,6 +19,7 @@ __pycache__/
 coverage/
 *.tsbuildinfo
 playwright-report/
+.playwright-cli/
 test-results/
 e2e/**/results/
 e2e/**/profile/

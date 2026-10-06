@@ -54,6 +54,42 @@ test('ordinary media polling and unconfirmed CLI shutdown retain their execution
   assert.match(cleanup.note, /停止状态/);
 });
 
+test('cancellation awaiting shutdown hides retry even when provider polling or workflow recovery is available', () => {
+  const pending = { code: 'CANCELLATION_PENDING', message: 'Fictional shutdown pending.' };
+  for (const job of [
+    workflow({ status: 'cancelled', workflowResumeAvailable: true, error: pending }),
+    workflow({ kind: 'video', provider: 'ark', status: 'cancelled', providerTaskId: 'fictional-handle', error: pending }),
+  ]) {
+    const presentation = jobRetryPresentation(job);
+    assert.equal(presentation.canRetry, false);
+    assert.match(presentation.note, /等待执行停止确认/);
+    assert.doesNotMatch(presentation.note, /不会创建新的生成请求|已完成步骤/);
+  }
+  assert.equal(jobRetryPresentation(workflow({ kind: 'video', provider: 'ark', status: 'cancelled', workflowSteps: undefined })).canRetry, true);
+});
+
+test('unknown ComfyUI submission cannot be resubmitted without a provider handle', () => {
+  const job = workflow({ kind: 'image', provider: 'comfyui', status: 'uncertain', workflowSteps: undefined, error: { code: 'COMFYUI_SUBMISSION_UNCERTAIN', message: 'Fictional unknown submission.' } });
+  const presentation = jobRetryPresentation(job);
+  assert.equal(presentation.canRetry, false);
+  assert.match(presentation.note, /核对已有结果/);
+  assert.match(presentation.note, /不能重新提交/);
+  assert.equal(jobRetryPresentation({ ...job, providerTaskId: 'fictional-handle' }).canRetry, true);
+  assert.equal(jobRetryPresentation({ ...job, status: 'failed' }).canRetry, true);
+  assert.equal(jobRetryPresentation({ ...job, provider: 'fal' }).canRetry, true);
+});
+
+test('confirmed terminal provider failures explain fresh generation approval and possible additional cost', () => {
+  for (const code of ['VIDEO_GENERATION_FAILED', 'MEDIA_GENERATION_FAILED', 'COMFYUI_FAILED', 'COMFYUI_NO_OUTPUT', 'COMFYUI_REJECTED']) {
+    const presentation = jobRetryPresentation(workflow({ kind: 'image', provider: 'comfyui', workflowSteps: undefined, providerTaskId: 'fictional-handle', error: { code, message: 'Fictional confirmed failure.' } }));
+    assert.equal(presentation.canRetry, true);
+    assert.equal(presentation.label, '重新生成');
+    assert.match(presentation.note, /新的审批/);
+    assert.match(presentation.note, /额外费用/);
+    assert.doesNotMatch(presentation.note, /同一个生成任务/);
+  }
+});
+
 test('browser tasks requiring review cannot be retried and partial outcomes remain reviewable', () => {
   const job = workflow({ kind: 'browser', provider: 'browser', options: { url: 'https://example.com/', actions: [{ type: 'scroll', direction: 'down', pixels: 500 }] }, browserExecution: { completedActions: 1, totalActions: 3, state: 'uncertain', reviewRequired: true } });
   const presentation = jobRetryPresentation(job);
@@ -87,4 +123,14 @@ test('browser review error codes override a stale permissive progress summary wi
   const browser = workflow({ kind: 'browser', provider: 'browser', browserExecution: { completedActions: 0, totalActions: 1, state: 'ready', reviewRequired: false }, error: { code: 'BROWSER_REVIEW_REQUIRED', message: 'Fictional review required.' } });
   assert.equal(jobRetryPresentation(browser).canRetry, false);
   assert.equal(jobRetryPresentation({ ...browser, kind: 'image', provider: 'openai' }).canRetry, true);
+});
+
+test('MCP started or uncertain calls cannot use ordinary retry while clearly unstarted tasks retain review', () => {
+  for (const change of [{ attempt: 1 }, { attempt: 0, status: 'uncertain' as const }, { attempt: 0, error: { code: 'MCP_REVIEW_REQUIRED', message: 'Fictional prior call.' } }, { attempt: undefined as any }]) {
+    const result = jobRetryPresentation(workflow({ kind: 'mcp', provider: 'mcp', ...change }));
+    assert.equal(result.canRetry, false); assert.match(result.note, /重新准备.*单独批准/);
+  }
+  assert.equal(jobRetryPresentation(workflow({ kind: 'mcp', provider: 'mcp', attempt: 0, status: 'cancelled' })).canRetry, true);
+  assert.equal(jobRetryPresentation(workflow({ kind: 'mcp', provider: 'mcp', attempt: 1, status: 'running' })).canRetry, false);
+  assert.equal(jobRetryPresentation(workflow({ kind: 'mcp', provider: 'mcp', attempt: 1, status: 'cancelled', error: { code: 'CANCELLATION_PENDING', message: 'Fictional shutdown pending.' } })).note.includes('等待执行停止确认'), true);
 });

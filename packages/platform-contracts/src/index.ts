@@ -1,9 +1,11 @@
 export { PLATFORM_ACCOUNT_HEADER, PLATFORM_ACCOUNT_QUERY, platformAccountId } from './account-context.ts';
+export * from './mcp.ts';
+import type { McpTaskSummary } from './mcp.ts';
 export const CHAT_MODES = ['chat', 'companion', 'agent'] as const;
 export type ChatMode = typeof CHAT_MODES[number];
-export const JOB_KINDS = ['image', 'video', 'speech', 'browser', 'cli', 'workflow'] as const;
+export const JOB_KINDS = ['image', 'video', 'speech', 'browser', 'cli', 'workflow', 'mcp'] as const;
 export type JobKind = typeof JOB_KINDS[number];
-export type Capability = 'chat' | 'agent' | 'image' | 'video' | 'speech' | 'transcription' | 'realtime' | 'browser' | 'cli' | 'workflow';
+export type Capability = 'chat' | 'agent' | 'image' | 'video' | 'speech' | 'transcription' | 'realtime' | 'browser' | 'cli' | 'workflow' | 'mcp';
 
 /** Public identity of a server-reviewed generation template; never contains its graph or path. */
 export interface ExecutionTemplateBinding { version: 1; hash: string; }
@@ -160,6 +162,7 @@ export type WorkflowCheckpointEvent = {
   | { type: 'failed' | 'uncertain'; errorCode: string }
 );
 export interface Job extends CreateJobInput {
+  mcp?: McpTaskSummary;
   id: string; status: JobStatus; progress: number; artifacts: Artifact[];
   createdAt: string; updatedAt: string; error?: { code: string; message: string };
   providerTaskId?: string; attempt: number;
