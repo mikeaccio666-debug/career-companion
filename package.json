@@ -7,7 +7,7 @@
   "engines": { "node": "24.21.0" },
   "scripts": {
     "check": "pnpm -r --if-present check",
-    "test": "pnpm -r --if-present test",
+    "test": "pnpm -r --workspace-concurrency=1 --if-present test",
     "build:extension": "pnpm --filter @edaix/extension build",
     "dev:extension": "pnpm --filter @edaix/extension dev",
     "preview:extension-ui": "pnpm --filter @edaix/extension preview:ui",
