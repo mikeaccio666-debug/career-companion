@@ -42,7 +42,7 @@ Embedding 是可选的检索能力，并非当前聊天模型自动附带的知�
 | MCP | 以统一协议暴露工具和资源 | 替用户取得第三方授权、替服务器实施 ACL、授权网页中的指令 |
 | 求职领域层 | 决定流程所需输入、输出和审阅标准 | 把不明来源内容变成已核验成果 |
 
-MCP 可以作为蔓藤只读服务的一种外壳，普通 HTTP API 同样可用。采用 MCP 时，工具 annotations 只是提示，不能当作权限证明；每次调用仍由服务器核验用户和资源授权。访问 token 必须针对对应 MCP 服务，不把 Gmail refresh token 当作通用 MCP token 透传。远程服务和重定向也要防 SSRF。当前项目未实现 MCP 客户端或蔓藤 MCP 服务器。[MCP tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)、[MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)、[MCP 安全实践](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices)
+MCP 可以作为蔓藤只读服务的一种外壳，普通 HTTP API 同样可用。采用 MCP 时，工具 annotations 只是提示，不能当作权限证明；每次调用仍由服务器核验用户和资源授权。访问 token 必须针对对应 MCP 服务，不把 Gmail refresh token 当作通用 MCP token 透传。远程服务和重定向也要防 SSRF。当前已实现 [服务器审阅的 MCP 客户端路径](../platform/mcp.md)：工具发现、账号 grant、任务审批、租约及私有回执；目录默认为空。尚未建立蔓藤 MCP 服务器、第三方 OAuth 或真实组织内容权限，现有服务凭据不代表用户邮箱授权。[MCP tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)、[MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)、[MCP 安全实践](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices)
 
 ## 蔓藤混合知识库：两个入口，一个来源目录
 

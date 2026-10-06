@@ -30,9 +30,11 @@ export function jobRetryPresentation(job: Job): { canRetry: boolean; label: stri
   const workflowPolling = job.kind === 'workflow' && terminalState && (workflowResume || job.workflowSteps?.some((step) => step.state === 'provider_task'));
   const continuePolling = !!job.providerTaskId && !terminalProvider && job.status !== 'uncertain';
   const browserReview = job.kind === 'browser' && terminalState && browserRequiresReview(job);
-  const canRetry = terminalState && !cancellationPending && !comfySubmissionUnknown && job.error?.code !== 'CLI_CLEANUP_UNCONFIRMED' && !workflowUnknown && !browserReview;
+  const mcpReview = job.kind === 'mcp' && terminalState && (!Number.isSafeInteger(job.attempt) || job.attempt !== 0 || job.status === 'uncertain' || ['MCP_REVIEW_REQUIRED', 'MCP_EXECUTION_UNCERTAIN', 'MCP_CALL_UNCERTAIN'].includes(job.error?.code || ''));
+  const canRetry = terminalState && !cancellationPending && !comfySubmissionUnknown && job.error?.code !== 'CLI_CLEANUP_UNCONFIRMED' && !workflowUnknown && !browserReview && !mcpReview;
   const label = workflowPolling ? '审阅后继续' : terminalProvider ? '重新生成' : job.status === 'uncertain' ? '审阅后重试' : continuePolling ? '继续查询' : '重试';
   const note = cancellationPending ? '取消请求已提交，正在等待执行停止确认，暂时不能重试。'
+    : mcpReview ? '外部工具调用已有执行记录或结果尚未确认，当前任务不能重新执行。请先核对已有结果；如需新的调用，请重新准备并单独批准。'
     : browserReview ? '这份网页计划已有执行记录或结果尚未确认。请检查部分结果，再创建新的完整计划，当前任务不会自动重新执行。'
     : workflowUnknown ? '这一步的外部执行结果尚未确认。请核对供应商结果和已有产物，当前任务不会自动重新执行。'
     : job.error?.code === 'CLI_CLEANUP_UNCONFIRMED' ? '运行环境停止状态需要管理员确认后才能重试。'

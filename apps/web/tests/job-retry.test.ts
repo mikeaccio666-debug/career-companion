@@ -124,3 +124,13 @@ test('browser review error codes override a stale permissive progress summary wi
   assert.equal(jobRetryPresentation(browser).canRetry, false);
   assert.equal(jobRetryPresentation({ ...browser, kind: 'image', provider: 'openai' }).canRetry, true);
 });
+
+test('MCP started or uncertain calls cannot use ordinary retry while clearly unstarted tasks retain review', () => {
+  for (const change of [{ attempt: 1 }, { attempt: 0, status: 'uncertain' as const }, { attempt: 0, error: { code: 'MCP_REVIEW_REQUIRED', message: 'Fictional prior call.' } }, { attempt: undefined as any }]) {
+    const result = jobRetryPresentation(workflow({ kind: 'mcp', provider: 'mcp', ...change }));
+    assert.equal(result.canRetry, false); assert.match(result.note, /重新准备.*单独批准/);
+  }
+  assert.equal(jobRetryPresentation(workflow({ kind: 'mcp', provider: 'mcp', attempt: 0, status: 'cancelled' })).canRetry, true);
+  assert.equal(jobRetryPresentation(workflow({ kind: 'mcp', provider: 'mcp', attempt: 1, status: 'running' })).canRetry, false);
+  assert.equal(jobRetryPresentation(workflow({ kind: 'mcp', provider: 'mcp', attempt: 1, status: 'cancelled', error: { code: 'CANCELLATION_PENDING', message: 'Fictional shutdown pending.' } })).note.includes('等待执行停止确认'), true);
+});

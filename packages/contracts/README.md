@@ -35,4 +35,4 @@ contract、runtime validation、consumer、测试与契约说明。破坏性、�
 
 `src/applicationLedgerWire.ts` owns the existing strict ledger/time-zone response decoders, moved from Chat without changing accepted HTTP shapes. Chat re-exports them; the read-only MCP server imports the same decoder. Existing decoder regression tests moved with the implementation.
 
-`src/mcp.ts` exports the additive local `McpAdapterResult` and `MCP_ADAPTER_ERROR_CODES`. Their semantics and consumers are documented in [the MCP adapter](../mcp-adapters/README.md#error-contract). These are adapter failures, not new REST endpoint errors.
+`src/mcp.ts` exports the additive local `McpAdapterResult` and `MCP_ADAPTER_ERROR_CODES`. These describe historical adapter failures, not new platform REST endpoint errors. The active web MCP integration uses separate [platform contracts](../platform-contracts/src/mcp.ts) and [platform setup](../../docs/platform/mcp.md); there is no active `packages/mcp-adapters` workspace package.

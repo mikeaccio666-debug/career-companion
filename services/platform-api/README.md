@@ -2,6 +2,8 @@
 
 Independent Fastify service for the web product. PostgreSQL owns identity, messages, saved memories, approvals, jobs, attempts and artifact metadata. Redis/BullMQ distributes jobs; it is not the source of task truth. The migrated application service and Argoland runtime are not started by this service.
 
+Reviewed MCP connections use a server-only catalog, real discovery, per-user grants, immutable task approvals, durable started receipts and private result reads. The catalog is empty by default; this is not third-party OAuth or a live Gmail integration. See [MCP setup and boundaries](../../docs/platform/mcp.md).
+
 Local Faster Whisper uses the existing authenticated voice transcription route, owner checks and runtime lease/usage boundary. An explicit provider is validated before upload execution; speech-only or transcription-only providers cannot authorize other voice capabilities. Import does not automatically persist raw audio or a transcript. Production queue recovery, deployment binding and storage readiness remain separate work; see [deployment plan](../../docs/platform/deployment-plan.md).
 
 Run these commands from the workspace root:

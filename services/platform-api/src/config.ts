@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAccountEmailConfig, type AccountEmailConfig } from './account-mail.ts';
+import { readMcpConfig, type McpCatalogConfig } from './mcp-config.ts';
 
 export const workspaceRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 
@@ -10,6 +11,7 @@ export interface PlatformConfig {
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
+  mcp?: McpCatalogConfig;
 }
 
 function port(value: string | undefined, name: string): number | undefined {
@@ -82,6 +84,6 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
     sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail,
-    queueName: env.PLATFORM_QUEUE_NAME ?? 'companion-platform-jobs', s3,
+    queueName: env.PLATFORM_QUEUE_NAME ?? 'companion-platform-jobs', s3, mcp: readMcpConfig(env),
   };
 }

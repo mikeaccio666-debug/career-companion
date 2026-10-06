@@ -1,5 +1,5 @@
 import type * as Platform from '@companion/platform-contracts';
-export type View = 'chat' | 'companion' | 'voice' | 'create' | 'browser' | 'cli' | 'workflow' | 'knowledge' | 'settings';
+export type View = 'chat' | 'companion' | 'voice' | 'create' | 'browser' | 'cli' | 'workflow' | 'knowledge' | 'mcp' | 'settings';
 export type ChatMode = Platform.ChatMode;
 export type JobKind = Platform.JobKind;
 export type User = Platform.User;
