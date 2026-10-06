@@ -24,14 +24,23 @@ export async function artifactReferenceAttachment(db:Database,storage:BlobStorag
   imageBytes(row.mime,await storage.get(row.storage_key),size);
   return {attachment:{id:row.id,name:row.filename,mime:row.mime,size,url:`/api/platform/uploads/${row.id}`},source:{artifactId:row.artifact_id,jobId:row.job_id}};
 }
-export async function validateJobImageReferences(db:Database,storage:BlobStorage,runtime:PlatformProviderRuntime,userId:string,input:CreateJobInput){
+export function validateReferenceImageCount(runtime:PlatformProviderRuntime,input:CreateJobInput,count:number){
+  if(!count||!['image','video'].includes(input.kind))return;
+  const policy=runtime.capabilities().find(provider=>provider.id===input.provider)?.referenceImages?.[input.kind as 'image'|'video'];
+  if(!policy)throw new ApiError(400,'REFERENCE_IMAGES_UNSUPPORTED','The selected provider does not support private image references for this task.');
+  if(!Number.isSafeInteger(policy.maxImages)||policy.maxImages<1||!Number.isSafeInteger(policy.maxTotalBytes)||policy.maxTotalBytes<1||!Array.isArray(policy.mimeTypes)||!['openai_edits','ark_video','fal_input'].includes(policy.binding))throw new ApiError(503,'REFERENCE_POLICY_INVALID','The server reference-image policy is unavailable.');
+  if(count>Math.min(4,policy.maxImages))throw invalid('Choose reference images within the selected provider’s limit.');
+  validateMediaReferenceBinding(input.provider,input.kind,input.options??{},count);
+}
+export async function validateJobImageReferences(db:Pick<Database,'query'>,storage:BlobStorage,runtime:PlatformProviderRuntime,userId:string,input:CreateJobInput,referenceCount=(input.attachmentIds??[]).length){
   const ids=input.attachmentIds??[];
+  validateReferenceImageCount(runtime,input,referenceCount);
   if(!ids.length||!['image','video'].includes(input.kind))return;
   const provider=runtime.capabilities().find(provider=>provider.id===input.provider),policy=provider?.referenceImages?.[input.kind as 'image'|'video'];
   if(!policy)throw new ApiError(400,'REFERENCE_IMAGES_UNSUPPORTED','The selected provider does not support private image references for this task.');
   if(!Number.isSafeInteger(policy.maxImages)||policy.maxImages<1||!Number.isSafeInteger(policy.maxTotalBytes)||policy.maxTotalBytes<1||!Array.isArray(policy.mimeTypes)||!['openai_edits','ark_video','fal_input'].includes(policy.binding))throw new ApiError(503,'REFERENCE_POLICY_INVALID','The server reference-image policy is unavailable.');
   if(ids.length>Math.min(4,policy.maxImages)||new Set(ids).size!==ids.length)throw invalid('Choose distinct reference images within the selected provider’s limit.');
-  validateMediaReferenceBinding(input.provider,input.kind,input.options??{},ids.length);
+  validateMediaReferenceBinding(input.provider,input.kind,input.options??{},referenceCount);
   const found=await db.query('SELECT * FROM platform_uploads WHERE user_id=$1 AND id=ANY($2::uuid[])',[userId,ids]);
   if(found.rowCount!==ids.length)throw notFound();let total=0;
   for(const row of found.rows){

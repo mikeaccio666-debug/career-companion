@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { agentToolStatusText, appendAgentApprovalStatus, finishAgentToolStatuses, upsertAgentToolStatus } from '../src/agent-tool-status.ts';
 
+test('proposing a goal plan labels a draft return without inventing task completion from raw output', () => {
+  const item = upsertAgentToolStatus([], { name: 'propose_goal_plan', callId: 'fictional-proposal', result: { arbitrary: 'untrusted-plan-id' } })[0];
+  assert.equal(agentToolStatusText(item), '提出计划草稿 · 已返回，请核对保存记录');
+  assert.doesNotMatch(agentToolStatusText(item), /任务完成|执行成功/);
+});
+
 test('the same callId updates from pending to returned instead of creating duplicate processing rows', () => {
   let items = upsertAgentToolStatus([], { name: 'read_saved_memories', callId: 'fixture-call-one', input: {} });
   assert.equal(agentToolStatusText(items[0]), '读取已保存记忆 · 处理中');

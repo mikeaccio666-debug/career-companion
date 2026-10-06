@@ -7,6 +7,7 @@ export const workspaceRoot=path.resolve(path.dirname(fileURLToPath(import.meta.u
 
 export interface PlatformConfig {
   databaseUrl: string; redisUrl: string; storageDir: string; port: number;
+  databasePoolMax: number; databaseConnectTimeoutMs: number; codeVersion: string;
   host: '127.0.0.1' | 'localhost' | '::1' | '0.0.0.0'; webStaticDir?: string;
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
@@ -18,6 +19,20 @@ function port(value: string | undefined, name: string): number | undefined {
   if (value === undefined) return undefined;
   if (!/^[1-9][0-9]{0,4}$/.test(value) || Number(value) > 65535) throw new Error(`${name} must be an integer port from 1 to 65535`);
   return Number(value);
+}
+
+function boundedInteger(value: string | undefined, name: string, fallback: number, min: number, max: number): number {
+  if (value === undefined) return fallback;
+  if (/^[1-9][0-9]*$/.exec(value)?.[0] !== value || !Number.isSafeInteger(Number(value)) || Number(value) < min || Number(value) > max) {
+    throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  }
+  return Number(value);
+}
+
+function runtimeIdentifier(value: string | undefined, name: string, fallback: string): string {
+  const result = value ?? fallback;
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.exec(result)?.[0] !== result) throw new Error(`${name} must be a bounded runtime identifier`);
+  return result;
 }
 
 function origins(value: string, production: boolean): Set<string> {
@@ -42,6 +57,13 @@ function serverUrl(value: string | undefined, name: string, protocols: readonly 
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig {
   const production = env.NODE_ENV === 'production';
+  const databasePoolMax = boundedInteger(env.PLATFORM_DATABASE_POOL_MAX, 'PLATFORM_DATABASE_POOL_MAX', 12, 1, 100);
+  const databaseConnectTimeoutMs = boundedInteger(env.PLATFORM_DATABASE_CONNECT_TIMEOUT_MS, 'PLATFORM_DATABASE_CONNECT_TIMEOUT_MS', 5000, 100, 5000);
+  const codeVersion = runtimeIdentifier(env.PLATFORM_BUILD_ID, 'PLATFORM_BUILD_ID', 'development');
+  if (production && (env.PLATFORM_BUILD_ID === undefined || ['development', 'unknown'].includes(codeVersion.toLowerCase()))) {
+    throw new Error('PLATFORM_BUILD_ID must identify the release explicitly in production');
+  }
+  const queueName = runtimeIdentifier(env.PLATFORM_QUEUE_NAME, 'PLATFORM_QUEUE_NAME', 'companion-platform-jobs');
   const host = env.PLATFORM_HOST ?? '127.0.0.1';
   if (!['127.0.0.1', 'localhost', '::1', '0.0.0.0'].includes(host)) throw new Error('PLATFORM_HOST must be loopback or an explicitly configured 0.0.0.0');
   const hostedPort = port(env.PORT, 'PORT'), platformPort = port(env.PLATFORM_PORT, 'PLATFORM_PORT');
@@ -78,12 +100,12 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   if (!Number.isSafeInteger(maxActiveJobs) || maxActiveJobs < 1) throw new Error('PLATFORM_MAX_ACTIVE_JOBS must be a positive integer');
   if (env.PLATFORM_WEB_STATIC_DIR !== undefined && !env.PLATFORM_WEB_STATIC_DIR.trim()) throw new Error('PLATFORM_WEB_STATIC_DIR must name the built web directory');
   return {
-    databaseUrl, redisUrl,
+    databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
     storageDir: path.resolve(workspaceRoot,env.PLATFORM_STORAGE_DIR ?? '.local/platform/blobs'),
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
     sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail,
-    queueName: env.PLATFORM_QUEUE_NAME ?? 'companion-platform-jobs', s3, mcp: readMcpConfig(env),
+    queueName, s3, mcp: readMcpConfig(env),
   };
 }

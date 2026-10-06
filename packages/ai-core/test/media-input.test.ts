@@ -19,6 +19,17 @@ const input = (provider:string,options:Record<string,unknown>={}):CreateJobInput
   ({kind:provider==='ark'?'video':'image',provider,prompt:'An invented scene',options});
 const queue = {request_id:'fixture-task',status_url:'https://queue.fal.run/fal-ai/fixture/requests/fixture-task/status',response_url:'https://queue.fal.run/fal-ai/fixture/requests/fixture-task/response',cancel_url:'https://queue.fal.run/fal-ai/fixture/requests/fixture-task/cancel'};
 
+test('prospective references validate exact combined counts without fabricating private upload IDs',()=>{
+  const ark={...input('ark',{referenceMode:'first_last_frame'}),model:'fictional-ark-model'};
+  validateMediaJobInput(ark,2);
+  validateMediaJobInput({...ark,attachmentIds:['actual-owned-reference']},1);
+  for(const count of [-1,0,1,3,4,1.5,NaN])assert.throws(()=>validateMediaJobInput(ark,count),{code:'INVALID_PROVIDER_INPUT'});
+  assert.throws(()=>validateMediaJobInput({...input('openai'),attachmentIds:['one','two','three','four']},1),{code:'INVALID_PROVIDER_INPUT'});
+  const seedance={...input('ark',{referenceMode:'first_last_frame',aspectRatio:'16:9'}),model:'doubao-seedance-2-5-pro-251215'};
+  assert.throws(()=>validateMediaJobInput(seedance,2),{code:'INVALID_PROVIDER_INPUT'});
+  assert.deepEqual(ark.attachmentIds,undefined);
+});
+
 test('all media adapters reject invalid IDs, signatures and aggregate reference size before any provider submission',async()=>{
   let calls=0,reads=0;
   const http=new HttpClient(fake(()=>{calls++;return json({});}),resolver);

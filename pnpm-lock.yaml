@@ -277,6 +277,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  services/voice-dataset: {}
+
 packages:
 
   '@1natsu/wait-element@4.2.0':

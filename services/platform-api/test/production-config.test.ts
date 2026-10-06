@@ -6,6 +6,7 @@ import { readConfig, workspaceRoot } from '../src/config.ts';
 // Fictional connection values exercise validation, without contacting a provider.
 const production: NodeJS.ProcessEnv = {
   NODE_ENV: 'production', PLATFORM_DATABASE_URL: 'postgresql://synthetic:synthetic-password@db.example.invalid/companion',
+  PLATFORM_BUILD_ID: 'synthetic-release-20261006',
   PLATFORM_REDIS_URL: 'rediss://:synthetic-password@redis.example.invalid:6379/0',
   PLATFORM_ALLOWED_ORIGINS: 'https://app.example.invalid', PLATFORM_S3_BUCKET: 'synthetic-private-objects',
   PLATFORM_S3_ENDPOINT: 'https://objects.example.invalid', PLATFORM_S3_REGION: 'auto',
@@ -74,4 +75,20 @@ test('origins and storage endpoints reject wildcard, credential, path and query 
   }
   assert.deepEqual([...readConfig({ PLATFORM_ALLOWED_ORIGINS: 'http://localhost:4321,https://app.example.invalid' }).allowedOrigins], ['http://localhost:4321', 'https://app.example.invalid']);
   assert.throws(() => readConfig({ PLATFORM_ALLOWED_ORIGINS: 'http://localhost:4321/path' }), /origins/);
+});
+
+test('runtime identities and database budgets are explicit and bounded without disclosing supplied values', () => {
+  const local = readConfig({});
+  assert.equal(local.databasePoolMax, 12); assert.equal(local.databaseConnectTimeoutMs, 5000); assert.equal(local.codeVersion, 'development');
+  const configured = readConfig({ PLATFORM_DATABASE_POOL_MAX: '1', PLATFORM_DATABASE_CONNECT_TIMEOUT_MS: '100', PLATFORM_BUILD_ID: 'a'.repeat(64), PLATFORM_QUEUE_NAME: 'isolated-queue-1' });
+  assert.equal(configured.databasePoolMax, 1); assert.equal(configured.databaseConnectTimeoutMs, 100); assert.equal(configured.codeVersion, 'a'.repeat(64));
+  for (const value of ['', '0', '-1', '101', '1.1', '01', '1e1', ' 1', '1\n']) assert.throws(() => readConfig({ PLATFORM_DATABASE_POOL_MAX: value }), /PLATFORM_DATABASE_POOL_MAX/);
+  for (const value of ['', '0', '99', '5001', '1.1', '0100', '1e3', ' 100']) assert.throws(() => readConfig({ PLATFORM_DATABASE_CONNECT_TIMEOUT_MS: value }), /PLATFORM_DATABASE_CONNECT_TIMEOUT_MS/);
+  for (const name of ['PLATFORM_BUILD_ID', 'PLATFORM_QUEUE_NAME'] as const) {
+    for (const value of ['', 'a'.repeat(129), 'synthetic-secret/path', 'synthetic-secret:other', ' synthetic-secret', 'synthetic-secret\n']) {
+      assert.throws(() => readConfig({ [name]: value }), error => error instanceof Error && error.message.includes(name) && !error.message.includes('synthetic-secret'));
+    }
+  }
+  for (const value of [undefined, 'development', 'DEVELOPMENT', 'unknown', 'UNKNOWN']) assert.throws(() => readConfig({ ...production, PLATFORM_BUILD_ID: value }), /PLATFORM_BUILD_ID/);
+  assert.equal(readConfig(production).codeVersion, 'synthetic-release-20261006');
 });

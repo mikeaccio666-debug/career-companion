@@ -32,3 +32,22 @@ export function clearPrivateImage(element: { removeAttribute(name: string): void
   release(() => element.removeAttribute('src'));
   release(() => element.removeAttribute('srcset'));
 }
+
+/** Each effect setup restores its captured source after installing the invalidation guard.
+ * Cleanup may run before another setup on the same DOM node in React StrictMode. */
+export function holdPrivateImage(account: PrivateResourceAccount | null, element: {
+  src: string; crossOrigin: string | null; removeAttribute(name: string): void;
+}, source: string | undefined): () => void {
+  let active = true;
+  const stop = holdPrivateResource(account, () => { active = false; clearPrivateImage(element); });
+  if (!source) { stop(); return stop; }
+  if (active && source && account?.isCurrent()) {
+    try {
+      element.crossOrigin = 'use-credentials';
+      if (active && account.isCurrent()) element.src = source;
+      // Recheck after browser property setters; a synchronously invalidated capture stays detached.
+      if (!account.isCurrent()) stop();
+    } catch { stop(); }
+  }
+  return stop;
+}

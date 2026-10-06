@@ -21,6 +21,10 @@ envVarGroups:
         value: "0"
       - key: PLATFORM_QUEUE_NAME
         value: career-platform-production-jobs
+      - key: PLATFORM_DATABASE_POOL_MAX
+        value: "12"
+      - key: PLATFORM_DATABASE_CONNECT_TIMEOUT_MS
+        value: "5000"
 services:
   - type: web
     name: career-platform-api
@@ -33,9 +37,11 @@ services:
     preDeployCommand: /app/infra/platform/production/entrypoint.sh migrate
     autoDeployTrigger: off
     maxShutdownDelaySeconds: 120
-    healthCheckPath: /api/platform/health
+    healthCheckPath: /api/platform/ready
     envVars:
       - fromGroup: career-platform-runtime
+      - key: PLATFORM_BUILD_ID
+        sync: false
       - key: PLATFORM_HOST
         value: 0.0.0.0
       - key: PLATFORM_WEB_STATIC_DIR
@@ -82,6 +88,11 @@ services:
     maxShutdownDelaySeconds: 120
     envVars:
       - fromGroup: career-platform-runtime
+      - key: PLATFORM_BUILD_ID
+        fromService:
+          type: web
+          name: career-platform-api
+          envVarKey: PLATFORM_BUILD_ID
       - key: PLATFORM_DATABASE_URL
         fromDatabase:
           name: career-platform-db

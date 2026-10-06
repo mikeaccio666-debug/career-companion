@@ -147,7 +147,7 @@ export async function readWorkspaceBootstrap<Options>(
     const operation = Promise.all([
       read('/auth/options', controller.signal).then(parseOptions),
       read('/auth/me', controller.signal).catch((failure) => { if (isAnonymous(failure)) return null; throw failure; }),
-      Promise.allSettled([read('/health', controller.signal), read('/capabilities', controller.signal)]),
+      Promise.allSettled([read('/ready', controller.signal), read('/capabilities', controller.signal)]),
     ]).then(([options, account, publicResults]) => ({ options, account, health: publicResults[0], capabilities: publicResults[1] }));
     const result = await Promise.race([operation, aborted]);
     if (signal.aborted || controller.signal.aborted) throw new DOMException('Connection cancelled.', 'AbortError');

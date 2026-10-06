@@ -4,11 +4,30 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { User } from '@companion/platform-contracts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
+import type { PoolClient } from 'pg';
 import { ApiError } from './errors.ts';
 
 const scrypt = promisify(rawScrypt);
 const COOKIE = 'companion_session';
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
+/** Server-captured identity for one HTTP request; never reconstructed from later window state. */
+export interface FixedSessionContext { readonly userId: string; readonly tokenHash: string; }
+export function fixedRequestSession(request: FastifyRequest, userId: string): FixedSessionContext {
+  const token = request.cookies[COOKIE];
+  if (!token || token.length > 128) throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');
+  return Object.freeze({userId,tokenHash:tokenHash(token)});
+}
+/** Match password reset's account -> session order. Recheck database time after lock waits. */
+export async function authorizeFixedSession(client: PoolClient, context: FixedSessionContext, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  const account = await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[context.userId]);
+  signal?.throwIfAborted();if (!account.rowCount) throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');
+  const session = await client.query('SELECT token_hash FROM platform_sessions WHERE token_hash=$1 AND user_id=$2 FOR UPDATE',[context.tokenHash,context.userId]);
+  signal?.throwIfAborted();if (!session.rowCount) throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');
+  const current = await client.query(`SELECT s.token_hash FROM platform_sessions s JOIN platform_users u ON u.id=s.user_id
+    WHERE s.token_hash=$1 AND s.user_id=$2 AND s.auth_version=u.auth_version AND s.expires_at>clock_timestamp()`,[context.tokenHash,context.userId]);
+  signal?.throwIfAborted();if (!current.rowCount) throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');
+}
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString('hex');
   const hash = await scrypt(password, salt, 64) as Buffer;

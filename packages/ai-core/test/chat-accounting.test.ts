@@ -107,7 +107,7 @@ test('Ark requests final usage without cumulative chunk statistics; OpenRouter a
 test('successful responses with absent or null statistics retain missing usage instead of fabricated zero', async () => {
   for (const provider of ['openai', 'ollama']) {
     const calls: ModelCallEvent[] = [];
-    await loopback((_body, response) => frames(response, provider === 'openai' ? [completed()] : [{ ...compatible(), usage: null }]), async ({ runtime }) => {
+    await loopback((_body, response) => frames(response, provider === 'openai' ? [{ type: 'response.output_text.delta', delta: 'Synthetic reply' }, completed()] : [{ ...compatible(), usage: null }]), async ({ runtime }) => {
       const result = await collect(runtime.streamChat(input(provider), { onModelCall: recorder(calls) }));
       assert.deepEqual(usages(result), []); assert.deepEqual(finish(calls).usage, { status: 'missing' }); assert.equal(finish(calls).status, 'complete');
     });
@@ -120,7 +120,7 @@ test('invalid usage is sticky, never rounded, coerced, clamped or published', as
     const object = typeof report === 'object' && !Array.isArray(report) ? report as Record<string, unknown> : undefined;
     const raw = object ? (provider === 'openai' ? { input_tokens: object.input, output_tokens: object.output } : { prompt_tokens: object.input, completion_tokens: object.output }) : report;
     const calls: ModelCallEvent[] = [];
-    await loopback((_body, response) => frames(response, provider === 'openai' ? [completed(raw), completed({ input_tokens: 1, output_tokens: 2 })] : [compatible(), { choices: [], usage: raw }, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 2 } }]), async ({ runtime }) => {
+    await loopback((_body, response) => frames(response, provider === 'openai' ? [{ type: 'response.output_text.delta', delta: 'Synthetic reply' }, completed(raw), completed({ input_tokens: 1, output_tokens: 2 })] : [compatible(), { choices: [], usage: raw }, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 2 } }]), async ({ runtime }) => {
       const result = await collect(runtime.streamChat(input(provider), { onModelCall: recorder(calls) }));
       assert.deepEqual(usages(result), []); assert.deepEqual(finish(calls).usage, { status: 'invalid' }); assert.equal(finish(calls).status, 'complete');
     });
@@ -130,7 +130,7 @@ test('invalid usage is sticky, never rounded, coerced, clamped or published', as
 test('different whole-call reports conflict rather than being added or silently replaced', async () => {
   for (const provider of ['openai', 'ollama']) {
     const calls: ModelCallEvent[] = [];
-    await loopback((_body, response) => frames(response, provider === 'openai' ? [completed({ input_tokens: 1, output_tokens: 2 }), completed({ input_tokens: 1, output_tokens: 3 })] : [compatible(), { choices: [], usage: { prompt_tokens: 1, completion_tokens: 2 } }, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 3 } }]), async ({ runtime }) => {
+    await loopback((_body, response) => frames(response, provider === 'openai' ? [{ type: 'response.output_text.delta', delta: 'Synthetic reply' }, completed({ input_tokens: 1, output_tokens: 2 }), completed({ input_tokens: 1, output_tokens: 3 })] : [compatible(), { choices: [], usage: { prompt_tokens: 1, completion_tokens: 2 } }, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 3 } }]), async ({ runtime }) => {
       const result = await collect(runtime.streamChat(input(provider), { onModelCall: recorder(calls) }));
       assert.deepEqual(usages(result), []); assert.deepEqual(finish(calls).usage, { status: 'invalid' });
     });

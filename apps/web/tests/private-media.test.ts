@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AccountRequestContext } from '../src/account-context.ts';
-import { clearPrivateImage, clearPrivateMedia, holdPrivateResource } from '../src/private-media.ts';
+import { clearPrivateImage, clearPrivateMedia, holdPrivateImage, holdPrivateResource } from '../src/private-media.ts';
 
 const accountA = '799c7d39-2d4d-4c43-8004-71872d3a021a';
 const accountB = '0c7a9552-29c6-4d6f-968d-4ca66ea00464';
@@ -53,4 +53,40 @@ test('a throwing resource disposer cannot prevent other account subscribers from
   holdPrivateResource(account, () => { throw new Error('Fictional browser failure'); });
   holdPrivateResource(account, () => { cleared = true; });
   context.invalidate(); assert.equal(cleared, true);
+});
+
+test('image effect setup-cleanup-setup restores the same captured source on the existing DOM node', () => {
+  const context=new AccountRequestContext();context.changeSession(accountA);const capture=context.capture()!;
+  const account={isCurrent:()=>context.isCurrent(capture),subscribe:context.subscribe};
+  const element={src:'',crossOrigin:null as string|null,removeAttribute(name:string){if(name==='src')this.src='';}};
+  const source='/api/platform/artifacts/fictional?expectedAccount='+accountA;
+  const first=holdPrivateImage(account,element,source);assert.equal(element.src,source);assert.equal(element.crossOrigin,'use-credentials');
+  first();assert.equal(element.src,'');
+  const second=holdPrivateImage(account,element,source);assert.equal(element.src,source);
+  context.invalidate();assert.equal(element.src,'');second();assert.equal(element.src,'');
+});
+
+test('an invalidated image capture cannot restore a source during any later setup, including a new session for the same account', () => {
+  const context=new AccountRequestContext();context.changeSession(accountA);const capture=context.capture()!;
+  const account={isCurrent:()=>context.isCurrent(capture),subscribe:context.subscribe};
+  const element={src:'',crossOrigin:null as string|null,removeAttribute(name:string){if(name==='src')this.src='';}};
+  const first=holdPrivateImage(account,element,'fictional-private-image');assert.equal(element.src,'fictional-private-image');
+  context.changeSession(accountA);assert.equal(element.src,'');first();
+  const second=holdPrivateImage(account,element,'fictional-private-image');assert.equal(element.src,'');second();
+  context.changeSession(accountB);const third=holdPrivateImage(account,element,'fictional-private-image');assert.equal(element.src,'');third();
+});
+
+test('synchronous subscription invalidation clears a rendered image before setup can restore it and releases the subscription', () => {
+  let current=true,unsubscribed=0,writes=0,source='rendered-before-effect';
+  const element={crossOrigin:null as string|null,get src(){return source;},set src(value:string){++writes;source=value;},removeAttribute(name:string){if(name==='src')source='';}};
+  const account={isCurrent:()=>current,subscribe(listener:()=>void){current=false;listener();return()=>{++unsubscribed;};}};
+  const stop=holdPrivateImage(account,element,'fictional-private-image');
+  assert.equal(source,'');assert.equal(writes,0);assert.equal(unsubscribed,1);stop();assert.equal(unsubscribed,1);
+});
+
+test('an unavailable image source clears an old DOM source and leaves no held subscription', () => {
+  let source='fictional-old-image',unsubscribed=0;
+  const account={isCurrent:()=>true,subscribe(){return()=>{++unsubscribed;};}};
+  const element={crossOrigin:null as string|null,get src(){return source;},set src(value:string){source=value;},removeAttribute(name:string){if(name==='src')source='';}};
+  const stop=holdPrivateImage(account,element,undefined);assert.equal(source,'');assert.equal(unsubscribed,1);stop();assert.equal(unsubscribed,1);
 });

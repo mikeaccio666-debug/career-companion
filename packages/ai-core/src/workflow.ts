@@ -54,8 +54,8 @@ export function workflowDefinitionHash(input: CreateJobInput): string {
 
 const uncertain = () => new ProviderError('WORKFLOW_STEP_UNCERTAIN', 'A workflow step has an unconfirmed external result. Review it before starting another request.', 409);
 const checkpointError = () => new ProviderError('WORKFLOW_CHECKPOINT_INVALID', 'The saved workflow checkpoint does not match this execution.', 409);
-const safeLocalFailures = new Set(['INVALID_PROVIDER_INPUT', 'MODEL_NOT_CONFIGURED', 'INVALID_PROVIDER_CONFIG', 'INVALID_COMFYUI_TEMPLATE', 'COMFYUI_TEMPLATE_UNBOUND', 'COMFYUI_TEMPLATE_BINDING_INVALID', 'COMFYUI_TEMPLATE_SNAPSHOT_INVALID', 'COMFYUI_SERVER_CHANGED', 'PROVIDER_UNSUPPORTED', 'PROVIDER_NOT_CONFIGURED']);
-const terminalFailures = new Set(['VIDEO_GENERATION_FAILED', 'MEDIA_GENERATION_FAILED', 'COMFYUI_FAILED', 'COMFYUI_NO_OUTPUT', 'COMFYUI_REJECTED']);
+const safeLocalFailures = new Set(['INVALID_PROVIDER_INPUT', 'MODEL_NOT_CONFIGURED', 'INVALID_PROVIDER_CONFIG', 'INVALID_COMFYUI_TEMPLATE', 'COMFYUI_TEMPLATE_UNBOUND', 'COMFYUI_TEMPLATE_BINDING_INVALID', 'COMFYUI_TEMPLATE_SNAPSHOT_INVALID', 'COMFYUI_SERVER_CHANGED', 'COMFYUI_OUTPUT_KIND_MISMATCH', 'PROVIDER_UNSUPPORTED', 'PROVIDER_NOT_CONFIGURED']);
+const terminalFailures = new Set(['VIDEO_GENERATION_FAILED', 'MEDIA_GENERATION_FAILED', 'COMFYUI_FAILED', 'COMFYUI_NO_OUTPUT', 'COMFYUI_REJECTED', 'COMFYUI_OUTPUT_INVALID']);
 function resumable(step: WorkflowStep): boolean {
   return step.provider === 'ark' && step.kind === 'video' || ['fal', 'comfyui'].includes(step.provider) && ['image', 'video'].includes(step.kind);
 }
@@ -167,6 +167,7 @@ export async function executeWorkflow(runtime: PlatformProviderRuntime, input: C
       const snapshot = ctx.workflowComfyUITemplates?.[String(index)];
       if (!step.executionTemplate || !snapshot || !runtime.validateComfyUITemplate) throw new ProviderError('COMFYUI_TEMPLATE_UNBOUND', 'An unfinished workflow step has no saved generation template version. Prepare a new reviewed task.', 409);
       runtime.validateComfyUITemplate(snapshot, step.executionTemplate);
+      if (snapshot.outputKind !== step.kind) throw new ProviderError('COMFYUI_OUTPUT_KIND_MISMATCH', 'The reviewed generation template does not produce the requested media kind. Prepare a new reviewed task.', 409);
       if (step.model) invalid('The ComfyUI model is part of its server-reviewed template.');
     }
     if(step.kind==='image'||step.kind==='video')validateMediaJobInput({kind:step.kind,provider:step.provider,model:step.model,prompt:step.prompt,options:step.options,

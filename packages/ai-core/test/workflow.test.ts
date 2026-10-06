@@ -150,7 +150,7 @@ test('frozen goal, step options and effective input hashes are validated before 
 });
 
 test('only confirmed terminal failures permit an explicitly authorized new attempt', async () => {
-  const template = { version: 1 as const, baseUrl: 'http://127.0.0.1:8188', promptNode: '6', promptField: 'text', graph: { '6': { class_type: 'CLIPTextEncode', inputs: { text: 'synthetic placeholder' } } } };
+  const template = { version: 1 as const, outputKind: 'image' as const, baseUrl: 'http://127.0.0.1:8188', promptNode: '6', promptField: 'text', graph: { '6': { class_type: 'CLIPTextEncode', inputs: { text: 'synthetic placeholder' } } } };
   const snapshot: ComfyUITemplateSnapshot = { ...template, hash: workflowHash(template) };
   const input = plan([{ kind: 'image', provider: 'comfyui', prompt: '{{input}}', executionTemplate: {version:1,hash:snapshot.hash} }]); const store = workflowStore(input, base); let attempts = 0;
   const execution = () => ({...store.context(),workflowComfyUITemplates:{'0':snapshot}});
