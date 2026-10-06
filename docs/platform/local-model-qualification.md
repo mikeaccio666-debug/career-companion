@@ -82,3 +82,15 @@ CPU 验收时开发服务器约 30GiB 内存，系统 GPU 工具返回 NVML 驱�
 真实音频验证使用虚构 Kokoro 英文 WAV，经 Whisper 得到原始转写，在普通聊天中明确审阅编辑后交给 GPU 9B。程序链路和真实网页点击各有一次 ASR/聊天，成功轮累计 speech1、ASR2、chat2；两次聊天用量为375/27与674/21输入/输出tokens。不可改写的原 ASR 与用户审阅正文分别保存，模型只收到标记为未核实来源的编辑文字，不收到原音频；任务执行副作用为0。网页编辑清除确认，重新勾选后才能发送；刷新恢复回答、编辑正文和独立原文。375×812 与1440×1000真实 Chrome布局无横向溢出，截图经过人工检查；这不是真机、本人声线或麦克风验收。未登录时的 auth/me 401 为预期，已登录刷新后控制台无错误或警告。
 
 详细来源版本、协议测试、独立复核和清理范围见[本轮验证记录](verification.md#真实-gpu-图片音频聊天与模型复测)。运行图像、音频、请求和截图只保存于忽略目录，不进入公开源码。
+
+## 真实本地视频生成
+
+2026-10-06，Wan 2.1 T2V 1.3B fp16 已在独立 ComfyUI 0.39.0 引擎通过 Platform API 完成一次真实文生视频。三个官方重打包权重固定 revision `123acf1cc74bccbb9bfff8ac1ee72edc08c2341d`，合计 9,828,025,775 字节，完整大小、SHA 和 safetensors 数据偏移均核验；没有下载整个模型仓库。模型、scaled FP8 UMT5 文字编码器和 VAE 的来源及 Apache 2.0 许可分别保留，外部 ComfyUI 引擎仍采用 GPL v3。[固定权重仓库](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/123acf1cc74bccbb9bfff8ac1ee72edc08c2341d)、[官方 Wan 说明](https://github.com/Wan-Video/Wan2.1)、[ComfyUI 许可](https://github.com/Comfy-Org/ComfyUI/blob/b0b743566f65daafc423b4fea8a2fbda94b3384a/LICENSE)
+
+生成部分沿用固定官方示例的 832×480、33 帧、30 steps、CFG 6、uni_pc/simple、shift 8 与单 batch，固定 seed。仅将示例保存节点替换为 stock CreateVideo／SaveVideo，以 16 fps 保存 H.264 MP4；实际引擎 object_info 核对了动态格式输入、范围和连接类型。没有 custom nodes、拼接静态图片或改写供应商输出元数据。[固定官方工作流](https://github.com/comfyanonymous/ComfyUI_examples/blob/cb13911e7d83e4f61ca12e29629cab85a6c08856/wan/text_to_video_wan.json)
+
+真实账户注册、HTTP 审批、父任务租约、processJob、步骤检查点和私有成果读写完成。唯一生成请求执行约 **80.160 秒**，输出 473,452 字节、2.0625 秒 MP4。同账号三次读取（含 API 重建）SHA 相同，另一账号 404。FFmpeg 和 PyAV 完整解码 33 帧；真实 Chrome 桌面和 375×812 手机尺寸播放／seek 成功。这里未启动 BullMQ worker，也没有真机 iOS／Android 验收。
+
+红色纸船、涟漪和倒影符合主要场景，但纸船基本保持中央，未明确实现提示词中的从左向右漂移和拖尾。独立九帧审阅不能证明全程无闪烁；实际短片播放通过也不代表专业质量、长视频或高并发能力。设备显存离散观察最高 13,769 MiB，监控最初出现身份断言故障并有采样缺口，不能作为完整或独占峰值。原生成进程经精确身份核对后继续被观察，没有再次提交模型请求。
+
+这条路线可以作为开发和质量比较用的独立 GPU 执行端。此次单请求结果不足以把 3090 设为生产容量承诺；托管视频 API、不同质量档位和专用 GPU worker 仍需按实际使用量另行比较。详细版本、错误与清理证据见[真实视频验证](verification.md#真实-wan-视频与网页播放)。

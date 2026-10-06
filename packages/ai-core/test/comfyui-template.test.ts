@@ -170,8 +170,31 @@ test('real HTTP video output selects verified MP4/WebM rather than poster images
   }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
 }));
 
+test('stock PreviewVideo images return verified MP4/WebM and resume without another submission', async () => fixture(async (_template,env)=>{
+  let posts=0;const fetched:string[]=[];
+  const server=http.createServer(async(req,res)=>{
+    const url=new URL(req.url!,'http://localhost');
+    if(req.method==='POST'){for await(const _ of req){}posts++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({prompt_id:'synthetic-stock-video'}));return;}
+    if(url.pathname.startsWith('/history/')){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({'synthetic-stock-video':{status:{completed:true},outputs:{'9':{images:[{filename:'poster.png',type:'output'},{filename:'ComfyUI_00001_.mp4',subfolder:'video',type:'output'},{filename:'ComfyUI_00002_.WEBM',subfolder:'video',type:'output'}],animated:[true]}}}}));return;}
+    const name=url.searchParams.get('filename')!;fetched.push(name);assert.equal(url.pathname,'/view');assert.equal(url.searchParams.get('subfolder'),'video');assert.equal(url.searchParams.get('type'),'output');
+    assert.notEqual(name,'poster.png');res.setHeader('Content-Type',name.endsWith('.mp4')?'video/mp4':'video/webm');res.end(name.endsWith('.mp4')?mp4():webm());
+  });
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();assert(address&&typeof address!=='string');
+  try{
+    const runtime=createProviderRuntime({env:{...env,COMFYUI_OUTPUT_KIND:'video',COMFYUI_BASE_URL:`http://127.0.0.1:${address.port}`}}),snapshot=runtime.captureComfyUITemplate!();
+    const input:CreateJobInput={kind:'video',provider:'comfyui',prompt:'Synthetic stock video metadata',executionTemplate:binding(snapshot)};
+    const first=await runtime.executeJob(input,{...context,comfyuiTemplate:snapshot});
+    const resumed=await runtime.executeJob(input,{...context,comfyuiTemplate:snapshot,previousProviderTaskId:first.providerTaskId});
+    for(const output of [first,resumed]){
+      assert.deepEqual(output.artifacts.map(item=>[item.name,item.mime]),[['video-1.mp4','video/mp4'],['video-2.webm','video/webm']]);
+      assert.deepEqual(output.artifacts.map(item=>Buffer.from(item.bytes)),[mp4(),webm()]);
+    }
+    assert.equal(posts,1);assert.deepEqual(fetched,['ComfyUI_00001_.mp4','ComfyUI_00002_.WEBM','ComfyUI_00001_.mp4','ComfyUI_00002_.WEBM']);
+  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+}));
+
 test('wrong selected output rejects the result before any successful publication, including resumed handles', async () => fixture(async (_template,env)=>{
-  for(const [kind,bytes,mime,key] of [['image',mp4(),'image/png','images'],['image',png,'image/jpeg','images'],['video',png,'video/mp4','videos'],['video',Buffer.from('GIF89a'),'image/gif','gifs'],['video',webm({audio:true}),'video/webm','videos']] as const){
+  for(const [kind,bytes,mime,key] of [['image',mp4(),'image/png','images'],['image',png,'image/jpeg','images'],['video',png,'video/mp4','videos'],['video',Buffer.from('GIF89a'),'image/gif','gifs'],['video',webm({audio:true}),'video/webm','videos'],['video',png,'video/mp4','images'],['video',mp4(),'image/png','images']] as const){
     let posts=0,published=0;const runtime=createProviderRuntime({env:{...env,COMFYUI_OUTPUT_KIND:kind},fetch:async(_url,init)=>{
       if(init?.method==='POST'){posts++;return Response.json({prompt_id:'synthetic-invalid'});}if(String(_url).includes('/history/'))return Response.json({'synthetic-invalid':{status:{completed:true},outputs:{'9':{[key]:[{filename:'pretends-valid.mp4',type:'output'}]}}}});return new Response(new Uint8Array(bytes),{headers:{'Content-Type':mime}});
     }}),snapshot=runtime.captureComfyUITemplate!(),input:CreateJobInput={kind,provider:'comfyui',prompt:'A fictional scene',executionTemplate:binding(snapshot)};
@@ -180,12 +203,22 @@ test('wrong selected output rejects the result before any successful publication
   }
 }));
 
-test('a video template with only poster images has no video output and does not fetch the poster', async () => fixture(async (_template,env)=>{
+test('animated image metadata with no supported video has no output and is never downloaded', async () => fixture(async (_template,env)=>{
   let downloads=0;const runtime=createProviderRuntime({env:{...env,COMFYUI_OUTPUT_KIND:'video'},fetch:async(url)=>{
     if(String(url).includes('/view')){downloads++;return new Response(png,{headers:{'Content-Type':'image/png'}});}
-    return Response.json({'synthetic-video':{status:{completed:true},outputs:{'9':{images:[{filename:'poster.png',type:'output'}]}}}});
+    return Response.json({'synthetic-video':{status:{completed:true},outputs:{'9':{images:['poster with spaces.png','animated.gif','unsupported.mkv'].map(filename=>({filename,subfolder:'../unused-poster',type:'output'})),animated:[true]}}}});
   }}),snapshot=runtime.captureComfyUITemplate!();
   await assert.rejects(runtime.executeJob({kind:'video',provider:'comfyui',prompt:'A fictional scene',executionTemplate:binding(snapshot)}, {...context,comfyuiTemplate:snapshot,previousProviderTaskId:'synthetic-video'}),{code:'COMFYUI_NO_OUTPUT'});assert.equal(downloads,0);
+}));
+
+test('stock video candidates reject malformed metadata and unsafe paths before download', async () => fixture(async (_template,env)=>{
+  for(const [item,code] of [[{type:'output'},'COMFYUI_OUTPUT_INVALID'],[{filename:'../clip.mp4',type:'output'},'INVALID_PROVIDER_RESPONSE'],[{filename:'clip.webm',subfolder:'../private',type:'output'},'INVALID_PROVIDER_RESPONSE']] as const){
+    let downloads=0;const runtime=createProviderRuntime({env:{...env,COMFYUI_OUTPUT_KIND:'video'},fetch:async(url)=>{
+      if(String(url).includes('/view')){downloads++;throw new Error('Unsafe metadata must not reach download');}
+      return Response.json({'synthetic-video':{status:{completed:true},outputs:{'9':{images:[item],animated:[true]}}}});
+    }}),snapshot=runtime.captureComfyUITemplate!();
+    await assert.rejects(runtime.executeJob({kind:'video',provider:'comfyui',prompt:'A fictional scene',executionTemplate:binding(snapshot)}, {...context,comfyuiTemplate:snapshot,previousProviderTaskId:'synthetic-video'}),{code});assert.equal(downloads,0);
+  }
 }));
 
 test('invalid output metadata cannot be interpreted as generated files', async () => fixture(async (_template,env)=>{

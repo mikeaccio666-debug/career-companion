@@ -473,3 +473,21 @@ GPU路线仅在用户私有目录提取匹配已加载内核的官方595.84库�
 自有Chrome已关闭，3156临时API经精确PID/UID/启动参数/监听核验后SIGTERM，仅清理其专属schema/blob；4334转发也按身份停止。ComfyUI引擎与GPU Ollama容器均按精确身份停止，后者删除；11436无listener、设备显存恢复221MiB使用/23903MiB空闲基线。只删除QA新home自生成的两份Ollama密钥，保留私人权重与匹配库。一次性DB在零活动连接及所有者核验后删除，qa.env移除；模型与测试报告闭合。主Ollama/PG/Redis容器及主源码hash、001–016迁移账本不变，017–022没有应用主预览。
 
 本轮发现原4321转发已退出；远端3120/3121返回200后，仅重新建立该loopback SSH转发为PID7791，未重启主API/worker/网页或同步源码。不能声称整轮连接无故障。运行请求、账号数据、图片、音频、截图及原失败只在忽略目录；综合记录为 `.local/platform/verification/gpu-audio-image-20261006.json`，其中分别记录原1879快照、3文件网页变体、后来文档变更和独立评分。没有付费/云模型、真人资料、真实申请或生产部署；公开源码更新与运行环境是不同的变更。
+
+## 真实 Wan 视频与网页播放
+
+2026-10-06。本轮原始冻结为 1892 份活跃文件，独立 `source-video` 副本仅覆盖 media.ts 与 comfyui-template.test.ts；完整 manifest 与两个 delta SHA 分别记录，原副本不变。修复 stock PreviewVideo 把视频放在 `images` 的兼容缺口：video 模板只从该集合筛选 MP4/WebM 候选，忽略 PNG／GIF／MKV 海报或不支持格式；真正候选仍检查路径、实际 MIME、容器与非空视频样本。已有 videos/gifs 行为保留。协议测试包含 stock MP4/WebM、海报混入、恢复不重复提交、伪视频字节、错误 MIME 及恶意路径。
+
+本地 core 209 项为 **208 通过／1 跳过／0 失败**，包含真实 Chromium 和真实 CLI 取消 fixture；跳过官方隔离 Codex Docker fixture。远端 core 同为209项，**198通过／11跳过／0失败／0取消**，其跳过范围与既有可选浏览器、Codex、CLI fixture一致，不能算此次远端实测。core 类型检查通过；相关真实 PostgreSQL 模板与工作流 API 集成 **25／25通过**，其两份独立 schema 已清理。网页生产构建和类型检查通过；仍有大分包警告，不证明移动加载性能达标。运行代码与随后公开文档变更分别记录，不把文档后的全目录 SHA 宣称为实际模型快照。
+
+固定 Wan 2.1 T2V 1.3B fp16、scaled FP8 UMT5 和 VAE 的三份权重完整字节数／SHA／safetensors offset核验通过，总计9,828,025,775字节。复用未修改的 ComfyUI v0.39.0 源码和私有 Python runtime；新的模型／input／output／user目录独立，custom／partner nodes关闭、offline开启。仅使用既有用户私有595.84库，没有系统安装。官方示例生成参数为832×480、33帧、30steps、CFG6、uni_pc/simple、shift8；输出改用实际 object_info 审阅后的 stock CreateVideo／SaveVideo MP4 H.264、16fps。节点实际 history 返回 `images` 与 `animated:[true]`，未改成自定义输出键。
+
+真实账户、HTTP任务审阅审批、父任务租约、outbox delivery hash、processJob和步骤ledger连通。实际POST/prompt恰好1次，generation1／attempt1，步骤 started→provider_task→completed；完成后租约清除。处理约 **80.160秒**，MP4 **473452字节**，SHA `b89589a43c39644ff8b969134c093e967be18350ec9d3de78f2e359de26b3560`。同账号两次读取及API重建后第三次读取一致、另一账号404；没有启动BullMQ worker。
+
+私有监控脚本启动helper后即时cmdline身份断言失败，原错误与源码保留。随后按PID／UID／启动标识／完整命令核对已在运行的同一helper，附加独立观察器；没有重启helper或重发生成。helper最终报告API／pool关闭且passed，原父监控无法取得子进程退出码，保持未知。显存3秒设备总量采样观察最高13769MiB，包含上述启动采样缺口；不能称为完整瞬时峰值或模型独占量。
+
+FFprobe、FFmpeg完整解码和PyAV逐帧检查通过：H.264、832×480、16fps、2.0625秒、33帧，PTS严格递增、33份解码帧SHA不同。这是实际Wan时空去噪输出，不是合成fixture。九帧contact sheet经root和独立审阅：红船和水波可见，但从左向右漂移／拖尾未清楚实现；独立截图审阅没有播放全片，不能确认全程流畅或无闪烁。
+
+独立3162静态网页／真实API通过4336临时转发，在具备真实虚构账户cookie的隔离Chrome查看原成果。实际视频play Promise完成、readyState4、832×480／2.0625秒、error为空；375×812尺寸下document/body宽度375，metadata预载与playsInline有效，seek到约1秒后播放。桌面和手机截图由root查看。这里是Chrome响应式尺寸和程序化媒体play/seek，不是iOS／Android真机、原生拖动手势、本人声音或生产容量验收。审阅服务未配置模型且未创建新任务。
+
+自有Chrome、4336转发、ComfyUI与3162审阅API均按精确身份关闭；离开工作流后媒体DOM为0，已登录console错误／警告为0。删库前真实记录为1个成功任务、1次审批、1次成功attempt、3条步骤ledger、活动租约0；outbox仍有1行且dispatched_at为空，因为本次没有队列worker，不能声称已派发或提前清除。独立数据库在所有者及零活动连接核验后删除，qa.env、两个虚构账号cookie及专属API blob删除；模型权重、固定runtime和私有视频证据保留。设备显存恢复观察基线221MiB使用／23903MiB空闲。主源码SHA、001–016迁移账本与4321转发PID7791身份不变，远端3120／3121及本地4321均HTTP200；未同步主源码或重启主服务。最终回执与综合证据保存在忽略目录 `.local/platform/verification/gpu-video-20261006.json`；没有付费调用、真实申请或生产部署。
