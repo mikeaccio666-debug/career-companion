@@ -105,6 +105,8 @@ API 返回的模型名称按文字、图片、视频和语音能力分别提供�
 
 执行和恢复使用创建任务时保存的原图快照，只在克隆上填入本次描述；新模板版本不会改变旧任务。若网页已审阅版本与创建时当前版本不同，请求拒绝，需返回编辑重新审阅。缺少旧快照、保存内容损坏或服务器地址改变时，在外部请求之前停止；有供应商任务句柄也不会绕过校验。全部未完成步骤的模板先检查，再调用前面的文字或媒体服务。模板版本锁定不证明ComfyUI服务器上的权重、custom nodes或输出质量保持不变，也不代替其许可、隔离和费用审阅。[ComfyUI服务器接口](https://docs.comfy.org/development/comfyui-server/comms_routes)
 
+ComfyUI 的标准 `SaveVideo`／`SaveWEBM` 节点通过 `PreviewVideo` 返回 `images` 集合和 `animated` 标记。对于声明为 video 的模板，适配器除了既有 `videos/gifs` 集合，还读取 `images` 中 MP4/WebM 后缀的候选；图片海报不下载。后缀仅筛选候选，成功仍取决于真实 HTTP MIME、容器、视频轨和非空视频样本的校验。`animated` 不能证明文件是视频，结构校验也不能代替完整解码、播放和画面质量检查。[固定版本 PreviewVideo](https://github.com/Comfy-Org/ComfyUI/blob/b0b743566f65daafc423b4fea8a2fbda94b3384a/comfy_api/latest/_ui.py)、[标准视频保存节点](https://github.com/Comfy-Org/ComfyUI/blob/b0b743566f65daafc423b4fea8a2fbda94b3384a/comfy_extras/nodes_video.py)
+
 OpenAI 官方公告 Sora 2 和 Videos API 于 2026 年 9 月 24 日关闭，因此平台没有 OpenAI 视频入口。视频使用仍提供接口的供应商。[官方状态](https://developers.openai.com/api/docs/guides/video-generation)
 
 ## 从本地走向多用户服务

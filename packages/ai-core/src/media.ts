@@ -157,19 +157,25 @@ export async function generateComfyUI(http:HttpClient,env:NodeJS.ProcessEnv,inpu
     if(result){if(result.status?.status_str==='error')throw new ProviderError('COMFYUI_FAILED','The ComfyUI workflow failed.');if(result.status?.completed){const artifacts:GeneratedArtifact[]=[];
       const outputs=result.outputs===undefined?{}:result.outputs;
       if(!outputs||typeof outputs!=='object'||Array.isArray(outputs))throw new ProviderError('COMFYUI_OUTPUT_INVALID','The generation server returned invalid output metadata.');
-      // Reviewed image templates select images. Video templates select videos/gifs (some
-      // Comfy video nodes use the latter key for MP4/WebM); poster images are not fetched.
+      // Stock PreviewVideo uses images for MP4/WebM. In that collection, the extension
+      // only selects download candidates; the actual bytes and HTTP MIME must match.
+      // Other video nodes use videos/gifs. Poster images are never downloaded for video.
       for(const output of Object.values(outputs) as any[]){
         if(!output||typeof output!=='object'||Array.isArray(output))throw new ProviderError('COMFYUI_OUTPUT_INVALID','The generation server returned invalid output metadata.');
-        const selected=snapshot.outputKind==='image'?[output.images]:[output.videos,output.gifs];
-        for(const list of selected){
+        const selected=snapshot.outputKind==='image'?[[output.images,false] as const]:[[output.videos,false] as const,[output.gifs,false] as const,[output.images,true] as const];
+        for(const [list,videoImages] of selected){
           if(list===undefined)continue;
           if(!Array.isArray(list))throw new ProviderError('COMFYUI_OUTPUT_INVALID','The generation server returned invalid output metadata.');
           for(const item of list){
             if(artifacts.length>=8)break;
             if(!item||typeof item!=='object'||Array.isArray(item))throw new ProviderError('COMFYUI_OUTPUT_INVALID','The generation server returned invalid output metadata.');
             if(item.type!=='output')continue;
-            const name=safePathPart(item.filename),query=new URLSearchParams({filename:name,subfolder:typeof item.subfolder==='string'?item.subfolder:'',type:'output'});
+            if(videoImages){
+              if(typeof item.filename!=='string')throw new ProviderError('COMFYUI_OUTPUT_INVALID','The generation server returned invalid output metadata.');
+              if(!/\.(?:mp4|webm)$/i.test(item.filename))continue;
+            }
+            const name=safePathPart(item.filename);
+            const query=new URLSearchParams({filename:name,subfolder:typeof item.subfolder==='string'?item.subfolder:'',type:'output'});
             if(query.get('subfolder')?.includes('..'))throw new ProviderError('INVALID_PROVIDER_RESPONSE','ComfyUI returned an invalid output path.');
             const response=await http.request(`${base}/view?${query}`,{signal:ctx.signal});
             artifacts.push(validatedComfyOutput(snapshot.outputKind,await readBytes(response),response.headers.get('content-type'),artifacts.length));
