@@ -31,6 +31,10 @@ export async function initializeWorkflowCheckpoint(client: PoolClient, jobId: st
   await client.query('INSERT INTO platform_workflow_checkpoints(job_id,definition_hash) VALUES($1,$2)', [jobId, workflowDefinitionHash(input)]);
 }
 function snapshot(row: any): WorkflowCheckpoint { return { definitionHash: row.definition_hash, revision: row.revision, steps: row.steps }; }
+/** Only persisted completed checkpoints waive execution requirements for historical templates. */
+export function completedWorkflowStepIndexes(steps: WorkflowStepCheckpoint[] | undefined): Set<number> {
+  return new Set((Array.isArray(steps) ? steps : []).filter((step, position) => step?.state === 'completed' && step.index === position && position < 8 && typeof step.inputHash === 'string' && /^[a-f0-9]{64}$/.test(step.inputHash)).map(step => step.index));
+}
 
 async function authorize(client: PoolClient | Database, binding: WorkflowBinding, lock = false) {
   binding.signal.throwIfAborted();
@@ -39,7 +43,7 @@ async function authorize(client: PoolClient | Database, binding: WorkflowBinding
   const row = result.rows[0];
   const definitionHash = workflowDefinitionHash({ kind: 'workflow', provider: 'workflow', prompt: row.prompt, options: row.options });
   if (row.definition_hash !== binding.definitionHash || definitionHash !== binding.definitionHash) throw new ApiError(409, 'WORKFLOW_DEFINITION_CHANGED', 'The reviewed workflow definition changed. Create another reviewed task.');
-  validateExecutionTemplates({kind:'workflow',provider:'workflow',prompt:row.prompt,options:row.options},row.execution_policy);
+  validateExecutionTemplates({kind:'workflow',provider:'workflow',prompt:row.prompt,options:row.options},row.execution_policy,undefined,completedWorkflowStepIndexes(row.checkpoint_steps));
   return row;
 }
 

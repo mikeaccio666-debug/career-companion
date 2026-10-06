@@ -117,7 +117,7 @@ test('each explicit bootstrap retry rechecks actual me/options and only uses fou
   assert.equal(first.account, null); assert.deepEqual(first.options, options); assert.equal(clock.pending, false);
   ++turn; const second = await readWorkspaceBootstrap(read, new AbortController().signal, parseAuthOptions, anonymous, clock);
   assert.deepEqual(second.account, { user: fixtureUser }); assert.equal(clock.pending, false);
-  assert.deepEqual(paths, ['/auth/options', '/auth/me', '/health', '/capabilities', '/auth/options', '/auth/me', '/health', '/capabilities']);
+  assert.deepEqual(paths, ['/auth/options', '/auth/me', '/ready', '/capabilities', '/auth/options', '/auth/me', '/ready', '/capabilities']);
 });
 
 test('network failure while browser says online remains a public bootstrap failure, never an anonymous success', async () => {

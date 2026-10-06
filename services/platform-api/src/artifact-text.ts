@@ -50,18 +50,24 @@ function binaryPrefix(bytes: Buffer): boolean {
 function boundary(bytes: Buffer, offset: number): boolean { return offset === bytes.length || (bytes[offset]! & 0xc0) !== 0x80; }
 function endBoundary(bytes: Buffer, offset: number, end: number): number { while (end > offset && !boundary(bytes, end)) --end; return end; }
 
-export async function readArtifactText(db: Database, storage: BlobStorage, userId: string, value: unknown, signal?: AbortSignal): Promise<ArtifactTextResult> {
-  return readPrivateArtifactText(db, storage, userId, value, signal);
+type ArtifactDatabase = Pick<Database, 'query'>;
+export type FullArtifactText = Pick<ArtifactTextResult, 'source' | 'provenance' | 'encoding' | 'version' | 'text'> & { sha256: string };
+export async function readArtifactText(db: ArtifactDatabase, storage: BlobStorage, userId: string, value: unknown, signal?: AbortSignal): Promise<ArtifactTextResult> {
+  return readPrivateArtifactText(db, storage, userId, value, signal) as Promise<ArtifactTextResult>;
+}
+/** Internal whole-file reader with the same ownership, UTF-8, version and cleanup guarantees. Never truncates. */
+export async function readFullArtifactText(db: ArtifactDatabase, storage: BlobStorage, userId: string, artifactId: string, signal?: AbortSignal): Promise<FullArtifactText> {
+  return readPrivateArtifactText(db, storage, userId, { artifactId }, signal, undefined, true) as Promise<FullArtifactText>;
 }
 
 /** Internal page reader after MCP receipt/approval validation; the public generic reader stays closed. */
 export async function readMcpArtifactTextPage(db: Database, storage: BlobStorage, userId: string, value: unknown,
   expected: { jobId: string; responseHash: string }, signal?: AbortSignal): Promise<ArtifactTextResult> {
-  return readPrivateArtifactText(db, storage, userId, value, signal, expected);
+  return readPrivateArtifactText(db, storage, userId, value, signal, expected) as Promise<ArtifactTextResult>;
 }
 
-async function readPrivateArtifactText(db: Database, storage: BlobStorage, userId: string, value: unknown, signal?: AbortSignal,
-  mcp?: { jobId: string; responseHash: string }): Promise<ArtifactTextResult> {
+async function readPrivateArtifactText(db: ArtifactDatabase, storage: BlobStorage, userId: string, value: unknown, signal?: AbortSignal,
+  mcp?: { jobId: string; responseHash: string }, whole = false): Promise<ArtifactTextResult | FullArtifactText> {
   const input = parseArtifactTextInput(value);
   aborted(signal);
   const found = await db.query('SELECT a.id,a.job_id,a.filename,a.mime,a.metadata,u.mime AS upload_mime,u.byte_size,u.storage_key,j.kind AS job_kind FROM platform_artifacts a JOIN platform_uploads u ON u.id=a.upload_id JOIN platform_jobs j ON j.id=a.job_id WHERE a.id=$1 AND a.user_id=$2 AND u.user_id=$2 AND j.user_id=$2', [input.artifactId, userId]);
@@ -119,6 +125,7 @@ async function readPrivateArtifactText(db: Database, storage: BlobStorage, userI
   if (!boundary(bytes, offset)) throw new ApiError(400, 'ARTIFACT_OFFSET_INVALID', 'Use a returned nextOffset so UTF-8 characters are not split.');
   const step = row.metadata?.workflowStep;
   const source = { artifactId: row.id, jobId: row.job_id, name, mime: row.mime, size, ...(row.job_kind === 'workflow' && Number.isSafeInteger(step) && step >= 0 && step < 8 ? { workflowStep: step } : {}) };
+  if (whole) { aborted(signal); return { source, provenance: 'untrusted_artifact', encoding: 'utf-8', version: stat.etag!, text: fullText, sha256: createHash('sha256').update(bytes).digest('hex') }; }
   let end = endBoundary(bytes, offset, Math.min(size, offset + (input.maxBytes ?? DEFAULT_PAGE_BYTES)));
   const result = (): ArtifactTextResult => ({ source, provenance: 'untrusted_artifact', encoding: 'utf-8', version: stat.etag!, offset, nextOffset: end < size ? end : null, truncated: end < size, text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(offset, end)) });
   let page = result();

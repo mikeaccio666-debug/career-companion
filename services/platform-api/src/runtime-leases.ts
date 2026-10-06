@@ -5,7 +5,8 @@ import { ApiError } from './errors.ts';
 import { recoverChatUsage } from './chat-usage.ts';
 
 export async function acquireRuntimeLease(client:PoolClient,userId:string,kind:'chat'|'voice',id=randomUUID(),seconds=120){
-  await client.query('SELECT id FROM platform_users WHERE id=$1 FOR UPDATE',[userId]);
+  // Serialize runtime limits without blocking child rows' user FK KEY SHARE.
+  await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[userId]);
   await client.query('DELETE FROM platform_runtime_leases WHERE user_id=$1 AND expires_at <= now()',[userId]);
   const active=await client.query('SELECT count(*)::integer AS count FROM platform_runtime_leases WHERE user_id=$1 AND kind=$2',[userId,kind]);
   if(active.rows[0].count >= (kind==='chat'?2:1))throw new ApiError(429,'RUNTIME_CONCURRENCY_LIMIT','Wait for an active conversation or voice request to finish.');

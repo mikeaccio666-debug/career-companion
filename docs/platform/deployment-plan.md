@@ -1,10 +1,10 @@
 # 网页 Chat／Agent 部署路线
 
-状态：**建议，未部署**。官方资料核对日期：**2026-10-06**。本轮增加了可审阅的生产入口代码并做本地 HTTP 验证；没有购买服务、配置真实云端密钥、公开端口、推送或云部署。
+状态：**建议，未部署**。官方资料核对日期：**2026-10-06**。已有可审阅的生产入口代码与本地 HTTP／容器验证；本次补充数据／执行就绪探针、worker心跳与连接池预算配置，独立真实PG／Redis／HTTP与worker生命周期11组通过，API427通过／4跳过、网页399通过；正式运维验收仍待执行。没有购买服务、配置真实云端密钥、公开端口或云部署。本人主开发预览仍是导出版本 `da4434a`、迁移账本001–016，当前017–021源码未进入主实例。
 
 ## 推荐起步方案
 
-**Vercel 托管网页和手机网页，Render 托管 Fastify API 与 Background Worker** 是合理的上线目标；Postgres、Key Value 和私有 R2／S3 继续作为独立服务。Vercel 负责静态前端的发布和 CDN，持续运行的 Agent、任务队列与执行器留在后端。现有技术可以继续使用，不需要先重写成 serverless 或 Kubernetes。CLI 代码执行先关闭，之后放到专用执行主机；本地 Python 语音服务完成 Linux 验收前不宣称生产可用。
+**Vercel 托管网页和手机网页，Render 托管 Fastify API 与 Background Worker** 是合理的上线目标；Postgres、Key Value 和私有 R2／S3 继续作为独立服务。Vercel 负责静态前端的发布和 CDN，持续运行的 Agent、任务队列与执行器留在后端。现有技术可以继续使用，不需要先重写成 serverless 或 Kubernetes。CLI 代码执行先关闭，之后放到专用执行主机；Python 语音服务已有 Linux 开发实例验证，完成目标生产镜像与容量验收前不宣称生产可用。
 
 **生产容器保留 Render Docker Web Service 同源服务 React 静态产物与 API 的参考入口；客户端也已支持显式独立API origin。**默认 `/api/platform` 同源，分离配置经薄client统一请求、SSE与私人媒体。API使用精确credentialed CORS并保留mutation Origin与owner校验。生产容器已完成本地Linux ARM64启动验收，分离入口已完成本地两个同站不同端口浏览器验证；均不表示真实云HTTPS与Secure Cookie已通过。
 
@@ -36,7 +36,7 @@ Render 支持 Docker Web Service 与连续运行的 Background Worker，后者�
 | 队列 | 付费 Render Key Value，显式 `noeviction` 与持久化 | BullMQ／Redis-compatible 长连接；不同环境独立队列与数据，不混用生产、预览和本地任务 |
 | 文件 | 私有 R2，或选择 AWS S3 | 已有 `S3BlobStorage` 与 API 私有 Range；不能继续依赖 `.local/platform/blobs` 保存生产附件 |
 | 模型 | 服务端配置当前已实现的 provider，明确开关／可用性／配额 | 前端不持有 key；没有配置的能力如实禁用，不用固定回复假装上线了模型 |
-| Python TTS／ASR | 后置 Linux 验收，再决定可信同主机进程或专用语音执行边界 | 目前只允许 literal loopback HTTP；不是将 URL 改成 Render private hostname 就能接入 |
+| Python TTS／ASR | 已有本人Linux CPU开发实例验收，再验证目标生产镜像与资源 | 目前只允许 literal loopback HTTP；不是将 URL 改成 Render private hostname 就能接入 |
 | 浏览器 | 完成目标 Linux／容器运行和隔离验证后，再启用 bounded public-page executor | Playwright Chromium 与 OS 依赖须预装；现边界不登录、不解验证码、不最终提交 |
 | CLI／Codex | 独立、可审计的 executor host；普通 Web／Worker 默认关闭 | 当前 adapter 调用 Docker daemon、使用 daemon host 上的 bind mounts；普通托管容器不等于有可用嵌套 Docker |
 
@@ -48,11 +48,13 @@ Render 官方技术说明支持 Web Service 流式响应，HTTP 响应上限为 
 
 当前 `app.ts` 的消息接口以 SSE 输出，15 秒 keepalive，并将内容／lease 写回数据库；`apps/web/src/api.ts` 会把没有 terminal event 的提前断连显示为未确认。因此生产验收须经过真实 HTTPS 入口验证首个 token、持续 flush、取消、断网和保存后恢复；不能只在 localhost curl 成功就宣布流式上线。API、CDN／proxy和模型请求各层都有自己的 deadline，新增代理必须明确关闭响应缓冲且保留取消信号。
 
-生产限流还需单独落地：当前API默认按IP共用120请求／分钟，尚未配置可信代理。反向代理后必须按所选入口精确配置可信代理，并为已登录请求设计按用户的额度；不能直接信任任意客户端提供的转发头，也不能把同一代理或校园网络的全部用户视为一个账号。前端降低后台轮询、单飞和429退避可以减少重复请求，但不替代生产的用户配额与真实入口验收。2026-10-06双页本地验收发现的限流现象及修复范围记录在 `verification.md`。
+当前已登录HTTP限流按真实userId和用途，在PostgreSQL共享原子计数：普通API默认120次／分钟，直接聊天、朗读、转写入口各20次／分钟，实时会话创建4次／小时，取消与释放等控制操作另用120次／分钟。这是入口请求额度，任务并发另有上限；它不是token或美元预算。跨实例、同IP不同账号、并发临界值、旧身份与数据库故障已有真实HTTP／PG检查。匿名认证和公开接口仍用规范化socket地址hash；源码不信任客户端转发头，代理后它可能代表共同入口。因此生产仍需明确边缘匿名防滥用、精确入口信任和各用途配额，并测共享计数写入／清理负载。前端退避不能代替这些验收。见 [共享请求限额](verification.md#按真实账号共享请求限额)。
 
 图片／视频／多步骤工作流等长任务继续“数据库记录→outbox→队列→worker→私人结果”，HTTP 返回任务 ID 后，客户端查询状态。Background Worker 不受单次 HTTP request 的时长限制，但部署、故障和资源限制仍会中断进程；checkpoint／lease／未知外部结果处理必须保留。
 
 Render 发布旧实例时发 SIGTERM，默认 shutdown delay 为 30 秒，可配置到 300 秒。当前 API `app.close()`、Worker `worker.close()` 需要实测能在这个窗口内停止接新任务、保存状态和结束子进程；超过窗口会 SIGKILL。不能把滚动部署的“服务无停机”解释成一个进行中的模型调用绝不被中断。[Render 部署与 graceful shutdown](https://render.com/docs/deploys)
+
+本次 probe close 会等待自己的有界底层清理，heartbeat stop 等待当前写入并尝试 stopping 报告；整个 worker 的 close 仍没有总 deadline，任务和其他组件可能继续等待。此实现尚未证明托管 SIGTERM 窗口足够，仍须目标实例故障／关闭验收。
 
 ## 队列：Key Value 可用，但要正确设置
 
@@ -88,7 +90,7 @@ API与worker最终都必须使用同一托管 storage；Render 默认临时文�
 
 ## 本地语音与代码执行为何后置
 
-`services/local-speech` 与 `services/local-transcription` 已有锁定依赖、模型 hash、离线 loader、实际取消／回收和虚构音频测试；README 也明确：实际模型推理目前只在 macOS ARM64 CPU验证，Linux尚未执行。Linux wheel 路线存在不等于已证明目标镜像中的模型、解码、G2P、CPU指令集、内存、超时与子进程回收都正确。
+`services/local-speech` 与 `services/local-transcription` 已有锁定依赖、模型hash、离线loader及取消／子进程回收检查。macOS ARM64和本人`edaix-dev` Linux CPU均有实际Kokoro／Whisper短合成音频验证；远端浏览器录音验收也曾把合成流的WebM交给真实CPU Whisper并追加转写。这些是开发主机上的链路证据，不证明Render目标镜像、并发容量或自然语音质量。目标生产环境仍须检查锁定assets、G2P／解码、CPU指令集、内存、超时与子进程回收。见 [开发迁移](remote-development.md)及[浏览器录音验证](verification.md#浏览器录音的完成失败与取消)。
 
 当前 Python server 只绑定 `127.0.0.1`，拒绝浏览器 Origin，要求 literal loopback Host；core adapter只接受 loopback base URL。第一版可以按真实配置只启用已经验收的服务端语音 provider；本地语音未提供时如实标未配置。若保留本地推理，需要在受信同主机／同容器进程环境运行并预置 assets；若拆成独立网络服务，应增加服务器之间的身份、请求契约与生命周期，不能为了部署方便直接公开 Python端口或放宽原 URL边界。
 
@@ -107,19 +109,20 @@ CLI adapter 当前 `spawn('docker',…)`，执行前 inspect已存在的镜像�
 | 静态／SPA衔接 | 新增 opt-in 静态入口，focused HTTP／配置测试 8／8 通过，API typecheck 通过 | 已验证 API404、私有文件401、HTML导航／HEAD、遍历／双编码／点文件／symlink拒绝、ETag／hash缓存；目标 HTTPS 与分离 Vercel 入口尚待验收 |
 | 认证与入口信任 | 当前session HttpOnly／SameSite=Lax、production Secure，mutations检查Origin | 实际 HTTPS登录／退出／跨账号／过期有效；精确origin白名单；trusted proxy范围与req.ip正确，不能盲信任任意转发头 |
 | 流式对话 | SSE／keepalive／持久lease已实现 | HTTPS首token与连续flush、无buffer、断连取消／刷新恢复、部署中断不伪造已完成 |
-| 数据库连接与迁移 | 每个 `Database` pool max12；未见production容量配置 | API／worker／迁移的总连接预算实测；迁移锁、长事务／SQL timeout、滚动兼容与恢复演练完成 |
-| 队列故障 | producer有界、单飞与按queue的PG advisory；受控reconciliation的11项真实PG／Redis／TCP故障测试通过，完整API149项通过 | 目标Valkey／Redis版本、满内存、托管故障仍待测；health 当前仅标queue configured，queue lag／worker readiness仍需告警 |
+| 数据库连接与迁移 | 已新增pool max配置（默认12、1–100）及原生checkout timeout（默认5000ms、100–5000）；probe／heartbeat共享有界事务，默认另有2秒 acquired操作期限 | API／worker／迁移的总连接预算实测；原有普通业务SQL未全部获得该deadline；迁移锁、滚动兼容与恢复演练独立验收 |
+| 数据／执行就绪 | 已实现 `/live`、`/ready`、`/execution-ready` 与只读CLI；公开固定简要状态，Render参考health path为 `/ready` | `/ready`只要求数据就绪；执行另须真实Redis只读探针、同queue/build近30秒worker报告且无全局暂停。独立真实PG／Redis／HTTP与worker生命周期11组通过，主实例未更新，不把heartbeat或build元数据当任务／部署成功证明 |
+| 队列故障 | producer有界、单飞与按queue的PG advisory；此前受控reconciliation的11项真实PG／Redis／TCP故障测试通过、当时完整API149项通过 | 新probe／heartbeat的真实worker双连接明确断开与恢复已独立通过，虚构任务只执行一次；目标Valkey／Redis版本、满内存、实际worker-main进程故障、静默网络停滞与queue lag告警仍待测；legacyhealth的queue configured仍不是执行就绪 |
 | 存储与媒体 | 已有owner检查、private Range／IfMatch | 真目标bucket兼容与双账号隔离、流式播放／拖动／取消、备份和保留期验证；API／worker无本地共享文件假设 |
 | Provider secrets | key在server、商业显式gate | 只在服务端 secret管理；前端VITE变量／镜像／日志无key，配置轮换；输出未配置和真实失败可观察。[Render Secrets](https://render.com/docs/configure-environment-variables) |
 | 授权与任务结果 | 现有审批／租约／checkpoint／unknown状态 | 实际部署撤销、超时、worker崩溃、重复通知仍不重复外部动作；partial成果可保存审阅 |
 | Linux browser | 真实本机Chromium测试不能替代Render容器 | 锁定browser和系统依赖、sandbox／网络策略／子进程清理在目标kernel实测；不可用时该capability关闭 |
-| Linux语音 | locked assets／macOS真实推理，Linux未测试 | 实际Linux离线启动、真实虚构音频、WAV／multipart／取消／并发／资源和asset校验通过，语音质量另外评估 |
+| Linux语音 | locked assets及macOS／本人Linux CPU开发实例短合成音频验收 | 目标生产Linux镜像离线启动、WAV／multipart／取消／并发／资源和asset校验通过，语音质量另评估；开发SSH主机结果不代替托管实例验收 |
 | CLI执行池 | daemon、host mount、hard aggregate quota与remote routing尚未接入 | 专用host和端到端授权、隔离、强配额、cleanup proof通过；此前CLI保持关闭 |
-| 监控与发布 | 当前安全错误／health存在，queue仅标configured | 不含正文／凭据的结构日志、request/job关联、error／queue lag／outbox age／DB连接／storage错误告警、真实回滚演练 |
-| 生产认证运维 | 当前是本地账户基础，尚未本轮验证正式服务管理 | 账号恢复／滥用控制／邮件验证等拟上线功能明确范围并验收；可审阅隐私、数据删除与保存期，避免把preview账户当正式身份系统 |
+| 监控与发布 | 已有安全错误、有界就绪检查、私有只读outbox／Redis／pool摘要；CLI使用自己的max1 pool，不等于运行中API指标 | 不含正文／凭据的结构日志、request/job关联、error／queue lag／outbox age／DB连接／storage错误告警、真实回滚演练；生产显式buildID只是配置元数据，不证明正确版本已部署 |
+| 生产认证运维 | 邮箱验证、单次找回挑战、加密邮件outbox和会话撤销已实现；production强制配置邮件与邮箱验证 | 真实发件域／送达、HTTPS挑战流程、滥用与恢复、保存期／数据删除及正式服务管理验收；开发协议fixtures不代替真实邮箱和用户验收 |
 | 用户验收 | 手机本地preview已有证据 | 真实目标HTTPS下手机聊天／文件／审阅／成果播放完整流程、弱网和恢复验证；实际资源选择基于测量，不预先报容量保证 |
 
-本轮交付的入口／Docker／部署配置供审阅；应用到云端会创建服务、配置外部连接并公开入口，应另行执行。本报告不等于已完成上线。
+本轮交付的入口／Docker／部署配置供审阅；应用到云端会创建服务、配置外部连接并公开入口，应另行执行。本报告不等于已完成上线。新增probe／heartbeat的实际源码边界、默认5秒checkout加2秒操作期限、CLI池范围与隔离QA范围已整理在 [运行健康检查](operations-readiness.md)。探针不自动迁移或派发任务；告警、正式worker-main进程关闭、容量和生产验收仍未完成。
 
 ## Vercel 前端＋Render 后端的接入条件
 

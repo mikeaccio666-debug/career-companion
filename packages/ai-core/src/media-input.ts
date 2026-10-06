@@ -10,7 +10,7 @@ export function mediaImageMime(bytes: Uint8Array): typeof MEDIA_REFERENCE_MIME_T
   const head = Buffer.from(bytes.subarray(0, 12));
   if (head.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
   if (head[0] === 255 && head[1] === 216 && head[2] === 255) return 'image/jpeg';
-  if (head.length === 12 && head.toString('ascii', 0, 4) === 'RIFF' && head.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  if (head.length === 12 && head.subarray(0, 4).equals(Buffer.from('RIFF')) && head.subarray(8, 12).equals(Buffer.from('WEBP'))) return 'image/webp';
   return undefined;
 }
 
@@ -98,14 +98,16 @@ export function validateMediaReferenceBinding(provider: string, kind: string, op
   if (count) invalid('This provider does not bind private reference images.');
 }
 
-export function validateMediaJobInput(input: CreateJobInput): void {
+export function validateMediaJobInput(input: CreateJobInput, pendingReferenceCount = 0): void {
   if (input.options !== undefined && !record(input.options)) invalid('Media options must be an object.');
   if (input.attachmentIds !== undefined && !Array.isArray(input.attachmentIds)) invalid('Select private image attachment IDs as an array.');
   const ids = input.attachmentIds ?? [];
   if (!Array.isArray(ids) || ids.length > MEDIA_REFERENCE_MAX_IMAGES || new Set(ids).size !== ids.length ||
       ids.some(id => typeof id !== 'string' || !id.length || id.length > 200)) invalid('Select at most four distinct authorized private image attachments.');
-  validateMediaReferenceBinding(input.provider, input.kind, input.options ?? {}, ids.length);
-  if (input.provider === 'ark' && input.kind === 'video' && input.model) validateArkModelOptions(input.model, input.options ?? {}, ids.length);
+  if (!Number.isSafeInteger(pendingReferenceCount) || pendingReferenceCount < 0 || ids.length + pendingReferenceCount > MEDIA_REFERENCE_MAX_IMAGES) invalid('Select at most four actual and pending private reference images.');
+  const referenceCount = ids.length + pendingReferenceCount;
+  validateMediaReferenceBinding(input.provider, input.kind, input.options ?? {}, referenceCount);
+  if (input.provider === 'ark' && input.kind === 'video' && input.model) validateArkModelOptions(input.model, input.options ?? {}, referenceCount);
   if (input.provider === 'openai' && input.kind === 'image' && input.model) openAIImageSize(input.model, input.options?.aspectRatio);
 }
 

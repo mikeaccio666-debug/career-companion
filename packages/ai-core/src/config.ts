@@ -6,6 +6,7 @@ import { kokoroConfiguration } from './kokoro.ts';
 import { localTranscriptionConfiguration } from './local-transcription.ts';
 import { openAISpeechVoiceOptions, openAIRealtimeVoiceOptions, kokoroVoiceOptions } from './voice-input.ts';
 import { elevenLabsConfiguration } from './elevenlabs.ts';
+import { configuredComfyUIOutputKind } from './comfyui-template.ts';
 export function providerStatuses(env:NodeJS.ProcessEnv):ProviderStatus[]{
   const paid=env.PLATFORM_ALLOW_PROVIDER_CALLS==='1';
   const commercial=(id:string,name:string,key:string,capabilities:ProviderStatus['capabilities'],modelKeys:string[],docs:string,extra=true):ProviderStatus=>{
@@ -20,6 +21,7 @@ export function providerStatuses(env:NodeJS.ProcessEnv):ProviderStatus[]{
   try{localTranscriptionConfiguration(env);localTranscriptionConfigured=true;}catch{/* No probing or downloads for an absent or invalid local transcription service. */}
   let elevenLabs:ReturnType<typeof elevenLabsConfiguration>|undefined;
   try{elevenLabs=elevenLabsConfiguration(env);}catch{/* Invalid voice/model bindings never enable requests or appear in the public catalog. */}
+  const comfyKind = configuredComfyUIOutputKind(env), comfyConfigured = Boolean(comfyKind&&env.COMFYUI_BASE_URL&&env.COMFYUI_WORKFLOW_TEMPLATE&&env.COMFYUI_PROMPT_NODE);
   const statuses:ProviderStatus[] = [
     commercial('openai','OpenAI','OPENAI_API_KEY',['chat','agent','image','speech','transcription','realtime'],['OPENAI_CHAT_MODEL','OPENAI_IMAGE_MODEL','OPENAI_REALTIME_MODEL'],'https://developers.openai.com/api/docs'),
     {id:'elevenlabs',name:'ElevenLabs',keyConfigured:Boolean(elevenLabs),enabled:Boolean(elevenLabs)&&paid,capabilities:['speech'],models:[],
@@ -33,7 +35,7 @@ export function providerStatuses(env:NodeJS.ProcessEnv):ProviderStatus[]{
     {id:'faster-whisper',name:'Faster Whisper · local',keyConfigured:localTranscriptionConfigured,enabled:localTranscriptionConfigured,capabilities:['transcription'],models:[],envVariables:['FASTER_WHISPER_BASE_URL','FASTER_WHISPER_MODEL'],reason:localTranscriptionConfigured?undefined:'Connect a literal loopback Faster Whisper service with whisper-tiny.',documentationUrl:'https://github.com/SYSTRAN/faster-whisper'},
     commercial('ark','Ark · Seedance','ARK_API_KEY',['chat','agent','video'],['ARK_CHAT_MODEL','ARK_VIDEO_MODEL'],'https://docs.volcengine.com/docs/ark',Boolean(env.ARK_CHAT_MODEL||env.ARK_VIDEO_MODEL)),
     commercial('fal','fal','FAL_KEY',['image','video'],['FAL_IMAGE_ENDPOINT','FAL_VIDEO_ENDPOINT'],'https://fal.ai/docs',Boolean(env.FAL_IMAGE_ENDPOINT||env.FAL_VIDEO_ENDPOINT)),
-    {id:'comfyui',name:'ComfyUI · local',keyConfigured:Boolean(env.COMFYUI_BASE_URL&&env.COMFYUI_WORKFLOW_TEMPLATE&&env.COMFYUI_PROMPT_NODE),enabled:Boolean(env.COMFYUI_BASE_URL&&env.COMFYUI_WORKFLOW_TEMPLATE&&env.COMFYUI_PROMPT_NODE),capabilities:['image','video'],models:[],envVariables:['COMFYUI_BASE_URL','COMFYUI_WORKFLOW_TEMPLATE','COMFYUI_PROMPT_NODE','COMFYUI_PROMPT_FIELD'],reason:env.COMFYUI_WORKFLOW_TEMPLATE?undefined:'Connect ComfyUI and a server-reviewed API workflow.',documentationUrl:'https://docs.comfy.org/development/comfyui-server/comms_routes'},
+    {id:'comfyui',name:'ComfyUI · local',keyConfigured:comfyConfigured,enabled:comfyConfigured,capabilities:comfyKind?[comfyKind]:[],models:[],envVariables:['COMFYUI_BASE_URL','COMFYUI_WORKFLOW_TEMPLATE','COMFYUI_PROMPT_NODE','COMFYUI_PROMPT_FIELD','COMFYUI_OUTPUT_KIND'],reason:comfyConfigured?undefined:'Connect ComfyUI and a server-reviewed API workflow with an explicit output kind.',documentationUrl:'https://docs.comfy.org/development/comfyui-server/comms_routes'},
     {id:'browser',name:'Browser',keyConfigured:env.PLATFORM_ENABLE_BROWSER==='1',enabled:env.PLATFORM_ENABLE_BROWSER==='1',browserActionsEnabled:env.PLATFORM_ENABLE_BROWSER==='1'&&env.PLATFORM_ENABLE_BROWSER_ACTIONS==='1',browserFixtureOrigins:fixtureOrigins,capabilities:['browser'],models:[],envVariables:['PLATFORM_ENABLE_BROWSER','PLATFORM_ENABLE_BROWSER_ACTIONS'],reason:env.PLATFORM_ENABLE_BROWSER==='1'?undefined:'Browser tasks are disabled until a browser worker is configured.'},
     {id:'cli',name:'CLI harness',keyConfigured:Boolean(env.PLATFORM_CLI_IMAGE&&env.PLATFORM_CLI_COMMAND&&env.OPENAI_API_KEY),enabled:env.PLATFORM_ENABLE_CLI==='1'&&env.PLATFORM_CLI_MODEL_RELAY==='1'&&paid&&Boolean(env.PLATFORM_CLI_IMAGE&&env.PLATFORM_CLI_COMMAND&&env.OPENAI_API_KEY),capabilities:['cli'],models:[],envVariables:['PLATFORM_ENABLE_CLI','PLATFORM_CLI_IMAGE','PLATFORM_CLI_COMMAND','PLATFORM_CLI_MODEL_RELAY','PLATFORM_CLI_MODEL','OPENAI_API_KEY','PLATFORM_ALLOW_PROVIDER_CALLS'],reason:'Configure the isolated harness, task model relay and provider access; every task needs user approval.'},
     {id:'workflow',name:'Workflow',keyConfigured:true,enabled:true,capabilities:['workflow'],models:[],envVariables:[]},

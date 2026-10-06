@@ -1,5 +1,6 @@
 import type * as Platform from '@companion/platform-contracts';
-export type View = 'chat' | 'companion' | 'voice' | 'create' | 'browser' | 'cli' | 'workflow' | 'knowledge' | 'mcp' | 'settings';
+import type { ExecutionAvailability } from './service-readiness';
+export type View = 'chat' | 'companion' | 'voice' | 'create' | 'browser' | 'cli' | 'workflow' | 'knowledge' | 'mcp' | 'plans' | 'settings';
 export type ChatMode = Platform.ChatMode;
 export type JobKind = Platform.JobKind;
 export type User = Platform.User;
@@ -12,5 +13,5 @@ export type Artifact = Platform.Artifact;
 export type Job = Platform.Job;
 export type Memory = Platform.Memory;
 export type Approval = Platform.Approval;
-export interface PlatformState { status?: string; providers: Provider[]; error?: string }
+export interface PlatformState { status?: 'connected' | 'unavailable'; execution?: ExecutionAvailability; checkedAt?: string; providers: Provider[]; error?: string }
 export type VoiceSession = Platform.VoiceSessionResult & { sessionId: string };

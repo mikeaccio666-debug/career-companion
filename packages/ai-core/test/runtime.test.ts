@@ -21,7 +21,7 @@ async function collect(stream:AsyncIterable<any>){const result=[];for await(cons
 
 test('commercial providers stay disabled until explicit server opt-in; no OpenAI video',async()=>{
   let calls=0;const runtime=createProviderRuntime({env:{OPENAI_API_KEY:'fixture-key'},fetch:fake(()=>{calls++;return json({});})});
-  assert.deepEqual(runtime.capabilities().find(p=>p.id==='comfyui')?.capabilities,['image','video']);
+  assert.deepEqual(runtime.capabilities().find(p=>p.id==='comfyui')?.capabilities,[]);
   assert.equal(runtime.capabilities().find(p=>p.id==='openai')?.enabled,false);
   assert.equal(runtime.capabilities().find(p=>p.id==='openai')?.capabilities.includes('video'),false);
   const references={maxImages:4,maxTotalBytes:20*1024*1024,mimeTypes:['image/png','image/jpeg','image/webp']};
@@ -144,7 +144,7 @@ test('speech jobs propagate cancellation to the provider request',async()=>{
 });
 
 test('historical attachments become structured model input, never raw binary objects',async()=>{
-  let body:any;const runtime=createProviderRuntime({env:paid,fetch:fake((_url,init)=>{body=JSON.parse(String(init.body));return events([{type:'response.completed',response:{output:[]}}]);})});
+  let body:any;const runtime=createProviderRuntime({env:paid,fetch:fake((_url,init)=>{body=JSON.parse(String(init.body));return events([{type:'response.output_text.delta',delta:'Fixture attachment reply.'},{type:'response.completed',response:{output:[]}}]);})});
   await collect(runtime.streamChat({provider:'openai',mode:'chat',messages:[{role:'user',content:'Read this',attachments:[{name:'fixture.pdf',mime:'application/pdf',bytes:new Uint8Array([1])}]},{role:'assistant',content:'Fixture summary'},{role:'user',content:'Ask again'}]}));assert.equal(body.input[0].content[1].type,'input_file');assert.equal(body.input[0].attachments,undefined);
 });
 
@@ -154,6 +154,6 @@ test('workflow rejects unsupported attachments before calling a supplier',async(
 
 test('ComfyUI runs a server-reviewed template and retrieves the same task after restart',async()=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-core-'));const template=path.join(directory,'fixture.json');await fs.writeFile(template,JSON.stringify({'6':{class_type:'CLIPTextEncode',inputs:{text:'placeholder'}}}));let posts=0;let id='';
-  try{const runtime=createProviderRuntime({env:{COMFYUI_BASE_URL:'http://127.0.0.1:8188',COMFYUI_WORKFLOW_TEMPLATE:template,COMFYUI_PROMPT_NODE:'6'},fetch:fake((url,init)=>{if(init.method==='POST'){posts++;assert.equal(JSON.parse(String(init.body)).prompt['6'].inputs.text,'fictional scene');return json({prompt_id:'fixture-task'});}if(url.includes('/history/'))return json({'fixture-task':{status:{completed:true,status_str:'success'},outputs:{'9':{images:[{filename:'fixture.png',subfolder:'',type:'output'}]}}}});return new Response(new Uint8Array([1]),{headers:{'Content-Type':'image/png'}});})});const snapshot=runtime.captureComfyUITemplate!();const input={kind:'image' as const,provider:'comfyui',prompt:'fictional scene',executionTemplate:{version:1 as const,hash:snapshot.hash}};await runtime.executeJob(input,{...context,comfyuiTemplate:snapshot,onProviderTask:value=>{id=value;}});await runtime.executeJob(input,{...context,comfyuiTemplate:snapshot,previousProviderTaskId:id});assert.equal(posts,1);}
+  try{const runtime=createProviderRuntime({env:{COMFYUI_BASE_URL:'http://127.0.0.1:8188',COMFYUI_WORKFLOW_TEMPLATE:template,COMFYUI_PROMPT_NODE:'6',COMFYUI_OUTPUT_KIND:'image'},fetch:fake((url,init)=>{if(init.method==='POST'){posts++;assert.equal(JSON.parse(String(init.body)).prompt['6'].inputs.text,'fictional scene');return json({prompt_id:'fixture-task'});}if(url.includes('/history/'))return json({'fixture-task':{status:{completed:true,status_str:'success'},outputs:{'9':{images:[{filename:'fixture.png',subfolder:'',type:'output'}]}}}});return new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==','base64'),{headers:{'Content-Type':'image/png'}});})});const snapshot=runtime.captureComfyUITemplate!();const input={kind:'image' as const,provider:'comfyui',prompt:'fictional scene',executionTemplate:{version:1 as const,hash:snapshot.hash}};await runtime.executeJob(input,{...context,comfyuiTemplate:snapshot,onProviderTask:value=>{id=value;}});await runtime.executeJob(input,{...context,comfyuiTemplate:snapshot,previousProviderTaskId:id});assert.equal(posts,1);}
   finally{await fs.rm(directory,{recursive:true,force:true});}
 });

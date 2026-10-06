@@ -119,6 +119,6 @@ API与worker可分别增加副本，普通任务与浏览器／代码／语音�
 
 PCI识别到Intel集显与NVIDIA GeForce RTX 3090，但nvidia-smi查询以exit 18失败：`Failed to initialize NVML: Driver/library version mismatch`，用户态NVML库595.91与已加载内核模块595.84不一致。因此本次未能核实显存或GPU推理可用性；应先由服务器管理员修复驱动／库匹配并验收，再评估任何GPU推理任务。本次仅只读核查，未安装、sudo、修改远端配置、迁移项目、重启或修复驱动。
 
-对16 GiB Mac，建议下一步把开发API、队列worker、Docker依赖及需要时的构建／浏览器／CLI执行放到edaix-dev，Mac主要保留编辑器、浏览器预览和真实Chrome插件交互。远端服务继续只监听localhost，通过SSH端口转发预览；真实身份、授权、租约和结果持久化边界保留，迁移前再按实际并发检查资源。**CPU业务后端／worker与GPU模型推理分别规划。** 即使修复3090，也不应直接把共享开发机当成生产推理服务；先用模型API卸下Ollama、Kokoro和Whisper的本机常驻负担，实际用量、延迟或数据要求出现后再评估专用推理。生产仍沿用正文的托管部署方案，默认不立即自建GPU服务。
+针对16 GiB Mac的开发内存压力，开发API、队列worker、网页、Docker依赖及CPU模型服务现已迁到edaix-dev，Mac主要保留编辑器、浏览器预览和真实Chrome插件交互。远端开发服务只监听localhost，通过SSH端口转发预览；真实身份、授权、租约和结果持久化边界保留，浏览器／CLI执行仍须按各自环境独立验收，不能由迁移成功推断。**CPU业务后端／worker与GPU模型推理分别规划。** 即使修复3090，也不应直接把共享开发机当成生产推理服务；后续可按明确授权用模型API卸下CPU推理负担，实际用量、延迟或数据要求出现后再评估专用推理。此次只完成开发环境迁移，生产云部署仍未执行，正文的托管部署方案保持候选状态。
 
-后续执行记录（2026-10-06）：用户已授权并完成独立远端开发迁移。API、worker、web、Postgres/Redis与 CPU Ollama/Kokoro/Whisper 在远端 loopback 运行，Mac通过SSH预览；23张表、27份附件迁移hash一致，虚构网页聊天和语音保存已验证。本项目本地服务已停、源数据保留，商业模型仍关闭、GPU未使用。上面的只读观测与建议属于迁移前阶段；当前运行、重启和回退边界见 [远端开发说明](remote-development.md)。正式云产品部署方案未因此改变。
+后续执行记录（2026-10-06）：用户已授权并完成独立远端开发迁移。API、worker、web、Postgres/Redis与 CPU Ollama/Kokoro/Whisper 在远端 loopback 运行，Mac通过SSH预览；23张表、27份附件迁移hash一致，虚构网页聊天和语音保存已验证。本项目本地服务已停、源数据保留，商业模型仍关闭、GPU未使用。前面的硬件只读观测属于迁移前阶段；后续开发维护与当前运行、重启和回退边界见 [远端开发说明](remote-development.md)。正式云产品部署方案未因此改变。

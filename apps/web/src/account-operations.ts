@@ -15,7 +15,9 @@ export class AccountOperationScope {
   activate() { this.live = true; ++this.generation; this.lanes.clear(); }
   dispose() { this.live = false; ++this.generation; this.lanes.clear(); }
   changeSession(accountId: string | null) { this.accountId = accountId; ++this.generation; this.lanes.clear(); }
-  snapshot(): AccountOperationToken { return { accountId: this.accountId, generation: this.generation }; }
+  snapshot(lane?: string): AccountOperationToken {
+    return { accountId: this.accountId, generation: this.generation, ...(lane ? { lane, sequence: this.lanes.get(lane) } : {}) };
+  }
   invalidate(lane: string) { this.lanes.set(lane, (this.lanes.get(lane) || 0) + 1); }
   begin(lane?: string, authenticated = true): AccountOperationToken | undefined {
     if (!this.live || authenticated && !this.accountId) return;
