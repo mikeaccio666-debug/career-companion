@@ -111,12 +111,12 @@
 | 部分 | 层 |
 |---|---|
 | 确定性自动填写、自动翻页、代注册登录 | 全员（不耗模型费用，是投递效率的核心） |
-| 逐项授权、三个选项、推荐默认值、「每次问我」、回执、底线（11 §3–5） | 全员，**不得因付费而不同**：会员「少问几次」就是付费换更少的保护 |
+| 小组对话里的逐项授权与确认卡、补问、「留给你」、提交卡与回执、底线（11 §3–5） | 全员，**不得因付费而不同**：会员跳过授权对话、预设代勾或少一次确认，都是付费换更少的保护 |
 | 材料包路径的每日上限（假设 10 份）、「页面直填」规则（11） | 全员相同；上限防海投和防封号，不是计价单位 |
 | 批量预填（P2） | `BATCH_PREFILL = {enabled, dailyCap}`，系统上限每天 10 条（假设），用户只能调低；建议各层相同（待确认 3） |
 | AI 定制材料 | 免费 5 份/周；会员不单独限量（仍受每日上限）；每一份都进待确认 |
 
-会员状态不改变任何一问的选项或推荐值，不能解锁 11 §5.1 的底线，也不能跳过待确认（验收见第 15 节）。
+会员状态不改变任何一问的问法、选项或补问，不能解锁 11 §5.1 的底线，也不能跳过确认卡或待确认（验收见第 15 节）。
 
 ---
 
@@ -169,7 +169,7 @@
 
 **隐私约束（B1 闸门项，07 §3.16 引用）**：运营不进小组、看不到对话；合同约定运营数据不进蔓藤销售 CRM、不加微信跟进、不做营销联系；运营台每次查看意向和订单写审计日志（04 §4.9）。
 
-**数据对象**（09 的 024 迁移）：履约用 04 的 `platform_mentor_sessions`（加 `order_id`、`intent_note`，不含价格、支付字段和 `refunded`；`kind`：`mock_interview` / `resume_direction` / `offer_negotiation` / `referral_assessment`）。付款用 `platform_mentor_orders`：`id`、`session_id`、`offer_id`、`price_cents`、`currency`、`status`（`quoted` / `paid` / `refunded_partial` / `refunded_full` / `void`）、`payment_ref`、`handoff_code`、`origin`、`suggestion_id`；退款只记在订单上。
+**数据对象**（09 的 026 迁移）：履约用 04 的 `platform_mentor_sessions`（加 `order_id`、`intent_note`，不含价格、支付字段和 `refunded`；`kind`：`mock_interview` / `resume_direction` / `offer_negotiation` / `referral_assessment`）。付款用 `platform_mentor_orders`：`id`、`session_id`、`offer_id`、`price_cents`、`currency`、`status`（`quoted` / `paid` / `refunded_partial` / `refunded_full` / `void`）、`payment_ref`、`handoff_code`、`origin`、`suggestion_id`；退款只记在订单上。
 
 **不复用**（`packages/contracts/src/`）：`payments.ts`、`payment-catalog.ts`、`subscription-lifecycle.ts`、`commercial-usage.ts`、`assistantCommerce.ts`、`referrals.ts`；`REFERRAL_ONE_TIME_AMOUNT_USD_CENTS`（$49 一次性内推）是「付费即内推」，明确不用。
 
@@ -437,12 +437,12 @@
 
 ### 12.4 实现要点（复用 / 改 / 新建）
 
-迁移编号以 09 为准（成本 `023_cost_guard.sql`，真人服务 024）。新学生路由（意向表、兑换码、会员与额度、申诉）挂 `secure`，要求 `x-companion-account`（09）。限流继续用 011 管突发。
+迁移编号以 09 为准（成本 `025_cost_guard.sql`，真人服务 026）。新学生路由（意向表、兑换码、会员与额度、申诉）挂 `secure`，要求 `x-companion-account`（09）。限流继续用 011 管突发。
 
 | 动作 | 内容 | 分期 |
 |---|---|---|
 | 新建价格表 | `platform_model_prices`：`provider`、`model`、`capability`、`unit`（输入 token / 缓存命中输入 token / 输出 token / 音频秒 / 字符 / 会话分钟）、`micros_per_unit`、`effective_from`、`effective_to`；只在服务端配置 | P0 |
-| 新建成本账本 | `platform_cost_ledger`：`user_id`、`capability`、`source_kind`（`chat_call` / `realtime_session` / `tts` / `transcription` / `job`）、`source_id`、`units` jsonb、`cost_micros`、`estimated`、`purpose`、`speaker`、`created_at` | P0 |
+| 新建成本账本 | `platform_cost_ledger`：`user_id`、`capability`、`source_kind`（`chat_call` / `realtime_session` / `tts` / `transcription` / `job` / `external_tool`）、`source_id`、`units` jsonb、`cost_micros`、`estimated`、`purpose`、`speaker`、`created_at` | P0 |
 | 改 `chatAccounting` | finished 事件写成本账本；`platform_chat_calls` 加 `cached_input_tokens`，同时改 `ModelCallUsage` 和 `usageCollector` 读缓存命中键；missing 时按请求估算、标 `estimated=true`。旧 `platform_usage` 只读，不再写入 | P0 |
 | 改朗读、转写、worker | 按字符或秒写成本；后台任务按任务的 `user_id` 归属 | P0 |
 | 新建 `CostGuard` | `services/platform-api/src/cost-guard.ts`：`reserve(userId, capability, estimate)` 返回 `ok` / `degrade` / `block` 与原因；`commit(reservationId, actual)` 结算，失败时释放。挂在对话轮次每段开始前（03 §4.1）、后台生成、`/voice/session`、worker 入口；危机流程不经过它；不挂在 `request-limits.ts` 的 scope 上。另配全站日预算，超出只放行必要调用并告警 | P0 |
@@ -525,7 +525,7 @@
 
 ## 15. 验收标准
 
-- [ ] 授权问卷、「每次问我」卡片、回执页不出现会员、价格、升级字样；授权代码不读会员状态；§3.2 各层相同的能力在免费与会员账号下行为一致。
+- [ ] 授权对话、确认卡、「留给你」提示、提交卡与回执页不出现会员、价格、升级字样；授权代码不读会员状态；§3.2 各层相同的能力在免费与会员账号下行为一致。
 - [ ] `PaidSuggestionPolicy` 有 §7.2 每条规则的单元测试，含 T5 注册 30 天内不触发。
 - [ ] 专家消息里付费服务名与金额为 0；正文中金额与导师资历为 0（出口检查有单元测试）；推荐卡内容只来自服务端渲染；报价高于推荐价时运营台拒存。
 - [ ] 没有分成协议时「我们会获得一部分收入」出现次数为 0。
