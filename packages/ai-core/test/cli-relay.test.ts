@@ -54,12 +54,16 @@ test('stdio relay pins the server model, streams native Response and keeps proto
 test('stdio relay rejects invalid framing, unknown IDs, duplicates, concurrency and output overrun', async () => {
   for (const mode of ['raw', 'unknown', 'duplicate', 'concurrency', 'oversized-frame', 'output-limit']) {
     const fake = await fixture(mode);
+    let cancellations = 0;
     try {
       const expected = ['duplicate', 'concurrency'].includes(mode) ? 'MODEL_RELAY_UNCERTAIN' : mode === 'oversized-frame' ? 'CLI_RELAY_LIMIT' : mode === 'output-limit' ? 'CLI_OUTPUT_LIMIT' : 'CLI_RELAY_PROTOCOL';
       await assert.rejects(executeCliRelay([], fake.env, new AbortController().signal, start, async request => {
-        if (mode === 'concurrency') await new Promise(resolve => request.signal.addEventListener('abort', resolve, { once: true }));
+        // These cases exercise invalid framing while broker work is still in flight.
+        // Keep the request pending even if stdout frames arrive in separate chunks.
+        if (['duplicate', 'concurrency'].includes(mode)) await new Promise<void>(resolve => request.signal.addEventListener('abort', () => { cancellations++; resolve(); }, { once: true }));
         return new Response('fixture', { headers: { 'content-type': 'text/event-stream' } });
-      }), code(expected));
+      }), code(expected), `Relay fixture ${mode} must reject with ${expected}.`);
+      if (['duplicate', 'concurrency'].includes(mode)) assert.equal(cancellations, mode === 'duplicate' ? 1 : 2, 'Invalid frames must abort all pending broker requests.');
     } finally { await fake.dispose(); }
   }
 });
