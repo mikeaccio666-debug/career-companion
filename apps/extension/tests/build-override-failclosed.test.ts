@@ -231,12 +231,21 @@ describe('development overrides and default-off runtime flags', () => {
 });
 
 describe('Field Lab exact unpacked-build identity', () => {
-  it('is absent from the default build', async () => {
+  it('is absent from the default build, which includes only its local vault settings page', async () => {
     setEnv({});
     const config = await loadConfig();
-    expect(config.filterEntrypoints).toEqual(['background', 'apply']);
+    expect(config.filterEntrypoints).toEqual(['background', 'apply', 'vault']);
     expect(config.outDir).toBe('.output');
     expect(config.vite?.().define?.__VIBE_EXTENSION_FIELD_LAB_ENABLED__).toBe('false');
+    expect(config.manifest?.options_ui).toEqual({ page: 'vault.html', open_in_tab: true });
+    expect(config.manifest).not.toHaveProperty('options_page');
+    expect(config.manifest).not.toHaveProperty('web_accessible_resources');
+    expect(config.manifest?.permissions).toEqual(['storage', 'alarms']);
+    expect(config.vite?.().define).toMatchObject({
+      __VIBE_EXECUTION_RUNTIME_BUNDLE_ENABLED__: 'false',
+      __VIBE_LIVE_HOST_WRITES__: 'false',
+      __VIBE_CONTROLLED_MOCK_WRITES__: 'false',
+    });
   });
 
   it.each([
@@ -260,6 +269,8 @@ describe('Field Lab exact unpacked-build identity', () => {
     expect(config.manifest).not.toHaveProperty('permissions');
     expect(config.manifest).not.toHaveProperty('host_permissions');
     expect(config.manifest).not.toHaveProperty('externally_connectable');
+    expect(config.manifest).not.toHaveProperty('options_ui');
+    expect(config.manifest).not.toHaveProperty('options_page');
     expect(config.vite?.({ command: 'build' }).define).toMatchObject({
       __VIBE_API_BASE__: 'null',
       __VIBE_WEB_BASE__: 'null',

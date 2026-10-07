@@ -13,8 +13,8 @@ import {
   type DockAccountAccessPayload,
   type DockAccountAccessReply,
 } from './accountAccessIntent';
-import { sharedPasswordProblem } from './accountPassword';
-import type { AutofillDockHandle, DockAccountHandlers, DockAccountSettings } from './autofillDock';
+import { parseDockOpenVaultIntent } from './accountVaultTransitionIntent';
+import type { AutofillDockHandle, DockAccountHandlers, DockVaultManagement } from './autofillDock';
 import { withDocumentPath } from './documentPath';
 import type { ResolvedContentDiscoveryRuntimeAuthority } from './executionRuntimeAuthority';
 import type { FillToReview } from './fillToReview';
@@ -28,8 +28,7 @@ import type { FillToReview } from './fillToReview';
  *     主按钮照旧是「自动填写」；
  *  2. 他按了主按钮（或卡上的「用这个密码登录」「我已验证，继续」）：账号墙上一步一步走（accountAccessController.ts），
  *     过去了就用那一轮发给下一页的凭证接着填（连填开着就一页一页填到检查页）；
- *  3. 账户菜单「招聘网站账号」：读、看、复制、改，都问 worker——保险箱只在那边；这里只在按下之后拿一次邮箱与密码，
- *     写进规则声明的那几格就不再留，也不发往 worker 之外的任何地方。
+ *  3. 账户菜单只读网站列表；查看和导出密码打开扩展自己的设置页。账号墙只取当前网站本轮实际凭证。
  */
 
 export interface AccountAccessPageDeps {
@@ -62,10 +61,11 @@ export interface AccountAccessPageDeps {
 export interface AccountAccessPage {
   /** 浮层上「招聘网站账号」那一块与账号墙上那两种输入。 */
   readonly handlers: DockAccountHandlers;
+  readonly vaultManagement: DockVaultManagement;
   /** 这一页此刻有规则声明的账号墙：主按钮那一下交给账号墙那一路。 */
   wallOnPage(): boolean;
   /** 用这一下点击在账号墙上走；墙已经不在了就照旧填这一页。 */
-  run(proof: TrustedGestureProof): Promise<void>;
+  run(proof: TrustedGestureProof, status?: Extract<DockAccountAccessReply, { kind: 'ACCOUNT_STATUS' }>): Promise<void>;
   /** 开始看着这一页（浮层挂上之后）。 */
   start(): void;
   /** 浮层拆了、换脸了：不再看、不再等他回来。 */
@@ -80,13 +80,19 @@ export function createAccountAccessPage(deps: AccountAccessPageDeps): AccountAcc
   const scanOptions: ScanRootOptions = { openShadowRoot: deps.openShadowRoot };
   const every = deps.setInterval ?? ((run: () => void, ms: number) => globalThis.setInterval(run, ms));
   const stopEvery = deps.clearInterval ?? ((id: unknown) => globalThis.clearInterval(id as ReturnType<typeof setInterval>));
+  let disposed = false, generation = 0;
+  let passwordPromptContext: Readonly<{ operationId: string; authEpoch: number }> | null = null;
+  let displayedStatus: Extract<DockAccountAccessReply, { kind: 'ACCOUNT_STATUS' }> | null = null;
 
   const ask = async (payload: DockAccountAccessPayload): Promise<DockAccountAccessReply | null> => {
+    if (disposed) return null;
+    const requested = generation;
     const here = deps.here();
     const intent = withDocumentPath(createDockAccountAccessIntent(here.origin, here.pathname, payload), deps.doc);
     if (intent === null) return null;
     try {
-      return parseDockAccountAccessReply(await deps.send(intent));
+      const reply = parseDockAccountAccessReply(await deps.send(intent));
+      return !disposed && requested === generation ? reply : null;
     } catch {
       return null;
     }
@@ -130,6 +136,7 @@ export function createAccountAccessPage(deps: AccountAccessPageDeps): AccountAcc
       };
     },
     ask,
+    onPasswordPrompt: (context) => { passwordPromptContext = context; },
     // 密码框就是账号墙本身：只看验证码与人机验证。
     checkpoint: () => detectHumanCheckpoint({ document: deps.doc, isVisible: deps.isVisible, ignoreLogin: true }),
     chain: deps.chain,
@@ -151,10 +158,23 @@ export function createAccountAccessPage(deps: AccountAccessPageDeps): AccountAcc
     onReturn: deps.onReturn,
   });
 
-  const run = async (proof: TrustedGestureProof): Promise<void> => {
+  const run = async (proof: TrustedGestureProof, status = displayedStatus): Promise<void> => {
+    if (disposed) return;
+    if (wallHere() === null) {
+      if (status === null) { deps.dock()?.accountPrompt({ kind: 'UNAVAILABLE', site: deps.site() }); return; }
+      const current = await ask({ step: 'CHECK', operationId: status.operationId, expectedEpoch: status.authEpoch });
+      if (!disposed && current?.kind === 'ACCOUNT_CURRENT') await deps.fillPage(proof);
+      else if (!disposed) deps.dock()?.accountPrompt({ kind: 'UNAVAILABLE', site: deps.site() });
+      return;
+    }
+    if (status === null) { deps.dock()?.accountPrompt({ kind: 'UNAVAILABLE', site: deps.site() }); return; }
     const stopper = deps.restart();
-    const result: AccountRunResult = await controller.run(proof, stopper.signal);
-    if (result === 'NO_WALL' && !stopper.signal.aborted) await deps.fillPage(proof);
+    const result: AccountRunResult = await controller.run(proof, stopper.signal, status);
+    if (result === 'NO_WALL' && !disposed && !stopper.signal.aborted) {
+      const current = await ask({ step: 'CHECK', operationId: status.operationId, expectedEpoch: status.authEpoch });
+      if (!disposed && !stopper.signal.aborted && current?.kind === 'ACCOUNT_CURRENT') await deps.fillPage(proof);
+      else if (!disposed && !stopper.signal.aborted) deps.dock()?.accountPrompt({ kind: 'UNAVAILABLE', site: deps.site() });
+    }
   };
 
   /** 按下之后当场取证（派发一结束 composedPath 就空了）。 */
@@ -164,41 +184,52 @@ export function createAccountAccessPage(deps: AccountAccessPageDeps): AccountAcc
     return proof;
   };
 
-  const settingsOf = (reply: DockAccountAccessReply | null): DockAccountSettings | null =>
-    reply?.kind === 'ACCOUNT_SETTINGS'
-      ? { email: reply.email, defaultEmail: reply.defaultEmail, hasPassword: reply.hasPassword, sites: reply.sites }
-      : null;
-
   const handlers: DockAccountHandlers = {
     onSitePassword: (password, event, shadowRoot) => {
       const proof = proofOf(event, shadowRoot);
       if (proof === null) return;
-      void ask({ step: 'SITE_PASSWORD', password }).then((saved) => {
-        if (saved?.kind === 'ACCOUNT_SAVED') return run(proof);
+      // This input belongs to the prompt already shown, never to whichever
+      // account happens to answer a fresh STATUS after the click.
+      const context = passwordPromptContext;
+      if (context === null) { deps.dock()?.accountPrompt({ kind: 'UNAVAILABLE', site: deps.site() }); return; }
+      void ask({ step: 'CHECK', operationId: context.operationId, expectedEpoch: context.authEpoch }).then(async (current) => {
+        if (disposed || passwordPromptContext !== context || current?.kind !== 'ACCOUNT_CURRENT') return null;
+        return ask({ step: 'SITE_PASSWORD', password, operationId: context.operationId, expectedEpoch: context.authEpoch });
+      }).then((saved) => {
+        if (disposed || passwordPromptContext !== context) return undefined;
+        if (saved?.kind === 'ACCOUNT_STATUS') { displayedStatus = saved; return run(proof, saved); }
         deps.dock()?.accountPrompt({ kind: 'UNAVAILABLE', site: deps.site() });
         return undefined;
       });
     },
     onResume: (event, shadowRoot) => {
       const proof = proofOf(event, shadowRoot);
-      if (proof !== null) void run(proof);
+      if (proof === null || disposed) return;
+      const context = passwordPromptContext;
+      if (context === null) { deps.dock()?.accountPrompt({ kind: 'UNAVAILABLE', site: deps.site() }); return; }
+      void ask({ step: 'CHECK', operationId: context.operationId, expectedEpoch: context.authEpoch }).then((current) => {
+        if (disposed || passwordPromptContext !== context) return;
+        if (current?.kind === 'ACCOUNT_CURRENT' && wallHere() === null) { void deps.fillPage(proof); return; }
+        deps.dock()?.accountPrompt(current?.kind === 'ACCOUNT_CURRENT'
+          ? { kind: 'SITE_PASSWORD', site: deps.site(), email: '', retry: false }
+          : { kind: 'UNAVAILABLE', site: deps.site() });
+      });
     },
-    load: async () => settingsOf(await ask({ step: 'SETTINGS_GET' })),
-    reveal: async () => {
-      const reply = await ask({ step: 'REVEAL' });
-      return reply?.kind === 'ACCOUNT_PASSWORD' ? reply.password : null;
+  };
+  const vaultManagement: DockVaultManagement = {
+    list: async (signal) => {
+      const reply = await ask({ step: 'LIST' });
+      if (disposed || signal.aborted || reply?.kind !== 'VAULT_LIST') return { ok: false, code: 'UNAVAILABLE' };
+      return { ok: true, value: reply };
     },
-    setEmail: async (email) => {
+    openSettings: async (origin, event, shadowRoot) => {
+      if (disposed || proofOf(event, shadowRoot) === null) return false;
       const here = deps.here();
-      if (email !== null && createDockAccountAccessIntent(here.origin, here.pathname, { step: 'SETTINGS_SET_EMAIL', email }) === null) {
-        return 'INVALID';
-      }
-      return settingsOf(await ask({ step: 'SETTINGS_SET_EMAIL', email }));
-    },
-    setPassword: async (password) => {
-      if (sharedPasswordProblem(password) !== null) return 'WEAK';
-      const reply = await ask({ step: 'SETTINGS_SET_PASSWORD', password });
-      return reply?.kind === 'REFUSED' && reply.code === 'WEAK_PASSWORD' ? 'WEAK' : settingsOf(reply);
+      const intent = withDocumentPath(parseDockOpenVaultIntent({ kind: 'dock/open-vault', version: 1,
+        origin: here.origin, pathname: here.pathname, ...(origin === null ? {} : { selectedOrigin: origin }) }), deps.doc);
+      if (intent === null) return false;
+      const reply = await deps.send(intent).catch(() => null) as { ok?: unknown } | null;
+      return reply?.ok === true;
     },
   };
 
@@ -211,16 +242,18 @@ export function createAccountAccessPage(deps: AccountAccessPageDeps): AccountAcc
     const key = wall?.kind ?? '';
     if (key === seen) return;
     seen = key;
+    displayedStatus = null;
     if (wall === null) {
       dock.setAccountWall(null);
       return;
     }
     void ask({ step: 'STATUS' }).then((status) => {
-      if (seen !== key || deps.dock() !== dock) return;
+      if (disposed || seen !== key || deps.dock() !== dock) return;
       if (status?.kind !== 'ACCOUNT_STATUS' || !status.enabled || !status.consent) {
         dock.setAccountWall(null);
         return;
       }
+      displayedStatus = status;
       const register = key === 'createAccount' || (key !== 'signIn' && !status.known);
       dock.setAccountWall({ action: register ? 'REGISTER' : 'SIGN_IN', site: deps.site() });
     });
@@ -229,15 +262,17 @@ export function createAccountAccessPage(deps: AccountAccessPageDeps): AccountAcc
   let timer: unknown = null;
   return Object.freeze({
     handlers,
+    vaultManagement,
     wallOnPage: () => wallHere() !== null,
     run,
     start: () => {
       // 规则是异步装上的：这里只看认不认得这一家，声明没声明账号墙每一次现看。
-      if (timer !== null || vendor === null) return;
+      if (disposed || timer !== null || vendor === null) return;
       watch();
       timer = every(watch, ACCOUNT_WALL_WATCH_MS);
     },
     dispose: () => {
+      disposed = true; generation += 1; passwordPromptContext = null; displayedStatus = null;
       if (timer !== null) stopEvery(timer);
       timer = null;
       controller.dispose();

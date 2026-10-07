@@ -59,5 +59,10 @@ describe('继续到下一页的接线', () => {
 
   it('换脸、让给助手、让给顶层帧、顶层让给嵌着申请表的 iframe（2026-10-04），四处撤浮层都先 disarm（翻页与提交两样一起）', () => {
     expect(content.match(/wizardAdvance\.disarm\(\);\s*submitter\.disarm\(\);\s*dockHandle\?\.dismiss\(\);/gu)?.length).toBe(4);
+    const invalidation = between('if (!isDockSessionChanged(raw)', '// 资料或代填授权在插件里');
+    const dismiss = invalidation.indexOf('dockHandle?.dismiss();');
+    expect(invalidation.indexOf('wizardAdvance.disarm();')).toBeLessThan(dismiss);
+    expect(invalidation.indexOf('submitter.disarm();')).toBeLessThan(dismiss);
+    expect(dismiss).toBeLessThan(invalidation.indexOf('void hello();'));
   });
 });

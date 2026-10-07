@@ -476,7 +476,7 @@ const EXTENSION_ENTRYPOINTS = ATS_LAB_BUILD ? ['background', 'lab'] : ASSISTANT_
   ? ['sidepanel']
   : EXTENSION_CONNECTED_DEV_ENABLED
     ? ['sidepanel', 'background', 'apply']
-    : ['background', 'apply'];
+    : ['background', 'apply', 'vault'];
 
 // 包内策略的构建时刻：每次构建注入当下时间，30 天硬过期从**构建日**起算。
 // 2026-08-18 修的事故：此前 apply-kernel 只读一个全仓没人设过的 VITE_ 变量，
@@ -659,6 +659,7 @@ export default defineConfig({
         // alarms：到期前 120s 叫醒 worker 提前轮换 refresh token（2026-09-20，会话 15 分钟
         // 必死的修法之一）。alarms 不弹任何用户提示，也不进商店的敏感权限清单。
         permissions: ASSISTANT_READ_ENABLED ? ['storage', 'alarms', 'activeTab', 'scripting', 'webNavigation'] : ['storage', 'alarms'],
+        ...(!ASSISTANT_READ_ENABLED ? { options_ui: { page: 'vault.html', open_in_tab: true } } : {}),
         // 商店包的版本号由 CI 打（P4-16）：`VIBE_EXTENSION_VERSION=0.1.<run>`；本机构建没给就沿用 package.json 的 0.0.0。
         // 只认 `x.y.z`：商店对版本号的比较是逐段数字，别的形状会让上传被拒或静默排错序。
         ...(STORE_VERSION === null ? {} : { version: STORE_VERSION }),
