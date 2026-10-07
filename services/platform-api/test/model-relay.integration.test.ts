@@ -1,3 +1,6 @@
+import { ModelConsent } from '../src/model-routing.ts';
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +18,7 @@ import { createProviderRuntime, ProviderError } from '@companion/ai-core';
 import { fakeCodexResponse } from '../../../packages/ai-core/test/fixtures/codex-responses.ts';
 import { fileURLToPath } from 'node:url';
 
-const schema=`relay_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' });
+const schema=`relay_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'});
 const admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());
 const env={PLATFORM_CLI_MODEL_RELAY:'1',PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-relay-key',PLATFORM_CLI_MODEL:'fictional-model',PLATFORM_CLI_RELAY_MAX_OUTPUT_TOKENS:'256'};
@@ -23,15 +26,16 @@ const input={model:'fictional-model',input:[{role:'user',content:'Invented local
 const error=(code:string)=>(cause:unknown)=>cause instanceof ApiError&&cause.code===code;
 function completed(stream=true){const body={status:'completed',output:[],usage:{input_tokens:16,output_tokens:4}};return new Response(stream?`data: ${JSON.stringify({type:'response.created',response:{id:'fictional-response'}})}\n\ndata: ${JSON.stringify({type:'response.completed',response:body})}\n\n`:JSON.stringify(body),{headers:{'Content-Type':stream?'text/event-stream':'application/json','Set-Cookie':'must-not-pass-through'}});}
 function fake(fn:(url:string,init:RequestInit)=>Promise<Response>|Response):typeof fetch{return ((url:any,init:RequestInit={})=>fn(String(url),init)) as typeof fetch;}
-before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();});
+before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);});
 after(async()=>{await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();});
 async function seed(userId:string=randomUUID(),policyEnv:NodeJS.ProcessEnv=env):Promise<ModelRelayBinding>{
-  await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[userId,`${userId}@example.invalid`,'Fictional relay user','fictional-unused-password-hash']);
+  await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[userId,`${userId}@example.invalid`,'Fictional relay user','fictional-unused-password-hash']); await seedFictionalConsent(db,userId);
   const jobId=randomUUID(),leaseToken=randomUUID();
   const policy=configuredModelRelayPolicy(policyEnv);
   await db.query("INSERT INTO platform_jobs(id,user_id,kind,provider,prompt,status,requires_approval,lease_token,lease_until,model,execution_policy) VALUES($1,$2,'cli','cli','Fictional fixture','running',true,$3,now()+interval '60 seconds',$4,$5)",[jobId,userId,leaseToken,policy.model,JSON.stringify({modelRelay:policy})]);
   await db.query("INSERT INTO platform_approvals(id,user_id,job_id,tool_name,generation,status,args) VALUES($1,$2,$3,'cli',1,'approved',$4)",[randomUUID(),userId,jobId,JSON.stringify({model:policy.model,modelProvider:policy.provider,modelRelayLimits:policy})]);
-  return {userId,jobId,generation:1,leaseToken,signal:new AbortController().signal};
+  const binding={userId,jobId,generation:1,leaseToken,signal:new AbortController().signal};
+  return {...binding,requestAdmission:new ModelConsent(db,FICTIONAL_LEGAL).forJob({...binding,authVersion:'0'})};
 }
 
 test('relay binds every request to current user, approval, generation and live worker lease',async()=>{
@@ -134,7 +138,7 @@ test('CLI task approval records the actual server model and durable relay limits
   const binding=await seed();
     const unavailable=async()=>{throw new Error('This fixture must not call a provider.');};
     const runtime:PlatformProviderRuntime={capabilities:()=>[{id:'cli',name:'Fictional CLI',enabled:true,keyConfigured:true,capabilities:['cli'],models:['fictional-model'],envVariables:[]}],streamChat:async function*(){throw new Error('No provider calls');},executeJob:unavailable,createVoiceSession:unavailable,transcribe:unavailable,speech:unavailable};
-    const service=new JobService(db,base,runtime,{} as BlobStorage,{env,fetch:fake(()=>{throw new Error('No model calls expected');})});
+    const service=new JobService(db,base,runtime,{} as BlobStorage,{env,fetch:fake(()=>{throw new Error('No model calls expected');})},undefined,FICTIONAL_LEGAL);
     await assert.rejects(service.create(binding.userId,{kind:'cli',provider:'cli',prompt:'Fictional task',model:'unapproved-model'}),{code:'INVALID_INPUT'});
     const result=await service.create(binding.userId,{kind:'cli',provider:'cli',prompt:'Fictional task'});
     assert.equal(result.job.model,'fictional-model');assert.equal(result.approval.args.model,'fictional-model');assert.equal(result.approval.args.modelProvider,'openai');assert.equal(result.approval.args.modelRelayLimits.maxOutputTokens,256);
@@ -145,7 +149,7 @@ test('local CLI task approval and outbox bind the configured provider and endpoi
   const binding=await seed(undefined,localEnv);
   const unavailable=async()=>{throw new Error('This fixture must not call a provider.');};
   const runtime:PlatformProviderRuntime={capabilities:()=>[{id:'cli',name:'Fictional CLI',enabled:true,keyConfigured:true,capabilities:['cli'],models:['fictional-model'],envVariables:[]}],streamChat:async function*(){throw new Error('No provider calls');},executeJob:unavailable,createVoiceSession:unavailable,transcribe:unavailable,speech:unavailable};
-  const service=new JobService(db,base,runtime,{} as BlobStorage,{env:localEnv,fetch:fake(()=>{throw new Error('No model calls expected');})});
+  const service=new JobService(db,base,runtime,{} as BlobStorage,{env:localEnv,fetch:fake(()=>{throw new Error('No model calls expected');})},undefined,FICTIONAL_LEGAL);
   const created=await service.create(binding.userId,{kind:'cli',provider:'cli',prompt:'Fictional local task'});
   assert.equal(created.approval.args.modelProvider,'ollama');assert.equal(created.approval.args.modelRelayLimits.provider,'ollama');
   assert.match(created.approval.args.modelRelayLimits.upstreamHash,/^[a-f0-9]{64}$/);
@@ -206,7 +210,7 @@ test('worker retains a relay provider uncertainty instead of publishing successf
   const unavailable=async()=>{throw new Error('Unused synthetic provider');};
   const runtime:PlatformProviderRuntime={capabilities:()=>[{id:'cli',name:'Fictional CLI',enabled:true,keyConfigured:true,capabilities:['cli'],models:['fictional-model'],envVariables:[]}],streamChat:async function*(){throw new Error('Unused');},createVoiceSession:unavailable,transcribe:unavailable,speech:unavailable,
     executeJob:async(_input,context)=>{assert(context.requestModel);await context.requestModel({requestId:'worker-request',body:input,signal:new AbortController().signal});return {artifacts:[{name:'must-not-publish.txt',mime:'text/plain',bytes:new TextEncoder().encode('Fictional result')}]};}};
-  const service=new JobService(db,{...base,storageDir:directory},runtime,{} as BlobStorage,{env,fetch:fake(()=>new Response('fictional-private-error',{status:503}))});
+  const service=new JobService(db,{...base,storageDir:directory},runtime,{} as BlobStorage,{env,fetch:fake(()=>new Response('fictional-private-error',{status:503}))},undefined,FICTIONAL_LEGAL);
   try{
     const created=await service.create(binding.userId,{kind:'cli',provider:'cli',prompt:'Fictional worker task'});await service.decide(binding.userId,created.approval.id,'approved');
     await processJob(service,created.job.id,1);
@@ -237,7 +241,7 @@ test('worker requires review when relay settlement is missing or its result is e
       throw new ProviderError(auditStatus?'CLI_RELAY_PROTOCOL':'MODEL_RELAY_UNCERTAIN','Synthetic settlement requires review.',502);
     }};
   const storage=new Map<string,Uint8Array>();
-  const service=new JobService(db,{...base,storageDir:directory},runtime,{put:async(key,bytes)=>{storage.set(key,bytes);},get:async key=>storage.get(key)!,delete:async key=>{storage.delete(key);},stat:async()=>{throw new Error('Metadata reads are unused by this settlement fixture');},openRead:async()=>{throw new Error('Streaming reads are unused by this settlement fixture');}},{env});
+  const service=new JobService(db,{...base,storageDir:directory},runtime,{put:async(key,bytes)=>{storage.set(key,bytes);},get:async key=>storage.get(key)!,delete:async key=>{storage.delete(key);},stat:async()=>{throw new Error('Metadata reads are unused by this settlement fixture');},openRead:async()=>{throw new Error('Streaming reads are unused by this settlement fixture');}},{env},undefined,FICTIONAL_LEGAL);
   try{
     for(const scenario of [{status:undefined,returns:false},{status:'reserved',returns:false},{status:'reserved',returns:true},{status:'uncertain',returns:true}]){
       auditStatus=scenario.status;returnArtifact=scenario.returns;
@@ -265,7 +269,7 @@ test('approved platform job reaches official disconnected Codex through the audi
     assert.equal(url,'https://api.openai.com/v1/responses');const body=JSON.parse(String(init.body));
     assert.equal(body.model,'fixture-model');assert.equal(body.store,false);assert.equal(body.client_metadata,undefined);assert.equal(body.max_output_tokens,256);
     turns++;return fakeCodexResponse(body,turns);
-  })});
+  })},undefined,FICTIONAL_LEGAL);
   try{
     const created=await service.create(binding.userId,{kind:'cli',provider:'cli',prompt:'Create fixture.ts containing one synthetic exported constant.'});
     assert.equal(created.job.status,'needs_approval');assert.equal(turns,0);

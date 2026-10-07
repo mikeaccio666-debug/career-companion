@@ -145,7 +145,7 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
       const request = jsonPost({ model: selectedModel, input: state.messages, instructions: instruction(input), tools, stream: true, store: false,
         include: ['reasoning.encrypted_content'], max_output_tokens: ctx.limits.maxOutputTokens,
         ...(!legacy ? { tool_choice: ctx.toolChoice === 'none' ? 'none' : ctx.allowedToolNames ? { type: 'allowed_tools', mode: 'auto', tools: ctx.allowedToolNames.map(name => ({ type: 'function', name })) } : 'auto' } : {}), ...(ctx.reasoningEffort ? { reasoning: { effort: ctx.reasoningEffort } } : {}) }, env.OPENAI_API_KEY!, timing.signal);
-      const response = await http.request('https://api.openai.com/v1/responses', request, ctx.timeoutMs);
+      const response = await http.request('https://api.openai.com/v1/responses', request, ctx.timeoutMs, ctx.requestAdmission);
       for await (const event of readSse(response)) {
         if (['response.completed', 'response.failed', 'response.incomplete'].includes(event.type)) usage.observe(event.response?.usage);
         if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
@@ -193,7 +193,7 @@ async function* compatibleStep(http: HttpClient, env: NodeJS.ProcessEnv, input: 
       const request = jsonPost({ model: selectedModel, messages: state.messages, stream: true, max_tokens: ctx.limits.maxOutputTokens,
         ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}), ...(input.provider === 'ollama' || input.provider === 'ark' ? { stream_options: { include_usage: true } } : {}),
         ...(tools.length ? { tools, tool_choice: ctx.toolChoice } : !legacy ? { tools: [], tool_choice: 'none' } : {}) }, config.key, timing.signal);
-      const response = await http.request(`${config.base}/chat/completions`, request, ctx.timeoutMs);
+      const response = await http.request(`${config.base}/chat/completions`, request, ctx.timeoutMs, ctx.requestAdmission);
       for await (const event of readSse(response)) {
         usage.observe(event.usage); if (event.error) throw new ProviderError('PROVIDER_GENERATION_FAILED', 'The provider could not complete the response.');
         for (const choice of event.choices ?? []) {
@@ -260,7 +260,7 @@ async function* legacyChat(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
     ctx.signal?.throwIfAborted();
     const step = (input.provider === 'openai' ? openAIStep : compatibleStep)(http, env, input, {
       tools: input.mode === 'agent' ? ctx.tools ?? [] : [], toolChoice: 'auto', limits: { maxOutputTokens: 4096 }, callIndex: turn + 1,
-      timeoutMs: 120_000, signal: ctx.signal, onModelCall: ctx.onModelCall, continuation, toolResults, invocation,
+      timeoutMs: 120_000, signal: ctx.signal, requestAdmission: ctx.requestAdmission, onModelCall: ctx.onModelCall, continuation, toolResults, invocation,
     }, true);
     let out: ParsedStepResult;
     try { while (true) { const next = await step.next(); if (next.done) { out = next.value; break; } if (next.value.type !== 'tool_started') yield next.value; } }

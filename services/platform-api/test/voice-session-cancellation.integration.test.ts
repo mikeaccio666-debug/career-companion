@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +11,7 @@ import { buildApp } from '../src/app.ts';
 import { readConfig } from '../src/config.ts';
 import { Database } from '../src/database.ts';
 
-const prefix='/api/platform',origin='http://localhost:4321',base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'voice-fixture', PLATFORM_AGENT_PROVIDER: 'voice-fixture', PLATFORM_REALTIME_PROVIDER: 'voice-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'voice-fixture', PLATFORM_SPEECH_PROVIDER: 'voice-fixture' });
+const prefix='/api/platform',origin='http://localhost:4321',base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'voice-fixture', PLATFORM_AGENT_PROVIDER: 'voice-fixture', PLATFORM_REALTIME_PROVIDER: 'voice-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'voice-fixture', PLATFORM_SPEECH_PROVIDER: 'voice-fixture' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema=`voice_cancel_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);
 url.searchParams.set('options',`-c search_path=${schema}`);
 function deferred<T>() { let resolve!:(value:T)=>void;const promise=new Promise<T>(yes=>{resolve=yes;});return {promise,resolve}; }
@@ -48,8 +49,8 @@ const runtime:PlatformProviderRuntime={
 let system:Awaited<ReturnType<typeof buildApp>>,directory:string,httpOrigin:string,registrations=0;
 before(async()=>{
   assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only the local test database is allowed.');
-  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-voice-cancel-'));
-  system=await buildApp({db,runtime,enableQueue:false,config:{...base,databaseUrl:url.toString(),storageDir:directory,s3:undefined}});
+  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-voice-cancel-'));
+  system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,runtime,enableQueue:false,config:{...base,databaseUrl:url.toString(),storageDir:directory,s3:undefined}});
   httpOrigin=await system.app.listen({host:'127.0.0.1',port:0});
 });
 after(async()=>{
@@ -58,7 +59,7 @@ after(async()=>{
   if(directory)await fs.rm(directory,{recursive:true,force:true});
 });
 async function register(){
-  const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:`127.9.0.${++registrations}`,headers:{origin},payload:{name:'Synthetic cancellation tester',email:`${randomUUID()}@example.invalid`,password:'Fictional-voice-test-2026'}});
+  const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:`127.9.0.${++registrations}`,headers:{origin},payload:await fictionalRegistration(db,{name:'Synthetic cancellation tester',email:`${randomUUID()}@example.invalid`,password:'Fictional-voice-test-2026'})});
   assert.equal(response.statusCode,201,response.body);
   return {id:response.json().user.id as string,cookie:String(response.headers['set-cookie']).split(';')[0]};
 }

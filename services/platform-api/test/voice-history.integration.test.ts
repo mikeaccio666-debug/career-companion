@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +14,7 @@ import { VOICE_HISTORY_LIMITS } from '../src/voice-history.ts';
 
 const prefix='/api/platform', origin='http://localhost:4321';
 const schema=`voice_history_test_${randomUUID().replaceAll('-','')}`;
-const config=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai', PLATFORM_REALTIME_PROVIDER: 'openai', PLATFORM_TRANSCRIPTION_PROVIDER: 'openai', PLATFORM_SPEECH_PROVIDER: 'openai' }), admin=new Database(config.databaseUrl);
+const config=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai', PLATFORM_REALTIME_PROVIDER: 'openai', PLATFORM_TRANSCRIPTION_PROVIDER: 'openai', PLATFORM_SPEECH_PROVIDER: 'openai' ,PLATFORM_REQUIRE_INVITE:'1'}), admin=new Database(config.databaseUrl);
 const url=new URL(config.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());
 let system:Awaited<ReturnType<typeof buildApp>>,directory:string,actorCount=0;
@@ -26,14 +27,14 @@ const fake:PlatformProviderRuntime={
   async speech(){return {name:'synthetic.wav',mime:'audio/wav',bytes:new TextEncoder().encode('RIFF0000WAVEsynthetic')};},
 };
 before(async()=>{
-  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-voice-history-'));
-  system=await buildApp({db,config:{...config,databaseUrl:url.toString(),storageDir:directory},runtime:fake,enableQueue:false});
+  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-voice-history-'));
+  system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,config:{...config,databaseUrl:url.toString(),storageDir:directory},runtime:fake,enableQueue:false});
 });
 after(async()=>{await system?.app.close();await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 interface Actor{user:{id:string};cookie:string;ip:string;}
 async function register():Promise<Actor>{
   const ip=`127.0.1.${++actorCount}`;
-  const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:ip,headers:{origin},payload:{name:'Synthetic voice-history tester',email:`voice-${randomUUID()}@example.invalid`,password:'Synthetic-password-123'}});
+  const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:ip,headers:{origin},payload:await fictionalRegistration(db,{name:'Synthetic voice-history tester',email:`voice-${randomUUID()}@example.invalid`,password:'Synthetic-password-123'})});
   assert.equal(response.statusCode,201,response.body);
   return {user:response.json().user,cookie:(response.headers['set-cookie'] as string).split(';')[0],ip};
 }

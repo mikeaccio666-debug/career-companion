@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +16,7 @@ import type { AssistantTurnOrigin } from '../src/assistant-turn-origin.ts';
 import { ApiError } from '../src/errors.ts';
 import { authorizeGoalPlanToolFeedback, goalPlanToolResult } from '../src/goal-plan-tool-feedback.ts';
 
-const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' }),prefix='/api/platform',origin='http://localhost:4321',schema=`goal_proposals_${randomUUID().replaceAll('-','')}`;
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'}),prefix='/api/platform',origin='http://localhost:4321',schema=`goal_proposals_${randomUUID().replaceAll('-','')}`;
 const admin=new Database(base.databaseUrl),databaseUrl=new URL(base.databaseUrl);databaseUrl.searchParams.set('options',`-c search_path=${schema}`);const db=new Database(databaseUrl.toString());
 let system:Awaited<ReturnType<typeof buildApp>>,directory:string,httpOrigin:string,executedJobs=0;
 interface Actor {id:string;cookie:string}
@@ -34,12 +35,12 @@ const runtime:PlatformProviderRuntime={
   },
   async executeJob(){++executedJobs;return {text:'Fictional independently approved output',artifacts:[]};},createVoiceSession:forbidden,transcribe:forbidden,speech:forbidden,
 };
-async function start(override=runtime,providerId='synthetic'){system=await buildApp({db,runtime:override,enableQueue:false,config:{...base,modelRoutes:{chat:{provider:providerId},agent:{provider:providerId}},databaseUrl:databaseUrl.toString(),storageDir:directory,requireVerifiedEmail:false,accountEmail:undefined,maxActiveJobs:100,mcp:{entries:[],fixtureOrigins:[]}},requestLimits:{policies:{api:{max:2000,windowSeconds:60},chat:{max:2000,windowSeconds:60},control:{max:2000,windowSeconds:60},'auth-register':{max:1000,windowSeconds:60}}}});httpOrigin=await system.app.listen({host:'127.0.0.1',port:0});}
-before(async()=>{assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only an explicitly provided loopback QA database is allowed.');await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-goal-proposals-'));await start();});
+async function start(override=runtime,providerId='synthetic'){system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,runtime:override,enableQueue:false,config:{...base,modelRoutes:{chat:{provider:providerId},agent:{provider:providerId}},databaseUrl:databaseUrl.toString(),storageDir:directory,requireVerifiedEmail:false,accountEmail:undefined,maxActiveJobs:100,mcp:{entries:[],fixtureOrigins:[]}},requestLimits:{policies:{api:{max:2000,windowSeconds:60},chat:{max:2000,windowSeconds:60},control:{max:2000,windowSeconds:60},'auth-register':{max:1000,windowSeconds:60}}}});httpOrigin=await system.app.listen({host:'127.0.0.1',port:0});}
+before(async()=>{assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only an explicitly provided loopback QA database is allowed.');await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-goal-proposals-'));await start();});
 after(async()=>{await system?.app.close();await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 const headers=(user?:Actor):Record<string,string>=>({origin,...(user?{cookie:user.cookie,[PLATFORM_ACCOUNT_HEADER]:user.id}:{})});
 async function request(user:Actor|undefined,method:'GET'|'POST'|'PUT'|'DELETE',route:string,payload?:any,override:Record<string,string|undefined>={}){const h=headers(user);for(const [key,value]of Object.entries(override)){if(value===undefined)delete h[key];else h[key]=value;}return system.app.inject({method,url:prefix+route,headers:h,payload});}
-async function actor():Promise<Actor>{const r=await request(undefined,'POST','/auth/register',{name:'Fictional proposal actor',email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'});assert.equal(r.statusCode,201,r.body);return {id:r.json().user.id,cookie:(r.headers['set-cookie'] as string).split(';')[0]};}
+async function actor():Promise<Actor>{const r=await request(undefined,'POST','/auth/register',await fictionalRegistration(db,{name:'Fictional proposal actor',email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'}));assert.equal(r.statusCode,201,r.body);return {id:r.json().user.id,cookie:(r.headers['set-cookie'] as string).split(';')[0]};}
 async function conversation(user:Actor){const r=await request(user,'POST','/conversations',{title:'Fictional proposal conversation',mode:'agent'});assert.equal(r.statusCode,201,r.body);return r.json().conversation.id as string;}
 const simple=():GoalPlanInput=>({title:'Fictional editable plan',goal:'Compare fictional directions',steps:[{kind:'task',title:'Fictional speech',task:{kind:'speech',provider:'synthetic',prompt:'Fictional task goal'}}]});
 async function live(user:Actor,conversationId:string):Promise<AssistantTurnOrigin>{const messageId=randomUUID();await db.query("INSERT INTO platform_messages(id,conversation_id,role,content,status,lease_until) VALUES($1,$2,'assistant','','streaming',clock_timestamp()+interval '120 seconds')",[messageId,conversationId]);await db.query("INSERT INTO platform_runtime_leases(id,user_id,kind,expires_at) VALUES($1,$2,'chat',clock_timestamp()+interval '120 seconds')",[messageId,user.id]);return {conversationId,messageId};}

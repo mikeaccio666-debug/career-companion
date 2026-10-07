@@ -1,3 +1,5 @@
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -17,7 +19,7 @@ import { createWorkflowTemplate } from '../src/workflow-templates.ts';
 const origin = 'http://localhost:4321', prefix = '/api/platform';
 const base = readConfig({ ...process.env, NODE_ENV: 'development', PLATFORM_ENABLE_WORKBENCH: '0', PLATFORM_EXPOSE_PROVIDER_DETAILS: '0',
   PLATFORM_CHAT_PROVIDER: 'channel-fixture', PLATFORM_AGENT_PROVIDER: 'channel-fixture', PLATFORM_REALTIME_PROVIDER: 'channel-fixture',
-  PLATFORM_TRANSCRIPTION_PROVIDER: 'channel-fixture', PLATFORM_SPEECH_PROVIDER: 'channel-fixture' });
+  PLATFORM_TRANSCRIPTION_PROVIDER: 'channel-fixture', PLATFORM_SPEECH_PROVIDER: 'channel-fixture' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema = `student_channel_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -52,15 +54,15 @@ const runtime: PlatformProviderRuntime = {
 };
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'This write fixture requires a loopback database.');
-  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-student-channel-'));
   const config = { ...base, databaseUrl: url.toString(), storageDir: directory, maxActiveJobs: 100, requireVerifiedEmail: false,
     accountEmail: undefined, s3: undefined, webStaticDir: undefined, allowedOrigins: new Set([origin]), mcp: undefined };
   const requestLimits = { policies: { api: { max: 2000, windowSeconds: 60 }, chat: { max: 2000, windowSeconds: 60 },
     control: { max: 2000, windowSeconds: 60 }, realtime: { max: 2000, windowSeconds: 60 }, transcription: { max: 2000, windowSeconds: 60 }, speech: { max: 2000, windowSeconds: 60 } } };
-  student = await buildApp({ db, config, runtime, enableQueue: false, requestLimits });
-  internal = await buildApp({ db, config: { ...config, workbenchEnabled: true, exposeProviderDetails: true }, runtime, storage: student.jobs.storage, enableQueue: false, requestLimits });
-  unbound = await buildApp({ db, config: { ...config, modelRoutes: {} }, runtime, storage: student.jobs.storage, enableQueue: false, requestLimits });
+  student = await buildApp({legalBundle:FICTIONAL_LEGAL, db, config, runtime, enableQueue: false, requestLimits });
+  internal = await buildApp({legalBundle:FICTIONAL_LEGAL, db, config: { ...config, workbenchEnabled: true, exposeProviderDetails: true }, runtime, storage: student.jobs.storage, enableQueue: false, requestLimits });
+  unbound = await buildApp({legalBundle:FICTIONAL_LEGAL, db, config: { ...config, modelRoutes: {} }, runtime, storage: student.jobs.storage, enableQueue: false, requestLimits });
 });
 after(async () => {
   await student?.app.close(); await internal?.app.close(); await unbound?.app.close(); await db.close();
@@ -69,7 +71,7 @@ after(async () => {
 });
 async function actor() {
   const userId = randomUUID(), conversationId = randomUUID(), token = randomBytes(32).toString('base64url');
-  await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)', [userId, `${userId}@example.invalid`, 'Synthetic channel user', 'synthetic-unused-password-hash']);
+  await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)', [userId, `${userId}@example.invalid`, 'Synthetic channel user', 'synthetic-unused-password-hash']); await seedFictionalConsent(db,userId);
   await db.query("INSERT INTO platform_sessions(token_hash,user_id,expires_at,auth_version) VALUES($1,$2,now()+interval '1 hour',0)", [tokenHash(token), userId]);
   await db.query("INSERT INTO platform_conversations(id,user_id,title,mode,persona) VALUES($1,$2,'Synthetic OpenAI course project','companion','Synthetic old client persona')", [conversationId, userId]);
   return { userId, conversationId, cookie: `companion_session=${token}` };

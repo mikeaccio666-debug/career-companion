@@ -1,3 +1,6 @@
+import { ModelConsent } from '../src/model-routing.ts';
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -18,7 +21,7 @@ import { GoalPlans } from '../src/goal-plans.ts';
 import { GoalPlanProposals } from '../src/goal-plan-proposals.ts';
 import { GoalPlanReaders } from '../src/goal-plan-readers.ts';
 
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '0' }), schema = `direct_turns_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '0' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `direct_turns_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -60,10 +63,10 @@ const runtime: PlatformProviderRuntime = {
 };
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'This write fixture requires a loopback database.');
-  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-direct-turns-'));
   const config = { ...base, databaseUrl: url.toString(), storageDir: directory };
-  const storage = createStorage(config), jobs = new JobService(db, config, runtime, storage);
+  const storage = createStorage(config), jobs = new JobService(db, config, runtime, storage,undefined,undefined,FICTIONAL_LEGAL);
   const goalPlans = new GoalPlans(db, jobs, runtime);
   turns = new ConversationTurns({ db, runtime, jobs, goalPlans, knowledge: new KnowledgeSources(db), audioTranscriptions: new AudioTranscriptions(db, storage, runtime), goalPlanProposals: new GoalPlanProposals(db, goalPlans), goalPlanReaders: new GoalPlanReaders(db) });
 });
@@ -74,10 +77,10 @@ after(async () => {
 });
 async function actor() {
   const userId = randomUUID(), conversationId = randomUUID(), token = randomBytes(32).toString('base64url');
-  await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)', [userId, `${userId}@example.invalid`, 'Synthetic direct-service user', 'synthetic-unused-password-hash']);
+  await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)', [userId, `${userId}@example.invalid`, 'Synthetic direct-service user', 'synthetic-unused-password-hash']); await seedFictionalConsent(db,userId);
   await db.query("INSERT INTO platform_sessions(token_hash,user_id,expires_at,auth_version) VALUES($1,$2,now()+interval '1 hour',0)", [tokenHash(token), userId]);
   await db.query("INSERT INTO platform_conversations(id,user_id,title,mode,persona) VALUES($1,$2,'Synthetic direct conversation','chat','Synthetic stored persona')", [conversationId, userId]);
-  const access: ConversationTurnAccess = { assertAccount: signal => db.transaction(client => authorizeFixedSession(client, { userId, tokenHash: tokenHash(token) }, signal)) };
+  const access: ConversationTurnAccess = { requestAdmission:new ModelConsent(db,FICTIONAL_LEGAL).forSession({userId,tokenHash:tokenHash(token)}), assertAccount: signal => db.transaction(client => authorizeFixedSession(client, { userId, tokenHash: tokenHash(token) }, signal)) };
   return { userId, conversationId, access };
 }
 type Actor = Awaited<ReturnType<typeof actor>>;
@@ -178,7 +181,7 @@ for (const name of hiddenWorkbenchTools) test(`injected runtime cannot call hidd
 test('explicit internal workbench retains actual tool discovery and planning instructions', async () => {
   const item = await actor(), sink = new CollectingTurnSink();
   const config = { ...base, workbenchEnabled: true, databaseUrl: url.toString(), storageDir: directory };
-  const storage = createStorage(config), jobs = new JobService(db, config, runtime, storage), goalPlans = new GoalPlans(db, jobs, runtime);
+  const storage = createStorage(config), jobs = new JobService(db, config, runtime, storage,undefined,undefined,FICTIONAL_LEGAL), goalPlans = new GoalPlans(db, jobs, runtime);
   const internal = new ConversationTurns({ db, runtime, jobs, goalPlans, knowledge: new KnowledgeSources(db), audioTranscriptions: new AudioTranscriptions(db, storage, runtime), goalPlanProposals: new GoalPlanProposals(db, goalPlans), goalPlanReaders: new GoalPlanReaders(db) });
   await internal.submit({ userId: item.userId, conversationId: item.conversationId, data: { provider: 'turn-fixture', mode: 'agent', content: 'Synthetic workbench tool get_execution_capabilities' } }, sink, item.access);
   assert(hiddenWorkbenchTools.every(name => lastTools.includes(name)));

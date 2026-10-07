@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER, type ChatInput, type PlatformProviderRuntime } from '@companion/platform-contracts';
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
@@ -14,7 +15,7 @@ import { Database } from '../src/database.ts';
 import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 
 const prefix = '/api/platform', origin = 'http://localhost:4321';
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'audio-chat-fixture', PLATFORM_AGENT_PROVIDER: 'audio-chat-fixture' }), schema = `audio_receipts_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'audio-chat-fixture', PLATFORM_AGENT_PROVIDER: 'audio-chat-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `audio_receipts_${randomUUID().replaceAll('-', '')}`;
 const databaseUrl = new URL(base.databaseUrl);
 assert(['localhost', '127.0.0.1', '[::1]'].includes(databaseUrl.hostname), 'Audio receipt fixtures require a loopback PostgreSQL instance.');
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
@@ -84,8 +85,8 @@ function exchange(route: string, actor?: Actor, options: { method?: string; body
 }
 function json(result: Exchange) { return JSON.parse(result.body); }
 async function register(): Promise<Actor> {
-  const result = await exchange('/auth/register', undefined, { method: 'POST', body: { name: 'Fictional audio reviewer',
-    email: `${randomUUID()}@example.invalid`, password: 'Fictional-audio-review-password-2026' } });
+  const result = await exchange('/auth/register', undefined, { method: 'POST', body: await fictionalRegistration(db,{ name: 'Fictional audio reviewer',
+    email: `${randomUUID()}@example.invalid`, password: 'Fictional-audio-review-password-2026' }) });
   assert.equal(result.status, 201, result.body); return { id: json(result).user.id, cookie: result.headers['set-cookie']![0]!.split(';')[0]! };
 }
 function wav(sample = 0) {
@@ -132,9 +133,9 @@ function begin(source: Source, clientRequestId: string, actor: Actor, controller
     () => ({ status: 0, body: '', aborted: true }));
 }
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); createdSchema = true; await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); createdSchema = true; await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-audio-receipts-')); storage = new TrackingStorage(directory);
-  system = await buildApp({ db, storage, runtime, enableQueue: false,
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage, runtime, enableQueue: false,
     requestLimits: { policies: { api: { max: 1000, windowSeconds: 60 }, chat: { max: 1000, windowSeconds: 60 }, transcription: { max: 1000, windowSeconds: 60 } } },
     config: { ...base, databaseUrl: databaseUrl.toString(), storageDir: directory, s3: undefined, webStaticDir: undefined,
       accountEmail: undefined, requireVerifiedEmail: false, allowedOrigins: new Set([origin]) } });

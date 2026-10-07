@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import { acquireRuntimeLease, recoverStaleStreams, withVoiceLease } from '../src
 
 const origin='http://localhost:4321',prefix='/api/platform';
 const schema=`platform_test_${randomUUID().replaceAll('-','')}`;
-const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'local-test', PLATFORM_AGENT_PROVIDER: 'local-test' }),admin=new Database(base.databaseUrl);
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'local-test', PLATFORM_AGENT_PROVIDER: 'local-test' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl);
 const testUrl=new URL(base.databaseUrl);testUrl.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(testUrl.toString());
 let directory:string,system:Awaited<ReturnType<typeof buildApp>>;
@@ -45,13 +46,13 @@ const fake:PlatformProviderRuntime={
   speech:async()=>({name:'synthetic.wav',mime:'audio/wav',bytes:new Uint8Array([1,2,3])}),
 };
 before(async()=>{
-  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);
   directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-platform-test-'));
-  system=await buildApp({db,config:{...base,databaseUrl:testUrl.toString(),storageDir:directory,queueName:`companion-test-${randomUUID()}`},runtime:fake,enableQueue:false});
+  system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,config:{...base,databaseUrl:testUrl.toString(),storageDir:directory,queueName:`companion-test-${randomUUID()}`},runtime:fake,enableQueue:false});
 });
 after(async()=>{await system?.app.close();await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 async function register(name:string){
-  const response=await system.app.inject({method:'POST',url:`${prefix}/auth/register`,remoteAddress:`127.0.0.${++registrationCount}`,headers:{origin},payload:{name,email:`${name.toLowerCase()}-${randomUUID()}@example.invalid`,password:'Synthetic-password-123'}});
+  const response=await system.app.inject({method:'POST',url:`${prefix}/auth/register`,remoteAddress:`127.0.0.${++registrationCount}`,headers:{origin},payload:await fictionalRegistration(db,{name,email:`${name.toLowerCase()}-${randomUUID()}@example.invalid`,password:'Synthetic-password-123'})});
   assert.equal(response.statusCode,201,response.body);
   const cookie=response.headers['set-cookie'];assert.equal(typeof cookie,'string');
   assert.match(cookie as string,/HttpOnly/);assert.match(cookie as string,/SameSite=Lax/);

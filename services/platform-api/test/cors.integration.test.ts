@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +18,7 @@ import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 // These are real HTTP/session/PG protocol tests. A Node client explicitly replays
 // cookies; it cannot prove that a browser will send Secure/SameSite cookies.
 const prefix = '/api/platform', origin = 'https://app.cors-fixture.invalid', secondOrigin = 'https://studio.cors-fixture.invalid';
-const schema = `cors_${randomUUID().replaceAll('-', '')}`, base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'cors-fixture', PLATFORM_AGENT_PROVIDER: 'cors-fixture' }), admin = new Database(base.databaseUrl);
+const schema = `cors_${randomUUID().replaceAll('-', '')}`, base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'cors-fixture', PLATFORM_AGENT_PROVIDER: 'cors-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), admin = new Database(base.databaseUrl);
 const databaseUrl = new URL(base.databaseUrl); databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString());
 type Actor = { id: string; cookie: string };
@@ -84,7 +85,7 @@ function cors(headers: IncomingHttpHeaders, expected = origin) {
 function noCors(headers: IncomingHttpHeaders) { assert.equal(headers['access-control-allow-origin'], undefined); }
 function result(response: Response) { assert.match(String(response.headers['content-type']), /application\/json/); return JSON.parse(response.bytes.toString('utf8')); }
 async function register(name: string): Promise<Actor> {
-  const response = await jsonRequest('/auth/register', undefined, { name, email: `${randomUUID()}@example.invalid`, password: 'Fictional-cors-password-123' });
+  const response = await jsonRequest('/auth/register', undefined, await fictionalRegistration(db,{ name, email: `${randomUUID()}@example.invalid`, password: 'Fictional-cors-password-123' }));
   assert.equal(response.status, 201, response.bytes.toString()); cors(response.headers);
   const cookie = response.headers['set-cookie']![0]!;
   assert.match(cookie, /HttpOnly/); assert.match(cookie, /SameSite=Lax/); assert.match(cookie, /Secure/);
@@ -108,9 +109,9 @@ async function bounded<T>(promise: Promise<T>): Promise<T> {
 }
 
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-cors-http-'));
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-cors-http-'));
   storage = new TrackingStorage(directory);
-  system = await buildApp({ db, storage, runtime, enableQueue: false,
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage, runtime, enableQueue: false,
     config: { ...base, databaseUrl: databaseUrl.toString(), storageDir: directory, allowedOrigins: new Set([origin, secondOrigin]), secureCookies: true } });
   await system.app.listen({ host: '127.0.0.1', port: 0 }); port = (system.app.server.address() as AddressInfo).port;
   alice = await register('Fictional CORS owner'); bob = await register('Fictional CORS other owner');

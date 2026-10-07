@@ -201,7 +201,10 @@ export interface ChatInput {
   persona?: string; memories?: string[]; attachments?: ProviderAttachment[];
 }
 export interface ProviderAttachment { name: string; mime: string; bytes: Uint8Array; }
-export interface ChatContext {
+/** Server-only request admission. A launch must synchronously start the request with the supplied signal. */
+export type ProviderRequestAdmission = <T>(launch: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal) => Promise<T>;
+export interface ProviderRequestContext { signal?: AbortSignal; requestAdmission?: ProviderRequestAdmission; }
+export interface ChatContext extends ProviderRequestContext {
   signal?: AbortSignal;
   tools?: ToolDefinition[];
   executeTool?: (name: string, input: Record<string, unknown>) => Promise<unknown>;
@@ -229,6 +232,7 @@ export interface ModelRelayRequest {
 }
 export interface JobExecutionContext {
   jobId: string; userId: string; signal?: AbortSignal;
+  requestAdmission?: ProviderRequestAdmission;
   workspaceDirectory: string;
   previousProviderTaskId?: string;
   readAttachment?: (id: string) => Promise<ProviderAttachment>;
@@ -248,7 +252,7 @@ export interface JobExecutionResult { artifacts: GeneratedArtifact[]; text?: str
 /** Omitted provider preserves the OpenAI default; an explicit provider must never fall back. */
 export interface VoiceSessionInput { provider?: string; model?: string; persona?: string; voice?: string; turnTaking?: 'patient' | 'balanced' | 'quick'; }
 export interface SpeechInput { provider?: string; text: string; voice?: string; model?: string; instructions?: string; }
-export interface TranscriptionContext { provider?: string; signal?: AbortSignal; }
+export interface TranscriptionContext extends ProviderRequestContext { provider?: string; }
 export interface VoiceSessionResult { clientSecret: string; model: string; endpoint: string; expiresAt?: number; inputTranscriptionEnabled?: boolean; }
 
 export interface PlatformProviderRuntime {
@@ -259,9 +263,9 @@ export interface PlatformProviderRuntime {
   /** One actual provider request. Optional only for trusted legacy runtime fixtures. */
   streamModelStep?(input: ChatInput, context: ModelStepContext): AsyncGenerator<ModelStepEvent, ModelStepResult>;
   executeJob(input: CreateJobInput, context: JobExecutionContext): Promise<JobExecutionResult>;
-  createVoiceSession(input?: VoiceSessionInput, context?: { signal?: AbortSignal }): Promise<VoiceSessionResult>;
+  createVoiceSession(input?: VoiceSessionInput, context?: ProviderRequestContext): Promise<VoiceSessionResult>;
   transcribe(input: ProviderAttachment, context?: TranscriptionContext): Promise<{ text: string }>;
-  speech(input: SpeechInput, context?: {signal?:AbortSignal}): Promise<GeneratedArtifact>;
+  speech(input: SpeechInput, context?: ProviderRequestContext): Promise<GeneratedArtifact>;
 }
 export * from './plans.ts';
 export * from './goal-proposals.ts';
@@ -271,3 +275,4 @@ export * from './student-api.ts';
 
 export * from './agent-loop.ts';
 export * from './staff.ts';
+export * from './student-entry.ts';

@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -25,14 +26,14 @@ const runtime: PlatformProviderRuntime = {
   async transcribe() { throw new Error('No voice is used by this fixture.'); },
   async speech() { throw new Error('No voice is used by this fixture.'); },
 };
-const base=readConfig(),schema=`static_web_${randomUUID().replaceAll('-','')}`,url=new URL(base.databaseUrl);
+const base=readConfig({...process.env,PLATFORM_REQUIRE_INVITE:'1'}),schema=`static_web_${randomUUID().replaceAll('-','')}`,url=new URL(base.databaseUrl);
 url.searchParams.set('options',`-c search_path=${schema}`);
 const admin=new Database(base.databaseUrl),db=new Database(url.toString());
 let schemaCreated=false;
 let directory: string, root: string, port: number, system: Awaited<ReturnType<typeof buildApp>>;
 before(async () => {
   assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only a local test database is allowed.');
-  await admin.query(`CREATE SCHEMA ${schema}`);schemaCreated=true;await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`);schemaCreated=true;await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-static-web-')); root = path.join(directory, 'web');
   await fs.mkdir(path.join(root, 'assets'), { recursive: true });
   await Promise.all([
@@ -43,7 +44,7 @@ before(async () => {
   ]);
   await fs.symlink(path.join(directory, 'outside.js'), path.join(root, 'linked.js'));
   await fs.symlink(directory, path.join(root, 'linked-directory'));
-  system = await buildApp({ db, config: {...base,databaseUrl:url.toString(),webStaticDir:root,storageDir:path.join(directory,'blobs'),
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, config: {...base,databaseUrl:url.toString(),webStaticDir:root,storageDir:path.join(directory,'blobs'),
     s3:undefined,allowedOrigins:new Set([origin])}, runtime, enableQueue: false });
   // The actual router includes shared public-capability limits, isolated in this fixture's schema.
   await system.app.listen({ host: '127.0.0.1', port: 0 }); port = (system.app.server.address() as AddressInfo).port;
@@ -111,7 +112,7 @@ test('traversal, dotfiles, symlinks, sourcemaps and case aliases cannot expose f
 });
 
 test('static serving is opt-in and an invalid or symlinked build index fails startup', async () => {
-  const noWeb = await buildApp({ config: readConfig({}), runtime, enableQueue: false });
+  const noWeb = await buildApp({legalBundle:FICTIONAL_LEGAL, config: readConfig({PLATFORM_REQUIRE_INVITE:'1'}), runtime, enableQueue: false });
   try { const response = await noWeb.app.inject({ url: '/', headers: { accept: 'text/html' } }); assert.equal(response.statusCode, 404); assert.match(String(response.headers['content-type']), /application\/json/); }
   finally { await noWeb.app.close(); }
   const invalid = path.join(directory, 'invalid'); await fs.mkdir(invalid); await fs.symlink(path.join(root, 'index.html'), path.join(invalid, 'index.html'));
@@ -127,7 +128,7 @@ test('the validated hosted port and loopback host drive the actual HTTP listener
   const probe = createServer(); await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve));
   const selectedPort = (probe.address() as AddressInfo).port;
   await new Promise<void>((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
-  const config = readConfig({ PLATFORM_HOST: '127.0.0.1', PORT: String(selectedPort) });
+  const config = readConfig({ PLATFORM_HOST: '127.0.0.1', PORT: String(selectedPort) ,PLATFORM_REQUIRE_INVITE:'1'});
   try {
     await app.listen({ host: config.host, port: config.port });
     assert.equal((app.server.address() as AddressInfo).port, selectedPort);

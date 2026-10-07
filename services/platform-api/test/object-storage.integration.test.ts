@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,7 +42,7 @@ class StreamingOnlyS3 extends S3BlobStorage {
 test('real local S3 storage and private HTTP Range delivery', {skip:!enabled,timeout:45_000},async t=>{
   const endpoint=localUrl(process.env.PLATFORM_TEST_OBJECT_STORAGE_ENDPOINT??'http://127.0.0.1:19000',['http:']);
   assert(!endpoint.username&&!endpoint.password&&!endpoint.search&&!endpoint.hash&&(endpoint.pathname==='/'||endpoint.pathname===''),'Use a bare local fixture endpoint.');
-  const base=readConfig({PLATFORM_DATABASE_URL:process.env.PLATFORM_DATABASE_URL,PLATFORM_ALLOWED_ORIGINS:origin});
+  const base=readConfig({PLATFORM_DATABASE_URL:process.env.PLATFORM_DATABASE_URL,PLATFORM_ALLOWED_ORIGINS:origin,PLATFORM_REQUIRE_INVITE:'1'});
   localUrl(base.databaseUrl,['postgres:','postgresql:']);
   const bucket=`companion-fixture-${randomUUID()}`,schema=`object_stream_${randomUUID().replaceAll('-','')}`;
   const connection=new URL(base.databaseUrl);connection.searchParams.set('options',`-c search_path=${schema}`);
@@ -53,13 +54,13 @@ test('real local S3 storage and private HTTP Range delivery', {skip:!enabled,tim
   const runtime:PlatformProviderRuntime={capabilities:()=>[],streamChat:async function*(){throw new Error('No model use');},executeJob:forbidden,createVoiceSession:forbidden,transcribe:forbidden,speech:forbidden};
   const exchange=(route:string,actor?:Actor,options:{method?:string;headers?:Record<string,string>;body?:string}={})=>request(new URL(prefix+route,appOrigin),{...options,headers:{...(actor?{cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id}:{}),...options.headers}});
   const register=async(name:string):Promise<Actor>=>{
-    const response=await exchange('/auth/register',undefined,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({name,email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'})});
+    const response=await exchange('/auth/register',undefined,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify(await fictionalRegistration(db,{name,email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'}))});
     assert.equal(response.status,201);const payload=JSON.parse(response.bytes.toString());return {id:payload.user.id,cookie:response.headers['set-cookie']![0]!.split(';')[0]!};
   };
   try{
     await sdk.send(new CreateBucketCommand({Bucket:bucket}));createdBucket=true;
-    await admin.query(`CREATE SCHEMA ${schema}`);createdSchema=true;await db.migrate();
-    system=await buildApp({config:{...base,databaseUrl:connection.toString(),s3},db,storage,runtime,enableQueue:false});
+    await admin.query(`CREATE SCHEMA ${schema}`);createdSchema=true;await db.migrate(); await seedFictionalActiveLegal(db);
+    system=await buildApp({legalBundle:FICTIONAL_LEGAL,config:{...base,databaseUrl:connection.toString(),s3},db,storage,runtime,enableQueue:false});
     await system.app.listen({host:'127.0.0.1',port:0});appOrigin=new URL(`http://127.0.0.1:${(system.app.server.address() as AddressInfo).port}`);
     const alice=await register('Fictional object owner'),bob=await register('Fictional second account');
     const uploadId=randomUUID(),artifactId=randomUUID(),jobId=randomUUID(),key=randomUUID();

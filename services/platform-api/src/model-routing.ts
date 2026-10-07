@@ -66,3 +66,7 @@ export function modelRouteAvailability(config: RouteConfig, runtime: RouteRuntim
   const statuses = catalogue(runtime);
   return Object.fromEntries(MODEL_ROUTE_PURPOSES.map(purpose => [purpose, !!selectedRoute(config, statuses, purpose)])) as Record<ModelRoutePurpose, boolean>;
 }
+
+/** The single platform model admission facade; provider adapters remain database-free. */
+export { ModelConsent, requireModelConsent, requireRequestAdmission } from './model-consent.ts';
+export type { ModelJobClaim } from './model-consent.ts';

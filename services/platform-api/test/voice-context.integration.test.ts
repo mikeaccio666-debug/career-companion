@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -11,7 +12,7 @@ import { Database } from '../src/database.ts';
 import { readVoiceContext } from '../src/voice-context.ts';
 import { authorizeFixedSession, tokenHash } from '../src/auth.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'voice-fixture', PLATFORM_AGENT_PROVIDER: 'voice-fixture', PLATFORM_REALTIME_PROVIDER: 'voice-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'voice-fixture', PLATFORM_SPEECH_PROVIDER: 'voice-fixture' });
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'voice-fixture', PLATFORM_AGENT_PROVIDER: 'voice-fixture', PLATFORM_REALTIME_PROVIDER: 'voice-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'voice-fixture', PLATFORM_SPEECH_PROVIDER: 'voice-fixture' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema = `voice_context_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl);
 const url = new URL(base.databaseUrl); url.searchParams.set('options', `-c search_path=${schema}`);
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(yes => { resolve = yes; }); return { promise, resolve }; }
@@ -44,9 +45,9 @@ const runtime: PlatformProviderRuntime = {
 let system: Awaited<ReturnType<typeof buildApp>>, directory: string, registrations = 0;
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'This write fixture requires a loopback database.');
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-voice-context-'));
-  system = await buildApp({ db, config: { ...base, databaseUrl: url.toString(), storageDir: directory }, runtime, enableQueue: false });
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, config: { ...base, databaseUrl: url.toString(), storageDir: directory }, runtime, enableQueue: false });
 });
 after(async () => {
   issuerGate?.release.resolve(); persistedGate?.release.resolve(); accountGate?.release.resolve();
@@ -56,7 +57,7 @@ after(async () => {
 interface Actor { id: string; cookie: string; ip: string; }
 async function register(): Promise<Actor> {
   const ip = `127.7.0.${++registrations}`;
-  const response = await system.app.inject({ method: 'POST', url: prefix + '/auth/register', remoteAddress: ip, headers: { origin }, payload: { name: 'Synthetic voice-context tester', email: `${randomUUID()}@example.invalid`, password: 'Fictional-voice-context-2026' } });
+  const response = await system.app.inject({ method: 'POST', url: prefix + '/auth/register', remoteAddress: ip, headers: { origin }, payload: await fictionalRegistration(db,{ name: 'Synthetic voice-context tester', email: `${randomUUID()}@example.invalid`, password: 'Fictional-voice-context-2026' }) });
   assert.equal(response.statusCode, 201, response.body);
   return { id: response.json().user.id, cookie: String(response.headers['set-cookie']).split(';')[0], ip };
 }

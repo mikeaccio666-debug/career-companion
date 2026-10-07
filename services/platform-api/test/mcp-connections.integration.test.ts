@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER, MCP_RESULT_MAX_BYTES } from '@companion/platform-contracts';
 import type { ChatInput, PlatformProviderRuntime } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
@@ -16,7 +17,7 @@ import { jobDefinitionHash, processJob, recoverInterrupted } from '../src/jobs.t
 import { mcpSchemaHash, type McpCatalogConfig } from '../src/mcp-config.ts';
 import type { McpDiscoveredTool, McpToolResult, McpTransport } from '../src/mcp-transport-port.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' });
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema = `mcp_call_test_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -71,7 +72,7 @@ function exchange(route: string, actor?: Actor, options: { method?: string; body
   });
 }
 async function actor(): Promise<Actor> {
-  const response = await exchange('/auth/register', undefined, { body: { name: 'Fictional MCP reviewer', email: `${randomUUID()}@example.invalid`, password: 'Fictional-password-123' } });
+  const response = await exchange('/auth/register', undefined, { body: await fictionalRegistration(db,{ name: 'Fictional MCP reviewer', email: `${randomUUID()}@example.invalid`, password: 'Fictional-password-123' }) });
   assert.equal(response.status, 201, response.body); return { id: JSON.parse(response.body).user.id, cookie: response.headers['set-cookie']![0].split(';')[0] };
 }
 async function connected(owner?: Actor) {
@@ -102,8 +103,8 @@ async function waitFor(condition: () => boolean): Promise<void> {
   while (!condition()) { if (Date.now() > deadline) throw new Error('The fictional MCP discovery did not reach its gate.'); await new Promise(resolve => setTimeout(resolve, 5)); }
 }
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-call-fixture-')); storage = new Storage(directory);
-  system = await buildApp({ db, storage, config: { ...base, databaseUrl: url.toString(), storageDir: directory, accountEmail: undefined, requireVerifiedEmail: false, mcp: config },
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-call-fixture-')); storage = new Storage(directory);
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage, config: { ...base, databaseUrl: url.toString(), storageDir: directory, accountEmail: undefined, requireVerifiedEmail: false, mcp: config },
     runtime, mcp: transport, enableQueue: false, requestLimits: { policies: { api: { max: 2000, windowSeconds: 60 }, control: { max: 2000, windowSeconds: 60 }, 'auth-register': { max: 1000, windowSeconds: 60 } } } });
   await system.app.listen({ host: '127.0.0.1', port: 0 }); port = (system.app.server.address() as import('node:net').AddressInfo).port;
 });

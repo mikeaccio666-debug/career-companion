@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import { ApiError } from '../src/errors.ts';
 import { KnowledgeSources } from '../src/knowledge-sources.ts';
 import { LocalBlobStorage } from '../src/storage.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai' }), schema = `knowledge_${randomUUID().replaceAll('-', '')}`;
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `knowledge_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl); url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString()), service = new KnowledgeSources(db);
 type Actor = { id: string; cookie: string };
@@ -59,7 +60,7 @@ function exchange(route: string, actor?: Actor, options: { method?: string; body
   });
 }
 async function register(): Promise<Actor> {
-  const result = await exchange('/auth/register', undefined, { method: 'POST', body: { name: 'Synthetic knowledge reader', email: `${randomUUID()}@example.invalid`, password: 'Synthetic-password-123' } });
+  const result = await exchange('/auth/register', undefined, { method: 'POST', body: await fictionalRegistration(db,{ name: 'Synthetic knowledge reader', email: `${randomUUID()}@example.invalid`, password: 'Synthetic-password-123' }) });
   assert.equal(result.status, 201); return { id: JSON.parse(result.body).user.id, cookie: result.headers['set-cookie']![0]!.split(';')[0]! };
 }
 async function source(actor = alice, text = content, extra = {}): Promise<KnowledgeSource> {
@@ -77,8 +78,8 @@ async function chat(mode: typeof agentMode): Promise<string> {
   assert.equal(result.status, 200); return result.body;
 }
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'knowledge-fixture-'));
-  system = await buildApp({ db, storage: new LocalBlobStorage(directory), config: { ...base, databaseUrl: url.toString(), storageDir: directory, requireVerifiedEmail: false }, runtime, enableQueue: false });
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'knowledge-fixture-'));
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage: new LocalBlobStorage(directory), config: { ...base, databaseUrl: url.toString(), storageDir: directory, requireVerifiedEmail: false }, runtime, enableQueue: false });
   await system.app.listen({ host: '127.0.0.1', port: 0 }); port = (system.app.server.address() as import('node:net').AddressInfo).port;
   alice = await register(); bob = await register(); agentSource = await source(); foreignSource = await source(bob, 'Private second-user notes, never disclosed.');
 });

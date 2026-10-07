@@ -13,6 +13,7 @@ export interface PlatformConfig {
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
+  requireInvite: boolean; legalBundlePath?: string;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
   exposeProviderDetails: boolean;
@@ -78,6 +79,11 @@ function modelRoutes(env: NodeJS.ProcessEnv): PlatformConfig['modelRoutes'] {
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig {
   const production = env.NODE_ENV === 'production';
+  if (env.PLATFORM_REQUIRE_INVITE !== undefined && !['0','1'].includes(env.PLATFORM_REQUIRE_INVITE)) throw new Error('PLATFORM_REQUIRE_INVITE must be 0 or 1');
+  if (production && env.PLATFORM_REQUIRE_INVITE === '0') throw new Error('Production requires invitations');
+  const requireInvite = production || env.PLATFORM_REQUIRE_INVITE !== '0';
+  if (env.PLATFORM_LEGAL_BUNDLE_FILE !== undefined && (!env.PLATFORM_LEGAL_BUNDLE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_LEGAL_BUNDLE_FILE))) throw new Error('PLATFORM_LEGAL_BUNDLE_FILE must name a server-controlled file');
+  const legalBundlePath = env.PLATFORM_LEGAL_BUNDLE_FILE === undefined ? undefined : path.resolve(workspaceRoot,env.PLATFORM_LEGAL_BUNDLE_FILE);
   if (env.PLATFORM_ENABLE_WORKBENCH !== undefined && !['0', '1'].includes(env.PLATFORM_ENABLE_WORKBENCH)) {
     throw new Error('PLATFORM_ENABLE_WORKBENCH must be 0 or 1');
   }
@@ -139,7 +145,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
-    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, workbenchEnabled,
+    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, workbenchEnabled,
     modelRoutes: configuredModelRoutes, exposeProviderDetails,
     queueName, s3, mcp: readMcpConfig(env),
   };

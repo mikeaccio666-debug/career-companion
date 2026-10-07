@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +17,7 @@ import { Database } from '../src/database.ts';
 // Real HTTP, authentication and database fixtures. Every actor connects from the
 // same loopback address; only verified sessions distinguish account limits.
 const prefix = '/api/platform', origin = 'https://limits-fixture.invalid';
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'limits-fixture', PLATFORM_AGENT_PROVIDER: 'limits-fixture', PLATFORM_REALTIME_PROVIDER: 'limits-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'limits-fixture', PLATFORM_SPEECH_PROVIDER: 'limits-fixture' }), schema = `request_limits_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'limits-fixture', PLATFORM_AGENT_PROVIDER: 'limits-fixture', PLATFORM_REALTIME_PROVIDER: 'limits-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'limits-fixture', PLATFORM_SPEECH_PROVIDER: 'limits-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `request_limits_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const databases = [new Database(url.toString()), new Database(url.toString())];
@@ -82,7 +83,7 @@ function cookie(response: Response) {
 }
 async function register(instance = 0): Promise<Actor> {
   const email = `limits-${randomUUID()}@example.invalid`;
-  const response = await post(instance, '/auth/register', undefined, { name: 'Fictional limiter tester', email, password: 'Fictional-limiter-password-2026' });
+  const response = await post(instance, '/auth/register', undefined, await fictionalRegistration(databases[0]!,{ name: 'Fictional limiter tester', email, password: 'Fictional-limiter-password-2026' }));
   assert.equal(response.status, 201, response.bytes.toString()); return { id: json(response).user.id, email, cookie: cookie(response) };
 }
 async function login(actor: Actor, instance = 1): Promise<Actor> {
@@ -122,7 +123,7 @@ async function exhaustApi(actor: Actor) {
 }
 
 async function start(instance: number, limits = requestLimits) {
-  systems[instance] = await buildApp({ db: databases[instance], runtime, enableQueue: false, requestLimits: limits,
+  systems[instance] = await buildApp({legalBundle:FICTIONAL_LEGAL, db: databases[instance], runtime, enableQueue: false, requestLimits: limits,
     config: { ...base, databaseUrl: url.toString(), storageDir: directory, s3: undefined, webStaticDir: undefined,
       allowedOrigins: new Set([origin]), secureCookies: true } });
   await systems[instance]!.app.listen({ host: '127.0.0.1', port: 0 });
@@ -130,7 +131,7 @@ async function start(instance: number, limits = requestLimits) {
 }
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'Only a local test database is allowed.');
-  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await databases[0]!.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await databases[0]!.migrate(); await seedFictionalActiveLegal(databases[0]!);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-request-limits-'));
   await start(0); await start(1);
 });
@@ -358,12 +359,12 @@ test('anonymous public, login and registration quotas share the socket identity 
   limited(await post(1, '/auth/login', actor, { email: actor.email, password: 'Fictional-limiter-password-2026' }, spoof(5)));
 
   for (const instance of [0, 1]) {
-    const response = await post(instance, '/auth/register', undefined, { name: 'Fictional forwarded registration',
-      email: `limits-forwarded-${randomUUID()}@example.invalid`, password: 'Fictional-limiter-password-2026' }, spoof(instance + 6));
+    const response = await post(instance, '/auth/register', undefined, await fictionalRegistration(databases[0]!,{ name: 'Fictional forwarded registration',
+      email: `limits-forwarded-${randomUUID()}@example.invalid`, password: 'Fictional-limiter-password-2026' }), spoof(instance + 6));
     assert.equal(response.status, 201, response.bytes.toString()); cookie(response);
   }
-  limited(await post(0, '/auth/register', undefined, { name: 'Fictional rejected registration',
-    email: `limits-forwarded-${randomUUID()}@example.invalid`, password: 'Fictional-limiter-password-2026' }, spoof(8)));
+  limited(await post(0, '/auth/register', undefined, await fictionalRegistration(databases[0]!,{ name: 'Fictional rejected registration',
+    email: `limits-forwarded-${randomUUID()}@example.invalid`, password: 'Fictional-limiter-password-2026' }), spoof(8)));
   assert.equal((await databases[0]!.query('SELECT count(*)::integer AS n FROM platform_users')).rows[0].n, users + 2);
   const windows = await databases[0]!.query("SELECT subject_key,scope,request_count FROM platform_request_limits WHERE subject_type='ip' ORDER BY scope");
   assert.deepEqual(windows.rows.map(row => ({ scope: row.scope, request_count: row.request_count })), [

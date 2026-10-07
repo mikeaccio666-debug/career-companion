@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +14,7 @@ import { accountUsage, chatAccounting } from '../src/chat-usage.ts';
 import { acquireRuntimeLease, recoverStaleStreams } from '../src/runtime-leases.ts';
 
 const prefix = '/api/platform', origin = 'http://localhost:4321';
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'usage-fixture', PLATFORM_AGENT_PROVIDER: 'usage-fixture' }), schema = `chat_usage_test_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'usage-fixture', PLATFORM_AGENT_PROVIDER: 'usage-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `chat_usage_test_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -57,15 +58,15 @@ const runtime: PlatformProviderRuntime = {
 };
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'Only a local test database is allowed.');
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-chat-usage-'));
-  system = await buildApp({ db, runtime, enableQueue: false, config: { ...base, databaseUrl: url.toString(), storageDir: directory } });
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, runtime, enableQueue: false, config: { ...base, databaseUrl: url.toString(), storageDir: directory } });
   httpOrigin = await system.app.listen({ host: '127.0.0.1', port: 0 });
 });
 after(async () => { await system?.app.close(); await db.close(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.close(); if (directory) await fs.rm(directory, { recursive: true, force: true }); });
 async function register() {
   const response = await system.app.inject({ method: 'POST', url: prefix + '/auth/register', remoteAddress: `127.0.0.${++registrations}`,
-    headers: { origin }, payload: { name: 'Synthetic usage tester', email: `${randomUUID()}@example.invalid`, password: 'Synthetic-usage-password-2026' } });
+    headers: { origin }, payload: await fictionalRegistration(db,{ name: 'Synthetic usage tester', email: `${randomUUID()}@example.invalid`, password: 'Synthetic-usage-password-2026' }) });
   assert.equal(response.statusCode, 201, response.body);
   return { userId: response.json().user.id as string, cookie: String(response.headers['set-cookie']).split(';')[0] };
 }
