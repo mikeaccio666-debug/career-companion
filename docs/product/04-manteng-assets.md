@@ -1,6 +1,6 @@
 # 04 蔓藤资产如何变成体验
 
-> 状态：v2，依据共享产品简报 v3 与总编辑裁决｜日期：2026-10-06｜本文只交叉引用：分期 07；队员、工具白名单、待确认、交接包 03；流程 05；价格、订单、内推商业与法务 06；视觉 08；迁移 09；Discord 10；插件 11；声线 12。
+> 状态：v2，依据共享产品简报 v3 与总编辑裁决｜日期：2026-10-06｜本文只交叉引用：分期 07；队员、工具白名单、待确认、交接包 03；技能与知识层 15；流程 05；价格、订单、内推商业与法务 06；视觉 08；迁移 09；Discord 10；插件 11；声线 12。
 > 代码以 `965db09` 之后的 main 为准（MCP 按 `1c26b3a`），引用写文件和函数名。示例用户林舟（01 Persona A），「墨」是他给主理人起的名字。标「假设」的数字，验证方法见第 9 节。
 
 ## 这份文档回答什么问题
@@ -17,7 +17,7 @@
 - 没有书面授权的内容不发布（`license_id` 必填，学员来源另加 `consent_id`）。内推评估在法务审核通过前线上线下都不提供（D6）。
 - 篇数、比例和出处标签只由服务端按工具结果和 citation 渲染，模型不能自己写「蔓藤面经」或频率（D2）。
 - 付费推荐全部按 06 §7：只由主理人在对话里提出；信件卡片、晨报、三件事和作战简报里没有付费内容。
-- 代码上新建与 014 私有资料库并列的组织共享库和 `OrgKnowledge`，复用版本与墓碑语义；`CareerKnowledgePort` 用一条「知识访问引用」接上 `prepareCareerRun`。
+- 代码上新建与 014 私有资料库并列的组织共享库和 `OrgKnowledge`，复用版本与墓碑语义；主理人和队员经 agent 的知识层检索、经技能加载蔓藤资产（15 §4.1–4.2）；`CareerKnowledgePort` 用一条「知识访问引用」接上 `prepareCareerRun`。
 - 授权语料仍导入组织库；导师可约时段、课程目录、合作机会、导师网络这类实时数据，P1b 起可由蔓藤以 MCP 只读交付，由我方核授权、渲染出处（4.12）。
 
 ---
@@ -44,16 +44,16 @@
 
 | # | 资产 | 主要使用者 | 关键时刻 | 界面 | 出处标签 | 分期（07） |
 |---|---|---|---|---|---|---|
-| 1 | 面经 | 面、投；主理人转述 | 作战简报；按公司练习；被拒后复盘 | 小组任务卡、旅程面试详情、面试间 | 蔓藤面经 · 已去标识化 | P1a（P1-4）；贡献 P1b（P1-9） |
+| 1 | 面经 | 面、投；主理人引用 | 作战简报；按公司练习；被拒后复盘 | 主线（面的转发卡）、旅程面试详情、面试间 | 蔓藤面经 · 已去标识化 | P1a（P1-4）；贡献 P1b（P1-9） |
 | 2 | 题库 | 面、前；教（P1b） | 面试间；故事库；三件事「练一道」 | 面试间、今天、旅程 → 故事库 | 蔓藤题库 | P0（P0-11） |
-| 3 | 学员简历 | 前、投；规（P1b） | 简历版本待确认；方向比较 | 小组、待确认、旅程 | 蔓藤写法样本 · 已改写；蔓藤学员统计 | P1b（P1-9）；校准集 P2 |
+| 3 | 学员简历 | 前、投；规（P1b） | 简历版本待确认；方向比较 | 对话、待确认、旅程 | 蔓藤写法样本 · 已改写；蔓藤学员统计 | P1b（P1-9）；校准集 P2 |
 | 4 | 导师方法论 | 全队（按发言者注入） | 所有时刻，在「看依据」里 | 所有界面 | 蔓藤方法 · v{n} | P0（P0-11，第一批 5 张）；其余随队员上线 |
 | 5 | 真人导师一对一 | 主理人提出；前起草交接包（P1-10） | 对话中（06 T1–T7） | 左栏「真人与社区」、我、旅程；待确认（P1-10） | 真人 · 蔓藤导师 | P0 意向表（P0-12）；预约与交接 P1b（P1-10） |
 | 6 | 真人导师内推 | — | — | — | — | 法务通过前不提供（D6）；之后不早于 P1b |
 | 7 | 真人导师网络 | 主理人；脉（P2） | 用户问「谁能回答这个」 | 左栏「真人与社区」、我 | 蔓藤导师网络 | P1b（P1-9）；Discord 答疑 P2 |
 | 8 | 职业规划师话术 | 主理人；规（P1b） | 情绪类、咨询类时刻 | 不展示；来源在隐私说明里披露 | 无 | P0（P0-11，对话模式卡） |
-| 9 | 小企业内推资源 | 投、主理人 | 机会卡 | 今天、小组、旅程 | 蔓藤合作企业 · 书面说明 {yyyy-mm} | P1b（P1-9） |
-| 10 | AI 课程 | 教（P1b） | 三件事只放 `included`；`paid` 只在对话中按 06 T8 | 今天、小组、旅程 | 蔓藤课程 | P1b（P1-7）；转写稿 P2 |
+| 9 | 小企业内推资源 | 投、主理人 | 机会卡 | 今天、主线、旅程 | 蔓藤合作企业 · 书面说明 {yyyy-mm} | P1b（P1-9） |
+| 10 | AI 课程 | 教（P1b） | 三件事只放 `included`；`paid` 只在对话中按 06 T8 | 今天、对话、旅程 | 蔓藤课程 | P1b（P1-7）；转写稿 P2 |
 
 另有支撑规划和飞轮的**蔓藤历年学员投递与结果数据**，见 3.3、第 5 节。
 
@@ -90,7 +90,7 @@
 - **面**：作战简报讲「这家常考什么」；面试间按面经出题和追问。
 - **投**：材料包读「这家看重什么」（如「HM 很在意 on-call 经验」），提醒用户**有据地**强调，不编造。
 - **主理人**：晨报一句带过「周四 Acme Pay 的 VO，面已经备好了作战简报」，篇数由服务端填入。
-- **被拒之后**（P1-5）：满 24 小时后主理人在晨报里提一次复盘（可选），用户接受后面入场；只描述考点和难度，不给通过率。
+- **被拒之后**（P1-5）：满 24 小时后主理人在晨报里提一次复盘（可选），用户接受后由面的转发卡带进面的单聊；只描述考点和难度，不给通过率。
 
 **用户感知**（任务卡，样式见 08）
 
@@ -150,7 +150,7 @@
 
 **质量控制**：抽取字段（工具辅助加人工核对）→ 蔓藤内容审核员发布，编辑与发布不能是同一人；自动检查字段完整、受控词表、PII（邮箱、电话、URL、人名表、学校表）、近似重复（`content_hash` 加相似度阈值）；命中反馈降权（5.1）；到 `valid_until` 自动 `retired`；更新频率（假设）招聘季（8–12 月、1–4 月）每两周、淡季每月。
 
-**风险**：小样本反推作者（`thin` 不显示比例；不足 3 篇按年合并）；公司主张保密（只存改写题意，通知后 48 小时内下架，假设）；内容过期（`valid_until`、「较旧」、命中反馈）；模型说「必考」或编造频率（数字只来自统计；D2 校验器；禁用短语配置，3.8）；批量抓取（每日全文配额、无导出接口、访问日志）。
+**风险**：小样本反推作者（`thin` 不显示比例；不足 3 篇按年合并）；公司主张保密（只存改写题意，通知后 48 小时内下架，假设）；过期（`valid_until`、「较旧」、命中反馈）；编造频率（数字只来自统计；D2 校验器；禁用短语，3.8）；批量抓取（全文配额、无导出、访问日志）。
 
 ### 3.2 题库（P0，P0-11）
 
@@ -208,7 +208,7 @@
 
 方法论整理成「方法卡」：带版本的结构化工作方法，不是长提示词（结构沿用 docs/career/product-research.md §4）。
 
-**字段**：`method_id`、`revision`；`title`；`author_id`、`reviewer_id`（都是蔓藤导师，界面只显示「蔓藤导师」，本人同意才显示姓名）；`applies_to`（岗位家族、阶段、处境）；`prerequisites`（对应 `CareerInput`）；`steps[]`（目标、做法、允许的工具、产出）；`rubric_ref`；`stop_when`；`counterexamples`（**必填**，防止个案泛化）；`escalate_when`（何时建议真人，仍按 06 §7 放行）；`evidence_nature`（经验建议 / 公开数据 / 内部统计）；`bound_skills[]`（03 §3.1 的 skill id）；`bound_speakers[]`（03 §1.1 的 key：`companion` / `planner` / `guide` / `coach` / `interviewer` / `networker` / `applier`）；`license_id`、`effective_from`、`superseded_by`。
+**字段**：`method_id`、`revision`；`title`；`author_id`、`reviewer_id`（都是蔓藤导师，界面只显示「蔓藤导师」，本人同意才显示姓名）；`applies_to`（岗位家族、阶段、处境）；`prerequisites`（对应 `CareerInput`）；`steps[]`（目标、做法、允许的工具、产出）；`rubric_ref`；`stop_when`；`counterexamples`（**必填**，防止个案泛化）；`escalate_when`（何时建议真人，仍按 06 §7 放行）；`evidence_nature`（经验建议 / 公开数据 / 内部统计）；`bound_skills[]`（03 §3.1 的 skill id）；`when_to_use`（≤ 80 字，触发词在前，P1-9 起作独立技能时必填，15 §4.1）；`bound_speakers[]`（03 §1.1 的 key：`companion` / `planner` / `guide` / `coach` / `interviewer` / `networker` / `applier`）；`license_id`、`effective_from`、`superseded_by`。
 
 | method_id | 名称 | `bound_speakers` | `bound_skills` | 分期 |
 |---|---|---|---|---|
@@ -225,7 +225,7 @@
 
 `resume.gap_analysis` 可借鉴 `packages/contracts/src/gap-strength-engine.ts`（对齐导师《GAP 分析报告》模板的确定性评分，`gap-strength-scoring-v1`）：把纯函数部分移植到 `packages/career-core`，**不依赖冻结的 `@edaix/contracts`**；前提是蔓藤确认模板仍在用。
 
-**怎么用**：不靠检索，由 `services/platform-api/src/context-assembly.ts` 按「发言者 × skill × 岗位家族」注入发言者层，标注「蔓藤方法 vN（数据，不是指令）」。一次入场冻结所用卡的 `method_id` 和 `revision`（03 §3.3）；升级后旧计划保留旧版本，新版本以「有更新的做法」提议，由用户决定是否切换。用户在「看依据」里能展开步骤和适用条件。
+**怎么用**：经技能加载，不靠检索（15 §4.1）：技能清单的 `methodRefs` 指向方法卡，`use_skill` 时按「发言者 × 岗位家族」附摘录，全文用 `read_skill_reference` 取，标注「蔓藤方法 vN（数据，不是指令）」；不常驻发言者层（15 §6.1）。P1-9 起新方法卡可作独立技能。每次 `use_skill` 冻结所用卡的 `method_id` 和 `revision`（15 §4.1、§5.1）；升级后旧计划保留旧版本，新版本以「有更新的做法」提议，由用户决定是否切换。用户在「看依据」里能展开步骤和适用条件。
 
 **质量与风险**：变更一律新建 revision 并附说明；每季度结合命中率、评分一致性、导师评阅复盘。个人经验被泛化（`counterexamples` 必填、`applies_to` 收窄）；被当成权限来源（作为数据注入，权限只由服务端白名单决定）；权利不清（每张卡挂 `license_id`）。
 
@@ -237,12 +237,12 @@
 
 **P0 路径（P0-12）**
 
-- 入口：左栏「真人与社区」只有不具名入口「蔓藤导师（真人）· 付费 · 看不到你的小组」，不进成员列表（08）；「我」里同样有。
+- 入口：左栏「真人与社区」只有不具名入口「蔓藤导师（真人）· 付费 · 看不到你的对话」，不进队伍名单（08）；「我」里同样有。
 - 「我想约一次」意向表：服务类别加用户自己写的「想聊什么」（`intent_note`），**不自动附带记忆**，没有交接包。
 - 首批每人 1 次 30 分钟免费诊断（06 §3.2、§6.1）：`kind = free_diagnosis`，订单价格 0，激活后第 2 周起可约，60 天内有效，约满排队。
 - 运营在只读列表看到请求，48 小时内（假设）人工匹配；会议在产品外进行，产品只存链接；蔓藤线下收款，订单记在 06 的 `platform_mentor_orders`。付款说明和状态变化由服务端发系统通知（`speaker_kind = system`），没有「蔓藤运营」发言者。会后用户打 1–5 分（只内部可见）。
 
-**P1b 路径（P1-10）**：前起草交接包 `mentor_packet`，用户确认后寄出（`final_action = in_product`）。内容、默认勾选、`platform_mentor_grants` 和访问窗口见 03 §11.1–11.2；导师进挂在小组下的 `mentor_room`（03 §11.3）。交接包只含用户已确认的资料和勾选项，不得写入这之外的事实（D2）。会后评阅以「真人 · 蔓藤导师」信件卡片发进小组，写成长证据 `mentor_reviewed`（`CareerEvidence.mentorReview`：`reviewerId` 必须是登录的导师账号，`rubricRevision` 取方法卡版本）。
+**P1b 路径（P1-10）**：前起草交接包 `mentor_packet`，用户确认后寄出（`final_action = in_product`）。内容、默认勾选、`platform_mentor_grants` 和访问窗口见 03 §11.1–11.2；导师只进 `mentor_room` 房间（03 §11.3）。交接包只含用户已确认的资料和勾选项，不得写入这之外的事实（D2）。会后评阅以「真人 · 蔓藤导师」信件卡片发进主线，写成长证据 `mentor_reviewed`（`CareerEvidence.mentorReview`：`reviewerId` 必须是登录的导师账号，`rubricRevision` 取方法卡版本）。
 
 **履约状态**（`platform_mentor_sessions.status`；订单与退款在 06）
 
@@ -260,7 +260,7 @@ P1b： packet_drafting → packet_pending_confirm → requested → … → comp
 
 - 在一对一中不承诺、不讨论为该学员内推，不收取任何与内推相关的费用（D6）。
 - 身份与签证问题一律转学校 DSO 或移民律师。
-- 出现危机信号：按 02 §10.3 直接问「你现在安全吗？」，给 988（拨打或短信）、911、Crisis Text Line（短信 HOME 到 741741）和学校心理咨询中心；会后由运营「安全上报」给 `safety_reviewer`。不替学员联系任何人。
+- 出现危机信号：按 02 §10.3 直接问「你现在安全吗？」，给资源卡上的热线（988、911、741741、学校心理咨询中心）；会后由运营「安全上报」给 `safety_reviewer`。不替学员联系任何人。
 - 导师可见内容里不出现第三方联系人姓名（D9）。
 - 会议默认不录音，录音须双方同意；录音不得用作声线样本，12 的「不克隆任何真人」适用于蔓藤导师（D14）。
 - 签保密协议；不提供个人联系方式、不私下接单（合同约束）。
@@ -322,7 +322,7 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 
 **`considering_agency`**（用户在考虑报求职机构）：必须给免费路径（学校 career center、面和前的练习、公开资料），不得推荐蔓藤或任何付费服务；用户主动问蔓藤时按 06 T1。
 
-**怎么用**：在对应处境由上下文组装注入主理人或规的发言者层，作为「怎么做」的参考；不改变主理人性格（02），不会被检索后原样发给用户。原始咨询录音和聊天记录**不导入**，蔓藤只提供去标识化的文本或模板。
+**怎么用**：在对应处境由上下文组装放进主理人或规的本轮变化层（15 §6.1 第 9 层，不改发言者层），作为「怎么做」的参考；不改变主理人性格（02），不会被检索后原样发给用户。原始咨询录音和聊天记录**不导入**，蔓藤只提供去标识化的文本或模板。
 
 **质量控制**：02 的评测集加 20 个相关处境，其中 `considering_agency` 至少 5 个（检查给了免费路径、没推荐蔓藤）。禁用短语只有一份配置，放在 `packages/career-core`，用短语级规则（如「名额只剩」「最后 N 个」「错过就没」「再不……就」「保 offer」「包内推」「上岸率」「必考」「一定会考」「稳过」），只在主动消息、付费相关消息和模式卡里检查；销售类由 06 维护，界面文案类由 08，主理人表达类由 02，本文引用。监控「这像推销」反馈率；每半年复审。
 
@@ -357,7 +357,7 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 
 **落到代码**：映射为 `CareerJobObservation`，`source` 新增 `'partner'`；`sponsorship` 仍只由岗位原文决定；企业书面说明放进单独的 `authorizationStatements[]`（4.7）。用户材料只在确认后才转给企业，转递记录写进旅程，企业不能浏览用户库。
 
-**风险**：挂靠雇主、收费「实习」、无薪岗位对 OPT 用户后果严重（严格审核，机会卡有举报入口，被举报就暂停）；转递被做成服务端代投（只发邮件，不碰招聘系统）；以为转递等于录用（固定文案）；推荐费造成利益冲突（披露行、开关、排序）。
+**风险**：挂靠雇主、收费「实习」、无薪岗位对 OPT 用户后果严重（严格审核，有举报入口，被举报就暂停）；转递变成代投（只发邮件）；以为转递等于录用（固定文案）；推荐费的利益冲突（披露行、开关、排序）。
 
 ### 3.10 AI 课程（P1b，P1-7；转写稿检索 P2）
 
@@ -431,18 +431,18 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 
 | 工具 | 参数 | 返回 | 使用者与分期（白名单见 03 §2.7） |
 |---|---|---|---|
-| `search_org_knowledge` | `assetClass`、`query?`、`filters{company?, roleFamily?, stage?, questionType?, topics?, season?}`、`limit ≤ 8`、`includeOlder?` | 段落、引用、覆盖档位 | 面、前、投（P0）；教、规（P1b） |
+| `search_org_knowledge` | `assetClass`、`query?`、`filters{company?, roleFamily?, stage?, questionType?, topics?, season?}`、`limit ≤ 8`、`includeOlder?` | 段落、引用、覆盖档位 | 面、前、投（P0）；教、规，主理人只查课程（P1b） |
 | `read_org_knowledge_passage` | `sourceId`、`revision`、`passageId` | 单段；版本变化或撤回时返回安全错误 | 同上 |
 | `summarize_interview_coverage` | `company`、`roleFamily` | **确定性统计**：篇数、半年范围、各考点 n/m、档位 | 面（P1-4） |
 | `find_mentors` | `need`、`roleFamily`、`language` | 匹配服务返回的导师 id 和公开字段；P1b 起可由蔓藤 MCP 只读提供（4.12） | 主理人、前（P1b）；脉（P2） |
 | `search_partner_opportunities` | `roleFamily`、`location?` | 合作机会；同上 | 投（P1b）；脉（P2） |
 
-现有 `search_knowledge` 保持只查私人库；方法卡和模式卡由上下文组装注入，不走检索。工具抽成对话轮次服务后按发言者挂载（03、09）。
+现有 `search_knowledge` 保持只查私人库；方法卡随技能加载、模式卡按处境注入，都不走检索。工具由能力目录按发言者 × 房间挂载，执行时再核（15 §4.7）。
 
 ### 4.5 中文检索
 
 - **P0**：只用结构化筛选（岗位家族、题型、难度），不做中文全文检索（07 P0-11）。
-- **阶段 A（P1a，P1-4，随面经）**：结构化筛选优先，文本只负责排序。入库时应用层生成检索词：拉丁文字按 `'simple'` 分词；连续汉字切成重叠两字词（「系统设计」→「系统」「统设」「设计」），写入同一个 `tsvector`；查询端同样切分，OR 召回，`ts_rank_cd` 排序。另维护中英受控标签与同义词表（「系统设计 ↔ system design」「行为面 ↔ behavioral」）。不需要新扩展或服务。私人库之后可同样升级，不在本期。
+- **阶段 A（P1a，P1-4，随面经）**：结构化筛选优先，文本只负责排序。入库时应用层生成检索词：拉丁文字按 `'simple'` 分词；连续汉字切成重叠两字词（「系统设计」→「系统」「统设」「设计」），写入同一个 `tsvector`；查询端同样切分，OR 召回，`ts_rank_cd` 排序。另维护中英受控标签与同义词表（「系统设计 ↔ system design」「行为面 ↔ behavioral」）。不需要新扩展或服务。私人库是否同样升级按 15 §4.2 的 30 条中文夹具决定（recall@5 < 0.8 时在 09 第 3C 步加同样的 `tsvector` 列）。
 - **阶段 B（评测不达标时）**：评估 trigram 扩展或向量、混合检索，选型由 09 定；embedding 仍是可选能力（docs/career/data-integrations.md）。
 - **评测集**：蔓藤审核员和我们写 120 条真实中英混合查询（如「Acme Pay new grad VO 考什么」「窗口函数 中等题」）并标注期望结果；recall@5 ≥ 0.8（假设，以 07 为准），跨权限返回为 0。
 
@@ -451,9 +451,9 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 - 新建 `services/platform-api/src/career-knowledge.ts` 实现 `CareerKnowledgePort`：同时查私人库和组织库，合并返回 `{text, citations}`。
 - `KnowledgeCitation` 新增可选 `scope?: 'private' | 'org'` 和 `assetClass?`，向后兼容（09 排期）。`updatedAt` 在界面显示为「收录于 2026-09」；面经发生时间看 `season`。
 - **prepare 闸门**：组织内容过不了 `ownerId` 校验，私人库与组织库各给一条引用又会 `ambiguous_input:knowledge`。**决定**：每次运行只构造**一条** `knowledge` 引用，代表「私人库 + 组织库批次」：`{input:'knowledge', id:'knowledge-access:<userId>', revision:<当前全局 publish_batch，尚无发布时为 1>, ownerId:<userId>, state:'current'}`，私人库不再单独给引用。
-- 有有效 entitlement 时，参与者记录的 `run`（03 §6.3）记 `orgScope:<audience_grants>` 和 `entitlementId`；没有 entitlement（不在首批、已到期）时引用仍为 `current`，只查私人库，`run` 记 `orgScope:'none'`，规（P1b）不会因此永远 blocked。
+- 有有效 entitlement 时，冻结记录 `platform_expert_runs`（03 §6.5）记 `org_scope:<audience_grants>` 和 `entitlement_id`；没有 entitlement（不在首批、已到期）时引用仍为 `current`，只查私人库，记 `org_scope = 'none'`，规（P1b）不会因此永远 blocked。
 - 运行中 entitlement 被撤销：该运行冻结的引用转为 `withdrawn`，重新 prepare 返回 blocked，之后的组织库读取返回 `NOT_ENTITLED`；下一次新运行按「没有 entitlement」构造。
-- 单元测试三条：私人库加组织库 → 一条引用、`ready_for_draft`；没有 entitlement → `ready_for_draft`、`orgScope:'none'`、不返回组织段落；entitlement 撤销 → 冻结引用 blocked、新运行只查私人库。
+- 单元测试三条：私人库加组织库 → 一条引用、`ready_for_draft`；没有 entitlement → `ready_for_draft`、`org_scope = 'none'`、不返回组织段落；entitlement 撤销 → 冻结引用 blocked、新运行只查私人库。
 
 ### 4.7 Sponsorship 与身份信息的来源边界
 
@@ -481,7 +481,7 @@ assessed_ready → mentor_deciding → referral_submitted | referral_not_possibl
 - 员工操作（发布、撤回、看交接包、改状态）写审计。员工看不到用户的私人库、记忆和对话；P1-10 起导师只看到用户确认寄出的交接包。
 - 发给商业模型供应商：`allowed_uses` 必须含 `model_context`，写进隐私说明；学员来源段落发送前再做一次 PII 扫描。
 - 撤回沿用墓碑语义；缓存键含 `revision` 和 `publish_batch`。
-- **Discord 与导师可见内容**：蔓藤内容全文不进 Discord 私信，只发摘要和「到网页查看」（如「Acme Pay 的作战简报已备好」）；交接包只在网页确认；不出现第三方联系人姓名（D9）。其余见 10。
+- **Discord 与导师可见内容**：蔓藤内容全文不进 Discord 私信，只发摘要和「到网页查看」；交接包只在网页确认；不出现第三方联系人姓名（D9）。其余见 10。
 
 ### 4.10 接口
 
@@ -532,7 +532,7 @@ MCP 接入（`docs/platform/mcp.md`）是专家读外部数据的唯一通道（
 3. **统计与配额**：覆盖档位要对全量面经确定性计数，`thin` 档防反推；每日全文配额和访问日志都在我方。远端给的统计只能标「该来源称」，不进档位。
 4. **回流与延迟**：命中反馈、纠错、贡献触达都挂在 `source_id` + `revision` 上；回流不经 MCP，仍按第 5 节。面试间同步出题要本地读取。
 
-走 MCP 的来源：目录条目登记 `orgId`、`licenseId`、`audience`，调用前在我方核 entitlement 和 `allowed_uses`（含 `retrieve`、`model_context`）；出站只发分配表列出的字段，不含学生个人信息；导师只返回本人同意公开的字段（3.7），不返回招聘联系人；结果存为私有结果（7 天，假设），不进组织库、不写 `sponsorship`（4.7），license 撤回后旧结果不可读。学生第一次用到时在小组里授权（03 §2.8）。
+走 MCP 的来源：目录条目登记 `orgId`、`licenseId`、`audience`，调用前在我方核 entitlement 和 `allowed_uses`（含 `retrieve`、`model_context`）；出站只发分配表列出的字段，不含学生个人信息；导师只返回本人同意公开的字段（3.7），不返回招聘联系人；结果存为私有结果（7 天，假设），不进组织库、不写 `sponsorship`（4.7），license 撤回后旧结果不可读。学生第一次用到时在要用该来源的队员单聊里授权（03 §2.8）。
 
 ---
 
@@ -653,6 +653,7 @@ applies_to: {role_families: [swe, ds], stages: [interview], situations: [behavio
 prerequisites: [project-facts]
 bound_skills: [evidence-story]
 bound_speakers: [guide]
+when_to_use: 用户要准备 behavioral、讲不出结果、想把一段经历存成故事时用
 evidence_nature: 经验建议
 escalate_when: [用户两次练习仍无法给出可量化结果, 涉及真实雇佣纠纷]
 ---
@@ -683,7 +684,7 @@ escalate_when: [用户两次练习仍无法给出可量化结果, 涉及真实�
 | 面经 | — | 导入（带 `consent_id`）、覆盖统计、作战简报（D2 渲染）、命中反馈（P1-4） | 用户贡献（P1-9） | 内部接口同步 |
 | 题库 | 导入、rubric、面试间与三件事（P0-10、P0-11） | 「我不同意」「这题有问题」（P1-4） | — | coding 参考解测试 |
 | 学员简历 | — | — | 写法样本、路径统计（P1-9；规 P1-6） | 校准集 |
-| 方法论 | 第一批 5 张，按发言者注入，冻结版本（P0-11） | `interview.battle_brief`（P1-4） | 第二批 3 张（P1-6、P1-7、P1-13）；升级时提议迁移 | `outreach.*`；gap 纯函数移植 |
+| 方法论 | 第一批 5 张，随技能加载，冻结版本（P0-11） | `interview.battle_brief`（P1-4） | 第二批 3 张（P1-6、P1-7、P1-13）；升级时提议迁移 | `outreach.*`；gap 纯函数移植 |
 | 一对一 | 入口、价格、意向表、免费诊断、只读列表（P0-12） | — | 交接包、预约、评阅回流、导师入 `mentor_room`（P1-10） | — |
 | 内推评估 | 不提供（D6） | 不提供 | 法务通过后开启（P1-10） | — |
 | 导师网络 | — | — | 目录、会议链接答疑、`find_mentors`（P1-9） | Discord 答疑、同期伙伴、脉 |
