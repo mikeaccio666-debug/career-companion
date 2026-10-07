@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApplyPlan } from '../src/engine';
+import { SIGNING_CONSENT_KINDS } from '../src/dict/signOnBehalf';
 import { createScanRoot } from '../src/scanRoot';
 import type { ApplyFieldKey, ApplyFormDescriptor } from '../src/contracts';
 
@@ -43,6 +44,7 @@ function plan(specs: readonly Spec[], options: { on?: boolean; signingDate?: str
   return buildApplyPlan(form(specs), (options.profile ?? PROFILE) as never, {
     fillEmptyOnly: options.fillEmptyOnly ?? true,
     capabilities: { 'sign-on-behalf': options.on === true },
+    signOnBehalfKinds: new Set(SIGNING_CONSENT_KINDS),
     ...(options.signingDate === undefined ? {} : { signingDate: options.signingDate }),
   } as never);
 }

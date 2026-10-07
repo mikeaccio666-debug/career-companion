@@ -1,13 +1,14 @@
-import { FULL_AI_LIMITS, fullAiManualField, type FullAiField, type FullAiLane } from '@edaix/contracts';
+import { FULL_AI_LIMITS, type FullAiField, type FullAiLane } from '@edaix/contracts';
 import type { ApplyErrorCode, ApplyFieldDescriptor, ApplyFormDescriptor, ApplyPlan } from '@edaix/apply-kernel/contracts';
 import type { AuditView } from '@edaix/apply-kernel/audit';
 import type { QuestionAnswer } from '@edaix/apply-kernel/engine';
 import type { GestureRoot, TrustedGestureProof } from '@edaix/apply-kernel/grant';
-import { describeQuestion, questionIdentity, type QuestionDescription } from '@edaix/apply-kernel/questions';
+import { describeQuestion, questionContextOf, questionIdentity, type QuestionDescription } from '@edaix/apply-kernel/questions';
 import { AI_TIMING_MAX_MARKS, parseDockAiStreamMessage, type AiAnswersRefusal, type AiFill, type AiTimingMark } from './aiAnswersIntent';
 import { hostFieldHasValue } from './dock/hostField';
 import type { KernelAiWrite, KernelFillAudit } from './kernelFiller';
 import { questionClaimKeyFor } from './questionClaimKey';
+import { requiresCurrentApplicationEvidence } from './answerMemoryReuse';
 
 /**
  * AI 代答（2026-09-23 负责人决定）的内容脚本那一半：挑题、组请求、把答案对回页面上的那一栏。
@@ -219,11 +220,7 @@ function isEmpty(field: ApplyFieldDescriptor): boolean {
 
 /** 旁边的说明文字：占位提示，与 aria-describedby 指向的那几句（「两三句话」「最多 500 字」一类）。 */
 function contextOf(element: Element): string {
-  const parts = [element.getAttribute('placeholder') ?? ''];
-  for (const id of (element.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)) {
-    parts.push(element.ownerDocument.getElementById(id)?.textContent ?? '');
-  }
-  return clean(parts.map((part) => clean(part, 600)).filter((part) => part !== '').join(' · '), 600);
+  return clean(questionContextOf(element), 600);
 }
 
 function maxLengthOf(element: Element): number | null {
@@ -264,7 +261,7 @@ export function selectAiLeftovers(plan: ApplyPlan, descriptor: ApplyFormDescript
     const context = contextOf(element);
     const autocomplete = clean(element.getAttribute('autocomplete') ?? '', 80);
     // 只能本人答的（工作授权、签证、EEO、年龄、同意、营销、签名、密码、验证码……）：与服务端同一个判据。
-    if (fullAiManualField({ label, context, autocomplete, options })) continue;
+    if (requiresCurrentApplicationEvidence(question, questionContextOf(element), autocomplete)) continue;
     if (!isEmpty(field)) continue;
     const id = `f${leftovers.length}`;
     const request: FullAiField = {

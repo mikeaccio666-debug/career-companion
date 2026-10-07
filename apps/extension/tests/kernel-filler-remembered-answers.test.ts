@@ -5,7 +5,7 @@ import { createBundledApplyPolicy } from '@edaix/apply-kernel/policy';
 import type { NeedsUserInputKind, ReceiptFieldOutcome } from '@edaix/contracts/draft';
 import type { ExecutionGrant, FillProgress } from '@edaix/agent-channel';
 import { scanCurrentPage } from '../lib/kernelScanner';
-import { fillFromGrant, questionClaimKeyFor } from '../lib/kernelFiller';
+import { fillFromGrant, questionClaimKeyFor, type KernelFillAudit } from '../lib/kernelFiller';
 import { installBundledApplyAdapters } from '@edaix/apply-kernel/bundledAdapters';
 
 // 识别路径的适配器表生产由后端 release 装配；单测不连后端，装随包内置那份。
@@ -84,6 +84,61 @@ async function whyKey(): Promise<string> {
 }
 
 describe('remembered answers in the Fill run', () => {
+  it.each(['granted', 'reuse-all'] as const)('%s：旧记忆 resolver 不接收没有加拿大记录的身份题，普通档案仍填写', async (mode) => {
+    const label = 'Are you legally authorized to work in the country where this job is based?';
+    document.body.innerHTML = `<form id="application-form">
+      <label for="first_name">First name*</label><input id="first_name" required />
+      <label for="auth">${label}</label><select id="auth" required><option value=""></option><option>Yes</option><option>No</option></select>
+    </form>`;
+    const { scan } = await scanCurrentPage(document, GH_LOC);
+    expect(scan).not.toBeNull();
+    const key = await questionClaimKeyFor({ text: label, controlType: 'SINGLE_CHOICE', optionTexts: ['Yes', 'No'] });
+    const asked: unknown[] = [];
+    const audits: KernelFillAudit[] = [];
+    const { progress, outcomes } = progressRecorder();
+    await fillFromGrant({
+      grant: grantFor(scan!.fieldKeys, mode === 'granted' ? [key] : []),
+      scan: scan!, profile: PROFILE, progress, policy: freshPolicy(),
+      jobRegionCode: 'CA',
+      workAuthorizations: [{ regionCode: 'US', authorizedToWork: 'YES', requiresSponsorship: 'YES' }],
+      ...(mode === 'reuse-all' ? { reuseRememberedAnswers: true } : {}),
+      resolveRememberedAnswers: async (questions) => {
+        asked.push(questions);
+        return questions.map((question) => ({ questionId: question.questionId, value: 'Yes' }));
+      },
+      onAudit: (audit) => audits.push(audit),
+    });
+    expect(asked).toEqual([]);
+    expect(document.querySelector<HTMLInputElement>('#first_name')!.value).toBe('Ada');
+    expect(document.querySelector<HTMLSelectElement>('#auth')!.value).toBe('');
+    expect(audits[0]!.questions.some((question) => question.text === label)).toBe(true);
+    expect(audits[0]!.prefills.size).toBe(0);
+    expect(outcomes.some((outcome) => outcome.ok && outcome.source === 'REMEMBERED_ANSWER')).toBe(false);
+  });
+
+  it.each([
+    'Explain your work authorization and visa status.',
+    'Applicants must be a U.S. person under export-control rules.',
+    'Applicants must hold a green card.',
+  ])('记忆入口也核对真实控件说明：%s', async (context) => {
+    mountForm();
+    document.querySelector('#why')!.setAttribute('placeholder', context);
+    const { scan } = await scanCurrentPage(document, GH_LOC);
+    const { progress } = progressRecorder();
+    let asked = 0;
+    await fillFromGrant({
+      grant: grantFor(scan!.fieldKeys, [await whyKey()]),
+      scan: scan!, profile: PROFILE, progress, policy: freshPolicy(),
+      resolveRememberedAnswers: async (questions) => {
+        asked += 1;
+        return questions.map((question) => ({ questionId: question.questionId, value: 'I am authorized.' }));
+      },
+    });
+    expect(asked).toBe(0);
+    expect(answerText()).toBe('');
+    expect(document.querySelector<HTMLInputElement>('#first_name')!.value).toBe('Ada');
+  });
+
   it('fills a granted remembered answer with the profile fields and names it in the receipt', async () => {
     mountForm();
     const { scan } = await scanCurrentPage(document, GH_LOC);

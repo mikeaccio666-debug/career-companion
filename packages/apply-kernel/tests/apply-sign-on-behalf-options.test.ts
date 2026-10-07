@@ -12,7 +12,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApplyPlan } from '../src/engine';
-import { SIGN_ON_BEHALF_COMBOBOX_ANSWERS } from '../src/dict/signOnBehalf';
+import { SIGNING_CONSENT_KINDS, SIGN_ON_BEHALF_COMBOBOX_ANSWERS } from '../src/dict/signOnBehalf';
 import { createScanRoot } from '../src/scanRoot';
 
 const ATTEST =
@@ -72,6 +72,7 @@ function plan(descriptor: unknown, on = true) {
   return buildApplyPlan(descriptor as never, {} as never, {
     fillEmptyOnly: true,
     capabilities: { 'sign-on-behalf': on },
+    signOnBehalfKinds: new Set(SIGNING_CONSENT_KINDS),
   } as never);
 }
 

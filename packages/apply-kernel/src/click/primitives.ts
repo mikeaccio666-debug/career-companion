@@ -38,6 +38,7 @@ import { collectClickFacts, type ClickFactsContext } from './facts.ts';
 import { checkActiveCapability, rowActionOfAuthority, type HostWriteAuthority, type WriteCapability } from '../grant.ts';
 import type { ApplyErrorCode, Result, ScanRoot, WriteTicket } from '../contracts.ts';
 import { captureScanRootObservationTargets, isTrustedScanRoot } from '../scanRoot.ts';
+import { evaluateHostVeto } from '../gate/hostVeto.ts';
 import {
   consumeFillOnlyHostWriteAuthority,
   type FillOnlyHostWriteAuthority,
@@ -54,6 +55,21 @@ type ClickEvaluator = (facts: ClickTargetFacts) => ClickPolicyDecision;
 interface ClickCapabilityPolicy {
   readonly enabled: boolean;
   readonly capabilities: Readonly<Record<WriteCapability, boolean>>;
+  readonly deniedHostSuffixes?: readonly string[];
+}
+
+/** Rules stay in hostVeto; this adapter reads the actual current target document. */
+function hostTargetStillAllowed(element: Element, deniedHostSuffixes: readonly string[] = []): boolean {
+  try {
+    const location = element.ownerDocument.location;
+    return location !== null && !evaluateHostVeto({
+      hostname: location.hostname,
+      pathname: location.pathname,
+      policy: { deniedHostSuffixes },
+    }).vetoed;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -185,7 +201,7 @@ function pointerTargetStillAllowed(
   if (!element.isConnected) return false;
   try {
     const fresh = recollectClickFacts(element, root, baseline, context);
-    return sameFacts(baseline, fresh) && evaluate(fresh).allowed;
+    return sameFacts(baseline, fresh) && evaluate(fresh).allowed && hostTargetStillAllowed(element);
   } catch {
     return false;
   }
@@ -256,6 +272,7 @@ export function clickHostTarget(input: ClickHostTargetInput): Result<void, Click
   // burns the authority the caller still needs for the rest of the run.
   if (!ticket.ok) return { ok: false, code: 'JOURNAL_UNAVAILABLE' };
   if (!policy.enabled) return { ok: false, code: 'POLICY_DISABLED' };
+  if (!hostTargetStillAllowed(element, policy.deniedHostSuffixes)) return { ok: false, code: 'POLICY_DISABLED' };
   const capability = capabilityFor(facts.kind);
   if (!policy.capabilities[capability]) {
     return { ok: false, code: 'CAPABILITY_DISABLED' };
@@ -363,6 +380,7 @@ export function activateAccountControl(input: ActivateAccountControlInput): Resu
   if (!evaluateClickTarget(facts).allowed) return { ok: false, code: 'CLICK_DENIED' };
   const click = (element as Partial<HTMLElement>).click;
   if (typeof click !== 'function') return { ok: false, code: 'CLICK_DENIED' };
+  if (!hostTargetStillAllowed(element, policy.deniedHostSuffixes)) return { ok: false, code: 'POLICY_DISABLED' };
   click.call(element);
   return { ok: true, value: undefined };
 }
@@ -544,8 +562,13 @@ export function activateReviewedChoiceGroup(
     ) return { ok: false, code: 'CLICK_DENIED' };
 
     let owned = false;
+    let hostAllowed = true;
     try {
       owned = input.withOwnership(activation.element, () => {
+        if (!hostTargetStillAllowed(activation.element)) {
+          hostAllowed = false;
+          return;
+        }
         // 全仓唯一一处不取消默认动作的宿主点击。理由见本函数头部。
         activation.element.dispatchEvent(
           new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }),
@@ -557,6 +580,7 @@ export function activateReviewedChoiceGroup(
     // 所有权窗口没兜住（观测不到自己的 click、期间有人试图提交、或窗口里混进了
     // 别的组事件）。报 `ABORTED` 而不是新造码：`APPLY_ERROR_CODES` 是已上线的
     // 稳定码集，而「一次 safety failure 中止了这一栏」正是它的定义。
+    if (!hostAllowed) return { ok: false, code: 'CLICK_DENIED' };
     if (!owned) return { ok: false, code: 'ABORTED' };
 
     let settled = false;
@@ -699,6 +723,10 @@ export function activateProxiedChoiceOptions(
       unvetoed = input.withSubmitVeto(() => {
         const carrier = activation.carrier;
         if (carrier !== null) {
+          if (!hostTargetStillAllowed(carrier)) {
+            outcome.result = { ok: false, code: 'CLICK_DENIED' };
+            return;
+          }
           // 承载的原生激活：默认动作就是这次作答，不取消（理由见本函数头注与 activateReviewedChoiceGroup）。
           carrier.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
           outcome.result = { ok: true, value: undefined };
@@ -734,7 +762,7 @@ function validateHostRestorationTarget(input: Readonly<{
   pointerSequenceFence?: ClickHostTargetInput['pointerSequenceFence'];
 }>, dispatch: boolean): boolean {
   const { element, root } = input;
-  if (!element.isConnected) return false;
+  if (!element.isConnected || !hostTargetStillAllowed(element)) return false;
   const initialTargets = captureScanRootObservationTargets(root);
   const Observer = element.ownerDocument.defaultView?.MutationObserver;
   if (!initialTargets || !Observer) return false;

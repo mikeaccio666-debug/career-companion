@@ -16,11 +16,13 @@
 import type { AccountFieldRole, Result } from '../contracts.ts';
 import { checkActiveCapability, type HostWriteAuthority, type WriteCapability } from '../grant.ts';
 import { dispatchHostEvent, EVENT_PROFILES } from './allowlist.ts';
+import { evaluateHostVeto } from '../gate/hostVeto.ts';
 
 /** 这一写只看策略里这两样；与点击原语交来的是同一个投影。 */
 interface AccountWritePolicy {
   readonly enabled: boolean;
   readonly capabilities: Readonly<Record<WriteCapability, boolean>>;
+  readonly deniedHostSuffixes?: readonly string[];
 }
 
 /** 邮箱与密码的长度上限：邮箱按 RFC 5321 的 254；密码 128（我们生成的 16 位，用户自己设的至多 64）。 */
@@ -64,7 +66,24 @@ export function writeAccountField(input: Readonly<{
   if (value === '' || value.length > MAX_LENGTH[role]) return { ok: false, code: 'TARGET_NOT_WRITABLE' };
   const setter = nativeInputValueSetter(element);
   if (setter === null) return { ok: false, code: 'TARGET_NOT_WRITABLE' };
+  // Direct use of this exported writer must obey the same immutable site gate.
+  const hostAllowed = (): boolean => {
+    try {
+      const location = element.ownerDocument.location;
+      return location !== null && !evaluateHostVeto({
+        hostname: location.hostname,
+        pathname: location.pathname,
+        policy: { deniedHostSuffixes: policy.deniedHostSuffixes ?? [] },
+      }).vetoed;
+    } catch {
+      return false;
+    }
+  };
+  if (!hostAllowed()) return { ok: false, code: 'POLICY_DISABLED' };
   setter(value);
-  for (const event of EVENT_PROFILES.text) dispatchHostEvent(element, event);
+  for (const event of EVENT_PROFILES.text) {
+    if (!hostAllowed()) return { ok: false, code: 'POLICY_DISABLED' };
+    dispatchHostEvent(element, event);
+  }
   return element.value === value ? { ok: true, value: undefined } : { ok: false, code: 'WRITE_REVERTED' };
 }

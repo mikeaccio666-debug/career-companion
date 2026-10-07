@@ -39,7 +39,7 @@ import {
   type ResolvedRuntimeApplyAdapter,
 } from '@edaix/apply-kernel/runtimeRegistry';
 import type { WizardReadOnlyDeclaration } from '@edaix/apply-kernel/wizardIdentity';
-import type { ApplyPolicy } from '@edaix/apply-kernel/policy';
+import { LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES, type ApplyPolicy } from '@edaix/apply-kernel/policy';
 import type { WriteCapability } from '@edaix/apply-kernel/grant';
 import type {
   ExecutionRuntimeBundleClient,
@@ -645,7 +645,10 @@ function remoteApplyPolicy(bundle: ExecutionRuntimeBundleV1): ApplyPolicy {
     inferredRequiresConfirm:
       CODE_COMPATIBILITY_CEILING.inferredRequiresConfirm ||
       bundle.policy.inferredRequiresConfirm,
-    deniedHostSuffixes: Object.freeze([...bundle.policy.deniedHostSuffixes]),
+    deniedHostSuffixes: Object.freeze([...new Set([
+      ...LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES,
+      ...bundle.policy.deniedHostSuffixes,
+    ])]),
     notAfter: Date.parse(bundle.notAfter),
     source: 'remote',
   });

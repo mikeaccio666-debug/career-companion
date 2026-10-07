@@ -1019,15 +1019,20 @@ describe('工作授权按岗位地点推断', () => {
     expect(audit.prefillBasis.size).toBe(0);
   });
 
-  // 2026-09-24 负责人决定（Mike：「就答是的」）：他有别国的记录、唯独没有岗位那一国的，与 Jobright 一样按默认答
-  // 「是」，审计行带上那一国，浮层据此写明、请他提交前核对。上午 #105 定的「不写、只说缺哪一国的记录」只剩他一条
-  // 记录都没有的时候（下一条）。
-  it('岗位在爱沙尼亚、他只有美国的记录（2026-09-24 Twilio）→ 按默认写 Yes，审计行带上爱沙尼亚', async () => {
+  it('虚构 F-1 学生只有美国记录，加拿大岗位：零身份写入，无候选预填，审阅行说明缺加拿大记录', async () => {
     const rows = audits();
-    await fillFromGesture({ ...input({ policy: released() }, ROLE_COUNTRY), workAuthorizations: AUTHORIZATIONS, jobRegionCode: 'EE', onAudit: rows.collect } as never);
-    expect(rows.audit().view.rows.find((row) => row.label.startsWith('Are you currently')))
-      .toMatchObject({ key: 'workAuthorization', status: 'FILLED', defaultedRegionCode: 'EE', inferredRegionCode: 'EE' });
-    expect((document.querySelector('input[name="work_auth"][value="yes"]') as HTMLInputElement).checked).toBe(true);
+    const f1Records = [{ regionCode: 'US', authorizedToWork: 'YES', requiresSponsorship: 'YES' }] as const;
+    await fillFromGesture({ ...input({ policy: released() }, ROLE_COUNTRY), workAuthorizations: f1Records, jobRegionCode: 'CA', onAudit: rows.collect } as never);
+    const audit = rows.audit();
+    const row = audit.view.rows.find((item) => item.label.startsWith('Are you currently'));
+    expect(row).toMatchObject({ reason: 'JOB_DEPENDENT', regionWithoutRecord: 'CA' });
+    expect(row?.defaultedRegionCode).toBeUndefined();
+    expect(audit.prefills.size).toBe(0);
+    expect(audit.prefillBasis.size).toBe(0);
+    for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="work_auth"]')) expect(radio.checked).toBe(false);
+    // Ordinary confirmed fields still run through the real plugin/runner path.
+    expect((document.querySelector('#first_name') as HTMLInputElement).value).toBe('Taylor');
+    expect((document.querySelector('#email') as HTMLInputElement).value).toBe('taylor@example.test');
   });
 
   it('他一条工作许可记录都没有 → 照旧不写，审计行带上爱沙尼亚', async () => {

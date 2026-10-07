@@ -9,6 +9,7 @@
  * （"仅限用户显式点击后"），把"决定填什么"和"真的去填"彻底分开。
  */
 
+import { questionContextOf } from './questions';
 import { isCollectionFieldRole, isCurrentRow, isDatePartRole, projectCollectionField, siblingDatePartRole } from './collectionProjection';
 import { flatValueCandidates } from './dict/fillKeyChoices';
 import { canonicalLinkedInProfileUrl } from './dict/linkedinProfileUrl';
@@ -243,8 +244,8 @@ export interface BuildPlanOptions {
   /**
    * 以用户名义代填时，这一轮获准的类别（2026-09-28）：`sign-on-behalf` 能力位之外的第二道。同意类只在用户同意了
    * 当前版本的代填授权时在里面（`SIGNING_CONSENT_KINDS`；同意的是旧版本就当没同意），能不能联系雇主只有资料里答过
-   * 才在里面（`employerContactKinds`）——没同意代填授权、只答了那一问时，调用方只交那一向的两类。不给 = 能力位本身
-   * 就是「同意了当前版本」，每一类都行（联系雇主那几类另要 `employerContact`）。
+   * 才在里面（`employerContactKinds`）——没同意代填授权、只答了那一问时，调用方只交那一向的两类。不给或为空
+   * 就没有获准的类别；能力位不能代替逐项授权（联系雇主那几类另要 `employerContact`）。
    */
   signOnBehalfKinds?: ReadonlySet<SignOnBehalfKind>;
   /**
@@ -956,6 +957,17 @@ export function coverLetterTargets(form: ApplyFormDescriptor): readonly CoverLet
   return targets;
 }
 
+/** 公民身份／绿卡题留给本人；已审阅或记住的答案也不构成自动填写授权。 */
+export function isCitizenshipQuestion(label: string): boolean {
+  return /\bcitizen(?:s|ship)?\b|\bgreen[ -]?card\b|\b(?:lawful[ -]+|legal[ -]+)?permanent[ -]+(?:resident(?:s)?|residency)\b|公民|绿卡|永久居民/iu.test(label);
+}
+
+/** 产品 11 §3.3 明确留给本人的身份题；不从工作授权记录推 U.S. person／出口管制身份。 */
+export function isManualIdentityQuestion(label: string): boolean {
+  return isCitizenshipQuestion(label)
+    || /\bu\.?\s*s\.?\s*persons?\b|\bexport[ -]+controls?\b[^?.]{0,80}\b(?:status|eligib(?:le|ility)|identity|person)\b|\b(?:status|eligib(?:le|ility)|identity|person)\b[^?.]{0,80}\bexport[ -]+controls?\b|出口管制身份/iu.test(label);
+}
+
 export function buildApplyPlan(
   form: ApplyFormDescriptor,
   profile: ApplyProfileDraft,
@@ -1068,6 +1080,10 @@ export function buildApplyPlan(
       })
     ) {
       skipped.push({ label, reason: 'HONEYPOT', required: field.required, key: field.key, element, order });
+      continue;
+    }
+    if (isManualIdentityQuestion(`${label} ${questionContextOf(element)}`)) {
+      skipped.push({ label, reason: 'MANUAL_ONLY', required: field.required, key: field.key, element, order });
       continue;
     }
     // 代填条款、声明与签名（2026-09-23；负责人 2026-09-22 夜的决定，dict/signOnBehalf.ts）。
@@ -1201,7 +1217,7 @@ export function buildApplyPlan(
     // 年龄与随岗位而定的事问在同一句里（2026-09-24，dict/ageQuestion.ts）：从前只凭 over18 一半就答了，
     // 没有 over18 时又只凭工作授权一半答。现在只答「年满 18 且有权在 X 工作」那一种，而且两半都得有依据：
     // 都是「是」才答是；年龄明确「否」、或那国的授权记录明确「否」就答否；其余交还（JOB_DEPENDENT）。
-    // 工作授权那一半按默认答的「是」（他有别国的记录、唯独没有 X 的，2026-09-24 负责人决定）也算依据，条目带上 X。
+    // 工作授权那一半必须来自该国有效记录，别国的记录不能补出答案。
     // 排在搬迁与工作授权之前：「年满 18 且愿意搬迁」同样不许只凭其中一半作答。只管认成 over18 的与没认出键的：
     // 规则认到别的键（期望薪资里写着「minimum 18」之类）照旧按那个键走。
     if ((field.key === null || field.key === 'over18') && mixesAgeWithJobQuestion(label)) {
@@ -1257,10 +1273,8 @@ export function buildApplyPlan(
       // 从申请卡片**确定性地**解出恰好一个国家才传（Remote / EMEA 解不出就不传）、问的不是「你现在住的
       // 国家」。条目带上推断的国家，浮层写明依据。
       //
-      // 说得出是哪一国、用户在那一国没有记录（2026-09-24）：他有别国的记录 → 按默认答（负责人决定，与 Jobright
-      // 一致：有权工作「是」、要不要担保「否」），条目带上那一国，浮层写明、请他提交前核对；他一条记录都没有、或默认
-      // 答案在页面上落不下 → 照旧不答，这一行带上那一国，浮层照实说「你的资料里没有在那一国工作的许可记录」——
-      // 岗位国家已经知道了，再说「取决于这个岗位」是一句空话。
+      // 说得出是哪一国、用户在那一国没有记录：不带答案、也不带预填，一律交还本人。
+      // 即使有别国记录也不能替代；这一行带上缺记录的国家，让浮层说清楚缺的是什么。
       const verdict = workAuthorizationPrefill(field, label, options);
       const authorized = verdict?.kind === 'ANSWER' ? verdict : null;
       if (authorized !== null) {
@@ -2034,7 +2048,7 @@ export function buildAnswerPlan(
       skip('HONEYPOT');
       continue;
     }
-    if (isNeverWritableControl({ text: label, inputType: element.getAttribute('type'), autocomplete: element.getAttribute('autocomplete') })) {
+    if (isManualIdentityQuestion(`${label} ${questionContextOf(element)}`) || isNeverWritableControl({ text: label, inputType: element.getAttribute('type'), autocomplete: element.getAttribute('autocomplete') })) {
       skip('MANUAL_ONLY');
       continue;
     }
@@ -2165,9 +2179,9 @@ function signOnBehalfProxyAllowed(field: ApplyFieldDescriptor, kind: SignOnBehal
   return isWholeQuestionKind(kind) && (field.choice.question ?? null) !== null;
 }
 
-/** 这一类在这一轮获准吗（能力位另判）。调用方没给这一轮获准的类别：能力位就是「同意了当前版本」，每一类都行。 */
+/** 这一类在这一轮获准吗（能力位另判）。没有显式的本轮授权类别，一律拒绝。 */
 function signOnBehalfKindAllowed(options: BuildPlanOptions, kind: SignOnBehalfKind): boolean {
-  return options.signOnBehalfKinds === undefined || options.signOnBehalfKinds.has(kind);
+  return options.signOnBehalfKinds?.has(kind) === true;
 }
 
 /** 认出来的一格代填：哪一类；选择类控件还带上要选的那一项。 */
@@ -2405,7 +2419,7 @@ function pushOptionAnswer(
   answer: OptionAnswer,
   order: number,
   fillEmptyOnly: boolean,
-  /** 工作授权答案的依据（按岗位地点推断的国家、按默认答的国家）：原样挂到条目上，浮层据此写明。 */
+  /** 工作授权答案的依据（按岗位地点推断的国家）：原样挂到条目上，浮层据此写明。 */
   basis?: WorkAuthorizationBasis,
 ): boolean {
   if (!isOptionControl(field)) return false;
@@ -2608,14 +2622,9 @@ const SELF_IDENTIFICATION_KEYS: Readonly<Record<SelfIdentificationConcept, Apply
  *     说不清是哪一国，不答（dict/workAuthorization.ts）。
  *  4. 答什么：
  *     - 他在那一国有记录 → 按记录答。明确的记录永远优先，包括明确的「否」；UNSPECIFIED 不算答案，交还他。
- *     - 他在那一国没有记录、但有别国的记录 → **按默认答**（2026-09-24 负责人决定，与 Jobright 一致）：
- *       有权工作「是」、要不要担保「否」、不需担保就有权工作「是」，条目带 `defaultedRegionCode`，浮层写明、
- *       请他提交前核对。负责人的原话是「就答是的」（Twilio 爱沙尼亚岗那道「Are you legally authorized to work
- *       in the country in which this role is located?」，他只有美国记录）。风险——他其实不能在那里合法工作时，
- *       这就是在正式申请里向雇主做了一句不实的事实陈述——已向他说明，他选了这样做。
- *     - 他一条记录都没有 → 照旧不答（`NO_RECORD`，浮层照实说缺的是哪一国的记录）：很多用户是国际学生，
- *       替他们在美国岗上答「不需要担保」就是错的。记录没交来（读失败）与交来空清单是两回事，前者什么都不说。
- *     页面上还得恰好有一个选项对得上；默认答案对不上时照旧交还，原因照实说缺的是哪一国的记录。
+ *     - 他在那一国没有记录 → 不答（`NO_RECORD`），不论有没有别国记录；浮层说清缺哪一国的记录，不能提供默认答案或预填。
+ *       记录没交来（读失败）与交来空清单是两回事，前者不能断言用户没有记录。
+ *     页面上还得恰好有一个选项对得上；已有记录的答案也不能猜一个最接近的选项。
  *
  * 清单里的每一条都已经由服务端判过「此刻成立」（未撤销、已生效、未过期），
  * 所以这里不碰时间。
@@ -2818,14 +2827,14 @@ function relocationPrefill(
 }
 
 /**
- * 工作授权答案的依据，原样挂到计划条目上，浮层据此写明：按岗位地点推断出的国家（P1-7）、
- * 按默认答的国家（他有别国的记录、唯独没有这一国的，2026-09-24）。
+ * 工作授权答案的依据，原样挂到计划条目上：按岗位地点推断出的国家（P1-7）。
+ * 答案仍必须来自这个国家的记录，推断国家不等于推断资格。
  */
-type WorkAuthorizationBasis = Readonly<{ inferredRegionCode?: string; defaultedRegionCode?: string }>;
+type WorkAuthorizationBasis = Readonly<{ inferredRegionCode?: string }>;
 
 /**
- * 工作授权题的结论：答得出（`ANSWER`，按记录答或按默认答）；说得出是哪一国而答不了（`NO_RECORD`：他一条记录
- * 都没有、或默认答案在页面上落不下——照旧不答，只是原因说得准）；其余 null（说不出是哪一国、记录说不清、
+ * 工作授权题的结论：答得出（`ANSWER`，只按该国记录答）；说得出是哪一国而没有那条记录（`NO_RECORD`，
+ * 没有答案或预填）；其余 null（说不出是哪一国、记录说不清、
  * 能力位没开……一律「取决于这个岗位」）。
  */
 type WorkAuthorizationVerdict =
@@ -2845,11 +2854,7 @@ function workAuthorizationPrefill(
   const fact = workAuthorizationFact(label, options);
   if (fact === null || fact.kind === 'NO_RECORD') return fact;
   const resolvedAnswer = isOptionControl(field) ? optionAnswer(field, fact.answer) : null;
-  if (resolvedAnswer === null) {
-    // 默认答案在页面上落不下（不是选项控件、没有对得上的选项）：照旧交还，原因照实说缺的是哪一国的记录。
-    const region = fact.basis.defaultedRegionCode;
-    return region === undefined ? null : { kind: 'NO_RECORD', regionCode: region };
-  }
+  if (resolvedAnswer === null) return null;
   return Object.freeze({
     kind: 'ANSWER' as const,
     key: fact.questionKind === 'REQUIRES_SPONSORSHIP' ? 'workSponsorship' : 'workAuthorization',
@@ -2864,7 +2869,7 @@ type WorkAuthorizationFact =
 
 /**
  * 工作授权题该答的是／否（四道筛见上面「工作授权／担保能不能预填」那段）：按记录答；说得出是哪一国、他在那一国
- * 没有记录时见 `withoutRecord`（有别国的记录就按默认答，一条都没有是 `NO_RECORD`）；答不出就 null。
+ * 没有该国记录时是 `NO_RECORD`，绝不从别国记录推资格；答不出就 null。
  */
 function workAuthorizationFact(
   label: string,
@@ -2874,7 +2879,7 @@ function workAuthorizationFact(
   const kind = workAuthorizationQuestionKind(label);
   if (kind === null) return null;
   // 记录没交来（读失败）与交来了一个空清单是两回事：前者不知道他有没有记录，「没有记录」那句话不能说，
-  // 默认答案也无从谈起。
+  // 读失败时不能断言没有该国记录；任何情况都不生成默认答案。
   const delivered = options.workAuthorizations !== undefined;
   const authorizations = options.workAuthorizations ?? [];
   const regions = authorizations.map((item) => item.regionCode.trim().toUpperCase());
@@ -2892,11 +2897,11 @@ function workAuthorizationFact(
     // 也不认（与 namedWorkRegion 同一个口径，2026-09-24）：题面上的 CA、DE、IN 说不清是州还是加拿大、德国、印度。
     // 解出的那一国**有**记录（写的是「USA」这类 namedWorkRegion 不认的别名）时照旧不答。
     const mentioned = delivered && mentionsAnyRegion(label) && !refersToResidence(label) ? inferRegionCode(label, false) : null;
-    return mentioned !== null && !regions.includes(mentioned) ? withoutRecord(kind, mentioned, regions, {}) : null;
+    return mentioned !== null && !regions.includes(mentioned) ? withoutRecord(mentioned) : null;
   }
   const basis: WorkAuthorizationBasis = inferred === null ? {} : { inferredRegionCode: inferred };
   const record = authorizations.find((item) => item.regionCode.trim().toUpperCase() === region);
-  if (record === undefined) return delivered ? withoutRecord(kind, region, regions, basis) : null;
+  if (record === undefined) return delivered ? withoutRecord(region) : null;
   const answer = kind === 'AUTHORIZED_TO_WORK' ? record.authorizedToWork
     : kind === 'REQUIRES_SPONSORSHIP' ? record.requiresSponsorship
     : withoutSponsorshipAnswer(record);
@@ -2904,25 +2909,9 @@ function workAuthorizationFact(
   return { kind: 'FACT', questionKind: kind, answer, basis };
 }
 
-/**
- * 说得出是哪一国、他在那一国没有记录（2026-09-24 负责人决定，与 Jobright 一致）：他有别国的记录，就按默认答——
- * 有权工作「是」、要不要担保「否」、不需担保就有权工作「是」——并带上那一国；一条记录都没有是 `NO_RECORD`，照旧不答
- * （很多用户是国际学生，替他们在美国岗上答「不需要担保」就是错的）。
- */
-function withoutRecord(
-  kind: WorkAuthorizationQuestionKind,
-  region: string,
-  regions: readonly string[],
-  basis: WorkAuthorizationBasis,
-): WorkAuthorizationFact {
-  return regions.length === 0
-    ? { kind: 'NO_RECORD', regionCode: region }
-    : {
-        kind: 'FACT',
-        questionKind: kind,
-        answer: kind === 'REQUIRES_SPONSORSHIP' ? 'NO' : 'YES',
-        basis: { ...basis, defaultedRegionCode: region },
-      };
+/** 缺该国记录：不论其他国家有多少记录，都不能生成答案或预填。 */
+function withoutRecord(region: string): WorkAuthorizationFact {
+  return { kind: 'NO_RECORD', regionCode: region };
 }
 
 /**
@@ -2931,8 +2920,7 @@ function withoutRecord(
  *  - 明确未满 18（档案 over18 = false）→ 否，键 over18：只凭年龄就确定，不涉及工作授权；
  *  - 那国的授权记录是「否」→ 否，键 workAuthorization（与单独问授权时同一套筛：能力位、记录、点名或按岗位地点推）；
  *  - 年满 18（明确的，或档案里没有明确值时按学历／工作经历推出来的）∧ 授权是「是」→ 是，键 workAuthorization。
- *    授权的「是」可以来自记录，也可以是他在那一国没有记录、有别国的记录时按默认答的（2026-09-24 负责人决定），
- *    后者带上那一国；
+ *    授权的「是」只能来自该国明确记录；别国的记录不能补出这半句。
  *  - 其余答不了，交还用户（年龄那一半没有依据、他一条记录都没有……）。
  */
 function ageAndWorkAuthorizationAnswer(

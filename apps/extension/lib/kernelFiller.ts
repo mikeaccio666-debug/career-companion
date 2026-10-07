@@ -29,11 +29,13 @@ import {
 } from '@edaix/apply-kernel/engine';
 import {
   describeQuestion,
+  questionContextOf,
   questionIdentity,
   type QuestionDescription,
   type QuestionIdentity,
 } from '@edaix/apply-kernel/questions';
 import { questionClaimKeyFor } from './questionClaimKey';
+import { requiresCurrentApplicationEvidence } from './answerMemoryReuse';
 import { runApplyPlan, type ApplyRunSummary, type RunApplyPlanInput } from '@edaix/apply-kernel/runner';
 import { createUndoJournal } from '@edaix/apply-kernel/undo';
 import { createBundledApplyPolicy, type ApplyPolicy } from '@edaix/apply-kernel/policy';
@@ -87,6 +89,11 @@ import { captureScanRootObservationTargets } from '@edaix/apply-kernel/scanRoot'
 import { hostFieldHasValue } from './dock/hostField';
 import { waitForHostQuiet, watchTrustedEdits, type HostQuietResult } from './hostSettle';
 
+/** 用当前扫描题面和真实控件的补充说明复核，不能由 resolver／AI 自报字段类别。 */
+function requiresCurrentFieldEvidence(question: QuestionDescription, element: Element): boolean {
+  return requiresCurrentApplicationEvidence(question, questionContextOf(element), element.getAttribute('autocomplete') ?? '');
+}
+
 export interface KernelFillInput {
   readonly grant: ExecutionGrant;
   /**
@@ -126,8 +133,8 @@ export interface KernelFillInput {
   readonly collections?: ApplyProfileCollections;
   /**
    * 用户自己确认过、此刻有效的工作授权记录（2026-09-21 起手势路由 worker 从 Profile V2 投影）。
-   * 内核只在题目点名国家、且恰好是有记录的那一个时直接写（2026-09-21 起：那条记录是用户自己填的）；
-   * 面板预选、用户点头才写。不给就等于「没有记录」，这类题退回 JOB_DEPENDENT。
+   * 内核只按目标国家的明确记录答；按岗位地点推断国家时可请本人确认已有记录的答案。
+   * 缺该国记录时不生成答案或预填；读不到记录时也不能猜用户的身份。
    */
   readonly workAuthorizations?: readonly Readonly<{
     regionCode: string;
@@ -954,8 +961,8 @@ export async function fillFromGrant(
   };
 
   // 记忆复用（PRODUCT-AUTHORITY §3 Reuse）：只处理 grant 点名的那些键，而且只有
-  // 本页上仍按**同一身份**找得到那道题时才算数。身份变了 key 就变，于是对不上，
-  // 于是零写入——这就是这里唯一需要的那道页面侧核对。
+  // 本页上仍按**同一身份**找得到那道题时才算数。身份变了 key 就变，于是对不上、零写入。
+  // 当前国家与敏感授权另须确认资料，泛化的记忆键不能担保它们。
   const grantedQuestionKeys = new Set<string>(grant.questionKeys ?? []);
   const rememberedOnPage = new Set<string>();
   // 两条路进这里：mission 路按 grant 点名的题；手势路（reuseRememberedAnswers）按本页
@@ -973,8 +980,10 @@ export async function fillFromGrant(
     const { questions, reviewable } = describeReviewable(source, descriptor, idPrefix, include);
     const targets: Array<{ target: KernelRememberedQuestion; element: Element }> = [];
     for (const question of questions) {
+      // 即使 resolver 或旧 grant 点名了它，泛化记忆也不能替代当前国家／敏感档案的确认依据。
       const element = reviewable.get(question.questionId);
       if (!element) continue;
+      if (requiresCurrentFieldEvidence(question, element)) continue;
       let claimKey: string;
       try {
         claimKey = await questionClaimKeyFor(questionIdentity(question));
@@ -1996,6 +2005,14 @@ export async function fillFromGrant(
     for (const answer of answers) {
       const element = liveElementFor(answer.element);
       if (element === null) continue;
+      const field = currentScan.descriptor.fields.find((candidate) => candidate.element === element);
+      const question = field === undefined ? null : describeQuestion(field, answer.questionId);
+      if (question === null) continue;
+      // 上层挑题已经拒绝这些字段；写入入口再按真实扫描的题面检查，不能信任调用方的答案标签。
+      if (requiresCurrentFieldEvidence(question, element)) {
+        // 收集阶段尚未写任何字段，整批拒绝，不能让调用方把剔除的身份答案当作已写成功。
+        return { ok: false, code: 'MANUAL_ONLY' };
+      }
       // 按「生成」之后、写之前，用户自己动了这一栏：不覆盖。
       if (options.unchangedFrom !== undefined && (element as HTMLInputElement | HTMLTextAreaElement).value !== options.unchangedFrom) {
         return { ok: false, code: 'NOT_EMPTY' };

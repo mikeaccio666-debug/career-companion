@@ -6,11 +6,8 @@
  * 「不答」的用例比「答对」的多，是刻意的：答错不是少填一栏，是在一份正式申请里
  * 向雇主做了不实的事实陈述。
  *
- * 2026-09-24 负责人决定（Mike，Twilio 爱沙尼亚岗上那道「Are you legally authorized to work in the country
- * in which this role is located?」，他只有美国记录：「就答是的」）：说得出是哪一国、他有别国的记录唯独没有
- * 这一国的，与 Jobright 一样按默认答——有权工作「是」、要不要担保「否」、不需担保就有权工作「是」，条目带上
- * `defaultedRegionCode`，浮层写明、请他提交前核对。风险（他其实不能在那里合法工作时就是一句不实陈述）已向他
- * 说明，他选了这样做。一条记录都没有的照旧不答：很多用户是国际学生，替他们在美国岗上答「不需要担保」就是错的。
+ * 缺少岗位所在国的记录时，无论有多少别国记录，都不生成默认答案或预填。
+ * 这些测试按 docs/product/09 的 10A、11 的身份字段边界验证。
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -211,22 +208,18 @@ describe('题目不点名国家：按岗位地点推断', () => {
       .toMatchObject({ reason: 'JOB_DEPENDENT' });
   });
 
-  // 2026-09-24 负责人决定：点名的日本他没有记录、但有别国的记录 → 按默认答（担保题「否」），带上日本，
-  // 不拿岗位所在的美国那条顶替。
-  it('题目点名了地方就只认点名的：点名日本、岗位在美国 → 按日本默认答；点名美国、岗位在加拿大 → 按美国那条直接写', () => {
-    const japan = inferredEntry('Will you now or in the future require sponsorship to work in Japan?', 'US');
-    expect(japan).toMatchObject({ key: 'workSponsorship', value: 'No', defaultedRegionCode: 'JP' });
-    expect(japan?.inferredRegionCode, '日本是题目点名的，不是按岗位地点推的').toBeUndefined();
+  it('题目点名日本、岗位在美国：缺日本记录就交还；点名美国、岗位在加拿大仍按美国记录', () => {
+    const japan = inferredPlan('Will you now or in the future require sponsorship to work in Japan?', 'US');
+    noRecord(japan, 'JP');
+    expect(japan.skipped[0]?.inferredRegionCode).toBeUndefined();
     const named = inferredPlan('Are you authorized to work in the United States?', 'CA');
     expect(named.entries[0]).toMatchObject({ key: 'workAuthorization', value: 'Yes' });
-    expect(named.entries[0]?.defaultedRegionCode, '有记录就按记录答，不是默认').toBeUndefined();
+    expect(named.entries[0]?.defaultedRegionCode).toBeUndefined();
     expect(named.skipped).toHaveLength(0);
   });
 
-  // 2026-09-24 负责人决定：岗位国家他没有记录、但有别国的记录 → 按默认答「是」，推断与默认两个依据都带上。
-  it('岗位国家用户没有记录、但有别国的记录 → 按默认答，带上推断的国家与「按默认答」', () => {
-    expect(inferredEntry('Are you authorized to work in the country for which you applied?', 'JP'))
-      .toMatchObject({ key: 'workAuthorization', value: 'Yes', inferredRegionCode: 'JP', defaultedRegionCode: 'JP' });
+  it('岗位国家用户没有记录：不以别国记录生成默认答案或预填', () => {
+    noRecord(inferredPlan('Are you authorized to work in the country for which you applied?', 'JP'), 'JP');
   });
 
   it('nvidia.wd5 Workday 第 3 步那两题（美国岗）：有权工作 → Yes；需要雇主支持 → No', () => {
@@ -254,58 +247,42 @@ const planWith = (label: string, extra: Record<string, unknown> = {}, options: r
     ...extra,
   } as never);
 
-/** 只有美国一条记录——测试台 Twilio 8185918（Remote - Estonia）与 Starburst 5119301008（Warsaw, Poland）上的真实情形。 */
+/** 虚构学生只有美国一条确认记录，没有其他国家记录。 */
 const US_ONLY = [{ regionCode: 'US', authorizedToWork: 'YES', requiresSponsorship: 'NO' }] as const;
 
-/**
- * 说得出是哪一国（题目点名、或按岗位地点推断）、而他在那一国没有记录。
- *
- * 2026-09-24 上午（#105）定的是照旧不答、原因照实说「你的资料里没有在这一国工作的许可记录」。同一天负责人改了
- * （Mike，测试台 Twilio 爱沙尼亚岗那道「Are you legally authorized to work in the country in which this role is
- * located?」，他只有美国记录：「就答是的」）：他有别国的记录、唯独没有这一国的，与 Jobright 一样按默认答——
- * 有权工作「是」、要不要担保「否」、不需担保就有权工作「是」，条目带上 `defaultedRegionCode`，浮层写明、请他提交前
- * 核对。风险（他其实不能在那里合法工作时，这就是一句不实陈述）已向他说明，他选了这样做。
- *
- * 不变的：明确的记录（包括明确的「否」）永远优先；一条记录都没有的照旧不答，并带上是哪一国（下一组）。
- */
-describe('说得出是哪一国、他有别国的记录唯独没有这一国的：按默认答（2026-09-24 负责人决定）', () => {
-  it('岗位在爱沙尼亚、他只有美国的记录：有权工作答 Yes、要不要担保答 No，带上爱沙尼亚', () => {
-    const authorized = planWith('Are you legally authorized to work in the country in which this role is located?', {
-      jobRegionCode: 'EE', workAuthorizations: US_ONLY,
-    });
-    expect(authorized.skipped).toHaveLength(0);
-    expect(authorized.entries[0]).toMatchObject({
-      key: 'workAuthorization', value: 'Yes', defaultedRegionCode: 'EE', inferredRegionCode: 'EE',
-    });
-    const sponsorship = planWith('Will you now or in the future require sponsorship for employment visa status?', {
-      jobRegionCode: 'EE', workAuthorizations: US_ONLY,
-    });
-    expect(sponsorship.skipped).toHaveLength(0);
-    expect(sponsorship.entries[0]).toMatchObject({
-      key: 'workSponsorship', value: 'No', defaultedRegionCode: 'EE', inferredRegionCode: 'EE',
-    });
+/** 无该国记录时，选项匹配与其他国家的资格都不能提供答案。 */
+function noRecord(result: ReturnType<typeof buildApplyPlan>, region: string) {
+  expect(result.entries).toHaveLength(0);
+  expect(result.skipped).toHaveLength(1);
+  expect(result.skipped[0]).toMatchObject({ reason: 'JOB_DEPENDENT', regionWithoutRecord: region });
+  expect(result.skipped[0]?.prefill).toBeUndefined();
+  expect(result.skipped[0]).not.toHaveProperty('defaultedRegionCode');
+}
+
+describe('缺该国记录：不按别国记录生成任何默认答案或预填', () => {
+  it('岗位在爱沙尼亚、只有美国记录：工作授权和担保都交还本人', () => {
+    for (const label of [
+      'Are you legally authorized to work in the country in which this role is located?',
+      'Will you now or in the future require sponsorship for employment visa status?',
+    ]) noRecord(planWith(label, { jobRegionCode: 'EE', workAuthorizations: US_ONLY }), 'EE');
   });
 
-  it('岗位在波兰（Starburst，Warsaw）、他有美国与加拿大两条记录：同样按默认答', () => {
-    expect(planWith('Are you authorized to work in the country for which you applied?', { jobRegionCode: 'PL' }).entries[0])
-      .toMatchObject({ key: 'workAuthorization', value: 'Yes', defaultedRegionCode: 'PL' });
-    expect(planWith('Do you require visa sponsorship?', { jobRegionCode: 'PL' }).entries[0])
-      .toMatchObject({ key: 'workSponsorship', value: 'No', defaultedRegionCode: 'PL' });
+  it('岗位在波兰、有美国和加拿大记录：两条记录也不能补出波兰资格', () => {
+    noRecord(planWith('Are you authorized to work in the country for which you applied?', { jobRegionCode: 'PL' }), 'PL');
+    noRecord(planWith('Do you require visa sponsorship?', { jobRegionCode: 'PL' }), 'PL');
   });
 
-  it('「不需要担保就有权工作吗」→ Yes', () => {
-    expect(planWith('Are you legally authorized to work in the country where this role is located without requiring sponsorship?', {
+  it('没有该国记录的「不需要担保就有权工作吗」同样无答案', () => {
+    noRecord(planWith('Are you legally authorized to work in the country where this role is located without requiring sponsorship?', {
       jobRegionCode: 'EE', workAuthorizations: US_ONLY,
-    }).entries[0]).toMatchObject({ key: 'workAuthorization', value: 'Yes', defaultedRegionCode: 'EE' });
+    }), 'EE');
   });
 
-  it('题目自己点名了一个他没有记录的国家（波兰、日本）：按默认答，带上那一国，不拿岗位国家顶替', () => {
+  it('题目点名波兰或日本时，不拿岗位所在国或其他记录顶替', () => {
     const poland = planWith('Are you legally authorized to work in Poland?', { jobRegionCode: 'US', workAuthorizations: US_ONLY });
-    expect(poland.skipped).toHaveLength(0);
-    expect(poland.entries[0]).toMatchObject({ key: 'workAuthorization', value: 'Yes', defaultedRegionCode: 'PL' });
-    expect(poland.entries[0]?.inferredRegionCode, '波兰是题目点名的，不是按岗位地点推的').toBeUndefined();
-    expect(planWith('Will you now or in the future require sponsorship to work in Japan?').entries[0])
-      .toMatchObject({ key: 'workSponsorship', value: 'No', defaultedRegionCode: 'JP' });
+    noRecord(poland, 'PL');
+    expect(poland.skipped[0]?.inferredRegionCode).toBeUndefined();
+    noRecord(planWith('Will you now or in the future require sponsorship to work in Japan?'), 'JP');
   });
 
   it('明确的记录永远优先：那一国的记录是「否」就答「否」（要担保就答「是」），不按默认', () => {
@@ -346,7 +323,7 @@ describe('说得出是哪一国、他有别国的记录唯独没有这一国的�
     expect(result.skipped[0]).toMatchObject({ reason: 'JOB_DEPENDENT' });
   });
 
-  it('页面上没有对得上的选项：默认答案写不下，照实说缺的是哪一国的记录', () => {
+  it('页面上有没有匹配选项都不影响无记录拒绝', () => {
     const result = planWith('Are you legally authorized to work in the country in which this role is located?', {
       jobRegionCode: 'EE', workAuthorizations: US_ONLY,
     }, ['Definitely', 'Absolutely not']);
@@ -404,8 +381,7 @@ describe('说得出是哪一国、但他一条记录都没有：照旧不答，�
 /**
  * 题目点名的是美国的一个州（2026-09-24 协调方跟进）。从前州名与同码的国家混在一起：「California」按加拿大那条记录答、
  * 「Delaware」按德国、「Indiana」按印度，题面上的裸码 CA、DE、IN 也一样——替一个在美国有权工作的人按他加拿大的「否」
- * 答了「否」。现在州名按美国认（工作授权是联邦的：有权在美国工作就有权在加州工作），美国那条记录有就按它答，没有就走
- * 默认那条路；两字母州码与三十来个国家码同形，谁都不认，交还用户；Georgia 既是州又是国家，交还用户。
+ * 答了「否」。现在州名按美国认，美国那条记录有就按它答，没有就交还本人；两字母州码与三十来个国家码同形，谁都不认，交还用户；Georgia 既是州又是国家，交还用户。
  * 从前「点名加州、他只有美国记录」交还用户（上一个提交还钉着），现在按美国那条答。
  */
 describe('题目点名了美国的一个州：按美国答，从不按同码国家的记录', () => {
@@ -421,9 +397,8 @@ describe('题目点名了美国的一个州：按美国答，从不按同码国�
     expect(usOnly?.defaultedRegionCode, '按记录答的').toBeUndefined();
   });
 
-  it('California：只有加拿大的记录 → 不按加拿大的 No；美国没有记录，按默认答，带上美国', () => {
-    const entry = planWith('Are you legally authorized to work in California?', { workAuthorizations: CANADA_NO }).entries[0];
-    expect(entry).toMatchObject({ key: 'workAuthorization', value: 'Yes', defaultedRegionCode: 'US' });
+  it('California：只有加拿大记录，美国无记录时交还，不拿加拿大的 No 或默认 Yes 作答', () => {
+    noRecord(planWith('Are you legally authorized to work in California?', { workAuthorizations: CANADA_NO }), 'US');
   });
 
   it('裸码 CA、DE、IN：说不清是州还是国家，交还用户，也不按默认答', () => {
@@ -471,7 +446,7 @@ describe('题目点名了美国的一个州：按美国答，从不按同码国�
 /**
  * 岗位地点里的两字母码（2026-09-24）：推错了国家，就是拿错一条记录答题。内容脚本就是这样接的——`inferRegionCode(岗位地点)`
  * 解出的国家当 `jobRegionCode` 交给内核（apply.content.ts）。从前「Toronto, CA」解成加州 → 美国，他在加拿大无权工作，这道题
- * 却按美国那条答了「是」；「Berlin, DE」解成 Delaware → 美国，本该写明「你的资料里没有德国的记录」按默认答，却按美国那条答了；
+ * 却按美国那条答了「是」；「Berlin, DE」解成 Delaware → 美国，本该写明「你的资料里没有德国的记录」，却按美国那条答了；
  * 「Remote - IN」说不清是印度还是 Indiana，也按美国答了。
  */
 describe('岗位地点里的两字母码：推错国家就是拿错记录答（2026-09-24）', () => {
@@ -486,9 +461,8 @@ describe('岗位地点里的两字母码：推错国家就是拿错记录答（2
       .toMatchObject({ key: 'workAuthorization', value: 'No', inferredRegionCode: 'CA' });
   });
 
-  it('Berlin, DE 是德国：他没有德国的记录 → 按默认答并带上德国，不按美国（Delaware）那条', () => {
-    expect(planWith(LABEL, jobRegion('Berlin, DE')).entries[0])
-      .toMatchObject({ key: 'workAuthorization', value: 'Yes', inferredRegionCode: 'DE', defaultedRegionCode: 'DE' });
+  it('Berlin, DE 是德国：没有德国记录就交还，不按美国（Delaware）记录或默认值答', () => {
+    noRecord(planWith(LABEL, jobRegion('Berlin, DE')), 'DE');
   });
 
   it('Remote - IN 说不清是印度还是 Indiana：不推，交还用户', () => {

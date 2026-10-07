@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApplyPlan } from '../src/engine';
+import { SIGNING_CONSENT_KINDS } from '../src/dict/signOnBehalf';
 import { mintAuthority, type HostWriteAuthority } from '../src/grant';
 import { createBundledApplyPolicy } from '../src/policy';
 import { runApplyPlan } from '../src/runner';
@@ -78,7 +79,7 @@ function fillAuthority(fingerprint: string): HostWriteAuthority {
 async function fill(on: boolean) {
   const root = greenhouseAdapter.resolveRoot(document)!;
   const fields = [...greenhouseAdapter.scan(root)];
-  const plan = buildApplyPlan({ vendor: 'greenhouse', root, fields }, {}, { fillEmptyOnly: true, capabilities: { 'sign-on-behalf': on } } as never);
+  const plan = buildApplyPlan({ vendor: 'greenhouse', root, fields }, {}, { fillEmptyOnly: true, capabilities: { 'sign-on-behalf': on }, signOnBehalfKinds: new Set(SIGNING_CONSENT_KINDS) } as never);
   const bundled = createBundledApplyPolicy(Date.now());
   const summary = await runApplyPlan({
     plan,

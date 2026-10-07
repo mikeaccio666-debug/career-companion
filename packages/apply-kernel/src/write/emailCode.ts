@@ -20,6 +20,7 @@ import type { EmailCodePrompt } from '../contracts.ts';
 import { checkActiveCapability, type HostWriteAuthority, type WriteCapability } from '../grant.ts';
 import { normalizeEmailCode } from '../rules/emailVerification.ts';
 import { dispatchHostEvent, EVENT_PROFILES } from './allowlist.ts';
+import { evaluateHostVeto } from '../gate/hostVeto.ts';
 
 export { normalizeEmailCode } from '../rules/emailVerification.ts';
 
@@ -27,6 +28,7 @@ export { normalizeEmailCode } from '../rules/emailVerification.ts';
 interface EmailCodeWritePolicy {
   readonly enabled: boolean;
   readonly capabilities: Readonly<Record<WriteCapability, boolean>>;
+  readonly deniedHostSuffixes?: readonly string[];
 }
 
 /**
@@ -81,6 +83,18 @@ export function writeEmailCode(input: Readonly<{
   }
   if (!current) return { ok: false, code: 'PROMPT_GONE' };
   const targets = prompt.inputs;
+  const hostAllowed = (target: HTMLInputElement): boolean => {
+    try {
+      const location = target.ownerDocument.location;
+      return location !== null && !evaluateHostVeto({
+        hostname: location.hostname, pathname: location.pathname,
+        policy: { deniedHostSuffixes: policy.deniedHostSuffixes ?? [] },
+      }).vetoed;
+    } catch {
+      return false;
+    }
+  };
+  if (!targets.every(hostAllowed)) return { ok: false, code: 'POLICY_DISABLED' };
   // 一格收整串，或每格一个字符（解释器已经保证格数是这两种之一）。
   const pieces = targets.length === 1 ? [code] : targets.length === code.length ? [...code] : null;
   if (pieces === null || !targets.every(writable)) return { ok: false, code: 'TARGET_NOT_WRITABLE' };
@@ -89,8 +103,12 @@ export function writeEmailCode(input: Readonly<{
     if (!writable(target)) return { ok: false, code: 'TARGET_NOT_WRITABLE' };
     const setter = nativeInputValueSetter(target);
     if (setter === null) return { ok: false, code: 'TARGET_NOT_WRITABLE' };
+    if (!hostAllowed(target)) return { ok: false, code: 'POLICY_DISABLED' };
     setter(pieces[index]!);
-    for (const event of EVENT_PROFILES.text) dispatchHostEvent(target, event);
+    for (const event of EVENT_PROFILES.text) {
+      if (!hostAllowed(target)) return { ok: false, code: 'POLICY_DISABLED' };
+      dispatchHostEvent(target, event);
+    }
   }
   return targets.every((target, index) => target.value === pieces[index])
     ? { ok: true }

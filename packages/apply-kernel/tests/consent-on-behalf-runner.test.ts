@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApplyFormDescriptor, ScanRootOptions } from '../src/contracts';
 import { buildApplyPlan } from '../src/engine';
+import { SIGNING_CONSENT_KINDS } from '../src/dict/signOnBehalf';
 import { fieldSignature } from '../src/fieldIdentity';
 import { mintAuthority, type HostWriteAuthority } from '../src/grant';
 import { createBundledApplyPolicy } from '../src/policy';
@@ -44,7 +45,7 @@ async function run(
   descriptor: ApplyFormDescriptor,
   options: { consent?: boolean; policyOn?: boolean; beforeRun?: () => void; auth?: (fingerprint: string) => HostWriteAuthority } = {},
 ) {
-  const plan = buildApplyPlan(descriptor, {} as never, { fillEmptyOnly: true, capabilities: { 'sign-on-behalf': true } } as never);
+  const plan = buildApplyPlan(descriptor, {} as never, { fillEmptyOnly: true, capabilities: { 'sign-on-behalf': true }, signOnBehalfKinds: new Set(SIGNING_CONSENT_KINDS) } as never);
   options.beforeRun?.();
   const summary = await runApplyPlan({
     plan,

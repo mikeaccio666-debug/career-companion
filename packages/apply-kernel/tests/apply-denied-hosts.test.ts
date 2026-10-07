@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createBundledApplyPolicy, isHostDenied, tighten } from '../src/policy';
+import { createBundledApplyPolicy, isHostDenied, LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES, tighten } from '../src/policy';
 
 /**
  * 主机名粒度的止血通道。
@@ -31,8 +31,9 @@ function remoteBlob(extra: Record<string, unknown> = {}): Record<string, unknown
 }
 
 describe('主机否决表', () => {
-  it('包内基线是空表（否决只从远程来，不必发版）', () => {
-    expect(createBundledApplyPolicy().deniedHostSuffixes).toEqual([]);
+  it('包内保留 LinkedIn/Indeed 自动操作限制，远程仍能增加止血后缀', () => {
+    expect(createBundledApplyPolicy().deniedHostSuffixes).toEqual(['linkedin.com', 'indeed.com']);
+    expect(Object.isFrozen(LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES)).toBe(true);
   });
 
   /**
@@ -47,7 +48,7 @@ describe('主机否决表', () => {
     );
     expect(merged.enabled).toBe(true);
     expect(merged.vendors.greenhouse).toBe(true);
-    expect(merged.deniedHostSuffixes).toEqual([]);
+    expect(merged.deniedHostSuffixes).toEqual(LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES);
   });
 
   it('远程下发的否决表会生效', () => {
@@ -55,7 +56,7 @@ describe('主机否决表', () => {
       createBundledApplyPolicy(),
       remoteBlob({ deniedHostSuffixes: ['nav.no', 'ethicspoint.com'] }),
     );
-    expect(merged.deniedHostSuffixes).toEqual(['nav.no', 'ethicspoint.com']);
+    expect(merged.deniedHostSuffixes).toEqual([...LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES, 'nav.no', 'ethicspoint.com']);
     expect(isHostDenied(merged, 'www.nav.no')).toBe(true);
     expect(isHostDenied(merged, 'secure.ethicspoint.com')).toBe(true);
     expect(isHostDenied(merged, 'jobs.lever.co')).toBe(false);
@@ -68,7 +69,7 @@ describe('主机否决表', () => {
   it('合并是并集，远程取消不掉包内已有的否决', () => {
     const bundled = { ...createBundledApplyPolicy(), deniedHostSuffixes: ['bad.example'] };
     const merged = tighten(bundled, remoteBlob({ deniedHostSuffixes: ['worse.example'] }));
-    expect(new Set(merged.deniedHostSuffixes)).toEqual(new Set(['bad.example', 'worse.example']));
+    expect(new Set(merged.deniedHostSuffixes)).toEqual(new Set([...LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES, 'bad.example', 'worse.example']));
 
     // 远程给空表也不能把已有的否决抹掉。
     const emptied = tighten(bundled, remoteBlob({ deniedHostSuffixes: [] }));
@@ -100,7 +101,7 @@ describe('主机否决表', () => {
   ])('deniedHostSuffixes %s 时按空表处理，其余策略照常生效', (_name, bad) => {
     const merged = tighten(createBundledApplyPolicy(), remoteBlob({ deniedHostSuffixes: bad }));
     expect(merged.source, '一个形状错误的否决表把整份策略拒了').toBe('remote');
-    expect(merged.deniedHostSuffixes).toEqual([]);
+    expect(merged.deniedHostSuffixes).toEqual(LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES);
   });
 
   /**
@@ -114,20 +115,32 @@ describe('主机否决表', () => {
         deniedHostSuffixes: ['com', 'org', '', '  ', 'a b.com', 'https://x.com', 'ok.example'],
       }),
     );
-    expect(merged.deniedHostSuffixes, '单标签或非法项被放行了').toEqual(['ok.example']);
+    expect(merged.deniedHostSuffixes, '单标签或非法项被放行了').toEqual([...LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES, 'ok.example']);
   });
 
   it('条目数有上限', () => {
     const many = Array.from({ length: 900 }, (_, i) => `h${i}.example`);
     const merged = tighten(createBundledApplyPolicy(), remoteBlob({ deniedHostSuffixes: many }));
-    expect(merged.deniedHostSuffixes.length).toBeLessThanOrEqual(512);
+    expect(merged.deniedHostSuffixes.length).toBe(512 + LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES.length);
+    expect(merged.deniedHostSuffixes).toContain('h511.example');
+    expect(merged.deniedHostSuffixes).not.toContain('h512.example');
   });
 
   /** 反向探针：空表时不能什么都否决，否则以上断言全是空转。 */
-  it('空表时不否决任何主机', () => {
+  it('本地限制不会把普通 ATS 或无关主机全部否决', () => {
     const policy = createBundledApplyPolicy();
     for (const host of ['jobs.lever.co', 'nav.no', 'example.com', '']) {
-      expect(isHostDenied(policy, host), `空表却否决了 ${host}`).toBe(false);
+      expect(isHostDenied(policy, host), `本地限制误拒了 ${host}`).toBe(false);
     }
+  });
+
+  it.each(['linkedin.com', 'www.linkedin.com', 'www.indeed.com', 'apply.indeed.com', 'smartapply.indeed.com'])('远程空表或手工空投影不能解除 %s 的本地操作限制', (hostname) => {
+    const merged = tighten(createBundledApplyPolicy(), remoteBlob({ deniedHostSuffixes: [] }));
+    expect(isHostDenied(merged, hostname)).toBe(true);
+    expect(isHostDenied({ deniedHostSuffixes: [] }, hostname)).toBe(true);
+  });
+
+  it.each(['notlinkedin.com', 'linkedin.com.example.test', 'notindeed.com', 'indeed.com.example.test'])('本地后缀同样按标签边界，不误拒 %s', (hostname) => {
+    expect(isHostDenied({ deniedHostSuffixes: [] }, hostname)).toBe(false);
   });
 });

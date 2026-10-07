@@ -2,8 +2,8 @@
  * 代填第五刀（2026-09-28）——计划期：同意了当前版本的代填授权才放行；能不能联系雇主按资料里的回答答。
  *
  * 能力位 `sign-on-behalf` 之外还有第二道：这一轮获准的类别（`signOnBehalfKinds`）。只有当前版本（2026-09-28）的同意
- * 算数：同意了，每一类都放行；没同意（只同意过旧版本也一样），同意类一律 MANUAL_ONLY。调用方不给获准的类别，能力位本身
- * 就是「同意了当前版本」。能不能联系雇主不看同意书，只看资料里的回答；没答就交还本人。
+ * 算数：只放行本轮明确提供的类别；没提供类别、没同意（只同意过旧版本也一样），同意类一律 MANUAL_ONLY。
+ * 能不能联系雇主不看同意书，只看资料里的回答及本轮类别；没答就交还本人。
  * 题面全是合成的（公司名一律 Acme）。
  */
 
@@ -121,8 +121,10 @@ describe('新类别：同意了当前版本的代填授权才排', () => {
     expect(result.skipped).toEqual([expect.objectContaining({ label, reason: 'MANUAL_ONLY', required: true })]);
   });
 
-  it.each(WIDENED_CHECKBOXES)('%s：调用方不给获准的类别 → 能力位本身就是「同意了当前版本」，照排', (kind, label) => {
-    expect(plan(checkboxes([label])).entries).toEqual([expect.objectContaining({ signOnBehalf: kind })]);
+  it.each(WIDENED_CHECKBOXES)('%s：调用方不给获准的类别 → 能力位不能替代授权，交还本人', (_kind, label) => {
+    const result = plan(checkboxes([label]));
+    expect(result.entries).toEqual([]);
+    expect(result.skipped).toEqual([expect.objectContaining({ label, reason: 'MANUAL_ONLY', required: true })]);
   });
 
   it('旧类别同样只在同意了当前版本时排：没同意（只同意过旧版本也一样）就交还本人', () => {

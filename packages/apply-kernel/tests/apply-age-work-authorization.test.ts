@@ -152,34 +152,33 @@ describe('「年满 18 且有权在 X 工作吗」：两半都得成立', () => 
   });
 });
 
-/**
- * 2026-09-24 负责人决定（Mike：「就答是的」）：说得出是哪一国、他有别国的记录唯独没有这一国的，工作授权那一半按默认
- * 答「是」（与 Jobright 一致），条目带上那一国。年龄那一半照旧得有依据：没有 over18、也推不出来，就交还用户。
- */
-describe('「年满 18 且有权在 X 工作吗」：X 他没有记录、但有别国的记录', () => {
+/** 年龄证据不能替代岗位所在国的工作许可记录。 */
+describe('「年满 18 且有权在 X 工作吗」：缺 X 记录时不生成默认工作资格', () => {
   const ROLE = 'Are you at least 18 years old and legally authorized to work in the country where this role is located?';
 
-  it('年满 18 ∧ 岗位在爱沙尼亚、他只有美国记录 → Yes，带上爱沙尼亚', () => {
+  it('已确认年满 18、岗位在爱沙尼亚、只有美国记录：无答案或预填', () => {
     const result = plan(radios(ROLE), { over18: 'true' }, released({ workAuthorizations: US('YES'), jobRegionCode: 'EE' }));
-    expect(entryFor(result, ROLE)).toMatchObject({
-      key: 'workAuthorization', value: 'Yes', defaultedRegionCode: 'EE', inferredRegionCode: 'EE',
-    });
+    expect(entryFor(result, ROLE)).toBeUndefined();
+    expect(skipFor(result, ROLE)).toMatchObject({ reason: 'JOB_DEPENDENT' });
+    expect(skipFor(result, ROLE)?.prefill).toBeUndefined();
   });
 
-  it('题目自己点名了波兰 → 同样按默认答，带上波兰', () => {
+  it('题目点名波兰、只有美国记录：同样交还本人', () => {
     const label = 'Are you at least 18 years of age and legally authorized to work in Poland?';
     const result = plan(radios(label), { over18: 'true' }, released({ workAuthorizations: US('YES') }));
-    expect(entryFor(result, label)).toMatchObject({ key: 'workAuthorization', value: 'Yes', defaultedRegionCode: 'PL' });
+    expect(entryFor(result, label)).toBeUndefined();
+    expect(skipFor(result, label)).toMatchObject({ reason: 'JOB_DEPENDENT' });
+    expect(skipFor(result, label)?.prefill).toBeUndefined();
   });
 
-  it('按学历推出年满 18 ∧ 默认答 → Yes，两个依据都带上', () => {
+  it('按学历判断年龄也不能补出未记录的爱沙尼亚工作资格', () => {
     const result = plan(radios(ROLE), {}, released({ workAuthorizations: US('YES'), jobRegionCode: 'EE', collections: WITH_EDUCATION }));
-    expect(entryFor(result, ROLE)).toMatchObject({
-      key: 'workAuthorization', value: 'Yes', historyBasis: 'ADULT_FROM_HISTORY', defaultedRegionCode: 'EE',
-    });
+    expect(entryFor(result, ROLE)).toBeUndefined();
+    expect(skipFor(result, ROLE)).toMatchObject({ reason: 'JOB_DEPENDENT' });
+    expect(skipFor(result, ROLE)?.prefill).toBeUndefined();
   });
 
-  it('没有 over18、也推不出来 → 照旧交还，不只凭默认的那一半答', () => {
+  it('没有 over18、也推不出来 → 照旧交还，不只凭别国记录或年龄作答', () => {
     const result = plan(radios(ROLE), {}, released({ workAuthorizations: US('YES'), jobRegionCode: 'EE' }));
     expect(entryFor(result, ROLE)).toBeUndefined();
     expect(skipFor(result, ROLE)).toMatchObject({ reason: 'JOB_DEPENDENT' });

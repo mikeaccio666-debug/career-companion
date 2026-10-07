@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ApplyFormDescriptor, ScanRootOptions } from '../src/contracts';
-import { SIGN_ON_BEHALF_COMBOBOX_ANSWERS } from '../src/dict/signOnBehalf';
+import { SIGNING_CONSENT_KINDS, SIGN_ON_BEHALF_COMBOBOX_ANSWERS } from '../src/dict/signOnBehalf';
 import { buildApplyPlan } from '../src/engine';
 import { createScanRoot } from '../src/scanRoot';
 import { ashbyAdapter } from '../src/sites/ashby/applyForm';
@@ -86,7 +86,7 @@ function listboxCombobox(question: string): ApplyFormDescriptor {
 }
 
 function plan(descriptor: ApplyFormDescriptor, on = true) {
-  return buildApplyPlan(descriptor, {} as never, { fillEmptyOnly: true, capabilities: { 'sign-on-behalf': on } } as never);
+  return buildApplyPlan(descriptor, {} as never, { fillEmptyOnly: true, capabilities: { 'sign-on-behalf': on }, signOnBehalfKinds: new Set(SIGNING_CONSENT_KINDS) } as never);
 }
 
 describe('单个勾选框：每一类一个条目键', () => {
