@@ -59,7 +59,8 @@
 |---|---|
 | `/welcome` | 初见（同意之前、第一封信之前访问任何路由都回到当前步骤） |
 | `/today` | 今天 |
-| `/group`（`?m=<messageId>`） | 主线（对话列表置顶的那一个；手机上对话列表的入口以 08 为准） |
+| `/chats` | 对话列表（手机上底部导航「对话」打开这里；宽屏 ≥ 640 时对话列表是常驻左栏，访问这里直接转到 `/group`） |
+| `/group`（`?m=<messageId>`） | 主线（对话列表置顶的那一个） |
 | `/group/:expertKey`（`guide` / `applier` / `interviewer`，P1b 起 `planner`、`coach`；可带 `?mode=apply_consent`） | 该队员的单聊，第一次打开时创建（03 §6.2）；未上线的 key 回到 `/group` |
 | `/group/mentor/:roomId` | 导师房间 `mentor_room`（P1-10） |
 | `/pending`、`/pending/:id` | 待确认 |
