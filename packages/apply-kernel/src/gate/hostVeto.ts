@@ -1,4 +1,4 @@
-import { isHostDenied, isLocallyAutomationDenied, type ApplyPolicy } from '../policy';
+import { isHostDenied, isLocallyAutomationDenied, type HostRestrictionPolicy } from './hostRestrictions';
 
 /**
  * 主机级注入否决。**纯函数，不碰 DOM**——所以它能在最便宜的位置先跑一遍。
@@ -169,7 +169,7 @@ export interface HostVetoInput {
    * 非共域主机上它不参与判断，行为与加这个字段之前逐字相同。
    */
   readonly pathname?: string;
-  readonly policy: Pick<ApplyPolicy, 'deniedHostSuffixes'>;
+  readonly policy: HostRestrictionPolicy;
 }
 
 export function evaluateHostVeto(input: HostVetoInput): HostVetoVerdict {

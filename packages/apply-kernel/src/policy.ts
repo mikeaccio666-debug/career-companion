@@ -10,24 +10,15 @@ import type { ExecutionRuntimeWriteCapability } from '@edaix/contracts';
 
 import { APPLY_VENDORS, type ApplyVendor } from './contracts';
 import type { WriteCapability } from './grant';
+import { LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES } from './gate/hostRestrictions';
+
+// Preserve the existing browser policy API; the shared rules no longer import
+// browser storage or Vite/WXT ambient types into server consumers.
+export { LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES, isHostDenied, isLocallyAutomationDenied } from './gate/hostRestrictions';
 
 export const APPLY_POLICY_CACHE_KEY = 'vibeApplyPolicy';
 export const APPLY_POLICY_INSTALLED_AT_KEY = 'vibeApplyPolicyInstalledAt';
 export const APPLY_POLICY_KILL_KEY = 'vibeApplyKill';
-
-/** Local automation restriction (product/11 §5.1, §6.2), independent of remote policy. */
-export const LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES = Object.freeze([
-  'linkedin.com',
-  // Includes the documented apply.indeed.com and smartapply.indeed.com frames.
-  'indeed.com',
-] as const);
-
-export function isLocallyAutomationDenied(hostname: string): boolean {
-  const host = hostname.trim().toLowerCase().replace(/\.$/, '');
-  return LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES.some(
-    (suffix) => host === suffix || host.endsWith(`.${suffix}`),
-  );
-}
 
 export const APPLY_POLICY_TTL_MS = 24 * 60 * 60 * 1000;
 export const APPLY_POLICY_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
@@ -453,27 +444,6 @@ function parseHostSuffixes(value: unknown): readonly string[] {
     if (out.length >= MAX_DENIED_HOST_SUFFIXES) break;
   }
   return [...new Set(out)];
-}
-
-/**
- * 这个主机名是否被否决。
- *
- * 按**标签边界**匹配，不是纯字符串后缀：`nav.no` 命中 `nav.no` 与 `www.nav.no`，
- * 但**不**命中 `notnav.no`。纯 `endsWith` 会让一条否决意外扩散到无关域名上，
- * 而否决表本身就是给运维在事故中用的，误伤范围必须可预测。
- */
-export function isHostDenied(policy: Pick<ApplyPolicy, 'deniedHostSuffixes'>, hostname: string): boolean {
-  const host = hostname.trim().toLowerCase().replace(/\.$/, '');
-  if (host === '') return false;
-  // Exported callers may pass a remote-only projection. It cannot erase the local rule.
-  if (isLocallyAutomationDenied(host)) return true;
-  return policy.deniedHostSuffixes.some((raw) => {
-    // 后缀也要归一化：`parseHostSuffixes` 出来的已经是小写，但这个谓词是导出的，
-    // 调用方可能拿一份手工构造的 policy 进来（测试、以及将来的内置基线）。
-    // 只归一化一边的谓词是个半成品——它在大部分调用点碰巧对。
-    const suffix = raw.trim().toLowerCase().replace(/^\.+/, '').replace(/\.+$/, '');
-    return suffix !== '' && (host === suffix || host.endsWith(`.${suffix}`));
-  });
 }
 
 export function tighten(bundled: ApplyPolicy, remote: unknown): ApplyPolicy {
