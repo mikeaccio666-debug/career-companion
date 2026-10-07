@@ -15,7 +15,7 @@ import { recoverStaleStreams } from '../src/runtime-leases.ts';
 import { mcpSchemaHash } from '../src/mcp-config.ts';
 import type { McpTransport } from '../src/mcp-transport-port.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig();
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' });
 const schema = `conversation_tasks_test_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), databaseUrl = new URL(base.databaseUrl);
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString());

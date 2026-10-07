@@ -18,7 +18,7 @@ import { processJob, recoverInterrupted } from '../src/jobs.ts';
 import { applyBrowserCheckpoint, assertBrowserAuthorized, loadBrowserCheckpoint, markBrowserInterrupted, type BrowserBinding } from '../src/browser-checkpoints.ts';
 import { LocalBlobStorage } from '../src/storage.ts';
 
-const schema=`browser_journal_test_${randomUUID().replaceAll('-','')}`,base=readConfig(),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const schema=`browser_journal_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString()),origin='http://localhost:4321',prefix='/api/platform';
 const requireCore=createRequire(new URL('../../../packages/ai-core/package.json',import.meta.url));
 const {chromium}=requireCore('playwright') as {chromium:{executablePath():string}};

@@ -35,6 +35,21 @@ test('listener defaults stay on loopback and hosted ports require explicit, vali
   assert.throws(() => readConfig({ PLATFORM_WEB_STATIC_DIR: '   ' }), /PLATFORM_WEB_STATIC_DIR/);
 });
 
+test('workbench admission defaults closed and only explicit non-production mode can enable it', () => {
+  for (const NODE_ENV of [undefined, 'development', 'test']) {
+    assert.equal(readConfig({ NODE_ENV }).workbenchEnabled, false);
+    assert.equal(readConfig({ NODE_ENV, PLATFORM_ENABLE_WORKBENCH: '0' }).workbenchEnabled, false);
+    assert.equal(readConfig({ NODE_ENV, PLATFORM_ENABLE_WORKBENCH: '1' }).workbenchEnabled, true);
+  }
+  assert.equal(readConfig(production).workbenchEnabled, false);
+  assert.equal(readConfig({ ...production, PLATFORM_ENABLE_WORKBENCH: '0' }).workbenchEnabled, false);
+  assert.throws(() => readConfig({ ...production, PLATFORM_ENABLE_WORKBENCH: '1' }), /staff authorization/);
+  assert.equal(readConfig({ PLATFORM_ALLOW_PROVIDER_CALLS: '1', PLATFORM_ENABLE_BROWSER: '1', PLATFORM_ENABLE_CLI: '1' }).workbenchEnabled, false);
+  for (const value of ['', 'true', 'yes', ' 1', '1 ', '01', '1\n', 'synthetic-secret']) {
+    assert.throws(() => readConfig({ PLATFORM_ENABLE_WORKBENCH: value }), error => error instanceof Error && error.message.includes('PLATFORM_ENABLE_WORKBENCH') && !error.message.includes('synthetic-secret'));
+  }
+});
+
 test('production requires explicit backend connections, exact HTTPS origins and server-owned object credentials', () => {
   const valid = readConfig(production);
   assert.equal(valid.secureCookies, true); assert.equal(valid.host, '127.0.0.1');

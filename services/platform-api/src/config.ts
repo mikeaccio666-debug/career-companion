@@ -12,6 +12,7 @@ export interface PlatformConfig {
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
+  workbenchEnabled: boolean;
   mcp?: McpCatalogConfig;
 }
 
@@ -57,6 +58,13 @@ function serverUrl(value: string | undefined, name: string, protocols: readonly 
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig {
   const production = env.NODE_ENV === 'production';
+  if (env.PLATFORM_ENABLE_WORKBENCH !== undefined && !['0', '1'].includes(env.PLATFORM_ENABLE_WORKBENCH)) {
+    throw new Error('PLATFORM_ENABLE_WORKBENCH must be 0 or 1');
+  }
+  const workbenchEnabled = env.PLATFORM_ENABLE_WORKBENCH === '1';
+  // Internal deployment mode is not employee authorization. Production cannot
+  // expose this mode before the separate staff-role boundary is implemented.
+  if (production && workbenchEnabled) throw new Error('PLATFORM_ENABLE_WORKBENCH cannot enable a public production workbench before staff authorization is implemented');
   const databasePoolMax = boundedInteger(env.PLATFORM_DATABASE_POOL_MAX, 'PLATFORM_DATABASE_POOL_MAX', 12, 1, 100);
   const databaseConnectTimeoutMs = boundedInteger(env.PLATFORM_DATABASE_CONNECT_TIMEOUT_MS, 'PLATFORM_DATABASE_CONNECT_TIMEOUT_MS', 5000, 100, 5000);
   const codeVersion = runtimeIdentifier(env.PLATFORM_BUILD_ID, 'PLATFORM_BUILD_ID', 'development');
@@ -105,7 +113,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
-    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail,
+    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, workbenchEnabled,
     queueName, s3, mcp: readMcpConfig(env),
   };
 }

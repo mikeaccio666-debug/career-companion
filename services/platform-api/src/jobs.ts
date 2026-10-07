@@ -24,6 +24,7 @@ import { authorizeConversationTaskOrigin, conversationTaskRows, parseConversatio
 import { authorizeGoalPlanTask, bindGoalPlanTask, recordGoalPlanTaskReceipt, type GoalPlanTaskOrigin } from './goal-plan-bindings.ts';
 import { assertGoalPlanImageBytes, readGoalPlanFile, readGoalPlanImage, readGoalPlanSourceFile, resolveGoalPlanInputs, verifyGoalPlanInputSources } from './goal-plan-inputs.ts';
 import { speechJobOptions, validateSpeechInput } from '../../../packages/ai-core/src/voice-input.ts';
+import { assertWorkbenchAdmission } from './workbench-policy.ts';
 export { connectionFromUrl } from './queue-connection.ts';
 
 export function parseJob(value: unknown): CreateJobInput {
@@ -168,6 +169,7 @@ export class JobService {
   async create(userId: string, input: CreateJobInput, originValue?: ConversationTaskCreationOrigin, signal?: AbortSignal, planOrigin?: GoalPlanTaskOrigin): Promise<{ job: Job; approval?: any }> {
     signal?.throwIfAborted();
     if(originValue && planOrigin)throw invalid('A task must have one server origin.');
+    if(!planOrigin)assertWorkbenchAdmission(this.config,input.kind);
     const origin = originValue === undefined ? undefined : parseConversationTaskOrigin(originValue);
     if(origin&&(origin.tool==='prepare_browser_task'&&input.kind!=='browser'||origin.tool==='prepare_mcp_task'&&input.kind!=='mcp'))throw invalid('The server origin tool does not match the prepared task kind.');
     let prepared = planOrigin?undefined:await this.preparedInput(userId,input);
@@ -185,6 +187,7 @@ export class JobService {
           const review=(await client.query("SELECT * FROM platform_approvals WHERE job_id=$1 AND user_id=$2 AND generation=$3 AND status='pending' AND $4='needs_approval' ORDER BY created_at DESC LIMIT 1",[existing.id,userId,existing.generation,existing.status])).rows[0];
           return {job:mapJob(existing),...(review?{approval:mapApproval(review)}:{})};
         }
+        assertWorkbenchAdmission(this.config,authorization.step!.input.task.kind);
         const resolved=await resolveGoalPlanInputs(client,this.storage,userId,authorization.step.input,authorization.rows!,signal);
         prepared=await this.preparedInput(userId,resolved.input,client);
         if(prepared.input.kind==='speech'){
@@ -269,6 +272,7 @@ export class JobService {
       if (!result.rowCount) throw notFound();
       const row = result.rows[0];
       if (!['failed','cancelled','uncertain'].includes(row.status)) throw new ApiError(409,'JOB_NOT_RETRYABLE','Only failed or cancelled tasks can be retried.');
+      assertWorkbenchAdmission(this.config,row.kind);
       if(row.kind==='mcp'){
         if(await this.mcp.started(client,id))throw new ApiError(409,'MCP_REVIEW_REQUIRED','This MCP call already started and cannot be replayed by retry.');
         await this.mcp.validateBinding(client,row);
@@ -310,6 +314,7 @@ export class JobService {
       if (!approval.job_id) throw new ApiError(409,'APPROVAL_NOT_EXECUTABLE','This action is not executable as a job.');
       if (!job.rowCount || job.rows[0].status!=='needs_approval') throw new ApiError(409,'JOB_NOT_AWAITING_APPROVAL','This task no longer awaits approval.');
       if(decision==='approved'){
+        assertWorkbenchAdmission(this.config,job.rows[0].kind);
         const input=jobInput(job.rows[0]);if(input.kind==='mcp')await this.mcp.validateBinding(client,job.rows[0]);
         const workflowCheckpoint=await workflowTemplateCheckpoint(client,job.rows[0]);
         validateExecutionTemplates(input,job.rows[0].execution_policy,undefined,completedWorkflowStepIndexes(workflowCheckpoint?.steps));

@@ -15,7 +15,7 @@ import { createProviderRuntime, ProviderError } from '@companion/ai-core';
 import { fakeCodexResponse } from '../../../packages/ai-core/test/fixtures/codex-responses.ts';
 import { fileURLToPath } from 'node:url';
 
-const schema=`relay_test_${randomUUID().replaceAll('-','')}`,base=readConfig();
+const schema=`relay_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' });
 const admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());
 const env={PLATFORM_CLI_MODEL_RELAY:'1',PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-relay-key',PLATFORM_CLI_MODEL:'fictional-model',PLATFORM_CLI_RELAY_MAX_OUTPUT_TOKENS:'256'};
