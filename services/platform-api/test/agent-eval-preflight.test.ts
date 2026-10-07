@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { evalCommand } from '../evals/main.ts';
 import { buildEvalPreflight } from '../evals/preflight.ts';
+import { createEvalStudyPlan } from '../evals/study-plan.ts';
 
 test('dry-run is deterministic, contains no student text and claims no measured result', () => {
   const plan = buildEvalPreflight();
@@ -18,6 +19,19 @@ test('dry-run is deterministic, contains no student text and claims no measured 
   assert(plan.pr3EntryGate.reasons.includes('real_model_study_not_run'));
   assert.match(plan.caseSetDigest, /^[a-f0-9]{64}$/);
   assert.match(plan.priceCandidateDigest, /^[a-f0-9]{64}$/);
+  const study = createEvalStudyPlan();
+  assert.equal(plan.studyDigest, study.digest);
+  assert.equal(plan.promptDigest, study.promptDigest);
+  assert.deepEqual(plan.stages.developmentPilot, study.pilotCaseIds);
+  assert.deepEqual(plan.stages.developmentAll, study.developmentCaseIds);
+  assert.deepEqual(plan.stages.formalAll, study.formalCaseIds);
+  assert.deepEqual(plan.stages.formalPilot, []);
+  assert.equal(plan.inputScope, 'prompt_only'); assert.equal(plan.toolExecution, 'not_exercised');
+  assert.equal(plan.entries.length, 140);
+  for (const entry of plan.entries) {
+    assert.deepEqual(Object.keys(entry).sort(), ['caseId','purpose','scriptDigest','scriptId','seedInputDigest','speaker','stage']);
+    assert.match(entry.seedInputDigest, /^[a-f0-9]{64}$/);
+  }
   for (const item of plan.cases) {
     assert.deepEqual(Object.keys(item).sort(), ['id', 'language', 'pairId', 'speaker', 'turnKind']);
   }

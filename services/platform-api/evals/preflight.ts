@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
-import { P0_EVAL_CASES, PILOT_CASE_IDS, FORMAL_CASE_IDS } from './cases.ts';
+import { createEvalStudyPlan } from './study-plan.ts';
+export { evalDigest } from './baseline-input.ts';
+import { evalDigest } from './baseline-input.ts';
 import { PROPOSED_EVAL_PRICES, PROPOSED_PRICE_STATUS } from './prices.ts';
 
 /** Availability describes this foundation, not an automatic audit of later code. */
@@ -18,22 +19,23 @@ export const PRODUCT_METRIC_BLOCKERS = Object.freeze({
   task_progress_gap_s: 'background_agent_runner_not_connected',
 });
 
-export function evalDigest(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
-}
-
 export function buildEvalPreflight() {
-  const cases = P0_EVAL_CASES.map(item => ({ id: item.id, pairId: item.pairId,
+  const study = createEvalStudyPlan();
+  const cases = study.scripts.map(item => ({ id: item.id, pairId: item.pairId,
     speaker: item.speaker, language: item.language, turnKind: item.turnKind }));
   const counts = Object.fromEntries(['companion', 'guide', 'applier', 'interviewer'].map(speaker => [speaker,
     cases.filter(item => item.speaker === speaker).length]));
   return {
     version: 1, scope: 'provider_loop_baseline_preparation', mode: 'dry_run',
     status: 'prepared_not_executed', providerCalls: 0, liveCommandAvailable: false,
-    caseSetDigest: evalDigest(P0_EVAL_CASES), priceCandidateDigest: evalDigest(PROPOSED_EVAL_PRICES),
+    caseSetDigest: study.corpusDigest, studyDigest: study.digest, promptDigest: study.promptDigest,
+    inputScope: study.scope, toolExecution: 'not_exercised', priceCandidateDigest: evalDigest(PROPOSED_EVAL_PRICES),
     languageScripts: cases.length, semanticScenarios: new Set(cases.map(item => item.pairId)).size,
     speakerCounts: counts,
-    stages: { developmentPilot: [...PILOT_CASE_IDS], developmentAll: cases.map(item => item.id), formalAll: [...FORMAL_CASE_IDS] },
+    stages: { developmentPilot: [...study.pilotCaseIds], developmentAll: [...study.developmentCaseIds],
+      formalPilot: [...study.formalPilotCaseIds], formalAll: [...study.formalCaseIds] },
+    entries: study.entries.map(({ caseId, scriptId, scriptDigest, seedInputDigest, speaker, purpose, stage }) =>
+      ({ caseId, scriptId, scriptDigest, seedInputDigest, speaker, purpose, stage })),
     priceStatus: PROPOSED_PRICE_STATUS, proposedPrices: PROPOSED_EVAL_PRICES,
     // Research prices are not silently promoted to a signed/approved live budget.
     approvedBudgetMicroUsd: null, spentMicroUsd: null, forecastMicroUsd: null,
