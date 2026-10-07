@@ -262,3 +262,4 @@ export * from './plans.ts';
 export * from './goal-proposals.ts';
 export * from './job-outcome-reviews.ts';
 export * from './voice-context.ts';
+export * from './student-api.ts';
