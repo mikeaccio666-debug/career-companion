@@ -35,6 +35,18 @@ export interface CompanionGeneratedPreview extends CompanionModelPreview {
   readonly companionId: string; readonly revision: 1; readonly generatedBy: 'model' | 'fallback';
   readonly inkToken: CompanionInkToken; readonly styleCard: string; readonly quirks: CompanionQuirks;
 }
+/** Internal verified data, not an authorization grant. A writer must consume it
+ * immediately in the same bounded transaction; it cannot authorize later writes.
+ */
+export interface VerifiedCompanionPreviewEnvelope {
+  readonly preview: Readonly<CompanionGeneratedPreview>;
+  readonly dimensions: Readonly<CompanionDimensions>;
+  readonly source: Readonly<{
+    taskId: string; companionId: string; previewRevision: 1; generation: number;
+    sourceDraftId: string; sourceRevision: number; answersId: string;
+    questionnaireRevision: number; rulesRevision: number; generatorVersion: number;
+  }>;
+}
 interface CallRow {
   call_id: string; task_id: string; user_id: string; companion_id: string; generation: number; attempt: number;
   provider: string; model: string; purpose: string; reservation_id: string; status: string; usage_status: string;
@@ -140,26 +152,38 @@ export class BackgroundGeneration {
   }
   async read(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionGeneratedPreview> | null> {
     const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
-    return this.db.withBoundedTransaction(async client => {
-      const row = await this.task(client, fixed, taskId, signal), seed = await this.seed(client, fixed, row, signal);
-      if (row.status !== 'completed') return null;
-      if (row.companion_status !== 'awaiting_name' || row.current_revision !== 1) throw intakeUnavailable();
-      const revision = (await client.query(`SELECT * FROM platform_companion_revisions WHERE task_id=$1 AND user_id=$2 FOR UPDATE`, [taskId, fixed.userId])).rows[0];
-      if (!revision || revision.companion_id !== row.companion_id || revision.revision !== 1 || revision.generation !== row.generation) throw intakeUnavailable();
-      let payload: any;
-      try { payload = JSON.parse(this.storage.crypto!.openUtf8(revision.payload_ciphertext,
-        { table: 'platform_companion_revisions', column: 'payload_ciphertext', rowId: row.companion_id, ownerId: fixed.userId, revision: 1 })); }
-      catch { throw intakeUnavailable(); }
-      let preview: CompanionModelPreview;
-      try { preview = parseCompanionModelPreview({ summary: payload?.summary, samples: payload?.samples }); }
-      catch { throw intakeUnavailable(); }
-      const claim: Claim = { row, seed, generation: row.generation, leaseToken: '', runtimeLeaseId: '' };
-      const expected = this.payload(fixed, claim, preview, revision.generated_by, payload?.callIds);
-      if (JSON.stringify(payload) !== JSON.stringify(expected) || !outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw intakeUnavailable();
-      await this.provenance(client, claim, revision.generated_by, payload.callIds);
-      await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
-      return this.preview(claim, preview, revision.generated_by);
-    });
+    return this.db.withBoundedTransaction(async client =>
+      (await this.readInTransaction(client, fixed, { taskId }, signal))?.preview ?? null);
+  }
+  /** Internal writer composition. The caller owns an already active bounded
+   * transaction and must consume this verified snapshot under its retained locks.
+   * No model request, publication permission or cross-transaction grant is issued.
+   */
+  async readInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown,
+    signal?: AbortSignal): Promise<Readonly<VerifiedCompanionPreviewEnvelope> | null> {
+    const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
+    const row = await this.task(client, fixed, taskId, signal), seed = await this.seed(client, fixed, row, signal);
+    if (row.status !== 'completed') return null;
+    if (row.companion_status !== 'awaiting_name' || row.current_revision !== 1) throw intakeUnavailable();
+    const revision = (await client.query(`SELECT * FROM platform_companion_revisions WHERE task_id=$1 AND user_id=$2 FOR UPDATE`, [taskId, fixed.userId])).rows[0];
+    if (!revision || revision.companion_id !== row.companion_id || revision.revision !== 1 || revision.generation !== row.generation) throw intakeUnavailable();
+    let payload: any;
+    try { payload = JSON.parse(this.storage.crypto!.openUtf8(revision.payload_ciphertext,
+      { table: 'platform_companion_revisions', column: 'payload_ciphertext', rowId: row.companion_id, ownerId: fixed.userId, revision: 1 })); }
+    catch { throw intakeUnavailable(); }
+    let preview: CompanionModelPreview;
+    try { preview = parseCompanionModelPreview({ summary: payload?.summary, samples: payload?.samples }); }
+    catch { throw intakeUnavailable(); }
+    const claim: Claim = { row, seed, generation: row.generation, leaseToken: '', runtimeLeaseId: '' };
+    const expected = this.payload(fixed, claim, preview, revision.generated_by, payload?.callIds);
+    if (JSON.stringify(payload) !== JSON.stringify(expected) || !outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw intakeUnavailable();
+    await this.provenance(client, claim, revision.generated_by, payload.callIds);
+    await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
+    return Object.freeze({ preview: this.preview(claim, preview, revision.generated_by), dimensions: seed.dimensions,
+      source: Object.freeze({ taskId: row.id, companionId: row.companion_id, previewRevision: 1 as const,
+        generation: row.generation, sourceDraftId: row.source_draft_id, sourceRevision: row.source_revision,
+        answersId: row.answers_id, questionnaireRevision: row.questionnaire_revision,
+        rulesRevision: row.rules_revision, generatorVersion: row.generator_version }) });
   }
   async generate(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionGeneratedPreview>> {
     const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
