@@ -7,7 +7,8 @@ import type { PlatformProviderRuntime } from '@companion/platform-contracts';
 import { ApiError } from '../src/errors.ts';
 import { tokenHash, type FixedSessionContext } from '../src/auth.ts';
 import { requireModelConsent } from '../src/model-consent.ts';
-import { parseCompanionNameSubmissionRequest, parseCompanionNameSafetyClaim, parseCompanionNameSafetyDecision } from '../src/companion-name-safety-protocol.ts';
+import { parseCompanionNameSubmissionRequest, parseCompanionNameSubmissionClaimRequest, parseCompanionNameSafetyClaim,
+  parseCompanionNameSafetyDecision } from '../src/companion-name-safety-protocol.ts';
 import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safety.ts';
 import { seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 
@@ -102,7 +103,7 @@ test('closed codecs reject caller authority, accessors, malformed Unicode and un
 test('actual session, student account, legal terms and completed call/cost source are rechecked for read and replay', async () => {
   await loopback(async (runtime, bodies) => {
     for (const mode of ['session', 'staff', 'unverified', 'legal', 'completion', 'cost'] as const) {
-      const { who, prepared, safety } = await fixture.ready(runtime), input = request(prepared.taskId, 'Juno'); await safety.submit(who, input);
+      const { who, prepared, safety } = await fixture.ready(runtime), input = request(prepared.taskId, 'Juno'), saved = await safety.submit(who, input);
       if (mode === 'session') await fixture.db.query('DELETE FROM platform_sessions WHERE token_hash=$1', [who.tokenHash]);
       if (mode === 'staff') await fixture.db.query("UPDATE platform_users SET account_kind='staff' WHERE id=$1", [who.userId]);
       if (mode === 'unverified') await fixture.db.query('UPDATE platform_users SET email_verified_at=NULL WHERE id=$1', [who.userId]);
@@ -112,7 +113,8 @@ test('actual session, student account, legal terms and completed call/cost sourc
       const before = await rows(who), original = await intake(who);
       try {
         for (const action of [() => safety.read(who, { taskId: prepared.taskId }), () => safety.submit(who, input),
-          () => safety.submit(who, request(prepared.taskId, '舟', 1)), () => safety.claim(who, { taskId: prepared.taskId, detectorRevision: 7 })])
+          () => safety.submit(who, request(prepared.taskId, '舟', 1)), () => safety.claim(who, { taskId: prepared.taskId, detectorRevision: 7 }),
+          () => safety.claimSubmission(who, { taskId: prepared.taskId, submissionId: saved.submissionId, detectorRevision: 7 })])
           await assert.rejects(action(), error => error instanceof ApiError && error.status >= 400);
         assert.deepEqual(await rows(who), before); assert.deepEqual(await intake(who), original);
       } finally { if (mode === 'legal') await seedFictionalActiveLegal(fixture.db); }
@@ -133,7 +135,8 @@ test('damaged, transplanted and canonically re-encrypted false preview captures 
       await fixture.db.query('UPDATE platform_companion_name_submissions SET request_ciphertext=$2 WHERE id=$1', [row.id, ciphertext]);
       const before = await rows(own.who);
       for (const action of [() => own.safety.read(own.who, { taskId: own.prepared.taskId }), () => own.safety.submit(own.who, input),
-        () => own.safety.claim(own.who, { taskId: own.prepared.taskId, detectorRevision: 7 })])
+        () => own.safety.claim(own.who, { taskId: own.prepared.taskId, detectorRevision: 7 }),
+        () => own.safety.claimSubmission(own.who, { taskId: own.prepared.taskId, submissionId: row.id, detectorRevision: 7 })])
         await assert.rejects(action(), code('COMPANION_NAME_SAFETY_UNAVAILABLE'));
       assert.deepEqual(await rows(own.who), before); assert.deepEqual(await intake(own.who), original);
     }
@@ -174,5 +177,136 @@ test('fresh real login can reclaim an expired source generation while stale exec
     assert.equal(called, false); await assert.rejects(safety.fail(first, 'unavailable'), code('COMPANION_NAME_SAFETY_CLAIM_CHANGED'));
     await safety.fail(second, 'unavailable'); assert.equal((await rows(who))[0].status, 'pending');
     assert.equal((await rows(who))[0].generation, 2); assert.deepEqual(await intake(fresh), original); assert.equal(bodies.length, 1);
+  });
+});
+
+test('targeted claim codec snapshots only actual source identifiers and bounded detector options without evaluating caller authority', async () => {
+  const input = { taskId: randomUUID(), submissionId: randomUUID(), detectorRevision: 7 }, parsed = parseCompanionNameSubmissionClaimRequest(input);
+  assert.deepEqual(parsed, { ...input, leaseMs: 5000 }); assert(Object.isFrozen(parsed));
+  input.taskId = randomUUID(); input.submissionId = randomUUID(); input.detectorRevision = 8;
+  assert.equal(parsed.detectorRevision, 7); assert.notEqual(parsed.taskId, input.taskId); assert.notEqual(parsed.submissionId, input.submissionId);
+  for (const leaseMs of [100, 60000]) assert.equal(parseCompanionNameSubmissionClaimRequest({ ...input, leaseMs }).leaseMs, leaseMs);
+  let accessed = 0;
+  for (const key of ['taskId', 'submissionId', 'detectorRevision', 'leaseMs']) {
+    const getter = { ...input, leaseMs: 5000 }; Object.defineProperty(getter, key, { enumerable: true, get() { accessed++; return parsed.taskId; } });
+    assert.throws(() => parseCompanionNameSubmissionClaimRequest(getter), code('INVALID_INPUT'));
+    const hidden = { ...input, leaseMs: 5000 }; Object.defineProperty(hidden, key, { value: parsed.taskId, enumerable: false });
+    assert.throws(() => parseCompanionNameSubmissionClaimRequest(hidden), code('INVALID_INPUT'));
+  }
+  assert.equal(accessed, 0);
+  for (const extra of ['userId', 'entryId', 'companionId', 'generation', 'authVersion', 'leaseToken', 'executionToken', 'level', 'mode', 'source', 'session'])
+    assert.throws(() => parseCompanionNameSubmissionClaimRequest({ ...input, [extra]: randomUUID() }), code('INVALID_INPUT'));
+  for (const value of [{ ...input, [Symbol('authority')]: true }, { ...input, submissionId: input.submissionId + '\n' },
+    { ...input, taskId: '00000000-0000-0000-0000-00000000000A' }, { ...input, detectorRevision: -0 }, { ...input, detectorRevision: 0 },
+    { ...input, detectorRevision: 2147483648 }, { ...input, detectorRevision: 1.5 }, { ...input, leaseMs: undefined },
+    { ...input, leaseMs: null }, { ...input, leaseMs: 99 }, { ...input, leaseMs: 60001 }, { ...input, leaseMs: 100.5 }])
+    assert.throws(() => parseCompanionNameSubmissionClaimRequest(value), code('INVALID_INPUT'));
+});
+
+test('targeted actual source claims serialize one lease while older pending recovery remains ordered and untouched', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, safety } = await fixture.ready(runtime), original = await intake(who);
+    const first = await safety.submit(who, request(prepared.taskId, 'Earlier fictional no-hit'));
+    const second = await safety.submit(who, request(prepared.taskId, 'Later fictional source', 1));
+    const before = await rows(who), options = { taskId: prepared.taskId, submissionId: second.submissionId, detectorRevision: 7, leaseMs: 60000 };
+    const results = await Promise.all(Array.from({ length: 3 }, () => safety.claimSubmission(who, options)));
+    assert.equal(results.filter(Boolean).length, 1); const claimed = results.find(Boolean)!;
+    assert.equal(claimed.submissionId, second.submissionId); assert.equal(claimed.submittedAtRevision, 2); assert.equal(claimed.generation, 1);
+    assert.equal(claimed.operationId, before[1].operation_id); assert.equal(claimed.entryId, before[1].entry_id);
+    let after = await rows(who); assert.deepEqual(after[0], before[0]); assert.equal(after[1].status, 'running');
+    const unchanged = after;
+    assert.equal(await safety.claimSubmission(who, options), null); assert.deepEqual(await rows(who), unchanged);
+    const oldest = await safety.claim(who, { taskId: prepared.taskId, detectorRevision: 7, leaseMs: 60000 }); assert(oldest);
+    assert.equal(oldest.submissionId, first.submissionId); assert.equal(oldest.submittedAtRevision, 1);
+    after = await rows(who); assert.deepEqual(after[1], unchanged[1]); assert.deepEqual(await intake(who), original);
+    await safety.fail(oldest, 'unavailable'); await safety.fail(claimed, 'unavailable');
+    assert.equal((await rows(who)).every(item => item.status === 'pending' && item.level === null), true);
+    assert.equal((await fixture.db.query('SELECT count(*)::int AS n FROM platform_safety_model_usage WHERE user_id=$1', [who.userId])).rows[0].n, 0);
+    assert.equal(bodies.length, 1);
+  });
+});
+
+test('targeted claims reject missing or foreign sources and authenticate unrelated original captures before touching a target', async () => {
+  await loopback(async (runtime, bodies) => {
+    const own = await fixture.ready(runtime), other = await fixture.ready(runtime), empty = await fixture.ready(runtime);
+    const first = await own.safety.submit(own.who, request(own.prepared.taskId, 'Earlier fictional source'));
+    const second = await own.safety.submit(own.who, request(own.prepared.taskId, 'Juno', 1));
+    const foreign = await other.safety.submit(other.who, request(other.prepared.taskId, '舟'));
+    const before = await rows(own.who), otherBefore = await rows(other.who), original = await intake(own.who);
+    for (const submissionId of [randomUUID(), foreign.submissionId])
+      await assert.rejects(own.safety.claimSubmission(own.who, { taskId: own.prepared.taskId, submissionId, detectorRevision: 7 }), code('COMPANION_NAME_SAFETY_UNAVAILABLE'));
+    await assert.rejects(other.safety.claimSubmission(other.who, { taskId: other.prepared.taskId, submissionId: second.submissionId, detectorRevision: 7 }), code('COMPANION_NAME_SAFETY_UNAVAILABLE'));
+    await assert.rejects(own.safety.claimSubmission(own.who, { taskId: other.prepared.taskId, submissionId: second.submissionId, detectorRevision: 7 }), code('NOT_FOUND'));
+    await assert.rejects(empty.safety.claimSubmission(empty.who, { taskId: empty.prepared.taskId, submissionId: second.submissionId, detectorRevision: 7 }), code('COMPANION_NAME_SAFETY_UNAVAILABLE'));
+    assert.deepEqual(await rows(own.who), before); assert.deepEqual(await rows(other.who), otherBefore); assert.deepEqual(await rows(empty.who), []);
+    for (const ciphertext of [Buffer.alloc(29), otherBefore[0].request_ciphertext]) {
+      await fixture.db.query('UPDATE platform_companion_name_submissions SET request_ciphertext=$2 WHERE id=$1', [first.submissionId, ciphertext]);
+      const damaged = await rows(own.who);
+      await assert.rejects(own.safety.claimSubmission(own.who, { taskId: own.prepared.taskId, submissionId: second.submissionId, detectorRevision: 7 }), code('COMPANION_NAME_SAFETY_UNAVAILABLE'));
+      assert.deepEqual(await rows(own.who), damaged);
+    }
+    await fixture.db.query('UPDATE platform_companion_name_submissions SET request_ciphertext=$2 WHERE id=$1', [first.submissionId, before[0].request_ciphertext]);
+    assert.deepEqual(await rows(own.who), before); assert.deepEqual(await intake(own.who), original); assert.equal(bodies.length, 3);
+  });
+});
+
+test('expired targeted source recovery binds the new actual session and auth version while old generations remain fenced', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, safety } = await fixture.ready(runtime), original = await intake(who);
+    const saved = await safety.submit(who, request(prepared.taskId, 'Juno'));
+    const options = { taskId: prepared.taskId, submissionId: saved.submissionId, detectorRevision: 7, leaseMs: 60000 };
+    const first = await safety.claimSubmission(who, options); assert(first);
+    const firstRow = (await rows(who))[0];
+    const activeCapture = JSON.parse(fixture.crypto.openUtf8(firstRow.claim_ciphertext, { table: 'platform_companion_name_submissions', column: 'claim_ciphertext', rowId: firstRow.id, ownerId: who.userId, revision: 1 }));
+    assert.equal(activeCapture.sessionTokenHash, who.tokenHash); assert.deepEqual(activeCapture.claim, first);
+    await fixture.db.transaction(async client => {
+      await client.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1', [who.userId]);
+      await client.query('DELETE FROM platform_sessions WHERE user_id=$1', [who.userId]);
+      await client.query("UPDATE platform_companion_name_submissions SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1", [first.submissionId]);
+    });
+    const fresh = { userId: who.userId, tokenHash: tokenHash(randomUUID()) };
+    await fixture.db.query("INSERT INTO platform_sessions(user_id,token_hash,auth_version,expires_at) VALUES($1,$2,1,clock_timestamp()+interval '1 hour')", [fresh.userId, fresh.tokenHash]);
+    const before = await rows(fresh);
+    await assert.rejects(safety.claimSubmission(who, options), code('AUTH_REQUIRED')); assert.deepEqual(await rows(fresh), before);
+    const second = await safety.claimSubmission(fresh, options); assert(second);
+    assert.equal(second.submissionId, first.submissionId); assert.equal(second.generation, 2); assert.equal(second.authVersion, '1'); assert.notEqual(second.leaseToken, first.leaseToken);
+    const current = (await rows(fresh))[0], capture = JSON.parse(fixture.crypto.openUtf8(current.claim_ciphertext, { table: 'platform_companion_name_submissions', column: 'claim_ciphertext', rowId: current.id, ownerId: fresh.userId, revision: 2 }));
+    assert.equal(capture.sessionTokenHash, fresh.tokenHash); assert.deepEqual(capture.claim, second);
+    assert.deepEqual(capture.sourceCapture, activeCapture.sourceCapture); assert.deepEqual(current.request_ciphertext, firstRow.request_ciphertext);
+    assert.equal(current.submitted_auth_version, '0'); assert.equal(await safety.claimSubmission(fresh, options), null);
+    let called = false;
+    await assert.rejects(safety.process(first, async () => { called = true; return {}; }, undefined, async () => {}), code('COMPANION_NAME_SAFETY_CLAIM_CHANGED'));
+    await assert.rejects(safety.fail(first, 'unavailable'), code('COMPANION_NAME_SAFETY_CLAIM_CHANGED')); assert.equal(called, false);
+    await safety.fail(second, 'unavailable'); assert.equal((await rows(fresh))[0].generation, 2); assert.deepEqual(await intake(fresh), original); assert.equal(bodies.length, 1);
+  });
+});
+
+test('targeted claims capture caller coordinates before an actual PostgreSQL account lock wait', async () => {
+  await loopback(async (runtime, bodies) => {
+    const own = await fixture.ready(runtime), other = await fixture.ready(runtime);
+    const first = await own.safety.submit(own.who, request(own.prepared.taskId, 'Earlier fictional source'));
+    const second = await own.safety.submit(own.who, request(own.prepared.taskId, 'Juno', 1)), original = await intake(own.who), before = await rows(own.who);
+    const foreign = await other.safety.submit(other.who, request(other.prepared.taskId, '舟'));
+    const holder = await fixture.db.pool.connect(), context = { ...own.who }, options = { taskId: own.prepared.taskId, submissionId: second.submissionId, detectorRevision: 7, leaseMs: 60000 };
+    let pending: ReturnType<typeof own.safety.claimSubmission> | undefined;
+    try {
+      await holder.query('BEGIN'); await holder.query('SELECT id FROM platform_users WHERE id=$1 FOR UPDATE', [own.who.userId]);
+      const holderPid = (await holder.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      pending = own.safety.claimSubmission(context, options); pending.catch(() => {});
+      let observed = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const waiting = (await fixture.db.query("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query=$1 AND $2=ANY(pg_blocking_pids(pid))", ['SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE', holderPid])).rows;
+        if (waiting.length) { observed = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      assert(observed, 'Expected an actual separate PostgreSQL account lock wait.');
+      context.userId = other.who.userId; context.tokenHash = other.who.tokenHash;
+      options.taskId = other.prepared.taskId; options.submissionId = foreign.submissionId; options.detectorRevision = 99; options.leaseMs = 100;
+      await holder.query('COMMIT'); const actual = await pending; assert(actual);
+      assert.equal(actual.submissionId, second.submissionId); assert.equal(actual.taskId, own.prepared.taskId); assert.equal(actual.userId, own.who.userId); assert.equal(actual.detectorRevision, 7);
+      const after = await rows(own.who); assert.deepEqual(after[0], before[0]); assert.equal(after[1].lease_until.getTime() - after[1].updated_at.getTime() > 59000, true);
+      assert.equal((await rows(other.who))[0].generation, 0); assert.equal(after[0].id, first.submissionId); assert.deepEqual(await intake(own.who), original); await own.safety.fail(actual, 'unavailable');
+    } finally { await holder.query('ROLLBACK'); holder.release(); await Promise.allSettled([pending]); }
+    assert.equal(bodies.length, 2);
   });
 });
