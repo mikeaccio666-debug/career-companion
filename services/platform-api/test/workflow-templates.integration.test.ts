@@ -13,7 +13,7 @@ import { parseJob } from '../src/jobs.ts';
 import { parseWorkflowTemplate, WORKFLOW_TEMPLATE_BYTES } from '../src/workflow-templates.ts';
 
 const prefix='/api/platform',origin='http://localhost:4321',schema=`workflow_templates_test_${randomUUID().replaceAll('-','')}`;
-const base=readConfig(),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string,system:Awaited<ReturnType<typeof buildApp>>,actors=0;
 const unused=async()=>{throw new Error('No model calls are permitted in template fixtures.');};
 const runtime:PlatformProviderRuntime={capabilities:()=>[{id:'workflow',name:'Local workflow engine',enabled:true,keyConfigured:true,capabilities:['workflow'],models:[],envVariables:[]},{id:'local-fixture',name:'Synthetic text model',enabled:true,keyConfigured:true,capabilities:['chat'],models:['synthetic-text'],envVariables:[]}],streamChat:async function*(){throw new Error('Unused');},executeJob:unused,createVoiceSession:unused,transcribe:unused,speech:unused};

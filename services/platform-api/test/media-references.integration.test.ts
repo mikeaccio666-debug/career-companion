@@ -14,7 +14,7 @@ import { parseJob, processJob } from '../src/jobs.ts';
 import { LocalBlobStorage } from '../src/storage.ts';
 import { REFERENCE_IMAGE_BYTES } from '../src/media-references.ts';
 
-const prefix='/api/platform',origin='http://localhost:4321',schema=`media_refs_test_${randomUUID().replaceAll('-','')}`,base=readConfig(),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const prefix='/api/platform',origin='http://localhost:4321',schema=`media_refs_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString()),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 let directory:string,storage:LocalBlobStorage,system:Awaited<ReturnType<typeof buildApp>>,actors=0,imageRequests:{url:string;prompt:string;referenceBytes?:Uint8Array}[]=[],sourceArtifactId='',agentAttachmentId='',agentCreatedId='',agentTurn=0,agentMode:'chain'|'foreign'|'nonimage'='chain';
 const transport=(async(value:any,init:RequestInit={})=>{
