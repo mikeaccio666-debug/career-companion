@@ -14,4 +14,4 @@ export type Job = Platform.Job;
 export type Memory = Platform.Memory;
 export type Approval = Platform.Approval;
 export interface PlatformState { status?: 'connected' | 'unavailable'; execution?: ExecutionAvailability; checkedAt?: string; providers: Provider[]; error?: string }
-export type VoiceSession = Platform.VoiceSessionResult & { sessionId: string };
+export type VoiceSession = Platform.VoiceSessionResponse;

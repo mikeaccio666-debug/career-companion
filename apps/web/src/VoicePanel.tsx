@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowRight, AudioLines, Check, CircleStop, Headphones, MessageCircle, Mic, Play, Radio, Save, Upload, Volume2 } from 'lucide-react';
-import type { VoiceRecord, VoiceRecordInput } from '@companion/platform-contracts';
+import type { VoiceRecord, VoiceRecordInput, VoiceSessionRequest } from '@companion/platform-contracts';
 import { entity, errorText, type BoundPlatformClient } from './api';
 import { useRequiredPlatformAccountClient } from './account-client';
 import { ArtifactView, Badge, ProviderSelect } from './ui';
@@ -9,6 +9,7 @@ import VoiceRecords from './VoiceRecords';
 import { excerptInput, quotedVoiceText, realtimeTurnCanSave, realtimeTurnStatusText, RealtimeTranscriptBuffer } from './voice-history';
 import { applyRealtimeDraftResult, voiceDepartureNotice, type VoiceDraftHandle, type VoiceDraftEditor } from './voice-draft';
 import { disposeVoiceSession, microphoneErrorText, requestVoiceSession } from './voice-session';
+import { RealtimeContextBridge, RealtimeVoiceBootstrap } from './realtime-context';
 import { voiceCapabilities, voiceControls } from './voice-capabilities';
 import { appendTranscriptionText, transcribeAudio, TRANSCRIPTION_AUDIO_ACCEPT } from './voice-transcription';
 import { BrowserVoiceRecording, supportedRecordingMimeType } from './voice-recording';
@@ -49,6 +50,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   const [saving, setSaving] = useState(false);
   const savedIds = new Set(savedClientIds);
   const [live, setLive] = useState<'idle' | 'connecting' | 'connected'>('idle');
+  const [includeConversation, setIncludeConversation] = useState(false);
   const [status, setStatus] = useState('');
   const recorder = useRef<BrowserVoiceRecording | null>(null);
   const audioInput = useRef<HTMLInputElement | null>(null);
@@ -66,6 +68,8 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   const sessionLease = useRef<{ sessionId: string; client: BoundPlatformClient } | null>(null);
   const sessionCreation = useRef<AbortController | null>(null);
   const leaseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contextBridge = useRef<RealtimeContextBridge | null>(null);
+  const voiceBootstrap = useRef<RealtimeVoiceBootstrap | null>(null);
   const editor = useRef(draft.edit());
   const pendingRequests = useRef(new Set<AbortController>());
   const negotiation = useRef<AbortController | null>(null);
@@ -118,8 +122,12 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     if (leaseTimeout.current) { clearTimeout(leaseTimeout.current); leaseTimeout.current = null; }
     if (lease) lease.client.cleanup('/voice/session/release', { body: JSON.stringify({ sessionId: lease.sessionId }) }).catch(() => {});
   }
+  function releaseContext() {
+    voiceBootstrap.current?.stop(); voiceBootstrap.current = null;
+    contextBridge.current?.stop(); contextBridge.current = null;
+  }
   function stopLive() {
-    connectionAttempt.current++; releaseLease(); connectionActive.current = false; activeWork.current.realtime = false;
+    connectionAttempt.current++; releaseContext(); releaseLease(); connectionActive.current = false; activeWork.current.realtime = false;
     remotePlayback.current?.(); remotePlayback.current = null;
     disposeVoiceSession({ controllers: [...(sessionCreation.current ? [sessionCreation.current] : []), ...(negotiation.current ? [negotiation.current] : [])], peer: peer.current, microphone: microphone.current, audio: remoteAudio.current });
     sessionCreation.current = null; negotiation.current = null; peer.current = null; remoteAudio.current = null; microphone.current = null;
@@ -128,9 +136,9 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   useEffect(() => {
     editor.current = draft.edit();
     voiceConversation.activate(() => accountClient.isCurrent() && editor.current.isCurrent());
-    const unsubscribe = draft.subscribe(() => { if (!draft.isCurrent()) { voiceConversation.clear(); playback.pauseAll(); } });
+    const unsubscribe = draft.subscribe(() => { if (!draft.isCurrent()) { if (connectionActive.current) stopLive(); voiceConversation.clear(); playback.pauseAll(); } });
     const dispose = () => {
-      editor.current.close(); connectionAttempt.current++; releaseLease(); connectionActive.current = false;
+      editor.current.close(); connectionAttempt.current++; releaseContext(); releaseLease(); connectionActive.current = false;
       voiceConversation.deactivate();
       playback.pauseAll(); remotePlayback.current?.(); remotePlayback.current = null;
       disposeVoiceSession({ controllers: [...pendingRequests.current, ...(negotiation.current ? [negotiation.current] : [])], recognition: recognition.current, recording: recorder.current, peer: peer.current, microphone: recorder.current ? null : microphone.current, audio: remoteAudio.current });
@@ -293,37 +301,52 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     const attempt = ++connectionAttempt.current;
     const stillActive = () => currentOrigin(origin) && connectionActive.current && connectionAttempt.current === attempt;
     try {
-      const sessionBody = voiceRealtimeBody(provider!, preferences);
+      const sessionBody: VoiceSessionRequest = { ...voiceRealtimeBody(provider!, preferences), ...(includeConversation && conversation ? { conversationId: conversation.id } : {}) };
       const session = await requestVoiceSession(sessionBody, controller.signal, stillActive, request, (sessionId) => { accountClient.cleanup('/voice/session/release', { body: JSON.stringify({ sessionId }) }).catch(() => {}); });
       if (!session) return;
       sessionLease.current = session.sessionId ? { sessionId: session.sessionId, client: accountClient } : null;
       leaseTimeout.current = setTimeout(() => { stopLive(); setStatus('已达到 10 分钟会话时限。可以重新开始实时交流。'); }, 10 * 60 * 1000);
       const token = session.clientSecret;
       if (!token || !session.endpoint || !session.sessionId) throw new Error('服务没有返回有效的实时语音会话。');
+      const bridge = new RealtimeContextBridge(session, sessionBody.conversationId); contextBridge.current = bridge;
       origin.update((value) => ({ ...value, inputTranscriptionEnabled: !!session.inputTranscriptionEnabled, notice: '' }));
       const buffer = new RealtimeTranscriptBuffer(session.sessionId), priorTurns = draft.getSnapshot().turns;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => { track.enabled = false; });
       if (!stillActive()) { disposeVoiceSession({ controllers: [], microphone: stream }); return; }
       microphone.current = stream;
       const pc = new RTCPeerConnection(); peer.current = pc;
-      const speaker = new Audio(); speaker.autoplay = true; remoteAudio.current = speaker;
+      const speaker = new Audio(); speaker.autoplay = false; remoteAudio.current = speaker;
       remotePlayback.current = playback.register(speaker);
-      pc.ontrack = (event) => { if (!stillActive()) return; speaker.srcObject = event.streams[0]; speaker.play().catch(() => { if (stillActive()) setStatus('浏览器阻止自动播放，请点击播放对话音频'); }); };
+      const playRemote = () => { speaker.play().catch(() => { if (stillActive()) setStatus('浏览器阻止自动播放，请点击播放对话音频'); }); };
+      const bootstrap = new RealtimeVoiceBootstrap(bridge, stream.getTracks(), {
+        isCurrent: () => stillActive() && peer.current === pc,
+        ready: () => { speaker.autoplay = true; if (speaker.srcObject) playRemote(); setLive('connected'); setStatus(sessionBody.conversationId ? `已接上当前对话的 ${bridge.count} 条文字${bridge.truncated ? '（部分历史未带入）' : ''}，可以开口了` : `已连接实时语音 · ${session.model}`); },
+        failed: (message) => { stopLive(); onError(message); },
+      }); voiceBootstrap.current = bootstrap;
+      pc.ontrack = (event) => { if (!stillActive()) return; speaker.srcObject = event.streams[0]; if (bootstrap.ready) playRemote(); };
       microphone.current.getTracks().forEach((track) => pc.addTrack(track, microphone.current!));
       const channel = pc.createDataChannel('oai-events');
+      channel.onopen = () => {
+        if (!stillActive() || peer.current !== pc) return;
+        bootstrap.channelOpened((entry) => channel.send(JSON.stringify(entry)));
+      };
+      channel.onclose = channel.onerror = () => { if (stillActive() && peer.current === pc) { stopLive(); onError('实时语音数据连接已断开。原有文字仍在，可以重试。'); } };
       channel.onmessage = (event) => {
         if (!stillActive() || peer.current !== pc) return;
         if (typeof event.data !== 'string' || event.data.length > 2 * 1024 * 1024) { stopLive(); onError('实时片段超过本页接收上限，连接已结束。已收到的完整片段可以保存。'); return; }
         try {
           const entry = JSON.parse(event.data);
-          const result = buffer.receive(entry);
+          if (bootstrap.receive(entry) || !stillActive()) return;
+          const forwarded = bridge.forTranscript(entry); if (forwarded === undefined) return;
+          const result = buffer.receive(forwarded);
           const captured = [...priorTurns, ...buffer.turns().map((turn) => ({ ...turn, ...(sessionBody.persona ? { voiceRoleId: preferences.roleId } : {}) }))];
           const applied = applyRealtimeDraftResult(origin, captured, result, () => { stopLive(); onError('本次实时转写已达到保存上限或回执格式无效，连接已结束。请审阅仍可保存的片段。'); });
           if (applied.limitReached) return;
           if (entry.type === 'error') onError(entry.error?.message || '实时语音服务返回错误。');
         } catch { /* Unsupported vendor events never become history records. */ }
       };
-      pc.onconnectionstatechange = () => { if (!stillActive() || peer.current !== pc) return; if (pc.connectionState === 'connected') { setLive('connected'); setStatus(`已连接实时语音 · ${session.model}`); } else if (['failed', 'disconnected'].includes(pc.connectionState)) { stopLive(); onError('实时语音连接已断开。'); } };
+      pc.onconnectionstatechange = () => { if (!stillActive() || peer.current !== pc) return; if (pc.connectionState === 'connected') bootstrap.connectionEstablished(); else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) { stopLive(); onError('实时语音连接已断开。'); } else bootstrap.connectionPending(); };
       const offer = await pc.createOffer(); if (!stillActive()) return; await pc.setLocalDescription(offer); if (!stillActive()) return;
       const negotiationController = new AbortController(); negotiation.current = negotiationController;
       const response = await fetch(session.endpoint, { method: 'POST', credentials: 'omit', redirect: 'error', body: offer.sdp, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/sdp' }, signal: negotiationController.signal });
@@ -349,7 +372,9 @@ export default function VoicePanel({ draft, providers, conversation, records, on
       <VoiceTurnTakingPicker provider={provider} value={voicePreferences.turnTaking} disabled={busy || saving} onChange={(turnTaking) => setVoicePreferences((value) => ({ ...value, turnTaking }))} />
       {realtimeVoiceProblem && <p className="helper-text">{realtimeVoiceProblem}</p>}
       <p id="voice-realtime-availability" aria-live="polite">实时对话：{capabilities.realtime.reason}</p>
-      <div className="voice-controls">{live === 'idle' ? <button className="primary" onClick={startLive} disabled={controls.realtimeDisabled || !!realtimeVoiceProblem} aria-describedby="voice-realtime-availability"><Radio size={16} />开始实时对话</button> : <button className="primary stop" onClick={stopLive}><CircleStop size={16} />结束实时对话</button>}<button className="secondary" onClick={() => remoteAudio.current?.play()} disabled={live === 'idle'}><Headphones size={16} />播放对话音频</button></div>
+      {conversation && <label className="helper-text"><input type="checkbox" checked={includeConversation} disabled={busy || saving} onChange={(event) => setIncludeConversation(event.target.checked)} />继续当前对话的最近文字</label>}
+      {includeConversation && conversation && <p className="helper-text">本次连接会带入最近最多 20 条已完成的文字消息。文件、语音摘录和已保存记忆不会随本次连接传递；连接完成后再开启麦克风。</p>}
+      <div className="voice-controls">{live === 'idle' ? <button className="primary" onClick={startLive} disabled={controls.realtimeDisabled || !!realtimeVoiceProblem} aria-describedby="voice-realtime-availability"><Radio size={16} />开始实时对话</button> : <button className="primary stop" onClick={stopLive}><CircleStop size={16} />结束实时对话</button>}<button className="secondary" onClick={() => remoteAudio.current?.play()} disabled={live !== 'connected'}><Headphones size={16} />播放对话音频</button></div>
     </div></div>
     {status && <div className="voice-status" aria-live="polite">{status}</div>}
     {notice && <div className="voice-status" aria-live="polite">{notice}</div>}

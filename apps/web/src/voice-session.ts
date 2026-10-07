@@ -1,4 +1,4 @@
-import type { VoiceSessionInput } from '@companion/platform-contracts';
+import type { VoiceSessionRequest } from '@companion/platform-contracts';
 import type { VoiceSession } from './types.ts';
 interface RecordingResource { state: string; onstop: unknown; ondataavailable: unknown; onerror?: unknown; stop(): void; }
 interface RecognitionResource { onresult: unknown; onerror: unknown; onend: unknown; stop(): void; }
@@ -40,7 +40,7 @@ export function microphoneErrorText(error: unknown): string {
 }
 
 /** Creation uses the same cancellation boundary as negotiation; late leases are released without publishing credentials. */
-export async function requestVoiceSession(body: VoiceSessionInput, signal: AbortSignal, isCurrent: () => boolean, read: (path: string, init: RequestInit) => Promise<unknown>, release: (sessionId: string) => void): Promise<VoiceSession | null> {
+export async function requestVoiceSession(body: VoiceSessionRequest, signal: AbortSignal, isCurrent: () => boolean, read: (path: string, init: RequestInit) => Promise<unknown>, release: (sessionId: string) => void): Promise<VoiceSession | null> {
   signal.throwIfAborted();
   if (!isCurrent()) return null;
   const session = await read('/voice/session', { method: 'POST', body: JSON.stringify(body), signal }) as VoiceSession;
