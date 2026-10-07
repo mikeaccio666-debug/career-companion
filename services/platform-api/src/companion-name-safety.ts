@@ -11,7 +11,8 @@ import { OnboardingStorage } from './onboarding-storage.ts';
 import { CompanionIdentityDrafts, CompanionIdentityNameRejected } from './companion-identity-drafts.ts';
 import { ApiError } from './errors.ts';
 import { parseCompanionNameApplication, parseCompanionNameSafetyClaim, parseCompanionNameSafetyDecision, parseCompanionNameSubmissionRequest,
-  parseCompanionNameTask, type CompanionNameSafetyClaim, type CompanionNameSafetyDecision, type CompanionNameSubmissionRequest } from './companion-name-safety-protocol.ts';
+  parseCompanionNameSubmissionClaimRequest, parseCompanionNameTask, type CompanionNameSafetyClaim, type CompanionNameSafetyDecision,
+  type CompanionNameSubmissionClaimRequest, type CompanionNameSubmissionRequest } from './companion-name-safety-protocol.ts';
 
 export const companionNameSafetyUnavailable = () => new ApiError(503, 'COMPANION_NAME_SAFETY_UNAVAILABLE', 'The private name safety source could not be confirmed.');
 export const companionNameSafetyClaimChanged = () => new ApiError(409, 'COMPANION_NAME_SAFETY_CLAIM_CHANGED', 'The name detection claim is no longer current.');
@@ -218,22 +219,41 @@ export class CompanionNameSafety {
   }
   async claim(context: FixedSessionContext, value: { taskId: string; detectorRevision: number; leaseMs?: number }, signal?: AbortSignal): Promise<Readonly<CompanionNameSafetyClaim> | null> {
     const fixed = captureFixed(context), options = claimOptions(value);
+    return this.claimSavedSource(fixed, options, undefined, signal);
+  }
+  /** Internal exact dispatch after a raw source COMMIT. An active or completed
+   * source is observed without stealing its claim or rerunning its detector. */
+  async claimSubmission(context: FixedSessionContext, value: CompanionNameSubmissionClaimRequest,
+    signal?: AbortSignal): Promise<Readonly<CompanionNameSafetyClaim> | null> {
+    const fixed = captureFixed(context), options = parseCompanionNameSubmissionClaimRequest(value);
+    return this.claimSavedSource(fixed, options, options.submissionId, signal);
+  }
+  private async claimSavedSource(fixed: FixedSessionContext, options: Readonly<{ taskId: string; detectorRevision: number; leaseMs: number }>,
+    submissionId: string | undefined, signal?: AbortSignal): Promise<Readonly<CompanionNameSafetyClaim> | null> {
     return this.db.withBoundedTransaction(async client => {
       const { verified, version } = await this.source(client, fixed, options.taskId, signal), entry = await this.entry(client, fixed, options.taskId);
-      if (!entry) { await authorizeFixedSession(client, fixed, signal); return null; }
+      if (!entry) {
+        if (submissionId !== undefined) throw companionNameSafetyUnavailable();
+        await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null;
+      }
       const rows = await this.history(client, entry, verified, fixed);
+      if (submissionId !== undefined && !rows.some(item => item.id === submissionId)) throw companionNameSafetyUnavailable();
       const row = (await client.query<CompanionNameSubmissionRow>(`SELECT * FROM platform_companion_name_submissions WHERE entry_id=$1 AND user_id=$2
-        AND (status='pending' OR status='running' AND lease_until<=clock_timestamp()) ORDER BY submitted_revision,id LIMIT 1 FOR UPDATE`, [entry.id, fixed.userId])).rows[0];
-      if (!row) { await authorizeFixedSession(client, fixed, signal); return null; }
+        AND ($3::uuid IS NULL OR id=$3) AND (status='pending' OR status='running' AND lease_until<=clock_timestamp())
+        ORDER BY submitted_revision,id LIMIT 1 FOR UPDATE`, [entry.id, fixed.userId, submissionId ?? null])).rows[0];
+      if (!row) { await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null; }
       if (!rows.some(item => item.id === row.id) || row.generation === 2147483647) throw companionNameSafetyUnavailable();
       const next = { ...row, status: 'running' as const, generation: row.generation + 1, auth_version: version,
         lease_token: randomUUID(), execution_token: null, detector_revision: options.detectorRevision }, claim = this.rowClaim(next);
       const claimCiphertext = this.storage.crypto!.sealUtf8(JSON.stringify(this.claimPayload(claim, fixed.tokenHash, this.decodeRequest(row, entry, verified).payload)),
         { table: 'platform_companion_name_submissions', column: 'claim_ciphertext', rowId: row.id, ownerId: row.user_id, revision: next.generation });
       await authorizeFixedSession(client, fixed, signal);
-      await client.query(`UPDATE platform_companion_name_submissions SET status='running',generation=$2,auth_version=$3,lease_token=$4,
-        lease_until=clock_timestamp()+($5::int*interval '1 millisecond'),execution_token=NULL,detector_revision=$6,claim_ciphertext=$7,failure=NULL,updated_at=clock_timestamp() WHERE id=$1`,
-        [row.id, next.generation, version, next.lease_token, options.leaseMs, options.detectorRevision, claimCiphertext]);
+      const saved = await client.query(`UPDATE platform_companion_name_submissions SET status='running',generation=$2,auth_version=$3,lease_token=$4,
+        lease_until=clock_timestamp()+($5::int*interval '1 millisecond'),execution_token=NULL,detector_revision=$6,claim_ciphertext=$7,failure=NULL,updated_at=clock_timestamp()
+        WHERE id=$1 AND generation=$8 AND user_id=$9 AND entry_id=$10
+          AND (status='pending' OR status='running' AND lease_until<=clock_timestamp()) RETURNING id`,
+        [row.id, next.generation, version, next.lease_token, options.leaseMs, options.detectorRevision, claimCiphertext, row.generation, fixed.userId, entry.id]);
+      if (!saved.rowCount) throw companionNameSafetyClaimChanged();
       await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return claim;
     });
   }

@@ -7,6 +7,11 @@ export interface CompanionNameSubmissionRequest {
   readonly taskId: string; readonly expectedEntryRevision: number; readonly expectedIdentityRevision: number;
   readonly operationId: string; readonly name: string;
 }
+/** Internal targeting of an already persisted source. No classifier result,
+ * execution token, generation or caller-supplied owner is accepted. */
+export interface CompanionNameSubmissionClaimRequest {
+  readonly taskId: string; readonly submissionId: string; readonly detectorRevision: number; readonly leaseMs?: number;
+}
 /** Concrete immutable name-source coordinates. A copied claim is not a lease or authority. */
 export interface CompanionNameSafetyClaim {
   readonly submissionId: string; readonly userId: string; readonly operationId: string; readonly entryId: string;
@@ -18,12 +23,13 @@ export interface CompanionNameSafetyDecision {
   readonly level: 'L0' | 'L1' | 'L2'; readonly mode: 'full' | 'keyword_only';
 }
 const invalid = () => new ApiError(400, 'INVALID_INPUT', 'Use a valid companion name source operation.');
-function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
+function record(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw invalid();
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Reflect.ownKeys(value).length !== keys.length || keys.some(key => !Object.hasOwn(descriptors, key))
+  const allowed = [...keys, ...optional];
+  if (Reflect.ownKeys(value).some(key => typeof key !== 'string' || !allowed.includes(key)) || keys.some(key => !Object.hasOwn(descriptors, key))
     || Object.values(descriptors).some(item => !('value' in item) || !item.enumerable)) throw invalid();
-  return Object.fromEntries(keys.map(key => [key, descriptors[key].value]));
+  return Object.fromEntries(allowed.filter(key => Object.hasOwn(descriptors, key)).map(key => [key, descriptors[key].value]));
 }
 export function companionNameUuid(value: unknown): string {
   if (typeof value !== 'string' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(value)?.[0] !== value) throw invalid();
@@ -43,6 +49,11 @@ export function parseCompanionNameSubmissionRequest(value: unknown): Readonly<Co
     expectedIdentityRevision: revision(data.expectedIdentityRevision, 0, MAX_REVISION - 1), operationId: companionNameUuid(data.operationId), name: data.name });
 }
 export function parseCompanionNameTask(value: unknown): string { return companionNameUuid(record(value, ['taskId']).taskId); }
+export function parseCompanionNameSubmissionClaimRequest(value: unknown): Readonly<CompanionNameSubmissionClaimRequest & { leaseMs: number }> {
+  const data = record(value, ['taskId', 'submissionId', 'detectorRevision'], ['leaseMs']);
+  return Object.freeze({ taskId: companionNameUuid(data.taskId), submissionId: companionNameUuid(data.submissionId),
+    detectorRevision: revision(data.detectorRevision, 1), leaseMs: Object.hasOwn(data, 'leaseMs') ? revision(data.leaseMs, 100, 60000) : 5000 });
+}
 export function parseCompanionNameApplication(value: unknown): Readonly<{ taskId: string; submissionId: string }> {
   const data = record(value, ['taskId', 'submissionId']); return Object.freeze({ taskId: companionNameUuid(data.taskId), submissionId: companionNameUuid(data.submissionId) });
 }

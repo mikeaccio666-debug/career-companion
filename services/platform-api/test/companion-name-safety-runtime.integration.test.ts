@@ -7,6 +7,7 @@ import { createProviderRuntime } from '@companion/ai-core';
 import { companionSealCandidates } from '@companion/career-core';
 import type { PlatformProviderRuntime } from '@companion/platform-contracts';
 import { ApiError } from '../src/errors.ts';
+import { tokenHash } from '../src/auth.ts';
 import { CompanionNameSafetyRunner } from '../src/companion-name-safety-runner.ts';
 import { CompanionNameSafety } from '../src/companion-name-safety.ts';
 import { CompanionIdentityDrafts } from '../src/companion-identity-drafts.ts';
@@ -82,6 +83,9 @@ async function submit(f: Ready, name = 'Juno', expectedEntryRevision = 0, expect
 }
 async function source(f: Ready) {
   return (await fixture.db.query('SELECT * FROM platform_companion_name_submissions WHERE user_id=$1 ORDER BY submitted_revision DESC', [f.who.userId])).rows[0];
+}
+async function sourceById(f: Ready, submissionId: string) {
+  return (await fixture.db.query('SELECT * FROM platform_companion_name_submissions WHERE user_id=$1 AND id=$2', [f.who.userId, submissionId])).rows[0];
 }
 async function usage(f: Ready) {
   return (await fixture.db.query('SELECT * FROM platform_safety_model_usage WHERE user_id=$1 ORDER BY created_at,call_id', [f.who.userId])).rows;
@@ -556,4 +560,138 @@ test('actual usage rows enforce a closed source shape and concrete naming foreig
       await assert.rejects(fixture.db.query(`UPDATE platform_safety_model_usage SET ${sql} WHERE call_id=$1`, [call.call_id]), violation('23514'));
     assert.deepEqual((await usage(f))[0], before);
   });
+});
+
+test('exact dispatch grades a newer invalid L2 name despite older unavailable no-hit text, disabled providers or zero quota', async () => {
+  for (const [env, limit] of [[{ ...providerEnv, PLATFORM_ALLOW_PROVIDER_CALLS: '0' }, 10],
+    [{ ...providerEnv, OPENAI_API_KEY: '' }, 10], [providerEnv, 0]] as const) {
+    await loopback(() => assert.fail('Reviewed L2 dispatch must not send provider HTTP.'), async (preview, runtime, bodies) => {
+      const f = await fixture.ready(preview), intake = await frozenIntake(f); await submit(f, 'Fictional older ordinary note.');
+      const first = await source(f), execute = runner(f, runtime, limit);
+      await assert.rejects(execute.runSubmission(f.who, { taskId: f.prepared.taskId, submissionId: first.id }), unavailable);
+      const older = await source(f); assert.equal(older.status, 'pending'); assert.equal(older.level, null); assert.equal(older.generation, 1);
+      await submit(f, 'Synthetic high marker\nThis is much too long to be a valid name.', 1);
+      const latest = await source(f), target = { taskId: f.prepared.taskId, submissionId: latest.id };
+      await execute.runSubmission(f.who, target);
+      const detected = await source(f); assert.equal(detected.id, latest.id); assert.equal(detected.status, 'detected'); assert.equal(detected.level, 'L2');
+      assert.equal(detected.detector_mode, 'keyword_only'); assert.equal(detected.application_status, 'pending'); assert.equal(detected.rejected_category, null);
+      assert.deepEqual(await sourceById(f, older.id), older); assert.equal((await usage(f)).length, 0); assert.equal(bodies.length, 0);
+      const entry = await f.safety.read(f.who, { taskId: f.prepared.taskId }); assert.equal(entry?.status, 'blocked'); assert.equal(entry?.pendingCount, 1); assert.equal(entry?.blockedCount, 1);
+      assert.equal(entry?.submissions[0].level, null); assert.equal(entry?.submissions[1].level, 'L2');
+      assert.equal((await f.safety.apply(f.who, target)).status, 'not_eligible');
+      await assert.rejects(f.safety.apply(f.who, { taskId: f.prepared.taskId, submissionId: older.id }), error => error instanceof ApiError && error.code === 'COMPANION_NAME_SAFETY_PENDING');
+      assert.deepEqual(await sourceById(f, older.id), older); await noEffects(f); assert.deepEqual(await frozenIntake(f), intake);
+      assert.equal(await execute.runSubmission(f.who, target), null); assert.equal(bodies.length, 0); assert.equal((await usage(f)).length, 0);
+    }, env);
+  }
+});
+
+test('exact no-hit failure retains the requested pending source and never consumes or loses an older pending input', async () => {
+  for (const enabled of [false, true]) {
+    await loopback((_body, reply) => { if (!enabled) assert.fail('Disabled provider must not be invoked.'); reply.writeHead(500).end(); }, async (preview, runtime, bodies) => {
+      const f = await fixture.ready(preview), intake = await frozenIntake(f); await submit(f, 'Fictional older preserved note.');
+      const older = await source(f); await submit(f, 'Juno', 1); const newer = await source(f);
+      await assert.rejects(runner(f, runtime).runSubmission(f.who, { taskId: f.prepared.taskId, submissionId: newer.id }), unavailable);
+      assert.deepEqual(await sourceById(f, older.id), older); const failed = await source(f);
+      assert.equal(failed.id, newer.id); assert.equal(failed.status, 'pending'); assert.equal(failed.level, null); assert.equal(failed.result_ciphertext, null); assert.equal(failed.generation, 1);
+      assert.deepEqual(failed.request_ciphertext, newer.request_ciphertext); assert.equal(failed.application_status, 'pending');
+      const entry = await f.safety.read(f.who, { taskId: f.prepared.taskId }); assert.equal(entry?.status, 'pending'); assert.equal(entry?.pendingCount, 2); assert.equal(entry?.blockedCount, 0);
+      const calls = await usage(f); assert.equal(calls.length, enabled ? 1 : 0); assert.equal(bodies.length, enabled ? 1 : 0);
+      if (enabled) { assert.equal(calls[0].submission_id, newer.id); assert.equal(calls[0].generation, 1); assert.equal(calls[0].status, 'failed'); }
+      await noEffects(f); assert.deepEqual(await frozenIntake(f), intake);
+    }, enabled ? providerEnv : { ...providerEnv, PLATFORM_ALLOW_PROVIDER_CALLS: '0' });
+  }
+});
+
+test('a detected exact target is observable without profile or provider and replay never changes oldest-source recovery order', async () => {
+  await loopback((_body, reply) => respond(reply, { level: 'L0' }), async (preview, runtime, bodies) => {
+    const f = await fixture.ready(preview); await submit(f, 'Fictional old ordinary note.'); const older = await source(f);
+    await submit(f, 'Juno', 1); const latest = await source(f), target = { taskId: f.prepared.taskId, submissionId: latest.id }, execute = runner(f, runtime);
+    await execute.runSubmission(f.who, target); const detected = await source(f), calls = await usage(f);
+    assert.equal(detected.status, 'detected'); assert.equal(detected.level, 'L0'); assert.equal(detected.detector_mode, 'full'); assert.equal(calls.length, 1); assert.equal(calls[0].submission_id, latest.id);
+    assert.deepEqual(await sourceById(f, older.id), older);
+    for (const observer of [execute, runner(f, runtime, 0, null)]) {
+      assert.equal(await observer.runSubmission(f.who, target), null); assert.deepEqual(await source(f), detected);
+      assert.deepEqual(await sourceById(f, older.id), older); assert.deepEqual(await usage(f), calls); assert.equal(bodies.length, 1);
+    }
+    await loopback(() => assert.fail('A detected target never needs disabled provider HTTP.'), async (_preview, disabled, disabledBodies) => {
+      assert.equal(await runner(f, disabled, 0).runSubmission(f.who, target), null);
+      assert.equal(await runner(f, disabled, 0, null).runSubmission(f.who, target), null); assert.equal(disabledBodies.length, 0);
+    }, { ...providerEnv, PLATFORM_ALLOW_PROVIDER_CALLS: '0', OPENAI_API_KEY: '' });
+    const recovered = await execute.runNext(f.who, { taskId: f.prepared.taskId }); assert.equal(recovered?.submissionId, older.id);
+    assert.equal((await sourceById(f, older.id)).level, 'L0'); assert.equal((await sourceById(f, older.id)).generation, 1);
+    assert.deepEqual(await source(f), detected); assert.equal(bodies.length, 2); assert.equal((await usage(f)).length, 2); await noEffects(f);
+  });
+});
+
+test('an exact active claim cannot be stolen, while expiry permits one new generation using the actual fresh session', async () => {
+  await loopback((_body, reply) => respond(reply, { level: 'L0' }), async (preview, runtime, bodies) => {
+    const f = await fixture.ready(preview); await submit(f); const submitted = await source(f), target = { taskId: f.prepared.taskId, submissionId: submitted.id };
+    const claim = await f.safety.claimSubmission(f.who, { ...target, detectorRevision: profile.revision, leaseMs: 60000 }); assert(claim);
+    const active = await source(f); assert.equal(active.generation, 1); assert.equal(active.status, 'running'); assert.equal(active.execution_token, null);
+    assert.equal(await runner(f, runtime).runSubmission(f.who, target), null); assert.deepEqual(await source(f), active); assert.equal(bodies.length, 0);
+    const fresh = { userId: f.who.userId, tokenHash: tokenHash(randomUUID()) };
+    await fixture.db.query('INSERT INTO platform_sessions(user_id,token_hash,auth_version,expires_at) SELECT id,$2,auth_version,clock_timestamp()+interval \'1 hour\' FROM platform_users WHERE id=$1', [fresh.userId, fresh.tokenHash]);
+    await fixture.db.query('DELETE FROM platform_sessions WHERE user_id=$1 AND token_hash=$2', [f.who.userId, f.who.tokenHash]);
+    assert.equal(await runner(f, runtime).runSubmission(fresh, target), null); assert.deepEqual(await source(f), active);
+    await fixture.db.query("UPDATE platform_companion_name_submissions SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1", [submitted.id]);
+    await runner(f, runtime).runSubmission(fresh, target); const detected = await source(f);
+    assert.equal(detected.status, 'detected'); assert.equal(detected.level, 'L0'); assert.equal(detected.detector_mode, 'full'); assert.equal(detected.generation, 2);
+    assert.notEqual(detected.lease_token, active.lease_token); assert(detected.execution_token); assert.deepEqual(detected.request_ciphertext, submitted.request_ciphertext);
+    const captured = JSON.parse(fixture.crypto.openUtf8(detected.claim_ciphertext, { table: 'platform_companion_name_submissions', column: 'claim_ciphertext', rowId: detected.id, ownerId: fresh.userId, revision: 2 }));
+    assert.equal(captured.sessionTokenHash, fresh.tokenHash); assert.equal(captured.sourceCapture.submittedSessionHash, f.who.tokenHash);
+    const calls = await usage(f); assert.equal(calls.length, 1); assert.equal(calls[0].submission_id, submitted.id); assert.equal(calls[0].generation, 2); assert.equal(calls[0].status, 'complete'); assert.equal(bodies.length, 1);
+    await assert.rejects(runner(f, runtime).runSubmission(f.who, target), error => error instanceof ApiError && error.status === 401);
+    assert.equal(await runner(f, runtime).runSubmission(fresh, target), null); assert.deepEqual(await usage(f), calls); assert.equal(bodies.length, 1); await noEffects(f);
+  });
+});
+
+test('concurrent dispatch of one exact target admits one real provider request and leaves every older source untouched', async () => {
+  await loopback((_body, reply) => respond(reply, { level: 'L0' }), async (preview, runtime, bodies) => {
+    const f = await fixture.ready(preview); await submit(f, 'Fictional older pending text.'); const older = await source(f);
+    await submit(f, 'Juno', 1); const latest = await source(f), target = { taskId: f.prepared.taskId, submissionId: latest.id }, execute = runner(f, runtime);
+    const results = await Promise.all([execute.runSubmission(f.who, target), execute.runSubmission(f.who, target), execute.runSubmission(f.who, target)]);
+    assert.equal(results.filter(Boolean).length, 1); assert.deepEqual(await sourceById(f, older.id), older);
+    const detected = await source(f); assert.equal(detected.status, 'detected'); assert.equal(detected.generation, 1); assert.equal(detected.level, 'L0');
+    const calls = await usage(f); assert.equal(calls.length, 1); assert.equal(calls[0].submission_id, latest.id); assert.equal(bodies.length, 1); await noEffects(f);
+  });
+});
+
+test('exact dispatch rejects foreign owner, task or source and caller-provided authority before any provider call', async () => {
+  await loopback(() => assert.fail('No unowned target may invoke a provider.'), async (preview, runtime, bodies) => {
+    const first = await fixture.ready(preview); await submit(first); const firstSource = await source(first);
+    const second = await fixture.ready(preview); await submit(second); const secondSource = await source(second);
+    const execute = runner(first, runtime), firstTarget = { taskId: first.prepared.taskId, submissionId: firstSource.id };
+    const rejected = (error: unknown) => error instanceof ApiError && error.status >= 400;
+    for (const [context, target] of [[second.who, firstTarget], [first.who, { taskId: second.prepared.taskId, submissionId: firstSource.id }],
+      [first.who, { taskId: first.prepared.taskId, submissionId: secondSource.id }], [first.who, { ...firstTarget, submissionId: randomUUID() }],
+      [{ userId: first.who.userId, tokenHash: second.who.tokenHash }, firstTarget]] as const) {
+      await assert.rejects(execute.runSubmission(context, target), rejected);
+      await assert.rejects(runner(first, runtime, 0, null).runSubmission(context, target), rejected);
+    }
+    await assert.rejects(execute.runSubmission(first.who, { ...firstTarget, level: 'L0' } as typeof firstTarget), error => error instanceof ApiError && error.code === 'INVALID_INPUT');
+    assert.deepEqual(await source(first), firstSource); assert.deepEqual(await source(second), secondSource);
+    assert.equal((await usage(first)).length, 0); assert.equal((await usage(second)).length, 0); assert.equal(bodies.length, 0); await noEffects(first); await noEffects(second);
+  });
+});
+
+test('target observation and dispatch both reauthenticate current session, student eligibility and legal policy', async () => {
+  for (const fence of ['session', 'auth', 'email', 'account', 'legal'] as const) {
+    await loopback(() => assert.fail('An ineligible caller cannot dispatch or observe a target.'), async (preview, runtime, bodies) => {
+      const f = await fixture.ready(preview); await submit(f, 'Synthetic high marker'); const original = await source(f), target = { taskId: f.prepared.taskId, submissionId: original.id };
+      const user = (await fixture.db.query('SELECT auth_version,email_verified_at,account_kind FROM platform_users WHERE id=$1', [f.who.userId])).rows[0];
+      if (fence === 'session') await fixture.db.query('DELETE FROM platform_sessions WHERE user_id=$1 AND token_hash=$2', [f.who.userId, f.who.tokenHash]);
+      if (fence === 'auth') await fixture.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1', [f.who.userId]);
+      if (fence === 'email') await fixture.db.query('UPDATE platform_users SET email_verified_at=NULL WHERE id=$1', [f.who.userId]);
+      if (fence === 'account') await fixture.db.query("UPDATE platform_users SET account_kind='staff' WHERE id=$1", [f.who.userId]);
+      if (fence === 'legal') await fixture.db.query('UPDATE platform_terms_policy SET review_digest=$1 WHERE singleton=true', ['c'.repeat(64)]);
+      try {
+        for (const detector of [profile, null]) await assert.rejects(runner(f, runtime, 0, detector).runSubmission(f.who, target), error => error instanceof ApiError && error.status >= 400);
+        assert.deepEqual(await source(f), original); assert.equal((await usage(f)).length, 0); assert.equal(bodies.length, 0); await noEffects(f);
+      } finally {
+        if (fence === 'legal') await seedFictionalActiveLegal(fixture.db);
+        if (fence === 'email' || fence === 'account') await fixture.db.query('UPDATE platform_users SET email_verified_at=$2,account_kind=$3 WHERE id=$1', [f.who.userId, user.email_verified_at, user.account_kind]);
+      }
+    });
+  }
 });
