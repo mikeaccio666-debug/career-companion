@@ -7,6 +7,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { createProviderRuntime } from '@companion/ai-core';
+import { companionSealCandidates } from '@companion/career-core';
 import type { PlatformProviderRuntime } from '@companion/platform-contracts';
 import { Database } from '../src/database.ts';
 import { readConfig } from '../src/config.ts';
@@ -136,8 +137,12 @@ function service(background: BackgroundGeneration, asset: CompanionIdentityBundl
 }
 
 async function state(who: FixedSessionContext) {
+  const intakeDrafts = await db.query('SELECT * FROM platform_onboarding_drafts WHERE user_id=$1 ORDER BY id', [who.userId]);
+  const intakeOperations = await db.query('SELECT * FROM platform_onboarding_operations WHERE user_id=$1 ORDER BY operation_id', [who.userId]);
   const drafts = await db.query('SELECT * FROM platform_companion_identity_drafts WHERE user_id=$1 ORDER BY id', [who.userId]);
   const operations = await db.query('SELECT * FROM platform_companion_identity_operations WHERE user_id=$1 ORDER BY operation_id', [who.userId]);
+  const selections = await db.query('SELECT * FROM platform_companion_identity_selections WHERE user_id=$1 ORDER BY id', [who.userId]);
+  const selectionOperations = await db.query('SELECT * FROM platform_companion_identity_selection_operations WHERE user_id=$1 ORDER BY operation_id', [who.userId]);
   const effects = (await db.query(`SELECT
     (SELECT count(*)::int FROM platform_conversations WHERE user_id=$1) AS rooms,
     (SELECT count(*)::int FROM platform_messages m JOIN platform_conversations c ON c.id=m.conversation_id WHERE c.user_id=$1) AS messages,
@@ -147,13 +152,22 @@ async function state(who: FixedSessionContext) {
     (SELECT count(*)::int FROM platform_runtime_leases WHERE user_id=$1) AS leases,
     (SELECT count(*)::int FROM platform_cost_ledger WHERE user_id=$1) AS costs`, [who.userId])).rows[0];
   const companions = (await db.query('SELECT * FROM platform_companions WHERE user_id=$1', [who.userId])).rows;
-  return { drafts: drafts.rows, operations: operations.rows, effects, companions };
+  return { intakeDrafts: intakeDrafts.rows, intakeOperations: intakeOperations.rows, drafts: drafts.rows, operations: operations.rows,
+    selections: selections.rows, selectionOperations: selectionOperations.rows, effects, companions };
 }
 function frozen(value: unknown): void {
   if (!value || typeof value !== 'object') return;
   assert(Object.isFrozen(value)); for (const item of Object.values(value)) frozen(item);
 }
 function command(taskId: string, expectedRevision = 0, name = 'Juno') { return { taskId, expectedRevision, operationId: randomUUID(), name }; }
+function selectionCommand(taskId: string, sealChar: string, expectedIdentityRevision = 1, expectedRevision = 0) {
+  return { taskId, expectedIdentityRevision, expectedRevision, operationId: randomUUID(), sealChar };
+}
+async function named(runtime: PlatformProviderRuntime, options: { text?: boolean } = {}) {
+  const readyState = await ready(runtime, options), auth = await authority(), names = service(readyState.background, auth.asset, auth.review);
+  const identity = await names.save(readyState.who, command(readyState.prepared.taskId));
+  return { ...readyState, auth, names, identity: identity.draft };
+}
 class QueryGateDatabase extends Database {
   constructor(private readonly gate: (client: PoolClient, text: string, values: unknown) => Promise<void>) { super(url.toString()); }
   override withBoundedTransaction<T>(run: (client: PoolClient) => Promise<T>, options: { readOnly?: boolean; timeoutMs?: number } = {}): Promise<T> {
@@ -502,5 +516,388 @@ test('actual provider completion, cost ledger and full encrypted intake history 
       assert.deepEqual(await state(who), captured);
     }
     assert.equal(bodies.length, 3);
+  });
+});
+
+test('seal selection is explicit private preparation with an independent encrypted revision and no birth effects', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, names, identity } = await named(runtime), before = await state(who);
+    const empty = { companionId: prepared.companionId, taskId: prepared.taskId, previewRevision: 1,
+      identityRevision: 1, revision: 0, selectedSeal: null };
+    assert.deepEqual(await names.readSelection(who, { taskId: prepared.taskId }), empty);
+    assert.equal(before.selections.length, 0); assert.equal(before.selectionOperations.length, 0);
+    const input = selectionCommand(prepared.taskId, identity.sealCandidates[1].char), saved = await names.saveSelection(who, input); frozen(saved);
+    assert.deepEqual(saved.selection, { ...empty, revision: 1, selectedSeal: input.sealChar });
+    assert.deepEqual(saved.operation, { id: input.operationId, appliedRevision: 1, replayed: false });
+    assert.deepEqual(await names.readSelection(who, { taskId: prepared.taskId }), saved.selection);
+    const captured = await state(who), row = captured.selections[0], receipt = captured.selectionOperations[0];
+    assert.equal(captured.selections.length, 1); assert.equal(captured.selectionOperations.length, 1);
+    assert.deepEqual(captured.drafts, before.drafts); assert.deepEqual(captured.operations, before.operations);
+    assert.deepEqual(captured.intakeDrafts, before.intakeDrafts); assert.deepEqual(captured.intakeOperations, before.intakeOperations);
+    assert.deepEqual(captured.effects, before.effects); assert.deepEqual(captured.companions, before.companions); assert.equal(bodies.length, 1);
+    const binding = { table: 'platform_companion_identity_selections', column: 'payload_ciphertext', rowId: row.id, ownerId: who.userId, revision: 1 };
+    const payload = JSON.parse(crypto.openUtf8(row.payload_ciphertext, binding));
+    assert.equal(payload.identityRevision, 1); assert.equal(payload.source.taskId, prepared.taskId);
+    assert.equal(payload.identitySnapshot.name, identity.name); assert.deepEqual(payload.identitySnapshot.sealCandidates, identity.sealCandidates);
+    const request = JSON.parse(crypto.openUtf8(receipt.request_ciphertext, { table: 'platform_companion_identity_selection_operations',
+      column: 'request_ciphertext', rowId: input.operationId, ownerId: who.userId, revision: 1 }));
+    assert.deepEqual(request.request, input); assert.deepEqual(request.identitySnapshot, payload.identitySnapshot);
+    assert.deepEqual(request.source, payload.source);
+    for (const sealed of [row.payload_ciphertext, receipt.request_ciphertext]) assert.equal(sealed.includes(Buffer.from('"sealChar"')), false);
+    for (const altered of [{ ...binding, ownerId: randomUUID() }, { ...binding, rowId: randomUUID() }, { ...binding, revision: 2 },
+      { ...binding, table: 'platform_companion_identity_drafts' }]) assert.throws(() => crypto.openUtf8(row.payload_ciphertext, altered));
+    for (const key of ['name', 'sealCandidates', 'source', 'identitySnapshot', 'bundleRevision', 'bornAt', 'provider', 'model'])
+      assert.equal(Object.hasOwn(saved.selection, key), false);
+  });
+});
+
+test('seal CAS serializes identical and competing writers and exact old replay returns current selection', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, names, identity } = await named(runtime), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char);
+    const results = await Promise.all([names.saveSelection(who, input), names.saveSelection(who, input), names.saveSelection(who, input)]);
+    assert.equal(results.filter(item => !item.operation.replayed).length, 1);
+    assert(results.every(item => item.selection.revision === 1));
+    const contenders = await Promise.allSettled(identity.sealCandidates.slice(1).map(candidate => names.saveSelection(who,
+      selectionCommand(prepared.taskId, candidate.char, 1, 1))));
+    assert.equal(contenders.filter(item => item.status === 'fulfilled').length, 1);
+    const denied = contenders.find(item => item.status === 'rejected'); assert(denied?.status === 'rejected');
+    assert(code('COMPANION_SEAL_SELECTION_REVISION_CHANGED')(denied.reason));
+    const current = await names.readSelection(who, { taskId: prepared.taskId }); assert(current); assert.equal(current.revision, 2);
+    const captured = await state(who), replay = await names.saveSelection(who, input);
+    assert.deepEqual(replay.selection, current); assert.deepEqual(replay.operation, { id: input.operationId, appliedRevision: 1, replayed: true });
+    await assert.rejects(names.saveSelection(who, { ...input, sealChar: identity.sealCandidates[1].char }), code('COMPANION_SEAL_SELECTION_OPERATION_CONFLICT'));
+    await assert.rejects(names.saveSelection(who, selectionCommand(prepared.taskId, input.sealChar, 1, 0)), code('COMPANION_SEAL_SELECTION_REVISION_CHANGED'));
+    await assert.rejects(names.saveSelection(who, selectionCommand(prepared.taskId, input.sealChar, 2, 2)), code('COMPANION_IDENTITY_REVISION_CHANGED'));
+    assert.deepEqual(await state(who), captured); assert.equal(captured.selectionOperations.length, 2);
+    assert.equal(captured.drafts[0].revision, 1); assert.equal(bodies.length, 1);
+  });
+});
+
+test('name changes invalidate the saved seal without resetting its CAS revision or reviving it when the name returns', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, names, identity } = await named(runtime), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char);
+    await names.saveSelection(who, input);
+    await names.save(who, command(prepared.taskId, 1, '舟'));
+    let current = await names.readSelection(who, { taskId: prepared.taskId }); assert(current);
+    assert.equal(current.identityRevision, 2); assert.equal(current.revision, 1); assert.equal(current.selectedSeal, null);
+    assert.deepEqual((await names.saveSelection(who, input)).selection, current);
+    const restored = await names.save(who, command(prepared.taskId, 2, 'Juno'));
+    assert.deepEqual(restored.draft.sealCandidates, identity.sealCandidates);
+    current = await names.readSelection(who, { taskId: prepared.taskId }); assert(current);
+    assert.equal(current.identityRevision, 3); assert.equal(current.revision, 1); assert.equal(current.selectedSeal, null);
+    const captured = await state(who);
+    await assert.rejects(names.saveSelection(who, selectionCommand(prepared.taskId, input.sealChar, 1, 1)), code('COMPANION_IDENTITY_REVISION_CHANGED'));
+    await assert.rejects(names.saveSelection(who, selectionCommand(prepared.taskId, input.sealChar, 3, 0)), code('COMPANION_SEAL_SELECTION_REVISION_CHANGED'));
+    assert.deepEqual(await state(who), captured);
+    const next = await names.saveSelection(who, selectionCommand(prepared.taskId, input.sealChar, 3, 1));
+    assert.equal(next.selection.revision, 2); assert.equal(next.selection.identityRevision, 3); assert.equal(next.selection.selectedSeal, input.sealChar);
+    const replay = await names.saveSelection(who, input); assert.deepEqual(replay.selection, next.selection); assert.equal(replay.operation.appliedRevision, 1);
+    assert.equal((await state(who)).companions[0].draft_rerolls, 0); assert.equal(bodies.length, 1);
+  });
+});
+
+test('selection accepts only a closed captured command and a current stored candidate from the actual owner', async () => {
+  await loopback(async (runtime, bodies) => {
+    const pending = await ready(runtime, { generate: false }), pendingAuth = await authority(), pendingNames = service(pending.background, pendingAuth.asset, pendingAuth.review);
+    await assert.rejects(pendingNames.saveSelection(pending.who, selectionCommand(pending.prepared.taskId, '墨')), code('COMPANION_PREVIEW_REQUIRED'));
+    const unnamed = await ready(runtime), unnamedAuth = await authority(), unnamedNames = service(unnamed.background, unnamedAuth.asset, unnamedAuth.review);
+    assert.equal(await unnamedNames.readSelection(unnamed.who, { taskId: unnamed.prepared.taskId }), null);
+    await assert.rejects(unnamedNames.saveSelection(unnamed.who, selectionCommand(unnamed.prepared.taskId, '墨')), code('COMPANION_IDENTITY_REQUIRED'));
+    const { who, prepared, names, identity } = await named(runtime), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char), captured = await state(who);
+    const other = await actor(); let accessed = 0;
+    for (const key of ['name', 'selectedSeal', 'sealCandidates', 'dimensions', 'source', 'bundle', 'review', 'userId', 'inkToken', 'bornAt'])
+      await assert.rejects(names.saveSelection(who, { ...input, [key]: 'Fictional caller claim' }), code('INVALID_INPUT'));
+    for (const field of ['expectedRevision', 'expectedIdentityRevision'] as const)
+      for (const value of [-0, -1, 1.5, Number.MAX_SAFE_INTEGER, '1'])
+        await assert.rejects(names.saveSelection(who, { ...input, [field]: value }), code('INVALID_INPUT'));
+    const getter = { ...input }; Object.defineProperty(getter, 'sealChar', { enumerable: true, get() { accessed++; return input.sealChar; } });
+    await assert.rejects(names.saveSelection(who, getter), code('INVALID_INPUT')); assert.equal(accessed, 0);
+    const hidden = { ...input }; Object.defineProperty(hidden, 'hidden', { value: true, enumerable: false });
+    for (const extra of [hidden, { ...input, [Symbol('hidden')]: true }]) await assert.rejects(names.saveSelection(who, extra), code('INVALID_INPUT'));
+    const noncandidate = ['墨', '如', '舟', '远', '暖'].find(char => !identity.sealCandidates.some(candidate => candidate.char === char)); assert(noncandidate);
+    for (const sealChar of [noncandidate, '导', 'AB', '墨舟', ' 墨', '\n墨', '\ud800'])
+      await assert.rejects(names.saveSelection(who, { ...input, sealChar }), code('SEAL_REJECTED'));
+    for (const action of [() => names.readSelection(other, { taskId: prepared.taskId }), () => names.saveSelection(other, input)])
+      await assert.rejects(action(), error => error instanceof ApiError && error.status >= 400);
+    assert.deepEqual(await state(who), captured); assert.equal((await state(other)).selections.length, 0); assert.equal(bodies.length, 2);
+  });
+});
+
+test('new selection requires current matching asset authority while history survives missing configuration and revoked activation', async () => {
+  await loopback(async (runtime, bodies) => {
+    for (const mode of ['missing_bundle', 'missing_review', 'missing_policy', 'revoked', 'disabled_org', 'student_reviewer', 'future', 'different_capture'] as const) {
+      const { who, prepared, background, auth, names, identity } = await named(runtime), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char);
+      const first = await names.saveSelection(who, input);
+      let writer = names;
+      if (mode === 'missing_bundle') writer = service(background, null, auth.review);
+      if (mode === 'missing_review') writer = service(background, auth.asset, null);
+      if (mode === 'missing_policy') await db.query('DELETE FROM platform_companion_identity_policy');
+      if (mode === 'revoked') await db.query("UPDATE platform_org_roles SET status='revoked',revoked_at=clock_timestamp() WHERE org_id=$1 AND user_id=$2", [auth.orgId, auth.reviewer.userId]);
+      if (mode === 'disabled_org') await db.query("UPDATE platform_orgs SET status='disabled' WHERE id=$1", [auth.orgId]);
+      if (mode === 'student_reviewer') await db.query("UPDATE platform_users SET account_kind='student' WHERE id=$1", [auth.reviewer.userId]);
+      if (mode === 'future') await db.query("UPDATE platform_companion_identity_policy SET activated_at=clock_timestamp()+interval '1 hour'");
+      if (mode === 'different_capture') { const latest = await authority(bundle(81)); writer = service(background, latest.asset, latest.review); }
+      const captured = await state(who);
+      assert.deepEqual(await writer.readSelection(who, { taskId: prepared.taskId }), first.selection);
+      assert.deepEqual((await writer.saveSelection(who, input)).selection, first.selection);
+      await assert.rejects(writer.saveSelection(who, selectionCommand(prepared.taskId, identity.sealCandidates[1].char, 1, 1)), code('COMPANION_IDENTITY_UNAVAILABLE'));
+      assert.deepEqual(await state(who), captured);
+    }
+    assert.equal(bodies.length, 8);
+  });
+});
+
+test('new selection checks the current real account name while history retains its original name snapshot', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, names, identity } = await named(runtime), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char);
+    const first = await names.saveSelection(who, input);
+    await db.query("UPDATE platform_users SET name='juno' WHERE id=$1", [who.userId]);
+    const captured = await state(who);
+    assert.deepEqual(await names.readSelection(who, { taskId: prepared.taskId }), first.selection);
+    assert.deepEqual((await names.saveSelection(who, input)).selection, first.selection);
+    await assert.rejects(names.saveSelection(who, selectionCommand(prepared.taskId, identity.sealCandidates[1].char, 1, 1)), error => error instanceof ApiError
+      && error.code === 'NAME_REJECTED' && 'category' in error && error.category === 'same_as_user');
+    assert.deepEqual(await state(who), captured); assert.equal(bodies.length, 1);
+  });
+});
+
+test('selection authenticates ciphertext, actual bound receipt and historical candidates even after invalidation', async () => {
+  await loopback(async (runtime, bodies) => {
+    const own = await ready(runtime), foreign = await ready(runtime), auth = await authority();
+    const names = service(own.background, auth.asset, auth.review), others = service(foreign.background, auth.asset, auth.review);
+    const identity = (await names.save(own.who, command(own.prepared.taskId))).draft;
+    const otherIdentity = (await others.save(foreign.who, command(foreign.prepared.taskId))).draft;
+    const input = selectionCommand(own.prepared.taskId, identity.sealCandidates[0].char);
+    await names.saveSelection(own.who, input); await others.saveSelection(foreign.who, selectionCommand(foreign.prepared.taskId, otherIdentity.sealCandidates[0].char));
+    const saved = await state(own.who), row = saved.selections[0], receipt = saved.selectionOperations[0], other = (await state(foreign.who)).selections[0];
+    const binding = { table: 'platform_companion_identity_selections', column: 'payload_ciphertext', rowId: row.id, ownerId: own.who.userId, revision: 1 };
+    const payload = JSON.parse(crypto.openUtf8(row.payload_ciphertext, binding));
+    const differentCandidate = { ...payload, sealChar: identity.sealCandidates[1].char };
+    const wrongSource = { ...payload, source: { ...payload.source, sourceRevision: payload.source.sourceRevision + 1 } };
+    const wrongSnapshot = { ...payload, identitySnapshot: { ...payload.identitySnapshot, revision: 2 } };
+    for (const ciphertext of [Buffer.alloc(29), other.payload_ciphertext, crypto.sealUtf8(JSON.stringify(differentCandidate), binding),
+      crypto.sealUtf8(JSON.stringify(wrongSource), binding), crypto.sealUtf8(JSON.stringify(wrongSnapshot), binding)]) {
+      await db.query('UPDATE platform_companion_identity_selections SET payload_ciphertext=$2 WHERE id=$1', [row.id, ciphertext]);
+      const captured = await state(own.who);
+      for (const action of [() => names.readSelection(own.who, { taskId: own.prepared.taskId }), () => names.saveSelection(own.who, input),
+        () => names.saveSelection(own.who, selectionCommand(own.prepared.taskId, identity.sealCandidates[1].char, 1, 1))])
+        await assert.rejects(action(), code('COMPANION_IDENTITY_UNAVAILABLE'));
+      assert.deepEqual(await state(own.who), captured);
+    }
+    await db.query('UPDATE platform_companion_identity_selections SET payload_ciphertext=$2 WHERE id=$1', [row.id, row.payload_ciphertext]);
+    await names.save(own.who, command(own.prepared.taskId, 1, '舟'));
+    await db.query('UPDATE platform_companion_identity_selection_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2',
+      [own.who.userId, input.operationId, Buffer.alloc(29)]);
+    const captured = await state(own.who);
+    for (const action of [() => names.readSelection(own.who, { taskId: own.prepared.taskId }), () => names.saveSelection(own.who, input),
+      () => names.saveSelection(own.who, selectionCommand(own.prepared.taskId, '舟', 2, 1))]) await assert.rejects(action(), code('COMPANION_IDENTITY_UNAVAILABLE'));
+    assert.deepEqual(await state(own.who), captured);
+    await db.query('UPDATE platform_companion_identity_selection_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2',
+      [own.who.userId, input.operationId, receipt.request_ciphertext]);
+    await db.query('UPDATE platform_companion_identity_selections SET identity_revision=3 WHERE id=$1', [row.id]);
+    await assert.rejects(names.readSelection(own.who, { taskId: own.prepared.taskId }), code('COMPANION_IDENTITY_UNAVAILABLE'));
+    assert.equal(bodies.length, 2);
+  });
+});
+
+test('invalidated selection recovers its original asset capture rather than the renamed identity assets', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, background, auth, names, identity } = await named(runtime), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char);
+    await names.saveSelection(who, input);
+    const nextAuth = await authority(bundle(82)), nextNames = service(background, nextAuth.asset, nextAuth.review);
+    await nextNames.save(who, command(prepared.taskId, 1, '舟'));
+    const expected = await nextNames.readSelection(who, { taskId: prepared.taskId }); assert(expected); assert.equal(expected.selectedSeal, null);
+    const asset = (await db.query('SELECT * FROM platform_companion_identity_assets WHERE content_digest=$1 AND review_digest=$2', [auth.asset.contentDigest, auth.review.reviewDigest])).rows[0];
+    await assert.rejects(db.query('DELETE FROM platform_companion_identity_assets WHERE content_digest=$1 AND review_digest=$2', [auth.asset.contentDigest, auth.review.reviewDigest]), { code: '23503' });
+    for (const column of ['bundle_json', 'review_json'] as const) {
+      await db.query(`UPDATE platform_companion_identity_assets SET ${column}=$3 WHERE content_digest=$1 AND review_digest=$2`, [auth.asset.contentDigest, auth.review.reviewDigest, '{"fictional":"corrupted-history"}']);
+      try {
+        const captured = await state(who);
+        for (const action of [() => nextNames.readSelection(who, { taskId: prepared.taskId }), () => nextNames.saveSelection(who, input),
+          () => nextNames.saveSelection(who, selectionCommand(prepared.taskId, '舟', 2, 1))]) await assert.rejects(action(), code('COMPANION_IDENTITY_UNAVAILABLE'));
+        assert.deepEqual(await state(who), captured);
+      } finally { await db.query(`UPDATE platform_companion_identity_assets SET ${column}=$3 WHERE content_digest=$1 AND review_digest=$2`, [auth.asset.contentDigest, auth.review.reviewDigest, asset[column]]); }
+    }
+    assert.deepEqual((await service(background, null, null).saveSelection(who, input)).selection, expected);
+    assert.equal(bodies.length, 1);
+  });
+});
+
+test('canonical alternate name snapshots cannot replace the current identity or disagree with the actual selection receipt', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, background, auth, names, identity } = await named(runtime);
+    const verified = await db.withBoundedTransaction(client => background.readInTransaction(client, who, { taskId: prepared.taskId })); assert(verified);
+    const alternative = auth.asset.policy.allowedSealCharacters.map(name => ({ name, candidates: companionSealCandidates({
+      companionId: prepared.companionId, name, dimensions: verified.dimensions, policy: auth.asset.policy }) }))
+      .find(item => item.candidates.some(candidate => identity.sealCandidates.some(original => candidate.char === original.char))
+        && item.candidates.some(candidate => !identity.sealCandidates.some(original => candidate.char === original.char)));
+    assert(alternative);
+    const shared = alternative.candidates.find(candidate => identity.sealCandidates.some(original => candidate.char === original.char))!.char;
+    const outside = alternative.candidates.find(candidate => !identity.sealCandidates.some(original => candidate.char === original.char))!.char;
+    const input = selectionCommand(prepared.taskId, shared); await names.saveSelection(who, input);
+    const captured = await state(who), row = captured.selections[0], receipt = captured.selectionOperations[0];
+    const rowBinding = { table: 'platform_companion_identity_selections', column: 'payload_ciphertext', rowId: row.id, ownerId: who.userId, revision: 1 };
+    const opBinding = { table: 'platform_companion_identity_selection_operations', column: 'request_ciphertext', rowId: input.operationId, ownerId: who.userId, revision: 1 };
+    const payload = JSON.parse(crypto.openUtf8(row.payload_ciphertext, rowBinding)), operation = JSON.parse(crypto.openUtf8(receipt.request_ciphertext, opBinding));
+    const alternateSnapshot = { ...payload.identitySnapshot, name: alternative.name, sealCandidates: alternative.candidates };
+    await db.query('UPDATE platform_companion_identity_selections SET payload_ciphertext=$2 WHERE id=$1', [row.id,
+      crypto.sealUtf8(JSON.stringify({ ...payload, identitySnapshot: alternateSnapshot, sealChar: outside }), rowBinding)]);
+    await db.query('UPDATE platform_companion_identity_selection_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, input.operationId,
+      crypto.sealUtf8(JSON.stringify({ ...operation, identitySnapshot: alternateSnapshot, request: { ...operation.request, sealChar: outside } }), opBinding)]);
+    let damaged = await state(who);
+    for (const action of [() => names.readSelection(who, { taskId: prepared.taskId }), () => names.saveSelection(who, { ...input, sealChar: outside }),
+      () => names.saveSelection(who, selectionCommand(prepared.taskId, identity.sealCandidates[0].char, 1, 1))])
+      await assert.rejects(action(), code('COMPANION_IDENTITY_UNAVAILABLE'));
+    assert.deepEqual(await state(who), damaged);
+    await db.query('UPDATE platform_companion_identity_selections SET payload_ciphertext=$2 WHERE id=$1', [row.id, row.payload_ciphertext]);
+    await db.query('UPDATE platform_companion_identity_selection_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, input.operationId, receipt.request_ciphertext]);
+    await names.save(who, command(prepared.taskId, 1, '墨'));
+    await db.query('UPDATE platform_companion_identity_selection_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, input.operationId,
+      crypto.sealUtf8(JSON.stringify({ ...operation, identitySnapshot: alternateSnapshot }), opBinding)]);
+    damaged = await state(who);
+    for (const action of [() => names.readSelection(who, { taskId: prepared.taskId }), () => names.saveSelection(who, input)])
+      await assert.rejects(action(), code('COMPANION_IDENTITY_UNAVAILABLE'));
+    assert.deepEqual(await state(who), damaged); assert.equal(bodies.length, 1);
+  });
+});
+
+test('legal, session, real account and complete generation provenance remain required for selection reads and writes', async () => {
+  await loopback(async (runtime, bodies) => {
+    for (const mode of ['legal', 'session', 'staff', 'unverified', 'completion', 'cost', 'history'] as const) {
+      const { who, prepared, names, identity, textId } = await named(runtime, { text: mode === 'history' }), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char);
+      await names.saveSelection(who, input);
+      if (mode === 'legal') await db.query("UPDATE platform_terms_policy SET content_digest=$1", ['0'.repeat(64)]);
+      if (mode === 'session') await db.query('DELETE FROM platform_sessions WHERE token_hash=$1', [who.tokenHash]);
+      if (mode === 'staff') await db.query("UPDATE platform_users SET account_kind='staff' WHERE id=$1", [who.userId]);
+      if (mode === 'unverified') await db.query('UPDATE platform_users SET email_verified_at=NULL WHERE id=$1', [who.userId]);
+      if (mode === 'completion') await db.query("UPDATE platform_companion_generation_calls SET status='failed' WHERE user_id=$1", [who.userId]);
+      if (mode === 'cost') await db.query('DELETE FROM platform_cost_ledger WHERE user_id=$1', [who.userId]);
+      if (mode === 'history') await db.query('UPDATE platform_onboarding_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, textId, Buffer.alloc(29)]);
+      const captured = await state(who);
+      try {
+        for (const action of [() => names.readSelection(who, { taskId: prepared.taskId }), () => names.saveSelection(who, input),
+          () => names.saveSelection(who, selectionCommand(prepared.taskId, identity.sealCandidates[1].char, 1, 1))])
+          await assert.rejects(action(), error => error instanceof ApiError && error.status >= 400);
+        assert.deepEqual(await state(who), captured);
+      } finally { if (mode === 'legal') await seedFictionalActiveLegal(db); }
+    }
+    assert.equal(bodies.length, 7);
+  });
+});
+
+test('seal command and owner are captured before database waits and late session expiry rolls the selection back', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, background, auth, identity } = await named(runtime), other = await actor();
+    let entered!: () => void, resume!: () => void, held = false;
+    const waiting = new Promise<void>(resolve => { entered = resolve; }), released = new Promise<void>(resolve => { resume = resolve; });
+    const gated = new QueryGateDatabase(async () => { if (!held) { held = true; entered(); await released; } });
+    const input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char), original = { ...input };
+    try {
+      const context = { ...who }, pending = service(background, auth.asset, auth.review, gated).saveSelection(context, input); await waiting;
+      context.userId = other.userId; context.tokenHash = other.tokenHash; input.sealChar = identity.sealCandidates[1].char;
+      input.operationId = randomUUID(); input.expectedRevision = 40; input.expectedIdentityRevision = 30; input.taskId = randomUUID(); resume();
+      const saved = await pending; assert.equal(saved.selection.selectedSeal, original.sealChar); assert.equal(saved.operation.id, original.operationId);
+      assert.equal((await state(other)).selections.length, 0);
+    } finally { resume?.(); await gated.close(); }
+    let expired = false;
+    const expiry = new QueryGateDatabase(async (client, text) => {
+      if (expired || !text.startsWith('INSERT INTO platform_companion_identity_selection_operations')) return; expired = true;
+      await client.query("UPDATE platform_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE token_hash=$1", [who.tokenHash]);
+    });
+    try {
+      const captured = await state(who);
+      await assert.rejects(service(background, auth.asset, auth.review, expiry).saveSelection(who,
+        selectionCommand(prepared.taskId, identity.sealCandidates[1].char, 1, 1)), code('AUTH_REQUIRED'));
+      assert.equal(expired, true); assert.deepEqual(await state(who), captured); assert.equal(bodies.length, 1);
+    } finally { await expiry.close(); }
+  });
+});
+
+test('actual deferred COMMIT rejection rolls back seal row and receipt while post-acceptance cancellation preserves the commit', async () => {
+  await loopback(async (runtime, bodies) => {
+    const { who, prepared, background, auth, names, identity } = await named(runtime), captured = await state(who), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char);
+    await db.query(`CREATE FUNCTION selection_fixture_commit_rejection() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'Fictional deferred selection COMMIT rejection' USING ERRCODE='23514'; END; $$`);
+    await db.query(`CREATE CONSTRAINT TRIGGER selection_fixture_commit_rejection AFTER INSERT ON platform_companion_identity_selection_operations
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION selection_fixture_commit_rejection()`);
+    let reachedCommit = false;
+    const gated = new BeforeCommitDatabase(async client => {
+      const staged = (await client.query(`SELECT
+        (SELECT count(*)::int FROM platform_companion_identity_selections WHERE user_id=$1) AS selections,
+        (SELECT count(*)::int FROM platform_companion_identity_selection_operations WHERE user_id=$1) AS operations`, [who.userId])).rows[0];
+      assert.deepEqual(staged, { selections: 1, operations: 1 }); reachedCommit = true;
+    });
+    try {
+      await assert.rejects(service(background, auth.asset, auth.review, gated).saveSelection(who, input), { code: '23514' });
+      assert.equal(reachedCommit, true); assert.deepEqual(await state(who), captured);
+    } finally {
+      await gated.close(); await db.query('DROP TRIGGER selection_fixture_commit_rejection ON platform_companion_identity_selection_operations');
+      await db.query('DROP FUNCTION selection_fixture_commit_rejection()');
+    }
+    const controller = new AbortController(), acceptance = new BeforeCommitDatabase(async client => {
+      assert.equal((await client.query('SELECT 1 FROM platform_companion_identity_selection_operations WHERE user_id=$1 AND operation_id=$2', [who.userId, input.operationId])).rowCount, 1);
+      controller.abort(new DOMException('Fictional cancellation after acceptance', 'AbortError'));
+    });
+    try {
+      const saved = await service(background, auth.asset, auth.review, acceptance).saveSelection(who, input, controller.signal);
+      assert.equal(saved.operation.replayed, false); assert.equal(controller.signal.aborted, true);
+      const committed = await state(who); assert.equal(committed.selections.length, 1); assert.equal(committed.selectionOperations.length, 1);
+      assert.deepEqual(await names.readSelection(who, { taskId: prepared.taskId }), saved.selection);
+      assert.deepEqual((await names.saveSelection(who, input)).selection, saved.selection); assert.deepEqual(await state(who), committed); assert.equal(bodies.length, 1);
+    } finally { await acceptance.close(); }
+  });
+});
+
+test('actual two-connection session revocation waits preserve the confirmed transaction order', async () => {
+  await loopback(async (runtime, bodies) => {
+    async function waitForLock(pid: number) {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const row = (await db.query('SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1', [pid])).rows[0];
+        if (row?.wait_event_type === 'Lock') return;
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      assert.fail('Expected the actual other PostgreSQL connection to wait for its row lock.');
+    }
+    for (const order of ['selection_first', 'revocation_first'] as const) {
+      const { who, prepared, background, auth, identity } = await named(runtime), input = selectionCommand(prepared.taskId, identity.sealCandidates[0].char);
+      const captured = await state(who), revoker = await db.pool.connect();
+      let gated: QueryGateDatabase | undefined, resume: (() => void) | undefined, pending: Promise<unknown> | undefined, deletion: Promise<unknown> | undefined;
+      try {
+        await revoker.query('BEGIN'); const revokerPid = (await revoker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+        if (order === 'selection_first') {
+          let entered!: () => void, held = false;
+          const waiting = new Promise<void>(resolve => { entered = resolve; }), released = new Promise<void>(resolve => { resume = resolve; });
+          gated = new QueryGateDatabase(async (_client, text) => {
+            if (held || !text.startsWith('INSERT INTO platform_companion_identity_selection_operations')) return;
+            held = true; entered(); await released;
+          });
+          pending = service(background, auth.asset, auth.review, gated).saveSelection(who, input); await waiting;
+          deletion = revoker.query('DELETE FROM platform_sessions WHERE token_hash=$1', [who.tokenHash]);
+          await waitForLock(revokerPid); resume!();
+          const saved = await pending; assert(saved && typeof saved === 'object' && 'operation' in saved);
+          await deletion; await revoker.query('COMMIT');
+          const current = await state(who); assert.equal(current.selections.length, 1); assert.equal(current.selectionOperations.length, 1);
+          assert.deepEqual(current.intakeDrafts, captured.intakeDrafts); assert.deepEqual(current.intakeOperations, captured.intakeOperations);
+          assert.deepEqual(current.drafts, captured.drafts); assert.deepEqual(current.effects, captured.effects); assert.deepEqual(current.companions, captured.companions);
+        } else {
+          await revoker.query('DELETE FROM platform_sessions WHERE token_hash=$1', [who.tokenHash]);
+          let entered!: (pid: number) => void, held = false;
+          const waiting = new Promise<number>(resolve => { entered = resolve; });
+          gated = new QueryGateDatabase(async (client, text) => {
+            if (held || !text.startsWith('SELECT token_hash FROM platform_sessions')) return;
+            held = true; entered((await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid);
+          });
+          pending = service(background, auth.asset, auth.review, gated).saveSelection(who, input);
+          const denied = assert.rejects(pending, code('AUTH_REQUIRED'));
+          await waitForLock(await waiting); await revoker.query('COMMIT'); await denied;
+          assert.deepEqual(await state(who), captured);
+        }
+        await assert.rejects(service(background, auth.asset, auth.review).readSelection(who, { taskId: prepared.taskId }), code('AUTH_REQUIRED'));
+      } finally {
+        resume?.(); await revoker.query('ROLLBACK'); revoker.release();
+        await Promise.allSettled([pending, deletion]); await gated?.close();
+      }
+    }
+    assert.equal(bodies.length, 2);
   });
 });
