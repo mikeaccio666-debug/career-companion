@@ -158,7 +158,10 @@ test('authenticated but invalid state and damaged operation ciphertext return bo
   await assert.rejects(store.read(who), code('DATA_STORAGE_UNAVAILABLE'));
   await db.query('UPDATE platform_onboarding_drafts SET payload_ciphertext=$2 WHERE user_id=$1', [who.userId, crypto.sealUtf8(JSON.stringify(saved.draft), binding)]);
   await db.query('UPDATE platform_onboarding_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, input.operationId, Buffer.alloc(29)]);
-  await assert.rejects(store.save(who, input), code('DATA_STORAGE_UNAVAILABLE')); assert.deepEqual(await store.read(who), saved.draft);
+  await assert.rejects(store.save(who, input), code('DATA_STORAGE_UNAVAILABLE'));
+  // Reads now verify the complete operation history before claiming that all text was accounted for.
+  await assert.rejects(store.read(who), code('DATA_STORAGE_UNAVAILABLE'));
+  assert.equal((await db.query('SELECT revision FROM platform_onboarding_drafts WHERE user_id=$1', [who.userId])).rows[0].revision, saved.draft.revision);
 });
 
 test('a fixed command and account survive caller mutation during a proven account lock wait', async () => {

@@ -1,17 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import type { PoolClient } from 'pg';
 import type { OnboardingCommand, OnboardingDraft, OnboardingSaveResult } from '@companion/platform-contracts';
-import { createOnboardingDraft, parseOnboardingCommand, parseOnboardingDraft, transitionOnboardingDraft } from '@companion/career-core';
+import { createOnboardingDraft, parseOnboardingCommand, transitionOnboardingDraft } from '@companion/career-core';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { PlatformConfig } from './config.ts';
 import type { Database } from './database.ts';
 import { DataCryptoError, type DataCrypto } from './data-crypto.ts';
 import { ApiError } from './errors.ts';
-import { assertActiveLegal, type LegalBundle } from './legal-documents.ts';
+import type { LegalBundle } from './legal-documents.ts';
+import { OnboardingStorage } from './onboarding-storage.ts';
+import { OnboardingSafety, type IntakeClassifier, type SafetyFailure } from './onboarding-safety.ts';
+import type { OnboardingSafetyClaim } from './onboarding-safety-protocol.ts';
 
-interface DraftRow {
-  id: string; user_id: string; revision: number; payload_ciphertext: Buffer; updated_at: Date;
-}
 interface OperationRow {
   operation_id: string; draft_id: string; applied_revision: number; request_ciphertext: Buffer;
 }
@@ -21,52 +20,35 @@ const changed = () => new ApiError(409, 'ONBOARDING_REVISION_CHANGED', 'Read the
 /** Unreleased preparation service. It grants no room, companion, memory, tool or first-letter completion. */
 export class OnboardingDrafts {
   private readonly crypto: DataCrypto | undefined;
-  private readonly requireVerifiedEmail: boolean;
+  private readonly storage: OnboardingStorage;
+  private readonly safety: OnboardingSafety;
   constructor(readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, readonly bundle: LegalBundle | null) {
     this.crypto = config.dataCrypto;
-    this.requireVerifiedEmail = config.requireVerifiedEmail;
+    this.storage = new OnboardingStorage(config, bundle);
+    this.safety = new OnboardingSafety(db, this.storage);
+  }
+  claimSafety(context: FixedSessionContext, options: { detectorRevision: number; leaseMs?: number }, signal?: AbortSignal) {
+    return this.safety.claim(context, options, signal);
+  }
+  processSafety(claim: OnboardingSafetyClaim, classify: IntakeClassifier, signal?: AbortSignal) {
+    return this.safety.process(claim, classify, signal);
+  }
+  failSafety(claim: OnboardingSafetyClaim, failure: SafetyFailure, signal?: AbortSignal) {
+    return this.safety.fail(claim, failure, signal);
+  }
+  readSafety(context: FixedSessionContext, signal?: AbortSignal) {
+    return this.safety.read(context, signal);
   }
   private fixed(context: FixedSessionContext): FixedSessionContext {
     return Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
   }
-  private async authorize(client: PoolClient, context: FixedSessionContext, signal?: AbortSignal): Promise<void> {
-    await authorizeFixedSession(client, context, signal);
-    const user = await client.query('SELECT account_kind,email_verified_at FROM platform_users WHERE id=$1', [context.userId]);
-    if (user.rows[0]?.account_kind !== 'student') throw new ApiError(403, 'STUDENT_ACCOUNT_REQUIRED', 'Use a student account for intake.');
-    if (this.requireVerifiedEmail && !user.rows[0].email_verified_at) throw new ApiError(403, 'EMAIL_VERIFICATION_REQUIRED', 'Verify your email before continuing.');
-    const policy = await assertActiveLegal(client, this.bundle, signal);
-    const consent = await client.query(`SELECT user_id FROM platform_terms_consents
-      WHERE user_id=$1 AND terms_version=$2 AND content_digest=$3 FOR SHARE`, [context.userId, policy.version, policy.digest]);
-    signal?.throwIfAborted();
-    if (!consent.rowCount) throw new ApiError(403, 'TERMS_CONFIRMATION_REQUIRED', 'Read and confirm the current legal documents before continuing.');
-    await authorizeFixedSession(client, context, signal);
-    if (!this.crypto) throw unavailable();
-  }
-  private async row(client: PoolClient, userId: string): Promise<DraftRow | undefined> {
-    const found = await client.query<DraftRow>(`SELECT id,user_id,revision,payload_ciphertext,updated_at
-      FROM platform_onboarding_drafts WHERE user_id=$1 FOR UPDATE`, [userId]);
-    return found.rows[0];
-  }
-  private decode(row: DraftRow): OnboardingDraft {
-    try {
-      const value = this.crypto!.openUtf8(row.payload_ciphertext, {
-        table: 'platform_onboarding_drafts', column: 'payload_ciphertext', rowId: row.id, ownerId: row.user_id, revision: row.revision,
-      });
-      const draft = parseOnboardingDraft(JSON.parse(value));
-      if (draft.id !== row.id || draft.userId !== row.user_id || draft.revision !== row.revision
-        || draft.updatedAt !== row.updated_at.toISOString()) throw unavailable();
-      return draft;
-    } catch { throw unavailable(); }
-  }
-  private async at(client: PoolClient): Promise<string> {
-    return (await client.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
-  }
   async read(context: FixedSessionContext, signal?: AbortSignal): Promise<OnboardingDraft | null> {
     const fixed = this.fixed(context);
     return this.db.withBoundedTransaction(async client => {
-      await this.authorize(client, fixed, signal);
-      const row = await this.row(client, fixed.userId);
-      const draft = row ? this.decode(row) : null;
+      await this.storage.authorizeSession(client, fixed, signal);
+      const row = await this.storage.row(client, fixed.userId);
+      const draft = row ? this.storage.decode(row) : null;
+      if (draft) await this.storage.recover(client, draft);
       await authorizeFixedSession(client, fixed, signal);
       return draft;
     });
@@ -81,9 +63,10 @@ export class OnboardingDrafts {
     command = JSON.parse(canonical) as OnboardingCommand;
     try {
       return await this.db.withBoundedTransaction(async client => {
-        await this.authorize(client, fixed, signal);
-        const row = await this.row(client, fixed.userId);
-        const previous = row ? this.decode(row) : null;
+        await this.storage.authorizeSession(client, fixed, signal);
+        const row = await this.storage.row(client, fixed.userId);
+        const previous = row ? this.storage.decode(row) : null;
+        const submissions = previous ? await this.storage.recover(client, previous) : [];
         const found = await client.query<OperationRow>(`SELECT operation_id,draft_id,applied_revision,request_ciphertext
           FROM platform_onboarding_operations WHERE user_id=$1 AND operation_id=$2 FOR UPDATE`, [fixed.userId, command.operationId]);
         const operation = found.rows[0];
@@ -101,8 +84,9 @@ export class OnboardingDrafts {
           await authorizeFixedSession(client, fixed, signal);
           return { draft: previous, operation: { id: operation.operation_id, appliedRevision: operation.applied_revision, replayed: true } };
         }
+        if (this.storage.safetyState(submissions).status === 'blocked') throw new ApiError(409, 'ONBOARDING_SAFETY_REVIEW_REQUIRED', 'The intake safety response must be handled before continuing.');
         if (command.expectedRevision !== (previous?.revision ?? 0)) throw changed();
-        const at = await this.at(client);
+        const at = await this.storage.at(client);
         const initial = previous ?? createOnboardingDraft({ id: randomUUID(), userId: fixed.userId, at });
         let draft: OnboardingDraft;
         try { draft = transitionOnboardingDraft(initial, command, { at, textId: command.operationId }); }
@@ -127,6 +111,7 @@ export class OnboardingDrafts {
         });
         await client.query(`INSERT INTO platform_onboarding_operations(user_id,operation_id,draft_id,applied_revision,request_ciphertext)
           VALUES($1,$2,$3,$4,$5)`, [fixed.userId, command.operationId, draft.id, draft.revision, requestCiphertext]);
+        if (command.action.kind === 'text') await this.storage.recover(client, draft);
         // Admission is checked after the writes. The transaction helper confirms COMMIT
         // before returning; expiry/cancellation after this check does not undo an accepted write.
         await authorizeFixedSession(client, fixed, signal);

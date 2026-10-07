@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ONBOARDING_BASIC_QUESTIONS, ONBOARDING_SCENARIO_QUESTIONS, type OnboardingAction, type OnboardingDraft } from '@companion/platform-contracts';
-import { OnboardingError, createOnboardingDraft, parseOnboardingCommand, parseOnboardingDraft, resolveOnboardingText, transitionOnboardingDraft } from '../src/index.ts';
+import { OnboardingError, createOnboardingDraft, parseOnboardingCommand, parseOnboardingDraft, parseOnboardingSafetyResult, resolveOnboardingText, transitionOnboardingDraft } from '../src/index.ts';
 
 const at = '2026-10-07T12:00:00.000Z';
 const id = (number = 1) => `00000000-0000-4000-8000-${number.toString(16).padStart(12, '0')}`;
@@ -12,6 +12,44 @@ const started = (fast = false) => send(create(), { kind: 'start', mode: fast ? '
 function basic(fast = false) { let draft = started(fast); for (const questionId of ONBOARDING_BASIC_QUESTIONS) draft = send(draft, { kind: 'skip', questionId }); return draft; }
 function extra() { let draft = basic(); for (const questionId of ONBOARDING_SCENARIO_QUESTIONS) draft = send(draft, { kind: 'skip', questionId }); return draft; }
 const rejects = (run: () => unknown, code: OnboardingError['code'] = 'ONBOARDING_INVALID_INPUT') => assert.throws(run, (error: unknown) => error instanceof OnboardingError && error.code === code);
+
+test('standalone safety parsing normalizes identifiers and copies resolved values without granting a question transition', () => {
+  const roles = ['mle', 'swe'], result = { textId: id(0xabcdef).toUpperCase(), submittedAtRevision: 4, level: 'L0', detectorRevision: 2, mode: 'full',
+    resolution: { kind: 'answer', questionId: 'roles', value: { kind: 'selected', roles } } };
+  const parsed = parseOnboardingSafetyResult(result); roles.push('ds');
+  assert.deepEqual(parsed, { textId: id(0xabcdef), submittedAtRevision: 4, level: 'L0', detectorRevision: 2, mode: 'full',
+    resolution: { kind: 'answer', questionId: 'roles', value: { kind: 'selected', roles: ['swe', 'mle'] } } });
+  assert.equal(Object.hasOwn(parsed, 'questionId'), false); assert.equal(Object.hasOwn(parsed, 'userId'), false);
+});
+test('standalone safety parsing rejects unclosed coordinates, control suffixes, invalid integer bounds and accessors', () => {
+  const result = { textId: id(3), submittedAtRevision: 2, level: 'L0', detectorRevision: 1, mode: 'full' };
+  for (const key of ['userId', 'submissionId', 'operationId', 'draftId', 'questionId', 'authVersion', 'generation', 'leaseToken', 'completed']) rejects(() => parseOnboardingSafetyResult({ ...result, [key]: id(9) }));
+  for (const suffix of ['\n', '\r', '\r\n', '\u2028', '\u2029']) rejects(() => parseOnboardingSafetyResult({ ...result, textId: id(3) + suffix }));
+  for (const field of ['submittedAtRevision', 'detectorRevision']) for (const value of [0, -1, 0.5, 2147483648, NaN, Infinity, '1']) rejects(() => parseOnboardingSafetyResult({ ...result, [field]: value }));
+  const max = parseOnboardingSafetyResult({ ...result, submittedAtRevision: 2147483647, detectorRevision: 2147483647 }); assert.equal(max.detectorRevision, 2147483647);
+  let called = false; const getter = { ...result }; Object.defineProperty(getter, 'level', { get() { called = true; return 'L0'; } });
+  rejects(() => parseOnboardingSafetyResult(getter)); assert.equal(called, false);
+  rejects(() => parseOnboardingSafetyResult(new Date())); rejects(() => parseOnboardingSafetyResult({ ...result, [Symbol('extra')]: 1 }));
+});
+test('standalone safety parsing allows only full L0 and forbids any non-L0 resolution field', () => {
+  const result = { textId: id(3), submittedAtRevision: 2, detectorRevision: 1 };
+  assert.deepEqual(parseOnboardingSafetyResult({ ...result, level: 'L0', mode: 'full' }), { ...result, level: 'L0', mode: 'full' });
+  rejects(() => parseOnboardingSafetyResult({ ...result, level: 'L0', mode: 'keyword_only' }));
+  for (const level of ['L1', 'L2']) for (const mode of ['full', 'keyword_only']) {
+    assert.equal(parseOnboardingSafetyResult({ ...result, level, mode }).level, level);
+    for (const resolution of [undefined, { kind: 'unmatched' }]) rejects(() => parseOnboardingSafetyResult({ ...result, level, mode, resolution }));
+  }
+  for (const resolution of [{ kind: 'unmatched', questionId: 'study' }, { kind: 'answer', questionId: 'Q2', value: 'D' },
+    { kind: 'answer', questionId: 'extra', value: { textId: id(3) } }, undefined]) rejects(() => parseOnboardingSafetyResult({ ...result, level: 'L0', mode: 'full', resolution }));
+});
+test('standalone L0 without resolution is allowed for extra but still cannot resolve a choice question', () => {
+  const choice = send(started(), { kind: 'text', questionId: 'study', text: 'Fictional choice text.' });
+  const parsed = parseOnboardingSafetyResult({ textId: choice.pendingText!.id, submittedAtRevision: choice.revision, level: 'L0', detectorRevision: 1, mode: 'full' });
+  rejects(() => resolveOnboardingText(choice, parsed, { at })); assert.equal(choice.state, 'safety_pending');
+  const pending = send(extra(), { kind: 'text', questionId: 'extra', text: 'Fictional extra text.' });
+  const extraResult = parseOnboardingSafetyResult({ textId: pending.pendingText!.id, submittedAtRevision: pending.revision, level: 'L0', detectorRevision: 1, mode: 'full' });
+  assert.equal(resolveOnboardingText(pending, extraResult, { at }).state, 'intake_ready');
+});
 
 test('initial draft is a strict revision-zero O1 draft, not a companion or completed onboarding', () => {
   const draft = create(); assert.equal(draft.revision, 0); assert.equal(draft.step, 'O1'); assert.equal(draft.currentQuestion, null);
