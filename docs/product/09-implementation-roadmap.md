@@ -13,7 +13,7 @@
 
 **结论**
 1. P0 = 第 0–8 步、第 8B 步，加 10A（做完不发布）。关键路径 0 → 1 → 2 → 3A/3B → 5 → 4，可后移项见 §1.6。
-2. 第 1 步（主理人 Agent 与对话引擎）是主线与单聊、主动消息、Discord、语音的共同前提；PR1 必须零行为变化，PR3 前做一次小规模真实模型测试（需产品负责人批准预算）。
+2. 第 1 步（主理人 Agent 与对话引擎）是主线与单聊、主动消息、Discord、语音的共同前提；PR1 必须零行为变化，PR3 前做一次小规模真实模型测试（产品负责人 2026-10-07 已批准：低价档跑全部、正式档抽样，15 §1.2）。
 3. 不随工期削减：危机模板不依赖模型、身份数字只来自审核过的配置（第 2 步）；要发给别人的消息和材料先进待确认（第 5 步）；付费建议护栏（第 8B 步）。
 4. 外部数据只经第 3D 步（复用 MCP，03 §2.8），不在关键路径上；插件授权在投的单聊里一次问清、确认卡生效，浮层不提问（第 10 步）。
 5. 最大风险：P0 七周的工程量；蔓藤授权卡住 3C 和题库；律师审核卡住插件发布。本文只给相对规模假设，不给工期。
@@ -158,7 +158,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 **六个 PR**（每个都用假 runtime 测，不需要付费调用；只有 PR3 前的实测例外）
 1. **纯抽取**（不变）：行为零变化，现有测试一行不改通过；给 platform-api 加 `@companion/career-core` 的 workspace 依赖。
 2. **Agent 循环与能力目录**：ai-core 改动；能力目录与权限矩阵；技能清单与 `use_skill`。不改表。
-3. **轮次服务**：合并迁移 017（第 1 步的全部表，PR4、PR6 只用不改）；租约按轮次；记账键改造；插话取代 409 `CONVERSATION_BUSY`，返回 202 `{turnId, queued:true}`，在 agent 的下一步并入，进行中的工具不取消（L1、L2 立即中断）；`queued` 轮次拿不到租约重试 3 次，仍失败标 `failed`；`POST /conversations/:id/turns/:turnId/cancel`；断线不取消。**开工前**做 15 §1.2 的小规模真实模型测试（主理人与前、投、面各 30 段虚构脚本），**需产品负责人批准预算**；不批准就按假设继续，B0 实测再调。
+3. **轮次服务**：合并迁移 017（第 1 步的全部表，PR4、PR6 只用不改）；租约按轮次；记账键改造；插话取代 409 `CONVERSATION_BUSY`，返回 202 `{turnId, queued:true}`，在 agent 的下一步并入，进行中的工具不取消（L1、L2 立即中断）；`queued` 轮次拿不到租约重试 3 次，仍失败标 `failed`；`POST /conversations/:id/turns/:turnId/cancel`；断线不取消。**开工前**做 15 §1.2 的小规模真实模型测试（主理人与前、投、面各 30 段虚构脚本；产品负责人 2026-10-07 已批准：低价档跑全部、正式档抽 20 段，只在预发或远程开发机上为这次测试打开商业调用，密钥只在服务端）；结果写进 docs/platform/，再按实测调整 15 §1 与 07 §7.4。
 4. **房间与转发卡**：`GET /rooms`、`POST /rooms`（打开单聊、进面试间）；`runExpert` 写转发卡消息（`kind = forward_card`，做法同现在路由里 `send('approval')` 的闭包）；`detectNameCall`；引用回复与卡上按钮（`POST .../messages/:messageId/actions`）；交接便条；单聊结论回主线；`platform_expert_runs`。
 5. **订阅流**：`GET /conversations/:id/events`、`GET /rooms/events` + `platform_conversation_events`（只存 `{type, message_id, card 引用}`，`seq` 在会话行锁内分配；`/rooms/events` 按 15 §8.2 用快照加通知）+ LISTEN/NOTIFY。网页用 fetch 流读取（复用 `readMessageStream`），带 `x-companion-account` 和 `Last-Event-ID`，不用原生 `EventSource`。最晚 B0（§1.6）。
 6. **后台任务卡**（15 §4.6、§12.2）：`agent` 任务只由服务端路径建（`parseAgentJob`；`POST /jobs`、重试对 `agent` 返回 403）；`authorizeConversationTaskOrigin` 改为核轮次；检查点续跑，进度每 ≤ 10 秒。
