@@ -23,7 +23,7 @@ interface TaskRow {
   questionnaire_revision: number; rules_revision: number; generator_version: number;
   purpose: string; status: string; seed_ciphertext: Buffer;
   answers_ciphertext: Buffer; fingerprint: string; companion_status: string;
-  current_revision: number; draft_rerolls: number;
+  current_revision: number; draft_rerolls: number; quirk_draw: number;
 }
 type Configuration = Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail' | 'modelRoutes'>;
 const changed = () => new ApiError(409, 'COMPANION_DRAFT_SOURCE_CHANGED', 'The prepared companion draft belongs to a different intake or account version.');
@@ -79,16 +79,27 @@ export class CompanionDraftPreparation {
       const taskId = previous?.id ?? randomUUID(), answersId = previous?.answers_id ?? randomUUID();
       // Only rule metadata is retained. Fallback summary/samples/generatedBy are
       // discarded; creating a task is not an eligible failed generation attempt.
-      const compiled = compileFallbackCompanionStyle({ companionId, dimensions: { ...prepared.dimensions } });
+      if (previous && (previous.quirk_draw !== 0 && previous.quirk_draw !== 1 || Object.is(previous.quirk_draw, -0))) throw intakeUnavailable();
+      let quirkDraw: 0 | 1 = previous ? previous.quirk_draw as 0 | 1 : 0;
+      let compiled = compileFallbackCompanionStyle({ companionId, dimensions: { ...prepared.dimensions }, quirkDraw });
+      const fingerprintOf = () => digest({ dimensions: { ...prepared.dimensions }, quirks: { ...compiled.quirks }, inkToken: compiled.inkToken });
+      let fingerprint = fingerprintOf();
+      // 02 §2.4: one best-effort pre-preview draw. This ordinary-index lookup
+      // neither locks other owners nor guarantees global uniqueness. Replays
+      // restore their saved draw and never revisit later collisions.
+      if (!previous && (await client.query('SELECT 1 FROM platform_companions WHERE fingerprint=$1 AND id<>$2 LIMIT 1', [fingerprint, companionId])).rowCount) {
+        quirkDraw = 1;
+        compiled = compileFallbackCompanionStyle({ companionId, dimensions: { ...prepared.dimensions }, quirkDraw });
+        fingerprint = fingerprintOf();
+      }
       const ruleStyle = { dimensions: { ...prepared.dimensions }, quirks: { ...compiled.quirks },
         inkToken: compiled.inkToken, styleCard: compiled.styleCard };
-      const fingerprint = digest({ dimensions: ruleStyle.dimensions, quirks: ruleStyle.quirks, inkToken: ruleStyle.inkToken });
       const answers = { schemaVersion: 1, id: answersId, userId: fixed.userId, sourceDraftId: source.id,
         sourceRevision: source.revision, fastTrack: source.fastTrack, answersPartial: source.answersPartial };
       const seed = { schemaVersion: 1, taskId, userId: fixed.userId, companionId, answersId,
         sourceDraftId: source.id, sourceRevision: source.revision, authVersion, questionnaireRevision: 1,
         rulesRevision: 1, generatorVersion: 1, purpose: 'companion_preview',
-        provider: route.provider, model: route.model, ...ruleStyle };
+        provider: route.provider, model: route.model, ...ruleStyle, ...(quirkDraw === 1 ? { quirkDraw: 1 } : {}) };
       const answersBinding = { table: 'platform_companion_answers', column: 'payload_ciphertext', rowId: answersId,
         ownerId: fixed.userId, revision: source.revision };
       const seedBinding = { table: 'platform_companion_generation_tasks', column: 'seed_ciphertext', rowId: taskId,
@@ -119,9 +130,9 @@ export class CompanionDraftPreparation {
         await client.query(`INSERT INTO platform_companion_answers(id,user_id,source_draft_id,source_revision,payload_ciphertext)
           VALUES($1,$2,$3,$4,$5)`, [answersId, fixed.userId, source.id, source.revision, answersCiphertext]);
         await client.query(`INSERT INTO platform_companion_generation_tasks(id,user_id,companion_id,answers_id,source_draft_id,
-          source_revision,auth_version,questionnaire_revision,rules_revision,generator_version,purpose,status,seed_ciphertext)
-          VALUES($1,$2,$3,$4,$5,$6,$7,1,1,1,'companion_preview','pending',$8)`,
-          [taskId, fixed.userId, companionId, answersId, source.id, source.revision, authVersion, seedCiphertext]);
+          source_revision,auth_version,questionnaire_revision,rules_revision,generator_version,purpose,status,seed_ciphertext,quirk_draw)
+          VALUES($1,$2,$3,$4,$5,$6,$7,1,1,1,'companion_preview','pending',$8,$9)`,
+          [taskId, fixed.userId, companionId, answersId, source.id, source.revision, authVersion, seedCiphertext, quirkDraw]);
       }
       await authorizeFixedSession(client, fixed, signal);
       signal?.throwIfAborted();

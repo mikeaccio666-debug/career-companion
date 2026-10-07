@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { CompanionStyleError, compileFallbackCompanionStyle } from '../src/companion/style.ts';
 import type { CompanionDimensions } from '../src/companion/mapping.ts';
 
@@ -73,4 +74,50 @@ test('closed input rejects getters, unknown authority fields and invalid UUID/di
   }
   assert.throws(() => compileFallbackCompanionStyle({ companionId: id(1), dimensions: { ...dimensions, get warmth() { reads++; return 1 as const; } } }), CompanionStyleError);
   assert.equal(reads, 0);
+});
+test('omitted and explicit zero draw preserve the exact pre-dedup output bytes for all dimensions and lengths', () => {
+  const legacy: ReturnType<typeof compileFallbackCompanionStyle>[] = [], values = [-1, 0, 1] as const;
+  for (const warmth of values) for (const directness of values) for (const drive of values) for (const structure of values)
+    for (const levity of values) for (const code_mix of values) for (const length of ['short', 'medium', 'long'] as const) {
+      const input = { companionId: id(7), dimensions: { warmth, directness, drive, structure, levity, code_mix, length } };
+      const result = compileFallbackCompanionStyle(input);
+      assert.equal(JSON.stringify(compileFallbackCompanionStyle({ ...input, quirkDraw: 0 })), JSON.stringify(result));
+      legacy.push(result);
+    }
+  // Captured from the original compiler before implementing quirkDraw.
+  assert.equal(legacy.length, 2187);
+  assert.equal(createHash('sha256').update(JSON.stringify(legacy)).digest('hex'), 'dc29d023cba47125a585d140f61b9b3495db2479f56e82c4e11e418a2ea85e5a');
+});
+test('one draw uses the actual entity deterministically and changes only quirks and corresponding style prose', () => {
+  let changed = 0;
+  for (let n = 1; n <= 30; n++) for (const levity of [-1, 0, 1] as const) for (const directness of [-1, 0, 1] as const) {
+    const source = { companionId: id(n), dimensions: { ...dimensions, levity, directness } }, snapshot = JSON.stringify(source);
+    const zero = compileFallbackCompanionStyle(source), one = compileFallbackCompanionStyle({ ...source, quirkDraw: 1 });
+    assert.deepEqual(compileFallbackCompanionStyle({ ...source, quirkDraw: 1 }), one);
+    for (const field of ['summary', 'samples', 'inkToken', 'generatedBy', 'generatorVersion'] as const) assert.deepEqual(one[field], zero[field]);
+    assert.equal(JSON.stringify(source), snapshot); assert.deepEqual(Object.keys(one), Object.keys(zero));
+    if (levity < 0) assert.equal(one.quirks.metaphorSource, null);
+    if (directness > 0) assert.equal(one.quirks.openingStyle, 'conclusion');
+    if (directness < 0) assert.notEqual(one.quirks.openingStyle, 'conclusion');
+    if (JSON.stringify(one.quirks) !== JSON.stringify(zero.quirks)) { changed++; assert.notEqual(one.styleCard, zero.styleCard); }
+    else assert.equal(one.styleCard, zero.styleCard);
+    for (const value of [one, one.quirks, one.samples]) assert(Object.isFrozen(value));
+    assert(Array.from(one.styleCard).length <= 600);
+  }
+  assert(changed > 0, 'The extra draw resamples quirks without changing the entity, dimension or ink seed.');
+});
+test('draw remains an optional closed internal value and rejects accessors, prototypes and invented retry counts', () => {
+  let reads = 0;
+  for (const quirkDraw of [undefined, null, true, -0, -1, 2, 0.5, NaN, '1']) {
+    assert.throws(() => compileFallbackCompanionStyle({ companionId: id(1), dimensions, quirkDraw } as never), CompanionStyleError);
+  }
+  const getter = { companionId: id(1), dimensions, get quirkDraw() { reads++; return 1 as const; } };
+  const hidden = Object.defineProperty({ companionId: id(1), dimensions }, 'quirkDraw', { value: 1, enumerable: false });
+  const inherited = Object.assign(Object.create({ quirkDraw: 1 }), { companionId: id(1), dimensions });
+  for (const value of [getter, hidden, inherited, { companionId: id(1), dimensions, quirkDraw: 1, [Symbol('draw')]: 1 }]) {
+    assert.throws(() => compileFallbackCompanionStyle(value as never), CompanionStyleError);
+  }
+  assert.equal(reads, 0);
+  const nullPrototype = Object.assign(Object.create(null), { companionId: id(1), dimensions, quirkDraw: 1 });
+  assert.deepEqual(compileFallbackCompanionStyle(nullPrototype), compileFallbackCompanionStyle({ companionId: id(1), dimensions, quirkDraw: 1 }));
 });

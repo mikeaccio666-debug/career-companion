@@ -17,28 +17,35 @@ export class CompanionStyleError extends Error {
   constructor() { super('The companion style could not be prepared.'); this.name = 'CompanionStyleError'; }
 }
 function invalid(): never { throw new CompanionStyleError(); }
-function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
+function record(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalid();
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Reflect.ownKeys(value).some(key => typeof key !== 'string' || !keys.includes(key)) || keys.some(key => !Object.hasOwn(descriptors, key))
+  if (Reflect.ownKeys(value).some(key => typeof key !== 'string' || ![...keys, ...optional].includes(key)) || keys.some(key => !Object.hasOwn(descriptors, key))
     || Object.values(descriptors).some(descriptor => !('value' in descriptor) || !descriptor.enumerable)) invalid();
-  return Object.fromEntries(keys.map(key => [key, descriptors[key].value]));
+  return Object.fromEntries([...keys, ...optional.filter(key => Object.hasOwn(descriptors, key))].map(key => [key, descriptors[key].value]));
 }
 const seed = (value: string) => { let number = 2166136261; for (const char of value) number = Math.imul(number ^ char.charCodeAt(0), 16777619) >>> 0; return number; };
 const warm: readonly CompanionInkToken[] = ['yanzhi', 'zheshi', 'ganlan', 'jiangzi'], cold: readonly CompanionInkToken[] = ['dai', 'yanzi', 'hehui'];
 const metaphors = ['chess', 'hiking', 'cooking', 'sailing', 'running', 'gardening', 'weather', 'coding'] as const;
 const metaphorLabels: Record<typeof metaphors[number], string> = { chess: '下棋', hiking: '登山', cooking: '做饭', sailing: '航海', running: '跑步', gardening: '园艺', weather: '天气', coding: '写代码' };
 /** 02 §§2.4–2.6: rule-based preview metadata, never a model response or permission to speak. */
-export function compileFallbackCompanionStyle(input: { companionId: string; dimensions: CompanionDimensions }): FallbackCompanionStyle {
-  const data = record(input, ['companionId', 'dimensions']);
+export function compileFallbackCompanionStyle(input: { companionId: string; dimensions: CompanionDimensions; quirkDraw?: 0 | 1 }): FallbackCompanionStyle {
+  const data = record(input, ['companionId', 'dimensions'], ['quirkDraw']);
   if (typeof data.companionId !== 'string' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(data.companionId)?.[0] !== data.companionId) invalid();
   const values = record(data.dimensions, ['warmth', 'directness', 'drive', 'structure', 'levity', 'code_mix', 'length']);
   for (const key of ['warmth', 'directness', 'drive', 'structure', 'levity', 'code_mix']) if (![-1, 0, 1].includes(values[key] as number) || Object.is(values[key], -0)) invalid();
   if (!['short', 'medium', 'long'].includes(values.length as string)) invalid();
-  const d = values as unknown as CompanionDimensions, pick = <T>(key: string, pool: readonly T[]): T => pool[seed(`${data.companionId}:${key}`) % pool.length];
-  const quirks: CompanionQuirks = Object.freeze({ metaphorSource: d.levity < 0 ? null : pick('metaphor', metaphors),
-    openingStyle: d.directness > 0 ? 'conclusion' : d.directness < 0 ? pick('opening', ['reflect', 'clarify'] as const) : pick('opening', ['reflect', 'conclusion', 'clarify'] as const),
-    signOff: pick('sign-off', ['name', 'name_and_time', 'dash_name'] as const), catchphrase: pick('catchphrase', [null, '先说结论', '先看这里']) });
+  const quirkDraw = Object.hasOwn(data, 'quirkDraw') ? data.quirkDraw : 0;
+  if (quirkDraw !== 0 && quirkDraw !== 1 || Object.is(quirkDraw, -0)) invalid();
+  const d = values as unknown as CompanionDimensions;
+  // A trusted caller may request the single pre-preview dedup draw. Keep the
+  // actual entity ID and legacy zero seed intact; ink never uses the new draw.
+  const pick = <T>(key: string, pool: readonly T[]): T => pool[seed(`${data.companionId}:${key}`) % pool.length];
+  const pickQuirk = <T>(key: string, pool: readonly T[]): T => quirkDraw === 0 ? pick(key, pool)
+    : pool[seed(`${data.companionId}:${key}:draw:1`) % pool.length];
+  const quirks: CompanionQuirks = Object.freeze({ metaphorSource: d.levity < 0 ? null : pickQuirk('metaphor', metaphors),
+    openingStyle: d.directness > 0 ? 'conclusion' : d.directness < 0 ? pickQuirk('opening', ['reflect', 'clarify'] as const) : pickQuirk('opening', ['reflect', 'conclusion', 'clarify'] as const),
+    signOff: pickQuirk('sign-off', ['name', 'name_and_time', 'dash_name'] as const), catchphrase: pickQuirk('catchphrase', [null, '先说结论', '先看这里']) });
   const tone = d.warmth < 0 ? '情绪表达克制' : d.warmth > 0 ? '说话温和，愿意多停一会儿' : '先接住感受，再理清事情';
   const direct = d.directness < 0 ? '先说材料能支持什么，再说缺口' : d.directness > 0 ? '先说结论，再给依据' : '把依据和待核对的地方并列';
   const drive = d.drive < 0 ? '给你空间，下一步是可选的' : d.drive > 0 ? '把下一步写清，等你确认再做' : '轻轻提一个下一步，也留出口';

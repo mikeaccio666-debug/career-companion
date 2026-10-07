@@ -96,15 +96,31 @@ for (const [label,events,code] of [
   ['incomplete',[{ type:'response.output_text.delta',delta:preview },{ type:'response.incomplete',response:{ incomplete_details:{ reason:'max_output_tokens' },usage:{ input_tokens:18,output_tokens:1536 } } }],'PROVIDER_OUTPUT_LIMIT'],
   ['failed',[{ type:'response.failed',response:{ error:{ message:'Synthetic private failure.' },usage:{ input_tokens:18,output_tokens:4 } } }],'PROVIDER_GENERATION_FAILED'],
   ['EOF',[{ type:'response.output_text.delta',delta:preview }],'PROVIDER_STREAM_INTERRUPTED'],
-  ['invalid JSON',[completed([message('Synthetic private malformed output.')])],'INVALID_PROVIDER_RESPONSE'],
-  ['wrong array length',[completed([message(JSON.stringify({ summary:'Synthetic',samples:['one','two'] }))])],'INVALID_PROVIDER_RESPONSE'],
-  ['blank summary',[completed([message(JSON.stringify({ summary:'',samples:['one','two','three'] }))])],'INVALID_PROVIDER_RESPONSE'],
-  ['oversized summary',[completed([message(JSON.stringify({ summary:'x'.repeat(61),samples:['one','two','three'] }))])],'INVALID_PROVIDER_RESPONSE'],
-  ['extra property',[completed([message(JSON.stringify({ summary:'Synthetic',samples:['one','two','three'],persona:'Synthetic private persona.' }))])],'INVALID_PROVIDER_RESPONSE'],
+  ['model self-reported completion without terminal',[{ type:'response.output_text.delta',delta:'{"status":"complete","structuredOutcome":"invalid_format"}' }],'PROVIDER_STREAM_INTERRUPTED'],
+  ['invalid JSON',[completed([message('Synthetic private malformed output.')])],'PROVIDER_STRUCTURED_VALIDATION_FAILED'],
+  ['wrong array length',[completed([message(JSON.stringify({ summary:'Synthetic',samples:['one','two'] }))])],'PROVIDER_STRUCTURED_VALIDATION_FAILED'],
+  ['blank summary',[completed([message(JSON.stringify({ summary:'',samples:['one','two','three'] }))])],'PROVIDER_STRUCTURED_VALIDATION_FAILED'],
+  ['oversized summary',[completed([message(JSON.stringify({ summary:'x'.repeat(61),samples:['one','two','three'] }))])],'PROVIDER_STRUCTURED_VALIDATION_FAILED'],
+  ['extra property',[completed([message(JSON.stringify({ summary:'Synthetic',samples:['one','two','three'],persona:'Synthetic private persona.' }))])],'PROVIDER_STRUCTURED_VALIDATION_FAILED'],
+  ['empty actual text',[completed([message('')])],'PROVIDER_STRUCTURED_VALIDATION_FAILED'],
+  ['nonobject JSON',[completed([message('null')])],'PROVIDER_STRUCTURED_VALIDATION_FAILED'],
+  ['completed reasoning and invalid text',[completed([{ type:'reasoning',encrypted_content:'synthetic-only' },message('Synthetic private malformed output.')])],'PROVIDER_STRUCTURED_VALIDATION_FAILED'],
+  ['no actual text part',[completed([message('',{ content:[] })])],'INVALID_PROVIDER_RESPONSE'],
+  ['bad assistant role',[completed([message('Synthetic private malformed output.',{ role:'user' })])],'INVALID_PROVIDER_RESPONSE'],
+  ['unfinished assistant message',[completed([message('Synthetic private malformed output.',{ status:'in_progress' })])],'INVALID_PROVIDER_RESPONSE'],
+  ['nonstring actual text',[completed([message(7)])],'INVALID_PROVIDER_RESPONSE'],
+  ['missing terminal output',[{ type:'response.output_item.done',item:message('Synthetic private malformed output.') },{ type:'response.completed',response:{ status:'completed' } }],'INVALID_PROVIDER_RESPONSE'],
+  ['contradictory terminal error',[{ type:'response.completed',response:{ status:'completed',error:false,output:[message('Synthetic private malformed output.')] } }],'INVALID_PROVIDER_RESPONSE'],
+  ['contradictory incomplete details',[{ type:'response.completed',response:{ status:'completed',incomplete_details:{ reason:'max_output_tokens' },output:[message('Synthetic private malformed output.')] } }],'INVALID_PROVIDER_RESPONSE'],
   ['tools',[{ type:'response.output_item.added',item:{ type:'function_call',call_id:'synthetic',name:'invented' } }],'INVALID_PROVIDER_RESPONSE'],
   ['tool final',[completed([{ type:'function_call',call_id:'synthetic',name:'invented',arguments:'{}',status:'completed' }])],'INVALID_PROVIDER_RESPONSE'],
+  ['tool hidden before terminal output',[{ type:'response.output_item.done',item:{ type:'function_call',call_id:'synthetic',name:'invented',arguments:'{}',status:'completed' } },completed([message('Synthetic private malformed output.')])],'INVALID_PROVIDER_RESPONSE'],
+  ['builtin tool hidden before terminal output',[{ type:'response.output_item.added',item:{ type:'web_search_call',status:'in_progress' } },completed([message('Synthetic private malformed output.')])],'INVALID_PROVIDER_RESPONSE'],
   ['invalid completion status',[{ type:'response.completed',response:{ status:'incomplete',output:[message(preview)] } }],'INVALID_PROVIDER_RESPONSE'],
   ['trailing output',[completed(),{ type:'response.output_text.delta',delta:'Synthetic private tail.' }],'INVALID_PROVIDER_RESPONSE'],
+  ['malformed text followed by duplicate terminal',[completed([message('Synthetic private malformed output.')]),completed()],'INVALID_PROVIDER_RESPONSE'],
+  ['malformed text followed by terminal error',[completed([message('Synthetic private malformed output.')]),{ type:'error',message:'Synthetic private tail.' }],'INVALID_PROVIDER_RESPONSE'],
+  ['malformed text followed by refusal',[completed([message('Synthetic private malformed output.')]),{ type:'response.refusal.done',refusal:'Synthetic private refusal.' }],'INVALID_PROVIDER_RESPONSE'],
 ] as const) test(`background ${label} is not successful and publishes no partial result`,async () => {
   const ledger: ModelCallEvent[] = [],published: ChatStreamEvent[] = [];
   await loopback((_body,reply) => write(reply,[...events]),async runtime => {
@@ -112,6 +128,10 @@ for (const [label,events,code] of [
       assert.equal((error as { code:string }).code,code); assert(!String(error).includes('Synthetic private')); return true;
     });
     assert.deepEqual(published,[]); assert.equal(ledger.length,2); assert(ledger[1].type === 'finished'); assert.notEqual(ledger[1].status,'complete');
+    if (code === 'PROVIDER_STRUCTURED_VALIDATION_FAILED') {
+      assert.equal(ledger[1].status,'failed'); assert.equal(ledger[1].structuredOutcome,'invalid_format');
+      assert.deepEqual(ledger[1].usage,{ status:'reported',inputTokens:18,outputTokens:37 });
+    } else assert.equal(Object.hasOwn(ledger[1],'structuredOutcome'),false);
     assert(!JSON.stringify(ledger).includes('Synthetic private'));
     if (label === 'incomplete') assert.deepEqual(ledger[1].usage,{ status:'reported',inputTokens:18,outputTokens:1536 });
     if (label === 'failed') assert.deepEqual(ledger[1].usage,{ status:'reported',inputTokens:18,outputTokens:4 });
@@ -240,5 +260,70 @@ test('cancellation while terminal accounting persists keeps real usage but suppr
     const rejected = assert.rejects(collect(runtime.streamChat(input(),context({ signal:abort.signal,onModelCall:async event => { ledger.push(event); if (event.type === 'finished') { arrived(); await held; } } })),events));
     await seen; abort.abort(); release(); await rejected; assert.deepEqual(events,[]); assert(ledger[1].type === 'finished');
     assert.equal(ledger[1].status,'complete'); assert.deepEqual(ledger[1].usage,{ status:'reported',inputTokens:18,outputTokens:37 });
+  });
+});
+
+test('direct structured step cannot mint background completion evidence from purpose alone without admission',async () => {
+  const ledger: ModelCallEvent[] = [],events: unknown[] = [];
+  await loopback((_body,reply) => write(reply,[completed([message('Synthetic private malformed output.')])]),async runtime => {
+    await assert.rejects(async () => {
+      for await (const event of runtime.streamModelStep!(input({ model:'synthetic-chat' }),{ invocation:{},purpose:'companion_generation',
+        tools:[],toolChoice:'none',responseFormat:{ name:'synthetic_preview',schema:schema() },limits:{ maxOutputTokens:100 },timeoutMs:1000,callIndex:1,
+        onModelCall:event => { ledger.push(event); } })) events.push(event);
+    },{ code:'INVALID_PROVIDER_RESPONSE' });
+    assert.deepEqual(events,[]); assert.equal(ledger.length,2); assert(ledger[1].type === 'finished'); assert.equal(ledger[1].status,'failed');
+    assert.equal(Object.hasOwn(ledger[1],'structuredOutcome'),false);
+  });
+});
+
+test('format failure evidence preserves missing or invalid real usage rather than inventing a token report',async () => {
+  for (const [usage,expected] of [[undefined,'missing'],[{ input_tokens:-1,output_tokens:0 },'invalid']] as const) {
+    const ledger: ModelCallEvent[] = [],events: ChatStreamEvent[] = [];
+    await loopback((_body,reply) => write(reply,[{ type:'response.completed',response:{ status:'completed',output:[message('Synthetic private malformed output.')],...(usage === undefined ? {} : { usage }) } }]),async runtime => {
+      await assert.rejects(collect(runtime.streamChat(input(),context({ onModelCall:event => { ledger.push(event); } })),events),{ code:'PROVIDER_STRUCTURED_VALIDATION_FAILED' });
+      assert.deepEqual(events,[]); assert(ledger[1].type === 'finished'); assert.equal(ledger[1].status,'failed'); assert.equal(ledger[1].structuredOutcome,'invalid_format');
+      assert.deepEqual(ledger[1].usage,{ status:expected });
+    });
+  }
+});
+
+test('completed malformed content produces no format evidence until the actual stream ends normally',async () => {
+  let arrived!: () => void,release!: () => void;
+  const seen = new Promise<void>(resolve => { arrived = resolve; }),held = new Promise<void>(resolve => { release = resolve; });
+  const ledger: ModelCallEvent[] = [],events: ChatStreamEvent[] = [];
+  await loopback(async (_body,reply) => { write(reply,[completed([message('Synthetic private malformed output.')])],false); arrived(); await held; reply.end('data: [DONE]\n\n'); },async runtime => {
+    const rejected = assert.rejects(collect(runtime.streamChat(input(),context({ onModelCall:event => { ledger.push(event); } })),events),{ code:'PROVIDER_STRUCTURED_VALIDATION_FAILED' });
+    await seen; assert.equal(ledger.length,1); assert.equal(events.length,0); release(); await rejected;
+    assert(ledger[1].type === 'finished'); assert.equal(ledger[1].structuredOutcome,'invalid_format');
+  });
+});
+
+test('actual HTTP truncation after malformed completed content is interruption without format evidence',async () => {
+  const ledger: ModelCallEvent[] = [],events: ChatStreamEvent[] = [];
+  await loopback((_body,reply) => { write(reply,[completed([message('Synthetic private malformed output.')])],false); setTimeout(() => reply.destroy(),25); },async runtime => {
+    await assert.rejects(collect(runtime.streamChat(input(),context({ onModelCall:event => { ledger.push(event); } })),events),error => {
+      assert.notEqual((error as { code?:string }).code,'PROVIDER_STRUCTURED_VALIDATION_FAILED'); assert(!String(error).includes('Synthetic private')); return true;
+    });
+    assert.deepEqual(events,[]); assert(ledger[1].type === 'finished'); assert.equal(ledger[1].status,'interrupted');
+    assert.equal(Object.hasOwn(ledger[1],'structuredOutcome'),false); assert.deepEqual(ledger[1].usage,{ status:'reported',inputTokens:18,outputTokens:37 });
+  });
+});
+
+test('deadline on an open completed-malformed stream cannot prove format failure',async () => {
+  const ledger: ModelCallEvent[] = [],events: ChatStreamEvent[] = [];
+  await loopback((_body,reply) => write(reply,[completed([message('Synthetic private malformed output.')])],false),async runtime => {
+    await assert.rejects(collect(runtime.streamChat(input(),context({ background:{ ...context().background!,timeoutMs:60 },onModelCall:event => { ledger.push(event); } })),events));
+    assert.deepEqual(events,[]); assert(ledger[1].type === 'finished'); assert.equal(ledger[1].status,'interrupted');
+    assert.equal(Object.hasOwn(ledger[1],'structuredOutcome'),false);
+  });
+});
+
+test('parent abort before completed-malformed stream EOF remains cancellation without format evidence',async () => {
+  let arrived!: () => void; const seen = new Promise<void>(resolve => { arrived = resolve; });
+  const abort = new AbortController(),ledger: ModelCallEvent[] = [],events: ChatStreamEvent[] = [];
+  await loopback((_body,reply) => { write(reply,[completed([message('Synthetic private malformed output.')])],false); arrived(); },async runtime => {
+    const rejected = assert.rejects(collect(runtime.streamChat(input(),context({ signal:abort.signal,onModelCall:event => { ledger.push(event); } })),events));
+    await seen; abort.abort(); await rejected; assert.deepEqual(events,[]); assert(ledger[1].type === 'finished'); assert.equal(ledger[1].status,'cancelled');
+    assert.equal(Object.hasOwn(ledger[1],'structuredOutcome'),false);
   });
 });
