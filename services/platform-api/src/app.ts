@@ -3,7 +3,7 @@ import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { ChatInput, ChatMode, Conversation, Message, PlatformProviderRuntime, ProviderAttachment, ToolDefinition, User } from '@companion/platform-contracts';
+import type { ChatInput, ChatMode, Conversation, Message, PlatformProviderRuntime, ProviderAttachment, ToolDefinition, User, VoiceContextSnapshot, VoiceSessionResponse } from '@companion/platform-contracts';
 import { createProviderRuntime } from '@companion/ai-core';
 import { Database } from './database.ts';
 import { readConfig, type PlatformConfig } from './config.ts';
@@ -15,6 +15,7 @@ import { createStorage, type BlobStorage, validateUpload } from './storage.ts';
 import { JobService, mapApproval, parseJob, providerAvailable, publicError, TaskQueue, verifyAttachments } from './jobs.ts';
 import { acquireRuntimeLease, recoverStaleStreams, withVoiceLease } from './runtime-leases.ts';
 import { listVoiceRecords, rememberVoiceSession, releaseVoiceSession, saveVoiceRecord } from './voice-history.ts';
+import { assertVoiceConversation, readVoiceContext } from './voice-context.ts';
 import { createWorkflowTemplate, deleteWorkflowTemplate, listWorkflowTemplates, updateWorkflowTemplate, WORKFLOW_TEMPLATE_BYTES } from './workflow-templates.ts';
 import { servePrivateFile } from './private-files.ts';
 import { ARTIFACT_TEXT_PAGE_BYTES, ARTIFACT_TEXT_SOURCE_BYTES, parseArtifactTextQuery } from './artifact-text.ts';
@@ -450,28 +451,33 @@ export async function buildApp(options:AppOptions={}) {
     finally{cancellation.dispose();}
   });
   app.post(`${prefix}/voice/session`,secured('realtime'),async(request,reply)=>{
-    const cancellation=requestSignal(request,reply),uid=userId(request),sessionId=randomUUID();
+    const cancellation=requestSignal(request,reply),uid=userId(request),sessionId=randomUUID(),session=fixedRequestSession(request,uid);
     let acquired=false;
     try{
-      const data=voiceBody(request.body===undefined?{}:request.body,['provider','model','persona','voice','turnTaking']);
+      const data=voiceBody(request.body===undefined?{}:request.body,['provider','model','persona','voice','turnTaking','conversationId']);
       const provider=voiceProvider(runtime,data.provider,'realtime'),model=string(data.model,'model',150,false)||undefined,persona=string(data.persona,'persona',2000,false)||undefined;
       const voice=data.voice===undefined?undefined:string(data.voice,'voice',100),turnTaking=voiceTurnTaking(data.turnTaking),usageId=randomUUID();
-      cancellation.signal.throwIfAborted();
+      const conversationId=data.conversationId===undefined?undefined:identifier(data.conversationId).toLowerCase();
+      let serverContext:VoiceContextSnapshot|undefined;
+      await assertRequestAccount(request,uid,cancellation.signal);
       await db.transaction(async client=>{
-        cancellation.signal.throwIfAborted();
+        await authorizeFixedSession(client,session,cancellation.signal);
+        if(conversationId)serverContext=await readVoiceContext(client,uid,conversationId);
         await acquireRuntimeLease(client,uid,'voice',sessionId,600);
         const recent=await client.query("SELECT count(*)::integer AS count FROM platform_usage WHERE user_id=$1 AND capability='realtime' AND created_at > now()-interval '1 hour'",[uid]);
         if(recent.rows[0].count>=4)throw new ApiError(429,'VOICE_SESSION_LIMIT','The hourly voice-session limit has been reached.');
         await client.query("INSERT INTO platform_usage(id,user_id,provider,model,capability) VALUES($1,$2,$3,$4,'realtime')",[usageId,uid,provider,model??null]);
         cancellation.signal.throwIfAborted();
       });
-      acquired=true;cancellation.signal.throwIfAborted();
+      acquired=true;await assertRequestAccount(request,uid,cancellation.signal);
       const result=await runtime.createVoiceSession({provider,model,persona,...(voice===undefined?{}:{voice}),...(turnTaking===undefined?{}:{turnTaking})},{signal:cancellation.signal});
-      cancellation.signal.throwIfAborted();
-      await rememberVoiceSession(db,uid,sessionId,provider,result.model);
+      await assertRequestAccount(request,uid,cancellation.signal);
+      await rememberVoiceSession(db,uid,sessionId,provider,result.model,{conversationId,authorize:client=>authorizeFixedSession(client,session,cancellation.signal)});
       await db.query('UPDATE platform_usage SET model=$3 WHERE id=$1 AND user_id=$2',[usageId,uid,string(result.model,'voice model',150)]);
-      cancellation.signal.throwIfAborted();
-      reply.header('Cache-Control','private, no-store');return {...result,sessionId};
+      await assertRequestAccount(request,uid,cancellation.signal);
+      if(conversationId)await db.transaction(async client=>{await authorizeFixedSession(client,session,cancellation.signal);await assertVoiceConversation(client,uid,conversationId);cancellation.signal.throwIfAborted();});
+      const response:VoiceSessionResponse={...result,sessionId,...(serverContext?{serverContext}:{})};
+      reply.header('Cache-Control','private, no-store');return response;
     }catch(error){if(acquired)await releaseVoiceSession(db,uid,sessionId);throw error;}
     finally{cancellation.dispose();}
   });

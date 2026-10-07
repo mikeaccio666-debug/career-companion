@@ -26,10 +26,24 @@ AI 片段必须关联到 `response.done` 事件的 `response.status=completed`�
 
 摘录保存为服务端明确标注的 `client_submitted`，不能因角色写为 assistant、附有供应商和模型名，就视为服务端验证过的模型正文。保存不证明说话者身份、音频全部播放、用户能力或外部执行授权。服务端仍核对账号、会话、签发的语音 session、附件所有权和保存限额，见 [语音摘录存储](../../services/platform-api/src/voice-history.ts)。
 
-逐回合语音把用户审阅后发送的问题及完整 AI 回复保存到普通会话。实时语音仍是独立摘录：当前 `/voice/session` 没有完整文字会话上下文注入，普通聊天的历史组装也不会自动读取这些 voice records。保存或带回草稿不自动发送消息；尚不能声称文字聊天与 Realtime 已无缝延续同一上下文。相关入口与历史读取见 [独立 API](../../services/platform-api/src/app.ts)。
+逐回合语音把用户审阅后发送的问题及完整 AI 回复保存到普通会话。实时语音仍是独立摘录，普通聊天的历史组装不会自动读取这些 voice records。保存或带回草稿不自动发送消息。
 
-## 本轮验证
+## 主动接续最近文字
 
-七个相关网页测试文件共 **74 项通过、0 失败**：`voice-history`、`voice-draft`、`voice-personality`、`voice-account-boundaries`、`voice-conversation`、`voice-session`、`voice-playback`。网页类型检查和 `git diff --check` 通过。
+现有 legacy／内部语音页面新增默认关闭的“继续当前对话的最近文字”。勾选后，`POST /voice/session` 接受当前 `conversationId`；客户端不能提交历史数组。服务端核对固定登录会话与会话所有权，返回 `serverContext`，不把它当系统指令传给凭据签发器。
 
-回归覆盖完成片段收到失败／取消及畸形或超量终态、无部分 item 关联、先更新草稿再关闭的实际公共处理函数、累计限额、旧 editor、事件顺序、去重、截断与删除。使用虚构协议事件及现有本地测试 fixture；本轮没有商业 Realtime 调用、真人录音、真实设备通话或新的浏览器语音验收，也未验证声音自然度。
+快照只包含最近最多 20 条已完成、非空的 user／assistant 普通文字。携带附件或音频转写引用的整条消息、工具消息、未完成消息、语音摘录和保存的记忆不进入快照。每条最多 8,000 个 Unicode 码点，合计最多 24 KiB UTF-8；只保留完整消息，遗漏以 `truncated` 告知。AI 已在普通文字中写出的分析仍是文字，当前实现没有追溯其全部材料来源。
+
+浏览器按原顺序发送文本 item，user 使用 `input_text`，assistant 使用 `output_text`。当前协议的 `conversation.item.added` 不放行麦克风；必须收到内容、角色、item ID 和次序匹配的 `conversation.item.done` 完成回执。旧协议中带完整内容与 completed 状态的 `conversation.item.created` 也可确认。参见 [官方客户端事件](https://developers.openai.com/api/reference/resources/realtime/client-events#conversation.item.create)与[官方完成事件](https://developers.openai.com/api/reference/resources/realtime/server-events#conversation.item.done)。
+
+数据通道、传输连接和全部上下文同时准备好后才开启麦克风；建立连接与确认共用 20 秒期限。失败、停止、账号或草稿失效会关闭连接、停止麦克风并请求释放服务端租约；释放请求未到达时，租约按原时限到期。已导入的 item ID 在整个连接期间排除出新语音摘录，包含嵌套终态输出。绑定会话的 session 只能向原会话保存摘录；原会话删除会级联删除签发标记。
+
+这是有界的 legacy 文字接续，不是产品主理人共享记忆或实时面试的验收。产品的小组、面试官和敏感度过滤仍按 `docs/product/03-team-and-orchestration.md`、`12-voice.md` 单独实现，不直接复用这个历史快照。
+
+实现见 [上下文契约](../../packages/platform-contracts/src/voice-context.ts)、[服务端快照](../../services/platform-api/src/voice-context.ts)与[麦克风启动控制](../../apps/web/src/realtime-context.ts)。新增迁移为 `023_voice_session_context.sql`；产品路线图中的暂定迁移编号在落地前须按已占用序列重新分配，不能复用这个编号。
+
+## 已有摘录状态验证
+
+前一轮七个相关网页测试文件共 **74 项通过、0 失败**：`voice-history`、`voice-draft`、`voice-personality`、`voice-account-boundaries`、`voice-conversation`、`voice-session`、`voice-playback`。该轮网页类型检查和 `git diff --check` 通过。
+
+回归覆盖完成片段收到失败／取消及畸形或超量终态、无部分 item 关联、先更新草稿再关闭的实际公共处理函数、累计限额、旧 editor、事件顺序、去重、截断与删除。使用虚构协议事件及现有本地测试 fixture。最近文字接续的验证另行记录在 [验证记录](verification.md)；商业 Realtime、真人录音、真实手机与声音自然度均未因此得到证明。

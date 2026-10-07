@@ -261,3 +261,4 @@ export interface PlatformProviderRuntime {
 export * from './plans.ts';
 export * from './goal-proposals.ts';
 export * from './job-outcome-reviews.ts';
+export * from './voice-context.ts';
