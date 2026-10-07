@@ -4,7 +4,7 @@ import { GOAL_PLAN_GOAL_CHARACTERS, GOAL_PLAN_INSTRUCTION_CHARACTERS, GOAL_PLAN_
 import type { GoalPlan, GoalPlanContinuation, GoalPlanContinueResult, GoalPlanInput, GoalPlanList, GoalPlanStep, GoalPlanStepInput, PlatformProviderRuntime } from '@companion/platform-contracts';
 import type { Database } from './database.ts';
 import { ApiError, identifier, invalid, notFound, object, string } from './errors.ts';
-import { JobService, mapApproval, mapJob, parseJob, providerAvailable } from './jobs.ts';
+import { JobService, mapApproval, mapJob, parseJob, providerAvailable, type JobAdmission } from './jobs.ts';
 import { parseMcpJob } from './mcp-connections.ts';
 import { assertGoalPlanDependencies, GOAL_PLAN_ROWS_SQL, lockGoalPlan } from './goal-plan-bindings.ts';
 import { goalPlanCheckpoint, goalPlanHash, goalPlanStepState, parseGoalPlanContinuation, planBlocked, planChanged, planRevision, planStepIndex } from './goal-plan-core.ts';
@@ -147,7 +147,7 @@ export class GoalPlans {
     return {id:first.id,conversationId:first.conversation_id,revision:first.revision,title:first.title,goal:first.goal,definitionHash:first.definition_hash,
       status:first.status==='active'&&priorSucceeded?'completed':first.status,steps,createdAt:new Date(first.created_at).toISOString(),updatedAt:new Date(first.updated_at).toISOString(),...(first.confirmed_at?{confirmedAt:new Date(first.confirmed_at).toISOString()}:{} )};
   }
-  async continue(userId:string,planId:string,value:unknown,signal?:AbortSignal):Promise<GoalPlanContinueResult> {
+  async continue(userId:string,planId:string,value:unknown,signal?:AbortSignal,admission?:JobAdmission):Promise<GoalPlanContinueResult> {
     const data=object(value);fields(data,['revision','stepIndex']);const revision=planRevision(data.revision),stepIndex=planStepIndex(data.stepIndex),plan=await this.get(userId,planId);
     signal?.throwIfAborted();if(plan.revision!==revision)throw planChanged();const step=plan.steps[stepIndex];if(!step)throw planBlocked();
     if(step.job||step.messageId||step.receipt)return {kind:'existing',plan,stepIndex};
@@ -156,7 +156,7 @@ export class GoalPlans {
       const continuation={planId,revision,stepIndex,conversationId:plan.conversationId};await this.prepareAgent(userId,continuation);
       return {kind:'agent_turn',plan,stepIndex,continuation};
     }
-    await this.jobs.create(userId,step.input.task,undefined,signal,{planId,revision,stepIndex});
+    await this.jobs.create(userId,step.input.task,undefined,signal,{planId,revision,stepIndex},admission);
     const next=await this.get(userId,planId),bound=next.steps[stepIndex];
     if(!bound.job)throw planBlocked();return {kind:'task',plan:next,stepIndex,job:bound.job,...(bound.approval?{approval:bound.approval}:{} )};
   }

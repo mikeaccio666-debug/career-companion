@@ -1,5 +1,6 @@
-import { ConversationTurns, mapMessage, mode } from './conversation-turns.ts';
+import { ConversationTurns, mapMessage } from './conversation-turns.ts';
 import { SseTurnSink } from './turn-sinks.ts';
+import { ProjectingTurnSink } from './projecting-turn-sink.ts';
 import Fastify, { type FastifyReply, type FastifyRequest, type FastifyError } from 'fastify';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
@@ -14,7 +15,7 @@ import { AccountActions } from './account-actions.ts';
 import { KnowledgeSources } from './knowledge-sources.ts';
 import { ApiError, identifier, invalid, notFound, object, string } from './errors.ts';
 import { createStorage, type BlobStorage, validateUpload } from './storage.ts';
-import { JobService, mapApproval, parseJob, providerAvailable, publicError, TaskQueue } from './jobs.ts';
+import { JobService, mapApproval, parseJob, publicError, TaskQueue } from './jobs.ts';
 import { acquireRuntimeLease, recoverStaleStreams, withVoiceLease } from './runtime-leases.ts';
 import { listVoiceRecords, rememberVoiceSession, releaseVoiceSession, saveVoiceRecord } from './voice-history.ts';
 import { assertVoiceConversation, readVoiceContext } from './voice-context.ts';
@@ -34,6 +35,15 @@ import { GoalPlanReaders } from './goal-plan-readers.ts';
 import { JobOutcomeReviews } from './job-outcome-reviews.ts';
 import { OperationsReadiness } from './operations-readiness.ts';
 import { AudioTranscriptions, providersWithChatAttachments } from './audio-transcriptions.ts';
+import { assertHttpWorkbench, serverConversationInput, serverMessageInput, serverPublicCapabilities } from './student-channel.ts';
+import { resolveModelRoute } from './model-routing.ts';
+import {
+  projectPlatformFeatures, projectPublicAccountUsage, projectPublicApproval, projectPublicAudioTranscriptionReceipt,
+  projectPublicConversation, projectPublicConversationTaskPage, projectPublicError, projectPublicGoalPlan,
+  projectPublicGoalPlanContinueResult, projectPublicGoalPlanList, projectPublicGoalPlanProposalList,
+  projectPublicMessage, projectPublicVoiceRecord, projectPublicVoiceSessionResponse, projectPublicWorkflowTemplate, projectPublicJob,
+  projectPublicJobOutcomeReviewPage, projectPublicJobOutcomeReviewSaved,
+} from './student-projection.ts';
 
 const prefix='/api/platform';
 type AuthRequest = FastifyRequest & { platformUser: User };
@@ -42,19 +52,11 @@ function passwordInput(value:unknown):string {if(typeof value!=='string'||!value
 function params(request:FastifyRequest,key='id'){return identifier((request.params as Record<string,unknown>)[key]);}
 function voiceBody(value:unknown,fields:readonly string[]){const data=object(value);if(Object.keys(data).some(key=>!fields.includes(key)))throw invalid('Unsupported voice request field.');return data;}
 function accountBody(value:unknown,fields:readonly string[]){const data=object(value);if(Object.keys(data).some(key=>!fields.includes(key)))throw invalid('Unsupported account request field.');return data;}
-function voiceTurnTaking(value:unknown):'patient'|'balanced'|'quick'|undefined {
-  if(value===undefined)return undefined;
-  if(value==='patient'||value==='balanced'||value==='quick')return value;
-  throw invalid('Choose a supported voice turn-taking setting.');
-}
-function voiceProvider(runtime:PlatformProviderRuntime,value:unknown,capability:'realtime'|'transcription'|'speech'){
-  const provider=value===undefined?'openai':string(value,'provider',80);
-  providerAvailable(runtime,provider,capability);return provider;
-}
 
 export interface AppOptions { config?:PlatformConfig; db?:Database; runtime?:PlatformProviderRuntime; storage?:BlobStorage; queue?:TaskQueue; enableQueue?:boolean; requestLimits?:RequestLimitsOptions; mcp?:McpTransport; }
 export async function buildApp(options:AppOptions={}) {
   const config=options.config??readConfig();
+  const present=<T,P>(value:T,project:(value:T)=>P):T|P=>config.workbenchEnabled?value:project(value);
   const db=options.db??new Database(config.databaseUrl,{max:config.databasePoolMax,connectionTimeoutMillis:config.databaseConnectTimeoutMs});
   const runtime=options.runtime??createProviderRuntime();
   const storage=options.storage??createStorage(config);
@@ -77,10 +79,10 @@ export async function buildApp(options:AppOptions={}) {
   app.decorateRequest('platformUser',null);
   app.setErrorHandler((cause,request,reply)=>{
     const error=cause as FastifyError;
-    if(error instanceof ApiError){reply.code(error.status).send({error:{code:error.code,message:error.publicMessage}});return;}
+    if(error instanceof ApiError){reply.code(error.status).send({error:present({code:error.code,message:error.publicMessage},projectPublicError)});return;}
     if(error.code==='FST_REQ_FILE_TOO_LARGE'){reply.code(413).send({error:{code:'FILE_TOO_LARGE',message:'Files must be at most 20 MB.'}});return;}
     if(error.statusCode && error.statusCode<500){reply.code(error.statusCode).send({error:{code:'INVALID_REQUEST',message:'The request could not be processed.'}});return;}
-    const safe=publicError(error);reply.code(safe.status).send({error:{code:safe.code,message:safe.message}});
+    const safe=publicError(error);reply.code(safe.status).send({error:present({code:safe.code,message:safe.message},projectPublicError)});
   });
   app.addHook('onRequest',async request=>{
     if(['POST','PUT','PATCH','DELETE'].includes(request.method)){
@@ -130,7 +132,12 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/ready`,async(_request,reply)=>{reply.header('Cache-Control','no-store');const result=await readiness.readiness();if(!result.ok)reply.code(503);return result;});
   app.get(`${prefix}/execution-ready`,async(_request,reply)=>{reply.header('Cache-Control','no-store');const result=await readiness.executionReadiness();if(!result.ok)reply.code(503);return result;});
   app.get(`${prefix}/health`,async(_request,reply)=>{reply.header('Cache-Control','no-store');const result=await readiness.health();if(!result.ok)reply.code(503);return result;});
-  app.get(`${prefix}/capabilities`,{preHandler:anonymousLimit('public')},async()=>({providers:[...providersWithChatAttachments(runtime).filter(provider=>provider.id!=='mcp'),...(config.mcp?.entries.length?[jobs.mcp.capability()]:[])]}));
+  app.get(`${prefix}/features`,{preHandler:anonymousLimit('public')},async()=>projectPlatformFeatures({workbench:config.workbenchEnabled,providerDetails:config.exposeProviderDetails}));
+  app.get(`${prefix}/capabilities`,{preHandler:anonymousLimit('public')},async()=>serverPublicCapabilities(config,runtime,config.mcp?.entries.length?jobs.mcp.capability():undefined));
+  app.get(`${prefix}/capabilities/details`,secure,async()=>{
+    if(!config.exposeProviderDetails)throw new ApiError(403,'PROVIDER_DETAILS_DISABLED','Provider diagnostics are disabled on this server.');
+    return {providers:[...providersWithChatAttachments(runtime).filter(provider=>provider.id!=='mcp'),...(config.mcp?.entries.length?[jobs.mcp.capability()]:[])]};
+  });
   app.get(`${prefix}/auth/options`,{preHandler:anonymousLimit('public')},async()=>({emailActionsEnabled:Boolean(config.accountEmail),requireVerifiedEmail:config.requireVerifiedEmail}));
   app.post(`${prefix}/auth/register`,{preHandler:anonymousLimit('auth-register')},async(request,reply)=>{
     const data=object(request.body),email=string(data.email,'email',254).toLowerCase(),name=string(data.name,'name',100);
@@ -171,74 +178,74 @@ export async function buildApp(options:AppOptions={}) {
   });
   app.get(`${prefix}/usage`,secure,async request=>{
     if(Object.keys(request.query as Record<string,unknown>).length)throw invalid('Usage is scoped to the signed-in account and current UTC month.');
-    return {usage:await accountUsage(db,userId(request))};
+    return {usage:present(await accountUsage(db,userId(request)),projectPublicAccountUsage)};
   });
 
-  app.get(`${prefix}/workflow-templates`,secure,async request=>({templates:await listWorkflowTemplates(db,userId(request))}));
-  app.post(`${prefix}/workflow-templates`,{...secure,bodyLimit:WORKFLOW_TEMPLATE_BYTES},async(request,reply)=>{const template=await createWorkflowTemplate(db,userId(request),request.body);reply.code(201);return {template};});
-  app.put(`${prefix}/workflow-templates/:id`,{...secure,bodyLimit:WORKFLOW_TEMPLATE_BYTES},async request=>({template:await updateWorkflowTemplate(db,userId(request),params(request),request.body)}));
+  app.get(`${prefix}/workflow-templates`,secure,async request=>({templates:(await listWorkflowTemplates(db,userId(request))).map(template=>present(template,projectPublicWorkflowTemplate))}));
+  app.post(`${prefix}/workflow-templates`,{...secure,bodyLimit:WORKFLOW_TEMPLATE_BYTES},async(request,reply)=>{assertHttpWorkbench(config);const template=await createWorkflowTemplate(db,userId(request),request.body);reply.code(201);return {template:present(template,projectPublicWorkflowTemplate)};});
+  app.put(`${prefix}/workflow-templates/:id`,{...secure,bodyLimit:WORKFLOW_TEMPLATE_BYTES},async request=>{const id=params(request);if(!config.workbenchEnabled&&!(await db.query('SELECT id FROM platform_workflow_templates WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL',[id,userId(request)])).rowCount)throw notFound();assertHttpWorkbench(config);return {template:present(await updateWorkflowTemplate(db,userId(request),id,request.body),projectPublicWorkflowTemplate)};});
   app.delete(`${prefix}/workflow-templates/:id`,secure,async request=>{await deleteWorkflowTemplate(db,userId(request),params(request));return {ok:true};});
 
   app.get(`${prefix}/conversations`,secure,async request=>{
-    const result=await db.query('SELECT * FROM platform_conversations WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100',[userId(request)]);return {conversations:result.rows.map(mapConversation)};
+    const result=await db.query('SELECT * FROM platform_conversations WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100',[userId(request)]);return {conversations:result.rows.map(row=>present(mapConversation(row),projectPublicConversation))};
   });
   app.post(`${prefix}/conversations`,secure,async(request,reply)=>{
-    const data=object(request.body),id=randomUUID();
-    const result=await db.query('INSERT INTO platform_conversations(id,user_id,title,mode,persona) VALUES($1,$2,$3,$4,$5) RETURNING *',[id,userId(request),string(data.title,'title',200,false)||'New conversation',mode(data.mode),string(data.persona,'persona',2000,false)||null]);
-    reply.code(201);return {conversation:mapConversation(result.rows[0])};
+    const data=serverConversationInput(config,request.body),id=randomUUID();
+    const result=await db.query('INSERT INTO platform_conversations(id,user_id,title,mode,persona) VALUES($1,$2,$3,$4,$5) RETURNING *',[id,userId(request),data.title,data.mode,data.persona??null]);
+    reply.code(201);return {conversation:present(mapConversation(result.rows[0]),projectPublicConversation)};
   });
   app.get(`${prefix}/conversations/:id`,secure,async request=>{
     const id=params(request),result=await db.query('SELECT * FROM platform_conversations WHERE id=$1 AND user_id=$2',[id,userId(request)]);
     if(!result.rowCount)throw notFound();
     const messages=await db.query("SELECT m.*,coalesce((SELECT jsonb_agg(jsonb_build_object('id',u.id,'name',u.filename,'mime',u.mime,'size',u.byte_size,'url','/api/platform/uploads/'||u.id)) FROM platform_uploads u WHERE u.user_id=$2 AND u.id IN (SELECT jsonb_array_elements_text(m.attachments)::uuid)), '[]'::jsonb) AS attachment_metadata FROM platform_messages m WHERE m.conversation_id=$1 ORDER BY m.ordinal",[id,userId(request)]);
     const mapped=[];
-    for(const row of messages.rows){row.audio_transcript_metadata=await audioTranscriptions.forMessage(userId(request),row.audio_transcripts);mapped.push(mapMessage(row));}
-    return {conversation:mapConversation(result.rows[0]),messages:mapped};
+    for(const row of messages.rows){if(!config.workbenchEnabled&&row.role==='tool')continue;row.audio_transcript_metadata=await audioTranscriptions.forMessage(userId(request),row.audio_transcripts);mapped.push(mapMessage(row));}
+    return {conversation:present(mapConversation(result.rows[0]),projectPublicConversation),messages:mapped.map(message=>present(message,projectPublicMessage))};
   });
-  app.get(`${prefix}/conversations/:id/tasks`,secure,async request=>jobs.conversationTasks(userId(request),params(request),request.query));
-  app.get(`${prefix}/conversations/:id/goal-plans`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return goalPlans.list(userId(request),params(request));});
-  app.get(`${prefix}/conversations/:id/goal-plan-proposals`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return goalPlanProposals.list(userId(request),params(request),request.query);});
-  app.post(`${prefix}/conversations/:id/goal-plans`,secure,async(request,reply)=>{const plan=await goalPlans.create(userId(request),params(request),request.body);reply.code(201).header('Cache-Control','private, no-store');return {plan};});
-  app.get(`${prefix}/goal-plans/:id`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {plan:await goalPlans.get(userId(request),params(request))};});
-  app.put(`${prefix}/goal-plans/:id`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {plan:await goalPlans.update(userId(request),params(request),request.body)};});
-  app.post(`${prefix}/goal-plans/:id/confirm`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {plan:await goalPlans.confirm(userId(request),params(request),request.body)};});
-  app.post(`${prefix}/goal-plans/:id/state`,control,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {plan:await goalPlans.state(userId(request),params(request),request.body)};});
+  app.get(`${prefix}/conversations/:id/tasks`,secure,async request=>present(await jobs.conversationTasks(userId(request),params(request),request.query),projectPublicConversationTaskPage));
+  app.get(`${prefix}/conversations/:id/goal-plans`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return present(await goalPlans.list(userId(request),params(request)),projectPublicGoalPlanList);});
+  app.get(`${prefix}/conversations/:id/goal-plan-proposals`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return present(await goalPlanProposals.list(userId(request),params(request),request.query),projectPublicGoalPlanProposalList);});
+  app.post(`${prefix}/conversations/:id/goal-plans`,secure,async(request,reply)=>{const id=params(request);if(!config.workbenchEnabled&&!(await db.query('SELECT id FROM platform_conversations WHERE id=$1 AND user_id=$2',[id,userId(request)])).rowCount)throw notFound();assertHttpWorkbench(config);const plan=await goalPlans.create(userId(request),id,request.body);reply.code(201).header('Cache-Control','private, no-store');return {plan:present(plan,projectPublicGoalPlan)};});
+  app.get(`${prefix}/goal-plans/:id`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {plan:present(await goalPlans.get(userId(request),params(request)),projectPublicGoalPlan)};});
+  app.put(`${prefix}/goal-plans/:id`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');const id=params(request);if(!config.workbenchEnabled)await goalPlans.get(userId(request),id);assertHttpWorkbench(config);return {plan:present(await goalPlans.update(userId(request),id,request.body),projectPublicGoalPlan)};});
+  app.post(`${prefix}/goal-plans/:id/confirm`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');const id=params(request);if(!config.workbenchEnabled&&(await goalPlans.get(userId(request),id)).status==='draft')assertHttpWorkbench(config);return {plan:present(await goalPlans.confirm(userId(request),id,request.body),projectPublicGoalPlan)};});
+  app.post(`${prefix}/goal-plans/:id/state`,control,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {plan:present(await goalPlans.state(userId(request),params(request),request.body),projectPublicGoalPlan)};});
   app.post(`${prefix}/goal-plans/:id/continue`,secure,async(request,reply)=>{
-    const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await goalPlans.continue(userId(request),params(request),request.body,cancellation.signal);}finally{cancellation.dispose();}
+    const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return present(await goalPlans.continue(userId(request),params(request),request.body,cancellation.signal,()=>assertHttpWorkbench(config)),projectPublicGoalPlanContinueResult);}finally{cancellation.dispose();}
   });
   app.delete(`${prefix}/conversations/:id`,secure,async request=>{
     const result=await db.query('DELETE FROM platform_conversations WHERE id=$1 AND user_id=$2 RETURNING id',[params(request),userId(request)]);if(!result.rowCount)throw notFound();return {ok:true};
   });
-  app.get(`${prefix}/conversations/:id/voice-records`,secure,async request=>({records:await listVoiceRecords(db,userId(request),params(request))}));
+  app.get(`${prefix}/conversations/:id/voice-records`,secure,async request=>({records:(await listVoiceRecords(db,userId(request),params(request))).map(record=>present(record,projectPublicVoiceRecord))}));
   app.post(`${prefix}/conversations/:id/voice-records`,secure,async(request,reply)=>{
-    const result=await saveVoiceRecord(db,userId(request),params(request),request.body);reply.code(result.created?201:200);return result;
+    const result=await saveVoiceRecord(db,userId(request),params(request),request.body);reply.code(result.created?201:200);return {...result,record:present(result.record,projectPublicVoiceRecord)};
   });
   app.post(`${prefix}/conversations/:id/messages`,secured('chat'),async(request,reply)=>{
-    const id=params(request),uid=userId(request),data=object(request.body);
-    await conversationTurns.submit({userId:uid,conversationId:id,data},new SseTurnSink(request,reply),{
+    const id=params(request),uid=userId(request),data=serverMessageInput(config,runtime,request.body),sink=new SseTurnSink(request,reply);
+    await conversationTurns.submit({userId:uid,conversationId:id,data,...(!config.workbenchEnabled?{suppressSavedPersona:true}:{})},config.workbenchEnabled?sink:new ProjectingTurnSink(sink),{
       assertAccount:signal=>assertRequestAccount(request,uid,signal),
     });
   });
 
-  app.get(`${prefix}/jobs`,secure,async request=>({jobs:await jobs.list(userId(request))}));
-  app.post(`${prefix}/jobs`,secure,async(request,reply)=>{const result=await jobs.create(userId(request),parseJob(request.body));reply.code(201);return result;});
-  app.get(`${prefix}/jobs/:id`,secure,async request=>({job:await jobs.get(userId(request),params(request))}));
-  app.post(`${prefix}/jobs/:id/cancel`,control,async request=>({job:await jobs.cancel(userId(request),params(request))}));
-  app.post(`${prefix}/jobs/:id/retry`,secure,async request=>({job:await jobs.retry(userId(request),params(request))}));
+  app.get(`${prefix}/jobs`,secure,async request=>({jobs:(await jobs.list(userId(request))).map(job=>present(job,projectPublicJob))}));
+  app.post(`${prefix}/jobs`,secure,async(request,reply)=>{assertHttpWorkbench(config);const result=await jobs.create(userId(request),parseJob(request.body),undefined,undefined,undefined,()=>assertHttpWorkbench(config));reply.code(201);return {...result,job:present(result.job,projectPublicJob),...(result.approval?{approval:present(result.approval,projectPublicApproval)}:{})};});
+  app.get(`${prefix}/jobs/:id`,secure,async request=>({job:present(await jobs.get(userId(request),params(request)),projectPublicJob)}));
+  app.post(`${prefix}/jobs/:id/cancel`,control,async request=>({job:present(await jobs.cancel(userId(request),params(request)),projectPublicJob)}));
+  app.post(`${prefix}/jobs/:id/retry`,secure,async request=>({job:present(await jobs.retry(userId(request),params(request),()=>assertHttpWorkbench(config)),projectPublicJob)}));
   app.get(`${prefix}/jobs/:id/outcome-review`,secure,async(request,reply)=>{
     const cancellation=requestSignal(request,reply);
-    try{reply.header('Cache-Control','private, no-store');return await jobOutcomeReviews.get(userId(request),params(request),request.query,cancellation.signal);}
+    try{reply.header('Cache-Control','private, no-store');return present(await jobOutcomeReviews.get(userId(request),params(request),request.query,cancellation.signal),projectPublicJobOutcomeReviewPage);}
     finally{cancellation.dispose();}
   });
   app.post(`${prefix}/jobs/:id/outcome-reviews`,control,async(request,reply)=>{
     const cancellation=requestSignal(request,reply);
-    try{reply.header('Cache-Control','private, no-store');return await jobOutcomeReviews.save(userId(request),params(request),request.body,cancellation.signal);}
+    try{reply.header('Cache-Control','private, no-store');return present(await jobOutcomeReviews.save(userId(request),params(request),request.body,cancellation.signal),projectPublicJobOutcomeReviewSaved);}
     finally{cancellation.dispose();}
   });
-  app.get(`${prefix}/approvals`,secure,async request=>{const result=await db.query('SELECT * FROM platform_approvals WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',[userId(request)]);return {approvals:result.rows.map(mapApproval)};});
+  app.get(`${prefix}/approvals`,secure,async request=>{const result=await db.query('SELECT * FROM platform_approvals WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',[userId(request)]);return {approvals:result.rows.map(row=>present(mapApproval(row),projectPublicApproval))};});
   app.post(`${prefix}/approvals/:id/decision`,secure,async request=>{
     const data=object(request.body);if(!['approved','rejected'].includes(String(data.decision)))throw invalid('Decision must be approved or rejected.');
-    return {approval:await jobs.decide(userId(request),params(request),data.decision as 'approved'|'rejected')};
+    return {approval:present(await jobs.decide(userId(request),params(request),data.decision as 'approved'|'rejected',()=>assertHttpWorkbench(config)),projectPublicApproval)};
   });
   app.get(`${prefix}/mcp/connections`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {connections:await jobs.mcp.list(userId(request))};});
   app.post(`${prefix}/mcp/connections`,control,async(request,reply)=>{
@@ -248,7 +255,7 @@ export async function buildApp(options:AppOptions={}) {
   });
   app.delete(`${prefix}/mcp/connections/:id`,control,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {connection:await jobs.mcp.revoke(userId(request),params(request),request.body)};});
   app.get(`${prefix}/mcp/connections/:id/tools`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return jobs.mcp.tools(userId(request),params(request));});
-  app.post(`${prefix}/mcp/tasks`,secure,async(request,reply)=>{const created=await jobs.create(userId(request),mcpJobInput(request.body));reply.code(201).header('Cache-Control','private, no-store');return created;});
+  app.post(`${prefix}/mcp/tasks`,secure,async(request,reply)=>{assertHttpWorkbench(config);const created=await jobs.create(userId(request),mcpJobInput(request.body));reply.code(201).header('Cache-Control','private, no-store');return {...created,job:present(created.job,projectPublicJob),...(created.approval?{approval:present(created.approval,projectPublicApproval)}:{})};});
   app.get(`${prefix}/mcp/tasks/:id/result`,secure,async(request,reply)=>{
     const parsed=parseArtifactTextQuery(params(request),request.query),{artifactId,...page}=parsed,cancellation=requestSignal(request,reply);
     try{const result=await jobs.mcp.result(userId(request),{jobId:artifactId,...page},cancellation.signal);reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff');return {result};}
@@ -287,17 +294,17 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/artifacts/:id/reference-attachment`,secure,async request=>jobs.referenceAttachment(userId(request),params(request)));
   app.post(`${prefix}/uploads/:id/transcriptions`,secured('transcription'),async(request,reply)=>{
     const cancellation=requestSignal(request,reply),uid=userId(request),session=fixedRequestSession(request,uid);
-    try{const result=await audioTranscriptions.create(uid,params(request),request.body,cancellation.signal,(client,signal)=>authorizeFixedSession(client,session,signal));reply.code(result.created?201:200).header('Cache-Control','private, no-store');return result;}
+    try{const result=await audioTranscriptions.create(uid,params(request),request.body,cancellation.signal,(client,signal)=>authorizeFixedSession(client,session,signal));reply.code(result.created?201:200).header('Cache-Control','private, no-store');return {...result,receipt:present(result.receipt,projectPublicAudioTranscriptionReceipt)};}
     finally{cancellation.dispose();}
   });
   app.get(`${prefix}/uploads/:id/transcriptions/:clientRequestId`,secure,async(request,reply)=>{
     const cancellation=requestSignal(request,reply),route=request.params as {id:string;clientRequestId:string};
-    try{const receipt=await audioTranscriptions.get(userId(request),identifier(route.id),identifier(route.clientRequestId),cancellation.signal);reply.header('Cache-Control','private, no-store');return {receipt};}
+    try{const receipt=await audioTranscriptions.get(userId(request),identifier(route.id),identifier(route.clientRequestId),cancellation.signal);reply.header('Cache-Control','private, no-store');return {receipt:present(receipt,projectPublicAudioTranscriptionReceipt)};}
     finally{cancellation.dispose();}
   });
   app.get(`${prefix}/audio-transcriptions/:id`,secure,async(request,reply)=>{
     const cancellation=requestSignal(request,reply);
-    try{const receipt=await audioTranscriptions.getById(userId(request),params(request),cancellation.signal);reply.header('Cache-Control','private, no-store');return {receipt};}
+    try{const receipt=await audioTranscriptions.getById(userId(request),params(request),cancellation.signal);reply.header('Cache-Control','private, no-store');return {receipt:present(receipt,projectPublicAudioTranscriptionReceipt)};}
     finally{cancellation.dispose();}
   });
   app.get(`${prefix}/artifacts/:id/text`,secure,async(request,reply)=>{
@@ -309,9 +316,8 @@ export async function buildApp(options:AppOptions={}) {
     const cancellation=requestSignal(request,reply),uid=userId(request),sessionId=randomUUID(),session=fixedRequestSession(request,uid);
     let acquired=false;
     try{
-      const data=voiceBody(request.body===undefined?{}:request.body,['provider','model','persona','voice','turnTaking','conversationId']);
-      const provider=voiceProvider(runtime,data.provider,'realtime'),model=string(data.model,'model',150,false)||undefined,persona=string(data.persona,'persona',2000,false)||undefined;
-      const voice=data.voice===undefined?undefined:string(data.voice,'voice',100),turnTaking=voiceTurnTaking(data.turnTaking),usageId=randomUUID();
+      const data=voiceBody(request.body===undefined?{}:request.body,['conversationId']),route=resolveModelRoute(config,runtime,'realtime');
+      const {provider,model,voice}=route,turnTaking=runtime.capabilities().find(item=>item.id===provider)?.voiceOptions?.realtime?.turnTaking===true?'patient':undefined,usageId=randomUUID();
       const conversationId=data.conversationId===undefined?undefined:identifier(data.conversationId).toLowerCase();
       let serverContext:VoiceContextSnapshot|undefined;
       await assertRequestAccount(request,uid,cancellation.signal);
@@ -325,14 +331,14 @@ export async function buildApp(options:AppOptions={}) {
         cancellation.signal.throwIfAborted();
       });
       acquired=true;await assertRequestAccount(request,uid,cancellation.signal);
-      const result=await runtime.createVoiceSession({provider,model,persona,...(voice===undefined?{}:{voice}),...(turnTaking===undefined?{}:{turnTaking})},{signal:cancellation.signal});
+      const result=await runtime.createVoiceSession({provider,model,voice,...(turnTaking===undefined?{}:{turnTaking})},{signal:cancellation.signal});
       await assertRequestAccount(request,uid,cancellation.signal);
       await rememberVoiceSession(db,uid,sessionId,provider,result.model,{conversationId,authorize:client=>authorizeFixedSession(client,session,cancellation.signal)});
       await db.query('UPDATE platform_usage SET model=$3 WHERE id=$1 AND user_id=$2',[usageId,uid,string(result.model,'voice model',150)]);
       await assertRequestAccount(request,uid,cancellation.signal);
       if(conversationId)await db.transaction(async client=>{await authorizeFixedSession(client,session,cancellation.signal);await assertVoiceConversation(client,uid,conversationId);cancellation.signal.throwIfAborted();});
       const response:VoiceSessionResponse={...result,sessionId,...(serverContext?{serverContext}:{})};
-      reply.header('Cache-Control','private, no-store');return response;
+      reply.header('Cache-Control','private, no-store');return present(response,projectPublicVoiceSessionResponse);
     }catch(error){if(acquired)await releaseVoiceSession(db,uid,sessionId);throw error;}
     finally{cancellation.dispose();}
   });
@@ -340,9 +346,8 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/voice/transcribe`,secured('transcription'),async(request,reply)=>{
     const cancellation=requestSignal(request,reply);
     try{
-      let audio:ProviderAttachment|undefined,providerValue:unknown,providerSeen=false;
-      // Consume every part before choosing a provider: browsers commonly append it after the file.
-      for await(const part of request.parts({limits:{fileSize:20*1024*1024,files:1,fields:2,parts:3,fieldSize:80,fieldNameSize:32}})){
+      let audio:ProviderAttachment|undefined;
+      for await(const part of request.parts({limits:{fileSize:20*1024*1024,files:1,fields:1,parts:2,fieldSize:80,fieldNameSize:32}})){
         cancellation.signal.throwIfAborted();
         if(part.type==='file'){
           const bytes=await part.toBuffer();
@@ -352,14 +357,11 @@ export async function buildApp(options:AppOptions={}) {
           if(!part.mimetype.startsWith('audio/')&&part.mimetype!=='video/webm')throw invalid('An audio file is required.');
           audio={name:part.filename,mime:part.mimetype,bytes};
         }else{
-          if(part.fieldnameTruncated||part.valueTruncated)throw invalid('Voice multipart fields exceed their size limits.');
-          if(part.fieldname!=='provider'||providerSeen)throw invalid('Only one provider field may accompany the audio file.');
-          providerSeen=true;providerValue=part.value;
-          if(typeof providerValue!=='string')throw invalid('provider must be a non-empty string of at most 80 characters.');
+          throw invalid('Only one audio file may be supplied. Voice routing is managed by the server.');
         }
       }
       if(!audio)throw invalid('An audio file is required.');
-      const provider=voiceProvider(runtime,providerValue,'transcription');
+      const {provider}=resolveModelRoute(config,runtime,'transcription');
       cancellation.signal.throwIfAborted();
       return await withVoiceLease(db,userId(request),()=>{cancellation.signal.throwIfAborted();return runtime.transcribe(audio!,{provider,signal:cancellation.signal});});
     }
@@ -368,9 +370,9 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/voice/speech`,secured('speech'),async(request,reply)=>{
     const cancellation=requestSignal(request,reply);
     try{
-      const data=voiceBody(request.body,['provider','text','voice','model','instructions']),provider=voiceProvider(runtime,data.provider,'speech');
-      const instructions=data.instructions===undefined?undefined:string(data.instructions,'instructions',2000);
-      const input={provider,text:string(data.text,'text',4000),voice:string(data.voice,'voice',100,false)||undefined,model:string(data.model,'model',150,false)||undefined,...(instructions===undefined?{}:{instructions})};
+      const data=voiceBody(request.body,config.workbenchEnabled?['text']:['text','message_id']);
+      if(!config.workbenchEnabled)throw new ApiError(403,'SPEECH_NOT_AVAILABLE','Speech playback is not available on this channel.');
+      const text=string(data.text,'text',4000),{provider,model,voice}=resolveModelRoute(config,runtime,'speech'),input={provider,text,voice,model};
       cancellation.signal.throwIfAborted();
       const audio=await withVoiceLease(db,userId(request),()=>{cancellation.signal.throwIfAborted();return runtime.speech(input,{signal:cancellation.signal});});
       cancellation.signal.throwIfAborted();const attachment=await saveUpload(userId(request),audio.name,audio.mime,audio.bytes);reply.code(201);return {attachment};

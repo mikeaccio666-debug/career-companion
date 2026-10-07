@@ -73,17 +73,20 @@ export interface AccountDataCallbacks {
   memories: (value: Memory[]) => void; approvals: (value: Approval[]) => void;
   onError: (error: unknown, token: AccountOperationToken) => void;
 }
-export async function refreshAccountData(scope: AccountOperationScope, read: (path: string) => Promise<unknown>, callbacks: AccountDataCallbacks): Promise<AccountOperationResult<PromiseSettledResult<unknown>[]>> {
+export async function refreshAccountData(scope: AccountOperationScope, read: (path: string) => Promise<unknown>, callbacks: AccountDataCallbacks, options: { workbench: boolean } = { workbench: false }): Promise<AccountOperationResult<PromiseSettledResult<unknown>[]>> {
   const token = scope.begin('private-refresh'); if (!token) return { status: 'discarded' };
-  return executeAccountOperation(scope, token, () => Promise.allSettled(['/conversations', '/jobs', '/memories', '/approvals'].map((path) => read(path))), {
+  const workbench = options.workbench === true;
+  const paths = workbench ? ['/conversations', '/jobs', '/memories', '/approvals'] : ['/conversations', '/memories'];
+  return executeAccountOperation(scope, token, () => Promise.allSettled(paths.map((path) => read(path))), {
     apply(responses) {
       const failures = responses.filter((response): response is PromiseRejectedResult => response.status === 'rejected');
       const unauthorized = failures.find((response) => response.reason instanceof ApiError && response.reason.status === 401);
       if (unauthorized) { callbacks.onError(unauthorized.reason, token); return; }
       if (responses[0].status === 'fulfilled') callbacks.conversations(collection<Conversation>(responses[0].value, 'conversations'));
-      if (responses[1].status === 'fulfilled') callbacks.jobs(collection<Job>(responses[1].value, 'jobs'));
-      if (responses[2].status === 'fulfilled') callbacks.memories(collection<Memory>(responses[2].value, 'memories'));
-      if (responses[3].status === 'fulfilled') callbacks.approvals(collection<Approval>(responses[3].value, 'approvals'));
+      if (workbench && responses[1].status === 'fulfilled') callbacks.jobs(collection<Job>(responses[1].value, 'jobs'));
+      const memories = responses[workbench ? 2 : 1];
+      if (memories.status === 'fulfilled') callbacks.memories(collection<Memory>(memories.value, 'memories'));
+      if (workbench && responses[3].status === 'fulfilled') callbacks.approvals(collection<Approval>(responses[3].value, 'approvals'));
       if (failures.length) callbacks.onError(failures[0].reason, token);
     },
     onError: (error) => callbacks.onError(error, token),

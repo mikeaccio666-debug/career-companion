@@ -1,17 +1,17 @@
 import { useEffect } from 'react';
 import { AudioLines, Loader2, Paperclip, X } from 'lucide-react';
-import type { Attachment, ProviderStatus } from '@companion/platform-contracts';
+import type { Attachment, ProviderStatus, PublicChatAttachmentSupport } from '@companion/platform-contracts';
 import type { AudioTranscriptionController, AudioReviewSnapshot } from './audio-transcriptions-controller.ts';
 import { reviewedAudioTextValid } from './audio-transcriptions-controller.ts';
 import type { ChatAttachmentAssessment } from './chat-attachments.ts';
 import './chat-attachments.css';
 
-interface Props { uploads: Attachment[]; provider?: ProviderStatus; controller: AudioTranscriptionController | null; snapshot: AudioReviewSnapshot; assessment: ChatAttachmentAssessment; disabled: boolean; onRemove(id: string): void; onRefresh(): void; }
-export default function ChatAttachmentsPanel({ uploads, provider, controller, snapshot, assessment, disabled, onRemove, onRefresh }: Props) {
+interface Props { uploads: Attachment[]; provider?: ProviderStatus; support?: PublicChatAttachmentSupport; controller: AudioTranscriptionController | null; snapshot: AudioReviewSnapshot; assessment: ChatAttachmentAssessment; disabled: boolean; onRemove(id: string): void; onRefresh(): void; }
+export default function ChatAttachmentsPanel({ uploads, provider, support: publicSupport, controller, snapshot, assessment, disabled, onRemove, onRefresh }: Props) {
   useEffect(() => { controller?.start(); return () => controller?.stop(); }, [controller]);
-  const support = provider?.chatAttachments, audioSupport = support?.audioTranscripts;
+  const support = publicSupport ?? provider?.chatAttachments, audioSupport = support?.audioTranscripts;
   return <section className="chat-input-attachments" aria-label="聊天文件输入与音频审阅">
-    <div className="chat-input-capabilities"><span>{support ? `支持：${support.directMimeTypes.some((mime) => mime.startsWith('text/') || mime === 'application/json') ? '文字文件 · ' : ''}${support.directMimeTypes.some((mime) => mime.startsWith('image/')) ? '图片 · ' : ''}${support.directMimeTypes.includes('application/pdf') ? 'PDF · ' : ''}${audioSupport?.available ? '音频转写后审阅' : '音频转写暂不可用'}。视频解析尚未接入。` : '选择对话模型后查看支持的文件。音频会先转写，确认正文后再发送。'}</span><button type="button" className="text-button" disabled={disabled} onClick={onRefresh}>刷新支持的格式</button></div>
+    <div className="chat-input-capabilities"><span>{support ? `支持：${support.directMimeTypes.some((mime) => mime.startsWith('text/') || mime === 'application/json') ? '文字文件 · ' : ''}${support.directMimeTypes.some((mime) => mime.startsWith('image/')) ? '图片 · ' : ''}${support.directMimeTypes.includes('application/pdf') ? 'PDF · ' : ''}${audioSupport?.available ? '音频转写后审阅' : '音频转写暂不可用'}。视频解析尚未接入。` : '服务尚未声明支持的文件格式。音频会先转写，确认正文后再发送。'}</span><button type="button" className="text-button" disabled={disabled} onClick={onRefresh}>刷新支持的格式</button></div>
     {uploads.length > 0 && <div className="chat-input-files">{uploads.map((upload) => {
       const entry = snapshot.entries[upload.id], audio = upload.mime.startsWith('audio/'), busy = entry?.phase === 'transcribing' || entry?.phase === 'recovering';
       const maxCharacters = audioSupport?.maxReviewedCharacters ?? 0;
