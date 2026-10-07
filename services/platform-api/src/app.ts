@@ -37,6 +37,7 @@ import { OperationsReadiness } from './operations-readiness.ts';
 import { AudioTranscriptions, providersWithChatAttachments } from './audio-transcriptions.ts';
 import { assertHttpWorkbench, serverConversationInput, serverMessageInput, serverPublicCapabilities } from './student-channel.ts';
 import { resolveModelRoute } from './model-routing.ts';
+import { StaffAccess } from './staff-access.ts';
 import {
   projectPlatformFeatures, projectPublicAccountUsage, projectPublicApproval, projectPublicAudioTranscriptionReceipt,
   projectPublicConversation, projectPublicConversationTaskPage, projectPublicError, projectPublicGoalPlan,
@@ -52,6 +53,10 @@ function passwordInput(value:unknown):string {if(typeof value!=='string'||!value
 function params(request:FastifyRequest,key='id'){return identifier((request.params as Record<string,unknown>)[key]);}
 function voiceBody(value:unknown,fields:readonly string[]){const data=object(value);if(Object.keys(data).some(key=>!fields.includes(key)))throw invalid('Unsupported voice request field.');return data;}
 function accountBody(value:unknown,fields:readonly string[]){const data=object(value);if(Object.keys(data).some(key=>!fields.includes(key)))throw invalid('Unsupported account request field.');return data;}
+function staffReadFailure(cause:unknown):never {
+  if(cause instanceof ApiError)throw cause;
+  throw new ApiError(503,'STAFF_ACCESS_UNAVAILABLE','Staff access could not be verified. Try again later.');
+}
 
 export interface AppOptions { config?:PlatformConfig; db?:Database; runtime?:PlatformProviderRuntime; storage?:BlobStorage; queue?:TaskQueue; enableQueue?:boolean; requestLimits?:RequestLimitsOptions; mcp?:McpTransport; }
 export async function buildApp(options:AppOptions={}) {
@@ -63,6 +68,7 @@ export async function buildApp(options:AppOptions={}) {
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp);
   const requestLimits=new RequestLimits(db,options.requestLimits);
   const accountActions=new AccountActions(db,config.accountEmail);
+  const staff=new StaffAccess(db);
   const knowledge=new KnowledgeSources(db);
   const audioTranscriptions=new AudioTranscriptions(db,storage,runtime);
   const goalPlans=new GoalPlans(db,jobs,runtime);
@@ -134,9 +140,38 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/health`,async(_request,reply)=>{reply.header('Cache-Control','no-store');const result=await readiness.health();if(!result.ok)reply.code(503);return result;});
   app.get(`${prefix}/features`,{preHandler:anonymousLimit('public')},async()=>projectPlatformFeatures({workbench:config.workbenchEnabled,providerDetails:config.exposeProviderDetails}));
   app.get(`${prefix}/capabilities`,{preHandler:anonymousLimit('public')},async()=>serverPublicCapabilities(config,runtime,config.mcp?.entries.length?jobs.mcp.capability():undefined));
-  app.get(`${prefix}/capabilities/details`,secure,async()=>{
-    if(!config.exposeProviderDetails)throw new ApiError(403,'PROVIDER_DETAILS_DISABLED','Provider diagnostics are disabled on this server.');
-    return {providers:[...providersWithChatAttachments(runtime).filter(provider=>provider.id!=='mcp'),...(config.mcp?.entries.length?[jobs.mcp.capability()]:[])]};
+  app.get(`${prefix}/capabilities/details`,secure,async(request,reply)=>{
+    reply.header('Cache-Control','private, no-store');
+    const query=object(request.query);
+    if(Object.keys(query).some(key=>key!=='orgId'))throw invalid('Use only the organization context for provider diagnostics.');
+    const cancellation=requestSignal(request,reply),session=fixedRequestSession(request,userId(request));
+    try{
+      const orgId=query.orgId===undefined?undefined:identifier(query.orgId);
+      if(!config.exposeProviderDetails){
+        await staff.recordDeniedAccess(session,orgId,'provider_details_viewed','feature_disabled',cancellation.signal);
+        throw new ApiError(403,'PROVIDER_DETAILS_DISABLED','Provider diagnostics are disabled on this server.');
+      }
+      if(query.orgId===undefined)return await staff.denyMissingOrganization(session,'provider_details_viewed',cancellation.signal);
+      return await staff.readWithAccess(session,orgId,
+      {roles:['ops','org_admin'],action:'provider_details_viewed'},async()=>{
+        const providers=[...providersWithChatAttachments(runtime).filter(provider=>provider.id!=='mcp'),...(config.mcp?.entries.length?[jobs.mcp.capability()]:[])];
+        return {value:{providers},recordCount:providers.length};
+      },cancellation.signal);
+    }catch(cause){staffReadFailure(cause);}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/staff/orgs/:id`,secure,async(request,reply)=>{
+    reply.header('Cache-Control','private, no-store');
+    if(Object.keys(object(request.query)).length)throw invalid('Organization access does not accept policy overrides.');
+    const cancellation=requestSignal(request,reply);
+    try{return {organization:await staff.getOrganization(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}
+    catch(cause){staffReadFailure(cause);}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/staff/orgs/:id/members`,secure,async(request,reply)=>{
+    reply.header('Cache-Control','private, no-store');
+    if(Object.keys(object(request.query)).length)throw invalid('Staff membership access does not accept policy overrides.');
+    const cancellation=requestSignal(request,reply);
+    try{return {memberships:await staff.listMembers(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}
+    catch(cause){staffReadFailure(cause);}finally{cancellation.dispose();}
   });
   app.get(`${prefix}/auth/options`,{preHandler:anonymousLimit('public')},async()=>({emailActionsEnabled:Boolean(config.accountEmail),requireVerifiedEmail:config.requireVerifiedEmail}));
   app.post(`${prefix}/auth/register`,{preHandler:anonymousLimit('auth-register')},async(request,reply)=>{

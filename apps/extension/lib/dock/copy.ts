@@ -64,10 +64,10 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const monthName = (month: number): string => MONTHS[month - 1] ?? String(month);
 
 const zh = {
-  product: 'ArgoLand.AI',
-  launcher: '打开 ArgoLand.AI',
+  product: 'Career Companion',
+  launcher: '打开 Career Companion',
   /** 收起按钮的读屏名字：数字写进去，角标本身只给眼睛看。 */
-  launcherWithNeeds: (count: number) => `打开 ArgoLand.AI，还有 ${count} 项需要你`,
+  launcherWithNeeds: (count: number) => `打开 Career Companion，还有 ${count} 项需要你`,
   hideLauncher: '隐藏入口',
   hidden: '已隐藏，刷新页面可恢复。',
   collapse: '收起',
@@ -85,7 +85,7 @@ const zh = {
     allDone: '都填好了',
     review: '到检查页了',
     ready: '自动填写',
-    idle: 'ArgoLand.AI',
+    idle: 'Career Companion',
   },
 
   /** 调用方没说是哪一家（`vendorLabel`）时，岗位卡副标题与进度卡上写的那个名字。 */
@@ -113,13 +113,13 @@ const zh = {
 
   faces: {
     unlinked: {
-      title: '连接 ArgoLand，一键填好申请表',
-      sub: '用你在 ArgoLand 保存的资料填写，提交前你都能检查一遍。',
-      primary: '登录 ArgoLand',
+      title: '连接 Career Companion，一键填好申请表',
+      sub: '用你在 Career Companion 保存的资料填写，提交前你都能检查一遍。',
+      primary: '登录 Career Companion',
     },
     linking: {
-      title: '等你在 ArgoLand 登录',
-      sub: '已在新标签页打开 ArgoLand。登录后回到这里，会自动继续。',
+      title: '等你在 Career Companion 登录',
+      sub: '已在新标签页打开 Career Companion。登录后回到这里，会自动继续。',
       ghost: '取消',
     },
     dormant: {
@@ -140,7 +140,7 @@ const zh = {
     /** 认出了申请表，但这一家还没在运行时包里放行（2026-10-04）：不是连不上，也不是认不出。 */
     closed: {
       title: '这类网站还没开放自动填写',
-      sub: 'ArgoLand 还没为这类网站打开自动填写。你可以照常在网站上自己填写，你的资料不受影响。',
+      sub: 'Career Companion 还没为这类网站打开自动填写。你可以照常在网站上自己填写，你的资料不受影响。',
     },
     signin: {
       title: (ats: string | null) => `先在 ${ats ?? '申请表'} 登录`,
@@ -236,7 +236,7 @@ const zh = {
    * 更不说「连不上」。卡上照旧有「再试一次」——他做完那一件事，按它接着填。
    */
   blockedFaces: {
-    VENDOR_CLOSED: { title: '这类网站还没开放自动填写', sub: 'ArgoLand 还没为这类网站打开自动填写。你可以照常在网站上自己填写，你的资料不受影响。' },
+    VENDOR_CLOSED: { title: '这类网站还没开放自动填写', sub: 'Career Companion 还没为这类网站打开自动填写。你可以照常在网站上自己填写，你的资料不受影响。' },
     CONSENT_GATE: { title: '先过网站的数据同意这一步', sub: '在页面上选好你的居住地，看完条款后点同意，申请表就会出来。然后点「再试一次」。' },
     // 替他选好了居住地（D7），网站把那一份条款摆了出来、要人点同意：那一下由他本人点。
     CONSENT_GATE_ACCEPT: { title: '已替你选好居住地，条款请你看完点同意', sub: '网站把这一份条款摆在页面上了：看完之后点同意（例如「Accept」），申请表就会出来。然后点「再试一次」。' },
@@ -244,7 +244,7 @@ const zh = {
   } as Record<string, { title: string; sub: string }>,
 
   failed: {
-    network: { title: '暂时连不上 ArgoLand', sub: '没能开始填写，稍后再试一次。' },
+    network: { title: '暂时连不上 Career Companion', sub: '没能开始填写，稍后再试一次。' },
     unknown: { title: '这一轮没有完成', sub: '再试一次；如果还不行，刷新页面后再试。' },
     retry: '再试一次',
     tech: '技术细节',
@@ -259,7 +259,7 @@ const zh = {
    * 给一颗「刷新页面」。有的网站刷新后会清空已填的内容，说一句，让他自己掂量。
    */
   updated: {
-    title: 'ArgoLand.AI 已更新',
+    title: 'Career Companion 已更新',
     sub: '刷新这一页即可继续。有的网站刷新后会清空已填的内容。',
     reload: '刷新页面',
   },
@@ -372,8 +372,8 @@ const zh = {
     refused: {
       NEEDS_PAGE_JOB: '读不到这个岗位的描述，求职信要你自己附',
       JOB_TEXT_UNUSABLE: '这一页的岗位描述没法用来写信，求职信要你自己附',
-      PROFILE_UNAVAILABLE: '你的资料还不够写一封求职信，先去 ArgoLand 补全经历',
-      AUTH_REQUIRED: '登录已过期，重新登录 ArgoLand 后再写求职信',
+      PROFILE_UNAVAILABLE: '你的资料还不够写一封求职信，先去 Career Companion 补全经历',
+      AUTH_REQUIRED: '登录已过期，重新登录 Career Companion 后再写求职信',
       PAYWALL_REQUIRED: '写求职信要开通会员，这一栏先由你自己附',
       USAGE_EXHAUSTED: '这个月写求职信的次数用完了，这一栏要你自己附',
       TARGET_NOT_ALLOWED: '这个网站还不能接收求职信，要你自己附',
@@ -434,7 +434,7 @@ const zh = {
       usedUpUntil: (month: number, day: number) => `本月的 AI 次数用完了，${month} 月 ${day} 日恢复`,
       upgrade: '升级会员',
       unavailable: '暂时用不了，稍后再试',
-      login: '登录已过期，重新登录 ArgoLand 后再试',
+      login: '登录已过期，重新登录 Career Companion 后再试',
       changed: '这一栏刚被改过，没有覆盖',
       pageChanged: '页面刚刚变化了，请再试一次',
       untrusted: '没接到你这一下，请再点一次',
@@ -599,7 +599,7 @@ const zh = {
    * argoland，暂不就什么都不改。
    */
   reconsent: {
-    title: '允许 ArgoLand 替你处理条款和授权吗？',
+    title: '允许 Career Companion 替你处理条款和授权吗？',
     lead: '同意后，插件会以你的名义处理申请表上的条款、声明和授权，每一项都会在这里逐条列出；不同意也可以照常用，这些题交给你自己答。以前同意过旧版本的，需要再同意一次。',
     agree: '同意',
     agreeing: '正在保存…',
@@ -629,7 +629,7 @@ const zh = {
 
   entries: {
     AUTOFILL_INFORMATION: { title: '我的资料', sub: '姓名、联系方式与地址' },
-    RESUME: { title: '我的简历', sub: '在 ArgoLand 里管理简历版本' },
+    RESUME: { title: '我的简历', sub: '在 Career Companion 里管理简历版本' },
     // 2026-09-27 起填写时自动写、自动附（表上有求职信栏就附）。
     COVER_LETTER: { title: '求职信', sub: '自动填写时为这个岗位写一封并附上' },
   },
@@ -650,7 +650,7 @@ const zh = {
   },
 
   menu: {
-    openPortal: '打开 ArgoLand',
+    openPortal: '打开 Career Companion',
     signOut: '退出登录',
     /** 账户菜单里的「语言」（2026-09-27）：选项本身各用自己的语言写（中文 / English）。 */
     language: '语言',
@@ -666,7 +666,7 @@ const zh = {
     advanced: '已到下一页。点「自动填写」填这一页。',
     pageChanged: '页面已换到下一步。点「自动填写」填这一页。',
     undone: '已撤销，这一页恢复到填写前',
-    connected: '已连接 ArgoLand',
+    connected: '已连接 Career Companion',
     advanceUnavailable: '网站上的「下一步」此刻按不了，请在网站上自己点。',
     untrusted: '没接到你这一下，请再点一次。',
     submitOnSite: '检查一遍，然后在网站上点提交。',
@@ -674,7 +674,7 @@ const zh = {
     // 内容脚本打在浮层上的几句（退出登录、打开门户）。
     signedOut: '已退出登录。',
     signOutFailed: '暂时无法退出登录，请稍后再试。',
-    portalOpened: 'ArgoLand 已在新标签页打开。',
+    portalOpened: 'Career Companion 已在新标签页打开。',
     portalFailed: '暂时无法打开求职助手，请打开本产品网页重试。',
     // 「打开申请表」没打开（2026-10-04）：从前一声不吭。
     openFormFailed: '暂时打不开申请表，请在网页上点申请按钮。',
@@ -732,7 +732,7 @@ const zh = {
     GESTURE_EXPIRED: '这一轮填写已经结束了，再点一次自动填写',
     GRANT_CONSUMED: '这一轮已经填过了，再点一次自动填写',
     LEASE_INVALID: '这一项这次没有替你填，请在网页上填',
-    LEASE_EXPIRED: '这次申请已经过期了，请回到 ArgoLand 重新开始',
+    LEASE_EXPIRED: '这次申请已经过期了，请回到 Career Companion 重新开始',
     JOURNAL_UNAVAILABLE: '这一栏这次没有动（没法保证能撤销），请在网页上填',
     // 2026-10-04：页面上还空着、浮层没认出的必填（lib/pageGaps.ts）。只在浮层里用，不是内核的错误码。
     STILL_EMPTY: '这一题还空着，请在网页上填',
@@ -795,8 +795,8 @@ const zh = {
     RUN_FAILED: '填写中途出了问题，没有填完。请刷新页面后再试一次。',
     POLICY_DISABLED: '这个版本的插件暂时填不了这一页，稍后再试，或更新插件。',
     DETACHED: '页面刚刚变化了。请刷新页面后再点自动填写。',
-    INTENT_REJECTED: '这次申请已经过期了。请回到 ArgoLand 重新开始。',
-    LOGIN_REQUIRED: '登录已过期。重新登录 ArgoLand 后再试一次。',
+    INTENT_REJECTED: '这次申请已经过期了。请回到 Career Companion 重新开始。',
+    LOGIN_REQUIRED: '登录已过期。重新登录 Career Companion 后再试一次。',
     NOTHING_FILLED: '这一页没有我们能用你资料填的项目，其余问题请你本人完成。',
     NO_FORM_FOUND: '这一页暂时认不出申请表。请刷新后再试。',
     // 这一页有密码框、却不是规则声明过的账号墙（或替你登录还没开）：照实说要先在网站上登录。
@@ -806,7 +806,7 @@ const zh = {
     ROOT_NOT_FOUND: '这一页暂时认不出申请表。请刷新后再试。',
     APPLY_FORM_NOT_OPENED: '这一页的申请表还没打开：先点页面上的申请按钮（例如「Apply for This Job」），表单出现后再点自动填写。',
     // 2026-10-04：申请表嵌在这一页的一个 iframe 里（公司官网嵌 Greenhouse），那一帧有自己的浮层。
-    IN_EMBEDDED_FRAME: '申请表嵌在这一页下方的那一块里，那里有它自己的 ArgoLand 按钮。滚到申请表，在那里按「自动填写」。',
+    IN_EMBEDDED_FRAME: '申请表嵌在这一页下方的那一块里，那里有它自己的 Career Companion 按钮。滚到申请表，在那里按「自动填写」。',
     NO_KEYED_FIELD: '这一页的问题我们暂时都填不了，请直接在网站上填写。',
     NOT_SEALABLE: '页面还在变化，这次没有填。请刷新页面后再试。',
     SCAN_NOT_SEALABLE: '页面还在变化，这次没有填。请刷新页面后再试。',
@@ -820,12 +820,12 @@ const zh = {
     TIMED_OUT: '还没确认填写结果，请在网站上检查一遍。',
     WORKER_UNREACHABLE: '插件没有响应。请刷新页面后再试。',
     STOPPED: '填写已停止，请在网站上检查已经填好的内容。',
-    AUTHORITY_UNAVAILABLE: '暂时连不上 ArgoLand，没能开始填写。请稍后刷新页面再试。',
+    AUTHORITY_UNAVAILABLE: '暂时连不上 Career Companion，没能开始填写。请稍后刷新页面再试。',
     RUN_UNAVAILABLE: '自动填写暂时不可用，请稍后刷新页面再试。',
-    PROFILE_UNAVAILABLE: '暂时读不到你的资料，所以这一页没有填。稍后再试，或先去 ArgoLand 检查资料。',
+    PROFILE_UNAVAILABLE: '暂时读不到你的资料，所以这一页没有填。稍后再试，或先去 Career Companion 检查资料。',
     // 2026-10-04：档案读得太慢（每个请求 8 秒、整份 15 秒），或门户正在保存档案（argoland #710 的读锁，等了约 1 秒再读也还在保存）。
-    PROFILE_TIMEOUT: 'ArgoLand 这次回得太慢，没读到你的资料，这一页没有填。稍后再点一次「自动填写」。',
-    PROFILE_BUSY: '你的资料正在保存（可能刚在 ArgoLand 改过），这一页还没填。等几秒再点一次「自动填写」。',
+    PROFILE_TIMEOUT: 'Career Companion 这次回得太慢，没读到你的资料，这一页没有填。稍后再点一次「自动填写」。',
+    PROFILE_BUSY: '你的资料正在保存（可能刚在 Career Companion 改过），这一页还没填。等几秒再点一次「自动填写」。',
   } as Record<string, string>,
 
   /** worker 交回「剩下的要你来」而没有逐栏的行时（mission 那条路）。 */
@@ -837,10 +837,10 @@ const zh = {
    */
   diagnosticsHints: {
     // 2026-09-28 起挂在简历那一栏上（挂不上才留在总结下面）：说他照着做就好的一句。
-    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE_VERSION_NOT_READY: '简历没附上：这一版还没有 PDF（上传的不是 PDF，或还没生成好）。去 ArgoLand 上传或生成一份 PDF，再点一次自动填写。',
-    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE_RESUME_VERSION_NOT_FOUND: '简历没附上：你的默认简历在 ArgoLand 里已经没有了。去简历页重新选一份默认简历。',
-    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE: '简历没附上：这一版此刻拿不到（可能还在生成）。稍后再点一次自动填写，或去 ArgoLand 换一版。',
-    RESUME_ATTACHMENT_NO_RESUME: '简历没附上：你的 ArgoLand 账号里还没有简历。先去简历页上传或生成一份。',
+    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE_VERSION_NOT_READY: '简历没附上：这一版还没有 PDF（上传的不是 PDF，或还没生成好）。去 Career Companion 上传或生成一份 PDF，再点一次自动填写。',
+    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE_RESUME_VERSION_NOT_FOUND: '简历没附上：你的默认简历在 Career Companion 里已经没有了。去简历页重新选一份默认简历。',
+    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE: '简历没附上：这一版此刻拿不到（可能还在生成）。稍后再点一次自动填写，或去 Career Companion 换一版。',
+    RESUME_ATTACHMENT_NO_RESUME: '简历没附上：你的 Career Companion 账号里还没有简历。先去简历页上传或生成一份。',
     RESUME_ATTACHMENT_RESUME_CHOICE_REQUIRED: '简历没附上：你有好几份简历，还没选默认的。在「我的资料」里选一份。',
     RESUME_ATTACHMENT_PLAN_TARGET_NOT_ALLOWED: '简历没附上：这个网站还不能接收简历附件，请在网页上自己附。',
     EEO_ANSWERS_FETCH_FAILED: '自我认同那几题没有预填：暂时读不到你保存的答案，这几题请自己选。',
@@ -928,7 +928,7 @@ const zh = {
     countryCode: '国际区号',
     currency: '币种',
     payPeriod: '薪资周期',
-    manageResumes: '在 ArgoLand 管理简历',
+    manageResumes: '在 Career Companion 管理简历',
     resumesUnavailable: '暂时读不到你的简历列表。',
     noResumes: '你的账号里还没有简历。',
     currentDefault: '当前默认',
@@ -938,7 +938,7 @@ const zh = {
     newExperience: '新的经历',
     newEducation: '新的教育经历',
     openToFill: '点开填写',
-    sectionUnavailable: '暂时读不到这一项。可以在 ArgoLand 网页端修改。',
+    sectionUnavailable: '暂时读不到这一项。可以在 Career Companion 网页端修改。',
     entryCount: (count: number) => `${count} 段`,
     on: '已开启',
     off: '未开启',
@@ -958,11 +958,11 @@ const zh = {
     loginExpired: '登录已过期，重新登录后再打开这一页。',
     unavailable: '暂时读不到你的资料，稍后再试。',
     /** 读得太慢（TIMEOUT）、门户正在保存档案（BUSY，argoland #710 的锁）：各说各的（2026-10-04）。 */
-    slow: 'ArgoLand 这次回得太慢，没读到你的资料。稍后再试。',
+    slow: 'Career Companion 这次回得太慢，没读到你的资料。稍后再试。',
     busy: '你的资料正在别处保存，等几秒再打开这一页。',
     /** 读不到时下面那一行：只有稳定的原因码，不含任何值（2026-09-27）。 */
     unavailableCode: (code: string) => `找我们帮忙时附上这一串：${code}`,
-    editInPortal: '在 ArgoLand 里编辑',
+    editInPortal: '在 Career Companion 里编辑',
     needsFixing: (count: number) => `有 ${count} 项需要修改`,
     saveFailed: '暂时保存不了，请稍后再试。',
     /** 别处一直在改：合了几次还是撞上（2026-10-04 起不再整份重读、丢掉他的修改）。 */
@@ -985,10 +985,10 @@ const zh = {
       removed: '（删掉这一段）',
       joiner: '、',
     },
-    saveLogin: '登录已过期，重新登录 ArgoLand 后再保存。',
+    saveLogin: '登录已过期，重新登录 Career Companion 后再保存。',
     saveInvalid: '有一项格式不对，没能保存。请检查电话、邮箱与链接。',
     /** 存的那一下到点没答：可能已经存上了，也可能没有（2026-10-04）。 */
-    saveTimeout: 'ArgoLand 这次回得太慢，不确定存上没有。你的修改还在，稍后再点一次保存。',
+    saveTimeout: 'Career Companion 这次回得太慢，不确定存上没有。你的修改还在，稍后再点一次保存。',
     saveBusy: '你的资料正在别处保存。你的修改还在，等几秒再点一次保存。',
     /** 保存前的检查（`profileModel.validate`）。 */
     errors: {
@@ -1011,9 +1011,9 @@ type DeepReadonly<T> = T extends (...args: never) => unknown ? T : { readonly [K
 export type DockCopy = DeepReadonly<typeof zh>;
 
 const en: typeof zh = {
-  product: 'ArgoLand.AI',
-  launcher: 'Open ArgoLand.AI',
-  launcherWithNeeds: (value) => `Open ArgoLand.AI, ${value} ${needVerb(value)} you`,
+  product: 'Career Companion',
+  launcher: 'Open Career Companion',
+  launcherWithNeeds: (value) => `Open Career Companion, ${value} ${needVerb(value)} you`,
   hideLauncher: 'Hide button',
   hidden: 'Hidden. Reload the page to bring it back.',
   collapse: 'Collapse',
@@ -1030,7 +1030,7 @@ const en: typeof zh = {
     allDone: 'All filled',
     review: 'Review page',
     ready: 'Autofill',
-    idle: 'ArgoLand.AI',
+    idle: 'Career Companion',
   },
 
   vendorFallback: 'Application form',
@@ -1054,13 +1054,13 @@ const en: typeof zh = {
 
   faces: {
     unlinked: {
-      title: 'Connect ArgoLand and fill applications in one click',
-      sub: 'We fill in the details you saved in ArgoLand, and you can review everything before you submit.',
-      primary: 'Sign in to ArgoLand',
+      title: 'Connect Career Companion and fill applications in one click',
+      sub: 'We fill in the details you saved in Career Companion, and you can review everything before you submit.',
+      primary: 'Sign in to Career Companion',
     },
     linking: {
-      title: 'Waiting for you to sign in to ArgoLand',
-      sub: 'ArgoLand is open in a new tab. Sign in, then come back here and we’ll pick up automatically.',
+      title: 'Waiting for you to sign in to Career Companion',
+      sub: 'Career Companion is open in a new tab. Sign in, then come back here and we’ll pick up automatically.',
       ghost: 'Cancel',
     },
     dormant: {
@@ -1080,7 +1080,7 @@ const en: typeof zh = {
     },
     closed: {
       title: 'Autofill isn’t available for this kind of site yet',
-      sub: 'ArgoLand hasn’t turned on autofill for this kind of site yet. You can fill it in on the site as usual; your profile isn’t affected.',
+      sub: 'Career Companion hasn’t turned on autofill for this kind of site yet. You can fill it in on the site as usual; your profile isn’t affected.',
     },
     signin: {
       title: (ats) => (ats === null ? 'Sign in on this site first' : `Sign in to ${ats} first`),
@@ -1150,14 +1150,14 @@ const en: typeof zh = {
   },
 
   blockedFaces: {
-    VENDOR_CLOSED: { title: 'Autofill isn’t available for this kind of site yet', sub: 'ArgoLand hasn’t turned on autofill for this kind of site yet. You can fill it in on the site as usual; your profile isn’t affected.' },
+    VENDOR_CLOSED: { title: 'Autofill isn’t available for this kind of site yet', sub: 'Career Companion hasn’t turned on autofill for this kind of site yet. You can fill it in on the site as usual; your profile isn’t affected.' },
     CONSENT_GATE: { title: 'First, get past the site’s data consent step', sub: 'Choose where you live on the page, read the terms and accept them, and the application form will appear. Then press “Try again”.' },
     CONSENT_GATE_ACCEPT: { title: 'We chose where you live — please read the terms and accept', sub: 'The site is showing its terms on the page: read them and accept (for example “Accept”), and the application form will appear. Then press “Try again”.' },
     APPLY_FORM_NOT_OPENED: { title: 'The application form isn’t open yet', sub: 'First click the site’s apply button (such as “Apply for This Job”), then press “Try again” once the form appears.' },
   } as Record<string, { title: string; sub: string }>,
 
   failed: {
-    network: { title: 'Can’t reach ArgoLand right now', sub: 'Filling couldn’t start. Try again in a moment.' },
+    network: { title: 'Can’t reach Career Companion right now', sub: 'Filling couldn’t start. Try again in a moment.' },
     unknown: { title: 'This run didn’t finish', sub: 'Try again. If it still doesn’t work, reload the page and try once more.' },
     retry: 'Try again',
     tech: 'Technical details',
@@ -1168,7 +1168,7 @@ const en: typeof zh = {
   },
 
   updated: {
-    title: 'ArgoLand.AI was updated',
+    title: 'Career Companion was updated',
     sub: 'Reload this page to continue. Some sites clear what you’ve entered when the page reloads.',
     reload: 'Reload page',
   },
@@ -1269,8 +1269,8 @@ const en: typeof zh = {
     refused: {
       NEEDS_PAGE_JOB: 'Couldn’t read this job’s description. Please add your cover letter yourself',
       JOB_TEXT_UNUSABLE: 'This page’s job description can’t be used for a letter. Please add yours yourself',
-      PROFILE_UNAVAILABLE: 'Your profile doesn’t have enough for a cover letter yet. Add your experience in ArgoLand',
-      AUTH_REQUIRED: 'Your sign-in expired. Sign in to ArgoLand again for a cover letter',
+      PROFILE_UNAVAILABLE: 'Your profile doesn’t have enough for a cover letter yet. Add your experience in Career Companion',
+      AUTH_REQUIRED: 'Your sign-in expired. Sign in to Career Companion again for a cover letter',
       PAYWALL_REQUIRED: 'Cover letters need a membership. Please add yours for now',
       USAGE_EXHAUSTED: 'You’ve used this month’s cover letters. Please add yours yourself',
       TARGET_NOT_ALLOWED: 'This site can’t take a cover letter from us yet. Please add yours yourself',
@@ -1324,7 +1324,7 @@ const en: typeof zh = {
       usedUpUntil: (month, day) => `You’ve used all your AI uses this month. They reset on ${monthName(month)} ${day}`,
       upgrade: 'Upgrade',
       unavailable: 'Not available right now. Please try again later',
-      login: 'Your sign-in expired. Sign in to ArgoLand again and retry',
+      login: 'Your sign-in expired. Sign in to Career Companion again and retry',
       changed: 'This field just changed, so it wasn’t overwritten',
       pageChanged: 'The page just changed. Please try again',
       untrusted: 'That tap didn’t come through. Please tap again',
@@ -1464,7 +1464,7 @@ const en: typeof zh = {
   },
 
   reconsent: {
-    title: 'Let ArgoLand handle terms and authorizations for you?',
+    title: 'Let Career Companion handle terms and authorizations for you?',
     lead: 'If you agree, the extension handles the terms, declarations and authorizations on application forms in your name and lists every item here. You can keep using it without agreeing; you’ll answer those yourself. If you agreed to an earlier version, please agree again.',
     agree: 'Agree',
     agreeing: 'Saving…',
@@ -1488,7 +1488,7 @@ const en: typeof zh = {
 
   entries: {
     AUTOFILL_INFORMATION: { title: 'My profile', sub: 'Name, contact details and address' },
-    RESUME: { title: 'My résumé', sub: 'Manage your résumé versions in ArgoLand' },
+    RESUME: { title: 'My résumé', sub: 'Manage your résumé versions in Career Companion' },
     COVER_LETTER: { title: 'Cover letter', sub: 'Written for this job and attached when you autofill' },
   },
   resumeDefault: (fileName) => `${fileName} · Default`,
@@ -1505,7 +1505,7 @@ const en: typeof zh = {
   },
 
   menu: {
-    openPortal: 'Open ArgoLand',
+    openPortal: 'Open Career Companion',
     signOut: 'Sign out',
     language: 'Language',
     rerun: 'Fill this page again',
@@ -1519,14 +1519,14 @@ const en: typeof zh = {
     advanced: 'On the next page. Press “Autofill” to fill it.',
     pageChanged: 'The page moved to the next step. Press “Autofill” to fill it.',
     undone: 'Undone. This page is back to how it was before filling',
-    connected: 'Connected to ArgoLand',
+    connected: 'Connected to Career Companion',
     advanceUnavailable: 'The site’s “Next” can’t be pressed right now. Please click it on the site.',
     untrusted: 'That tap didn’t come through. Please tap again.',
     submitOnSite: 'Look it over, then click Submit on the site.',
     submitUnavailable: 'The site’s “Submit” can’t be pressed right now. Please click it on the site.',
     signedOut: 'Signed out.',
     signOutFailed: 'Can’t sign out right now. Please try again later.',
-    portalOpened: 'ArgoLand is open in a new tab.',
+    portalOpened: 'Career Companion is open in a new tab.',
     portalFailed: 'Can’t open the career assistant right now. Please open the product website and try again.',
     openFormFailed: 'Can’t open the application form right now. Please use the Apply button on the site.',
   },
@@ -1576,7 +1576,7 @@ const en: typeof zh = {
     GESTURE_EXPIRED: 'This fill has ended. Press Autofill again',
     GRANT_CONSUMED: 'This fill already ran. Press Autofill again',
     LEASE_INVALID: 'This one wasn’t filled for you this time. Please fill it on the page',
-    LEASE_EXPIRED: 'This application has expired. Please start again from ArgoLand',
+    LEASE_EXPIRED: 'This application has expired. Please start again from Career Companion',
     JOURNAL_UNAVAILABLE: 'Left as is this time (we couldn’t make sure you could undo it). Please fill it on the page',
     STILL_EMPTY: 'This one is still empty. Please fill it in on the page',
   },
@@ -1613,8 +1613,8 @@ const en: typeof zh = {
     RUN_FAILED: 'Something went wrong partway, so filling didn’t finish. Please reload the page and try again.',
     POLICY_DISABLED: 'This version of the extension can’t fill this page right now. Try again later, or update the extension.',
     DETACHED: 'The page just changed. Please reload it and press Autofill again.',
-    INTENT_REJECTED: 'This application has expired. Please go back to ArgoLand and start again.',
-    LOGIN_REQUIRED: 'Your sign-in expired. Sign in to ArgoLand again and try once more.',
+    INTENT_REJECTED: 'This application has expired. Please go back to Career Companion and start again.',
+    LOGIN_REQUIRED: 'Your sign-in expired. Sign in to Career Companion again and try once more.',
     NOTHING_FILLED: 'Nothing on this page could be filled from your profile. Please answer the rest yourself.',
     NO_FORM_FOUND: 'Can’t recognize an application form on this page yet. Please reload and try again.',
     CREDENTIAL_PAGE: 'This page needs you to sign in first. Sign in on the site, then press “Autofill”.',
@@ -1622,7 +1622,7 @@ const en: typeof zh = {
     PATH_NOT_APPLY: 'This page isn’t an application form. Open the application page, then press Autofill.',
     ROOT_NOT_FOUND: 'Can’t recognize an application form on this page yet. Please reload and try again.',
     APPLY_FORM_NOT_OPENED: 'The application form on this page isn’t open yet: first click the site’s apply button (such as “Apply for This Job”), then press Autofill once the form appears.',
-    IN_EMBEDDED_FRAME: 'The application form is embedded further down this page and has its own ArgoLand button. Scroll to the form and press “Autofill” there.',
+    IN_EMBEDDED_FRAME: 'The application form is embedded further down this page and has its own Career Companion button. Scroll to the form and press “Autofill” there.',
     NO_KEYED_FIELD: 'We can’t fill any of the questions on this page yet. Please fill them in on the site.',
     NOT_SEALABLE: 'The page was still changing, so nothing was filled. Please reload the page and try again.',
     SCAN_NOT_SEALABLE: 'The page was still changing, so nothing was filled. Please reload the page and try again.',
@@ -1636,20 +1636,20 @@ const en: typeof zh = {
     TIMED_OUT: 'Filling isn’t confirmed yet. Please check the site.',
     WORKER_UNREACHABLE: 'The extension isn’t responding. Please reload the page and try again.',
     STOPPED: 'Filling stopped. Please check what was filled on the site.',
-    AUTHORITY_UNAVAILABLE: 'Can’t reach ArgoLand right now, so filling didn’t start. Please reload the page in a moment and try again.',
+    AUTHORITY_UNAVAILABLE: 'Can’t reach Career Companion right now, so filling didn’t start. Please reload the page in a moment and try again.',
     RUN_UNAVAILABLE: 'Autofill isn’t available right now. Please reload the page in a moment and try again.',
-    PROFILE_UNAVAILABLE: 'Can’t read your profile right now, so this page wasn’t filled. Try again later, or check your profile in ArgoLand first.',
-    PROFILE_TIMEOUT: 'ArgoLand took too long to send your profile, so this page wasn’t filled. Press “Autofill” again in a moment.',
-    PROFILE_BUSY: 'Your profile is being saved right now (maybe you just edited it in ArgoLand), so this page isn’t filled yet. Wait a few seconds, then press “Autofill” again.',
+    PROFILE_UNAVAILABLE: 'Can’t read your profile right now, so this page wasn’t filled. Try again later, or check your profile in Career Companion first.',
+    PROFILE_TIMEOUT: 'Career Companion took too long to send your profile, so this page wasn’t filled. Press “Autofill” again in a moment.',
+    PROFILE_BUSY: 'Your profile is being saved right now (maybe you just edited it in Career Companion), so this page isn’t filled yet. Wait a few seconds, then press “Autofill” again.',
   },
 
   handBack: { title: 'Some questions need you', sub: 'Please finish the remaining questions on the site.' },
 
   diagnosticsHints: {
-    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE_VERSION_NOT_READY: 'Résumé not attached: this version has no PDF yet (the upload isn’t a PDF, or it isn’t generated yet). Upload or generate a PDF in ArgoLand, then press Autofill again.',
-    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE_RESUME_VERSION_NOT_FOUND: 'Résumé not attached: your default résumé is no longer in ArgoLand. Choose a new default on the résumé page.',
-    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE: 'Résumé not attached: this version isn’t ready right now (it may still be generating). Press Autofill again shortly, or pick another version in ArgoLand.',
-    RESUME_ATTACHMENT_NO_RESUME: 'Résumé not attached: your ArgoLand account has no résumé yet. Upload or generate one on the résumé page first.',
+    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE_VERSION_NOT_READY: 'Résumé not attached: this version has no PDF yet (the upload isn’t a PDF, or it isn’t generated yet). Upload or generate a PDF in Career Companion, then press Autofill again.',
+    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE_RESUME_VERSION_NOT_FOUND: 'Résumé not attached: your default résumé is no longer in Career Companion. Choose a new default on the résumé page.',
+    RESUME_ATTACHMENT_PLAN_RESUME_UNAVAILABLE: 'Résumé not attached: this version isn’t ready right now (it may still be generating). Press Autofill again shortly, or pick another version in Career Companion.',
+    RESUME_ATTACHMENT_NO_RESUME: 'Résumé not attached: your Career Companion account has no résumé yet. Upload or generate one on the résumé page first.',
     RESUME_ATTACHMENT_RESUME_CHOICE_REQUIRED: 'Résumé not attached: you have several résumés but no default. Choose one in “My profile”.',
     RESUME_ATTACHMENT_PLAN_TARGET_NOT_ALLOWED: 'Résumé not attached: this site can’t take a résumé from us yet. Please attach it on the page.',
     EEO_ANSWERS_FETCH_FAILED: 'Self-identification not prefilled: can’t read your saved answers right now. Please choose these yourself.',
@@ -1723,7 +1723,7 @@ const en: typeof zh = {
     countryCode: 'Country code',
     currency: 'Currency',
     payPeriod: 'Pay period',
-    manageResumes: 'Manage résumés in ArgoLand',
+    manageResumes: 'Manage résumés in Career Companion',
     resumesUnavailable: 'Can’t load your résumés right now.',
     noResumes: 'There’s no résumé in your account yet.',
     currentDefault: 'Default',
@@ -1732,7 +1732,7 @@ const en: typeof zh = {
     newExperience: 'New experience',
     newEducation: 'New education',
     openToFill: 'Click to fill in',
-    sectionUnavailable: 'Can’t load this right now. You can change it on the ArgoLand website.',
+    sectionUnavailable: 'Can’t load this right now. You can change it on the Career Companion website.',
     entryCount: (value) => plural(value, 'entry', 'entries'),
     on: 'On',
     off: 'Off',
@@ -1749,10 +1749,10 @@ const en: typeof zh = {
     loading: 'Loading your profile…',
     loginExpired: 'Your sign-in expired. Sign in again, then reopen this page.',
     unavailable: 'Can’t load your profile right now. Please try again later.',
-    slow: 'ArgoLand took too long to send your profile. Please try again in a moment.',
+    slow: 'Career Companion took too long to send your profile. Please try again in a moment.',
     busy: 'Your profile is being saved elsewhere. Wait a few seconds, then open this page again.',
     unavailableCode: (code: string) => `If you contact us, include: ${code}`,
-    editInPortal: 'Edit in ArgoLand',
+    editInPortal: 'Edit in Career Companion',
     needsFixing: (value) => `${plural(value, 'field')} ${needVerb(value)} fixing`,
     saveFailed: 'Can’t save right now. Please try again later.',
     saveStale: 'Your profile keeps changing elsewhere. Your changes are still here; save again in a moment.',
@@ -1770,9 +1770,9 @@ const en: typeof zh = {
       removed: '(remove this entry)',
       joiner: ', ',
     },
-    saveLogin: 'Your sign-in expired. Sign in to ArgoLand again, then save.',
+    saveLogin: 'Your sign-in expired. Sign in to Career Companion again, then save.',
     saveInvalid: 'Something is in the wrong format, so it wasn’t saved. Please check your phone, email and links.',
-    saveTimeout: 'ArgoLand took too long to answer, so we can’t tell whether it saved. Your changes are still here; press Save again in a moment.',
+    saveTimeout: 'Career Companion took too long to answer, so we can’t tell whether it saved. Your changes are still here; press Save again in a moment.',
     saveBusy: 'Your profile is being saved elsewhere. Your changes are still here; wait a few seconds, then press Save again.',
     errors: {
       first: 'Enter your first name.',

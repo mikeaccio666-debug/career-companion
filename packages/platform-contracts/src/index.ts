@@ -270,3 +270,4 @@ export * from './voice-context.ts';
 export * from './student-api.ts';
 
 export * from './agent-loop.ts';
+export * from './staff.ts';

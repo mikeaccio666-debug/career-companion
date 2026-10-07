@@ -7,7 +7,7 @@ export function WelcomeScene({ view, events }: SceneProps) {
   return <>
     <div data-scene={"welcome"} data-scroll={"1"} style={{ "flex": "1", "minHeight": "0", "display": "flex", "flexDirection": "column", "overflow": "auto" }}>
       <div style={{ "padding": "22px 24px 0", "fontSize": "11px", "letterSpacing": "2.8px", "color": "var(--argo-faint)", "fontWeight": "600" }}>
-        {"ARGOLAND"}
+        {"CAREER COMPANION"}
       </div>
       <div data-hero={"1"} style={{ "position": "relative", "flex": "0 0 auto", "height": `${ui.heroH}px`, "marginTop": "6px" }}>
         <div style={{ "position": "absolute", "left": "50%", "top": "52%", "width": "320px", "height": "220px", "transform": "translate(-50%,-50%)", "background": "radial-gradient(closest-side,rgba(168,192,220,.42),rgba(179,184,234,.18) 55%,rgba(255,255,255,0) 100%)", "filter": "blur(6px)", "pointerEvents": "none" }}>

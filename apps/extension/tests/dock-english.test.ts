@@ -240,9 +240,9 @@ describe('英文界面的几幕', () => {
       ['My résumé', 'Alex_Chen_Resume.pdf · Default'],
       ['Cover letter', 'Written for this job and attached when you autofill'],
     ]);
-    expect(handle.launcherButton()?.getAttribute('aria-label')).toBe('Open ArgoLand.AI');
+    expect(handle.launcherButton()?.getAttribute('aria-label')).toBe('Open Career Companion');
     const shadow = shadowOf(handle);
-    expect(Array.from(shadow.querySelectorAll('.pop-item')).map(text)).toEqual(['Open ArgoLand', 'Sign out', 'Fill this page again', 'Edit my profile', 'Back to home']);
+    expect(Array.from(shadow.querySelectorAll('.pop-item')).map(text)).toEqual(['Open Career Companion', 'Sign out', 'Fill this page again', 'Edit my profile', 'Back to home']);
     expect(shadow.querySelector('[data-act="menu-more"]')?.getAttribute('aria-label')).toBe('More');
     expect(shadow.querySelector('.collapse')?.getAttribute('aria-label')).toBe('Collapse');
   });
@@ -253,7 +253,7 @@ describe('英文界面的几幕', () => {
       return [text(root?.querySelector('.face-title')), text(root?.querySelector('.face-sub'))];
     };
     expect(face({ kind: 'UNAVAILABLE', reason: 'PORTAL_UNLINKED' }, { onOpenPortal: () => {} })).toEqual(
-      ['Connect ArgoLand and fill applications in one click', 'We fill in the details you saved in ArgoLand, and you can review everything before you submit.']);
+      ['Connect Career Companion and fill applications in one click', 'We fill in the details you saved in Career Companion, and you can review everything before you submit.']);
     expect(face({ kind: 'DORMANT' })).toEqual(['This is a job details page', 'Open the application form and we can fill it in.']);
     expect(face({ kind: 'GUIDANCE', guidance: 'NO_FORM_FOUND' })).toEqual(['No application form on this page yet', 'Once the form appears, we can fill it in.']);
     expect(face({ kind: 'GUIDANCE', guidance: 'SIGN_IN_FIRST' }, { vendorLabel: 'Workday' })[0]).toBe('Sign in to Workday first');
@@ -262,7 +262,7 @@ describe('英文界面的几幕', () => {
     expect(text(rules?.querySelector('.face-title'))).toBe('Can’t tell yet whether this page can be autofilled');
     expect(text(rules?.querySelector('[data-action="recheck"]'))).toBe('Check again');
     const unlinked = mount({ kind: 'UNAVAILABLE', reason: 'PORTAL_UNLINKED' }, { onOpenPortal: () => {} }).sceneRoot();
-    expect(text(unlinked?.querySelector('[data-action="login"]'))).toBe('Sign in to ArgoLand');
+    expect(text(unlinked?.querySelector('[data-action="login"]'))).toBe('Sign in to Career Companion');
     // 读不出岗位名：不说「Application application」。
     const bare = mount({ kind: 'READY' }).sceneRoot();
     expect(text(bare?.querySelector('.job-title'))).toBe('Job application');
@@ -369,7 +369,7 @@ describe('英文界面的几幕', () => {
     network.reportBlocked('AUTHORITY_UNAVAILABLE');
     const root = network.sceneRoot()!;
     expect([text(root.querySelector('.face-title')), text(root.querySelector('.face-sub'))]).toEqual(
-      ['Can’t reach ArgoLand right now', 'Filling couldn’t start. Try again in a moment.']);
+      ['Can’t reach Career Companion right now', 'Filling couldn’t start. Try again in a moment.']);
     expect(text(root.querySelector('[data-action="retry"]'))).toBe('Try again');
     expect(text(root.querySelector('[data-action="toggle-tech"]'))).toBe('Technical details');
     expect(text(root.querySelector('.tech-copy'))).toBe('Copy');
@@ -519,7 +519,7 @@ describe('英文的「我的资料」', () => {
     click(handle.entryButtons()[0]);
     expect(text(handle.profileRoot()?.querySelector('.pf-message')).trim()).toBe('Loading your profile…');
     await flush();
-    expect(text(handle.profileRoot()?.querySelector('.pf-message'))).toBe('Your sign-in expired. Sign in again, then reopen this page.Edit in ArgoLand');
+    expect(text(handle.profileRoot()?.querySelector('.pf-message'))).toBe('Your sign-in expired. Sign in again, then reopen this page.Edit in Career Companion');
   });
 });
 

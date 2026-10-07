@@ -1,10 +1,6 @@
 import { createPresentationData } from '../presentation-data';
 const { mentors, phases, fieldMeta, dimensionCatalog, usageLabels, runRows } = createPresentationData('zh-CN');
 import type { AssistantData, Profile, Mentor, ResumeOption, ProfilePhase, ProfileField, FieldMeta, Job, AtsReport, Entitlement, RunRow, Extraction, ExtractHit, TextSegment } from '../state/types';
-import charlie from '../assets/mentors/charlie.webp';
-import alice from '../assets/mentors/alice.webp';
-import darren from '../assets/mentors/darren.webp';
-import xena from '../assets/mentors/xena.webp';
 
 /** Fictional Fable reference data. Only the preview entry may import this module. */
 type JobRow = [string, string, string, string, string, string, string | null, string | null, string, string[], string];

@@ -57,6 +57,22 @@ ComfyUI jobs bind a server-reviewed API graph captured at runtime startup. Publi
 
 Legacy tasks without a valid saved snapshot cannot make a ComfyUI request and must be prepared again. An unconfirmed submission stays `uncertain`; no handle means ordinary retry is held, while a persisted handle permits a reviewed poll of that same request. Approval and final publication recheck the binding and private policy. The digest covers the graph, URL and prompt node/field; it does not pin installed custom nodes, server binaries or model weights. The local fixtures validate PostgreSQL, private storage and injected protocol requests, without running actual ComfyUI models or verifying generated-media quality.
 
+## Staff access
+
+Migration `024_staff_access.sql` adds the organization, six staff roles and access-audit records for roadmap 8B. Public registration always creates a `student` account. Staff accounts and organization grants must be provisioned separately through trusted administration; this slice provides no HTTP promotion or grant endpoint. P0 provisions only the Manteng organization.
+
+Staff reads require the existing session Cookie and `x-companion-account`, plus an active database staff identity and a matching organization role:
+
+| Route | Required role |
+| --- | --- |
+| `GET /staff/orgs/:id` | Any active role in that organization |
+| `GET /staff/orgs/:id/members` | `ops` or `org_admin` in that organization |
+| `GET /capabilities/details?orgId=:id` | `ops` or `org_admin`, plus the existing development diagnostics flag |
+
+Metadata responses use `private, no-store`. Reads and their audit records commit together; a failed audit prevents a response containing the data. Authenticated role denials and disabled diagnostics also append a bounded deny record. Audit fields contain IDs, closed categories, counts and timestamps. Session expiry/reset, account kind, organization state and role revocation are checked under database locks; revocation that follows an accepted read waits for that read to commit. Infrastructure failures return `STAFF_ACCESS_UNAVAILABLE`, without SQL or provider details.
+
+Organization metadata and staff membership IDs are the only organization records exposed here. Content editing, student handoff packages, invitation/terms gates, deletion/export, employee workbench access and the remaining 8B features require their later implementations. Production workbench and paid-model settings keep their existing defaults.
+
 ## API
 
 All paths start with `/api/platform`. Public routes are `GET /live`, `GET /ready`, `GET /execution-ready`, legacy `GET /health`, `GET /features`, `GET /capabilities`, `GET /auth/options`, `POST /auth/register`, `POST /auth/login`, and the password-reset request/completion routes documented below. Registration requires email, name and a password of 10–256 characters. Other routes require the opaque HttpOnly session cookie; production workspace routes also require verified email. `GET /auth/me`, logout and email-verification actions remain available to an authenticated unverified account. All mutating routes, including public account actions, require an `Origin` included in `PLATFORM_ALLOWED_ORIGINS`.

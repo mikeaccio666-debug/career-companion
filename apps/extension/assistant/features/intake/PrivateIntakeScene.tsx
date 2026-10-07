@@ -15,13 +15,13 @@ export function PrivateIntakeScene({ controller }: { controller: AssistantContro
     <header className="argo-intake-heading"><div><small>YOUR STORY</small><h2>{t('聊聊你的经历')}</h2><p>{t('想到哪里就说到哪里。整理出的资料由你核对后保存。')}</p></div><button type="button" data-act="open-review">{t('查看资料')}</button></header>
     <div className="argo-intake-balance"><span>{t('AI 回复剩余：{v0}', { v0: unit(usage?.replies) })}</span><span>{t('语音剩余秒数：{v0}', { v0: unit(usage?.speechSeconds) })}</span>{usage?.replies.resetsAt && <span>{t('下次重置：{v0}', { v0: new Date(usage.replies.resetsAt).toLocaleString(controller.ctx.state.locale) })}</span>}<button type="button" disabled={state.busy} onClick={() => void intake.refresh()}>{t('刷新')}</button></div>
     <div className="argo-intake-body"><div className="argo-intake-conversation" ref={scroll}>
-      {!session?.turns.some(turn => turn.kind === 'REPLY') && <div className="argo-intake-bubble"><b>ArgoLand.AI</b><p>{t('你最近在做什么？可以从一段工作、学习或项目经历说起，还没确定目标岗位也没关系。')}</p></div>}
+      {!session?.turns.some(turn => turn.kind === 'REPLY') && <div className="argo-intake-bubble"><b>Career Companion</b><p>{t('你最近在做什么？可以从一段工作、学习或项目经历说起，还没确定目标岗位也没关系。')}</p></div>}
       {session?.turns.filter(turn => turn.kind === 'REPLY').map(turn => <div className="argo-intake-turn" key={turn.id}>
         <div className="argo-intake-bubble argo-intake-user"><small>{t('你')}</small><p>{turn.text}</p></div>
-        {turn.reply && <div className="argo-intake-bubble"><b>ArgoLand.AI</b><p>{turn.reply}</p>{turn.clarifications.map((q, i) => <p key={i}>{q}</p>)}</div>}
+        {turn.reply && <div className="argo-intake-bubble"><b>Career Companion</b><p>{turn.reply}</p>{turn.clarifications.map((q, i) => <p key={i}>{q}</p>)}</div>}
         {turn.failure && <p className="argo-intake-note" role="status">{t('这一轮未完成，没有扣除 AI 轮次。可以修改文字后重新发送。')}</p>}
       </div>)}
-      {state.streaming && <div className="argo-intake-bubble" aria-live="polite"><b>ArgoLand.AI</b><p>{state.streaming}</p><small>{t('正在整理，尚未保存')}</small></div>}
+      {state.streaming && <div className="argo-intake-bubble" aria-live="polite"><b>Career Companion</b><p>{state.streaming}</p><small>{t('正在整理，尚未保存')}</small></div>}
       {busy && !state.streaming && <p role="status">{t('正在整理你的经历…')}</p>}
     </div><aside className="argo-intake-candidates" aria-label={t('待核对资料')}>
       <h3>{t('待核对资料')}</h3><p className="argo-intake-note">{t('每次只确认一组。确认和手动修改不消耗 AI 轮次。')}</p>
