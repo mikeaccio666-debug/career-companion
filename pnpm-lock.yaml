@@ -227,6 +227,9 @@ importers:
       '@companion/ai-core':
         specifier: workspace:*
         version: link:../../packages/ai-core
+      '@companion/career-core':
+        specifier: workspace:*
+        version: link:../../packages/career-core
       '@companion/platform-contracts':
         specifier: workspace:*
         version: link:../../packages/platform-contracts
