@@ -28,6 +28,8 @@ export interface ProviderStatus {
   capabilities: Capability[];
   models: string[];
   modelsByCapability?: Partial<Record<Capability,string[]>>;
+  /** Explicit server purpose binding; never mixed into ordinary chat model candidates. */
+  modelsByPurpose?: Partial<Record<'safety_classify',string[]>>;
   /** Supported server chat inputs and explicit local audio preprocessing; no quality claim. */
   chatAttachments?: ChatAttachmentSupport;
   /** Declared speech languages (BCP 47); absence makes no language claim. */

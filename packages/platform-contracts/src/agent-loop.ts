@@ -37,6 +37,8 @@ export interface ModelStepContext {
   limits: { maxOutputTokens: number };
   callIndex: number;
   purpose?: string;
+  /** Server-owned strict structured output. Provider adapters fix strict=true. */
+  responseFormat?: { name: string; schema: Record<string, unknown> };
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
   timeoutMs: number;
   firstTokenTimeoutMs?: number;

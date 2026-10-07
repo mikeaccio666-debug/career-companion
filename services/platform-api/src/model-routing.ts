@@ -3,7 +3,8 @@ import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
 export const MODEL_ROUTE_PURPOSES = ['chat', 'agent', 'realtime', 'transcription', 'speech'] as const;
-export type ModelRoutePurpose = typeof MODEL_ROUTE_PURPOSES[number];
+export type PublicModelRoutePurpose = typeof MODEL_ROUTE_PURPOSES[number];
+export type ModelRoutePurpose = PublicModelRoutePurpose | 'safety_classify';
 export interface ResolvedModelRoute {
   purpose: ModelRoutePurpose; provider: string; model: string; voice?: string;
 }
@@ -30,13 +31,25 @@ function catalogue(runtime: RouteRuntime): ProviderStatus[] {
 }
 
 function selectedRoute(config: RouteConfig, statuses: ProviderStatus[], purpose: ModelRoutePurpose): ResolvedModelRoute | undefined {
-  if (!(MODEL_ROUTE_PURPOSES as readonly string[]).includes(purpose)) return undefined;
+  if (purpose !== 'safety_classify' && !(MODEL_ROUTE_PURPOSES as readonly string[]).includes(purpose)) return undefined;
   const providerId = config.modelRoutes[purpose]?.provider;
   if (typeof providerId !== 'string' || /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.exec(providerId)?.[0] !== providerId) return undefined;
   const matches = statuses.filter(status => status?.id === providerId);
   if (matches.length !== 1) return undefined;
   const provider = matches[0];
-  if (provider.enabled !== true || !Array.isArray(provider.capabilities) || !provider.capabilities.includes(purpose)) return undefined;
+  if (provider.enabled !== true || !Array.isArray(provider.capabilities) || !provider.capabilities.includes(purpose === 'safety_classify' ? 'chat' : purpose)) return undefined;
+
+  // Safety has a dedicated, explicit server model. Legacy flat/chat model metadata cannot configure it.
+  if (purpose === 'safety_classify') {
+    const descriptor = Object.getOwnPropertyDescriptor(provider, 'modelsByPurpose');
+    const mapping = descriptor && 'value' in descriptor ? descriptor.value : undefined;
+    if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(mapping))) return undefined;
+    const entry = Object.getOwnPropertyDescriptor(mapping, 'safety_classify');
+    const models = entry && 'value' in entry ? entry.value : undefined;
+    if (provider.id !== 'openai' || !Array.isArray(models) || models.length !== 1 || !boundedValue(models[0], 150)) return undefined;
+    return { purpose, provider: providerId, model: models[0] };
+  }
 
   const mapping = provider.modelsByCapability;
   // Only trusted legacy runtimes lacking capability-specific metadata may use
@@ -62,9 +75,9 @@ export function resolveModelRoute(config: RouteConfig, runtime: RouteRuntime, pu
 }
 
 /** Configuration availability, not a network health probe or execution authorization. */
-export function modelRouteAvailability(config: RouteConfig, runtime: RouteRuntime): Record<ModelRoutePurpose, boolean> {
+export function modelRouteAvailability(config: RouteConfig, runtime: RouteRuntime): Record<PublicModelRoutePurpose, boolean> {
   const statuses = catalogue(runtime);
-  return Object.fromEntries(MODEL_ROUTE_PURPOSES.map(purpose => [purpose, !!selectedRoute(config, statuses, purpose)])) as Record<ModelRoutePurpose, boolean>;
+  return Object.fromEntries(MODEL_ROUTE_PURPOSES.map(purpose => [purpose, !!selectedRoute(config, statuses, purpose)])) as Record<PublicModelRoutePurpose, boolean>;
 }
 
 /** The single platform model admission facade; provider adapters remain database-free. */

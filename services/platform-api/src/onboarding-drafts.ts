@@ -8,7 +8,7 @@ import { DataCryptoError, type DataCrypto } from './data-crypto.ts';
 import { ApiError } from './errors.ts';
 import type { LegalBundle } from './legal-documents.ts';
 import { OnboardingStorage } from './onboarding-storage.ts';
-import { OnboardingSafety, type IntakeClassifier, type SafetyFailure } from './onboarding-safety.ts';
+import { OnboardingSafety, type IntakeClassifier, type IntakeExecutionGuard, type SafetyFailure } from './onboarding-safety.ts';
 import type { OnboardingSafetyClaim } from './onboarding-safety-protocol.ts';
 
 interface OperationRow {
@@ -30,8 +30,8 @@ export class OnboardingDrafts {
   claimSafety(context: FixedSessionContext, options: { detectorRevision: number; leaseMs?: number }, signal?: AbortSignal) {
     return this.safety.claim(context, options, signal);
   }
-  processSafety(claim: OnboardingSafetyClaim, classify: IntakeClassifier, signal?: AbortSignal) {
-    return this.safety.process(claim, classify, signal);
+  processSafety(claim: OnboardingSafetyClaim, classify: IntakeClassifier, signal?: AbortSignal, guard?: IntakeExecutionGuard) {
+    return this.safety.process(claim, classify, signal, guard);
   }
   failSafety(claim: OnboardingSafetyClaim, failure: SafetyFailure, signal?: AbortSignal) {
     return this.safety.fail(claim, failure, signal);
