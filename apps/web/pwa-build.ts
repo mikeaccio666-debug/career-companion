@@ -3,6 +3,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { ManifestTransform } from 'workbox-build';
 import type { VitePWAOptions } from 'vite-plugin-pwa';
+import { BRAND } from './src/brand.ts';
 
 export const PWA_PUBLIC_FILES = [
   'index.html', 'mark.svg', 'manifest.webmanifest', 'pwa-legacy-cleanup.js',
@@ -49,9 +50,20 @@ export const PWA_NAVIGATION_DENYLIST = [/^\/(?:api|uploads|artifacts|auth)(?:\/|
 export function platformPwaOptions(directory: () => string): Partial<VitePWAOptions> {
   return {
     strategies: 'generateSW', filename: 'sw.js', registerType: 'prompt', injectRegister: false,
-    manifest: false, includeAssets: [], devOptions: { enabled: false },
+    manifest: {
+      name: BRAND.name, short_name: BRAND.name, description: BRAND.description,
+      id: '/', start_url: '/', scope: '/', display: 'standalone',
+      background_color: '#f7f8f2', theme_color: BRAND.themeColor,
+      icons: [
+        { src: BRAND.mark, sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+        { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+        { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+        { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      ],
+    },
+    includeAssets: [], includeManifestIcons: false, devOptions: { enabled: false },
     workbox: {
-      cacheId: 'openfield', skipWaiting: false, clientsClaim: false, cleanupOutdatedCaches: false,
+      cacheId: 'companion', skipWaiting: false, clientsClaim: false, cleanupOutdatedCaches: false,
       inlineWorkboxRuntime: true, sourcemap: false, runtimeCaching: [],
       importScripts: ['/pwa-legacy-cleanup.js'], globFollow: false,
       globPatterns: [...PWA_PUBLIC_FILES, 'assets/*.{js,css,svg,png,jpg,jpeg,webp,avif,woff,woff2}'],

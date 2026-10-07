@@ -1,4 +1,8 @@
 export type * from './contracts.ts';
-export { CAREER_SKILLS, careerSkill } from './skills.ts';
+export { ROLE_FAMILIES } from './contracts.ts';
+export { CAREER_SKILLS, careerSkill, careerSkillIndex } from './skills.ts';
+export type * from './capabilities.ts';
+export { CAREER_CAPABILITIES, careerCapability, capabilityPermitted, capabilityVisible } from './capabilities.ts';
 export { prepareCareerRun } from './prepare.ts';
+export { careerSkillCompletion, careerSkillOutputMatchesContract } from './skill-output.ts';
 export { careerProgress } from './progress.ts';

@@ -36,7 +36,7 @@ function harness(options: { visible?: boolean; online?: boolean; scope?: Account
     const batch = paths.map(() => deferred<unknown>()); batches.push(batch);
     return refreshAccountData(scope, (path) => { requested.push(path); signals.push(clock.now()); return batch[paths.indexOf(path)].promise; }, {
       conversations: (items) => { state.collections = items.map((item) => item.id); }, jobs() {}, memories() {}, approvals() {}, onError(error) { state.failures.push(error); },
-    });
+    }, { workbench: true });
   }, { ...clock, isVisible: () => state.visible, isOnline: () => state.online, isCurrent: () => scope.isCurrent(token) });
   const settle = (index: number, error?: unknown) => { batches[index].forEach((reply, position) => position === 1 && error ? reply.reject(error) : reply.resolve({ [paths[position].slice(1)]: [{ id: `fictional-batch-${index}` }] })); };
   return { controller, scope, clock, state, batches, requested, signals, settle };

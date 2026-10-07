@@ -18,7 +18,7 @@ import { recoverStaleStreams } from '../src/runtime-leases.ts';
 import { parseGoalPlanInput } from '../src/goal-plans.ts';
 import type { PoolClient } from 'pg';
 
-const base=readConfig(),prefix='/api/platform',origin='http://localhost:4321';
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' }),prefix='/api/platform',origin='http://localhost:4321';
 const schema=`goal_plans_test_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl),databaseUrl=new URL(base.databaseUrl);
 databaseUrl.searchParams.set('options',`-c search_path=${schema}`);const db=new Database(databaseUrl.toString());
 const inputSchema={type:'object',properties:{query:{type:'string'}},required:['query'],additionalProperties:false};

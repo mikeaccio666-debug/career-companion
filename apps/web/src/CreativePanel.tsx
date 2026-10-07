@@ -138,7 +138,7 @@ export default function CreativePanel({ accountId, providers, jobs, onCreate, on
   }
 
   return <section className="feature-page creative-page">
-    <div className="page-kicker"><Image size={15} />CREATIVE STUDIO</div>
+
     <h1>让想法，<span>变成可以继续创作的作品。</span></h1>
     <p className="page-description">从文字或参考图片开始，生成图片与视频。已有图片可以直接带入下一轮草稿，审阅后再开始新的创作。</p>
     <div className="studio-tabs"><button type="button" className={kind === 'image' ? 'selected' : ''} disabled={disabled} onClick={() => { setKind('image'); setNotice(''); }}><Image size={16} />图片创作</button><button type="button" className={kind === 'video' ? 'selected' : ''} disabled={disabled} onClick={() => { setKind('video'); setNotice(''); }}><Clapperboard size={16} />视频创作</button></div>

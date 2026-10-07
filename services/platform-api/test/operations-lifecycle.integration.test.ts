@@ -17,7 +17,7 @@ import { startWorkerHeartbeat } from '../src/worker-heartbeat.ts';
 
 // Real isolated PostgreSQL, Redis and BullMQ connections; only the task runtime is synthetic.
 // Injected clocks accelerate report scheduling/cache expiration, never fake connection facts or DB time.
-const base = readConfig(), schema = `ops_lifecycle_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }), schema = `ops_lifecycle_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl, { max: 1, connectionTimeoutMillis: 1000 });
 const databaseUrl = new URL(base.databaseUrl); databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString(), { max: 4, connectionTimeoutMillis: 1000 });

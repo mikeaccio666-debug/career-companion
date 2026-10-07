@@ -26,10 +26,10 @@ test('a delayed multipart transcription cannot publish into a still-mounted A ed
     calls++; assert.equal(input, '/api/platform/voice/transcribe');
     assert.equal(new Headers(init?.headers).get(PLATFORM_ACCOUNT_HEADER), accountA);
     assert.equal(new Headers(init?.headers).has('Content-Type'), false);
-    assert.ok(init?.body instanceof FormData); assert.equal(init.body.get('provider'), 'fictional-transcriber');
+    assert.ok(init?.body instanceof FormData); assert.deepEqual([...init.body.keys()], ['file']);
     requestSignal = init.signal!; started.resolve(); return response.promise;
   }, context).capture();
-  const pending = transcribeAudio(new Blob(['fictional encoded audio'], { type: 'audio/wav' }), 'fictional-transcriber', new AbortController().signal, client.request)
+  const pending = transcribeAudio(new Blob(['fictional encoded audio'], { type: 'audio/wav' }), new AbortController().signal, client.request)
     .then((text) => origin.update((value) => ({ ...value, text: appendTranscriptionText(value.text, text) })));
   await started.promise;
   context.changeSession(accountB);
@@ -56,7 +56,7 @@ test('late realtime creation releases its A lease under the captured assertion w
   const creation = deferred<VoiceSession>(), controller = new AbortController();
   const cleanups: Promise<void>[] = [];
   // Simulate a creation transport that ignores cancellation; never use a human microphone or vendor endpoint.
-  const pending = requestVoiceSession({ provider: 'fictional-realtime' }, controller.signal, client.isCurrent, async () => creation.promise, (sessionId) => {
+  const pending = requestVoiceSession({}, controller.signal, client.isCurrent, async () => creation.promise, (sessionId) => {
     cleanups.push(client.cleanup('/voice/session/release', { body: JSON.stringify({ sessionId }) }).catch(() => {}));
   });
   context.changeSession(accountB); controller.abort();
@@ -92,7 +92,7 @@ test('account invalidation aborts an active voice SSE, clears the answer and sto
     disposeVoiceSession({ controllers: [controller], recording: { cancel() { events.push('discard-recording'); } }, peer: { close() { events.push('RTC'); } }, audio, microphone: { getTracks() { return [{ stop() { events.push('first-track'); throw new Error('Fictional device failure'); } }, { stop() { events.push('second-track'); } }]; } } });
   });
   const provider: Provider = { id: 'fictional-chat', keyConfigured: true, enabled: true, capabilities: ['chat'], models: ['fixture'], envVariables: [] };
-  const pending = conversation.answer({ text: 'Fictional reviewed question.', provider, model: 'fixture', ensureConversation: async () => conversationId }, client);
+  const pending = conversation.answer({ text: 'Fictional reviewed question.', available: true, ensureConversation: async () => conversationId }, client);
   await sawPartial.promise; context.changeSession(accountB); await pending; await cleanupDone.promise;
   assert.equal(streamingAccount, accountA); assert.equal(cleanupAccount, accountA);
   assert.equal(controller.signal.aborted, true); assert.equal(audio.srcObject, null);

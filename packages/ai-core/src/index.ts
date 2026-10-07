@@ -1,7 +1,7 @@
 import type { ChatInput, ChatContext, CreateJobInput, JobExecutionContext, JobExecutionResult, PlatformProviderRuntime, VoiceSessionInput, ProviderAttachment, ComfyUITemplateSnapshot, SpeechInput, TranscriptionContext, Capability } from '@companion/platform-contracts';
 import { HttpClient, type Fetch, type ResolveHost } from './http.ts';
 import { providerStatuses, requireProvider } from './config.ts';
-import { streamOpenAI, streamCompatible } from './chat.ts';
+import { streamOpenAI, streamCompatible, streamModelStep } from './chat.ts';
 import { generateOpenAIImage, generateArkVideo, generateFal, generateComfyUI, realtimeOpenAI, transcribeOpenAI, speechOpenAI } from './media.ts';
 import { ProviderError, invalid } from './errors.ts';
 import { executeBrowser, executeCli } from './executors.ts';
@@ -52,6 +52,13 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
       if(!input.messages.length||input.messages.length>200)invalid('A conversation must contain between 1 and 200 context messages.');
       return input.provider==='openai'?streamOpenAI(http,env,input,context):streamCompatible(http,env,input,context);
     },
+    streamModelStep(input,context){
+      requireProvider(env,input.provider,context.tools.length?'agent':'chat');
+      const configured=providerStatuses(env).find(provider=>provider.id===input.provider)?.modelsByCapability?.chat;
+      if(!configured||configured.length!==1||input.model!==configured[0])invalid('The model step must use the configured server model.');
+      if(!input.messages.length||input.messages.length>200)invalid('A conversation must contain between 1 and 200 context messages.');
+      return streamModelStep(http,env,input,context);
+    },
     async executeJob(input:CreateJobInput,context:JobExecutionContext):Promise<JobExecutionResult>{
       if(input.executionTemplate&&input.provider!=='comfyui')invalid('Only ComfyUI generation tasks use a server template version.');
       if(input.provider==='comfyui'){
@@ -84,3 +91,5 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
       return provider==='kokoro'?speechKokoro(http,env,input,context.signal):speechOpenAI(http,env,input,context.signal);},
   };return runtime;
 }
+
+export { ProviderAdapter, runAgentLoop } from './agent-loop.ts';

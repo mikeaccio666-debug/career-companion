@@ -140,7 +140,7 @@ export default function WorkflowPanel({ providers, jobs, onCreate, onCancel, onR
   }
 
   return <section className="feature-page workflow-page">
-    <div className="page-kicker"><Layers3 size={15} />WORKFLOW LAB</div>
+
     <h1>把多个能力，<span>连成自己的流程。</span></h1>
     <p className="page-description">组合文字、图片、视频与配音，保存成你的私有模板。每次运行先审阅完整任务，再由你批准执行。</p>
     <div className="workflow-library">

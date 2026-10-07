@@ -1,4 +1,5 @@
-import type { Attachment, AudioTranscriptionReceipt } from '@companion/platform-contracts';
+import type { Attachment, AudioTranscriptionReceipt, PublicAudioTranscriptionReceipt } from '@companion/platform-contracts';
+import { parsePublicAudioReceipt } from './student-requests.ts';
 import type { BoundPlatformClient } from './api.ts';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -12,8 +13,14 @@ export function parseAudioReceipt(value: unknown, source: ReceiptExpectation): A
   return { id: value.id, sourceAttachmentId: source.id, sourceName: source.name, sourceMime: source.mime, sourceSha256: value.sourceSha256, provider: 'faster-whisper', model: 'whisper-tiny', text: value.text, provenance: 'untrusted_audio_transcript', createdAt: value.createdAt };
 }
 /** The transport is the caller's immutable account capture; no late global account lookup. */
-export function createAudioTranscriptionClient(request: BoundPlatformClient['request']) {
-  const result = (value: unknown, source: ReceiptExpectation) => { if (!object(value)) throw invalid(); return parseAudioReceipt(value.receipt, source); };
+export function createAudioTranscriptionClient(request: BoundPlatformClient['request'], options: { publicReceipt?: boolean; allowInternalMetadata?: () => boolean } = {}) {
+  const result = (value: unknown, source: ReceiptExpectation) => { if (!object(value)) throw invalid(); if (!options.publicReceipt) return parseAudioReceipt(value.receipt, source);
+    let receipt = value.receipt;
+    if (options.allowInternalMetadata?.() && object(receipt) && ('provider' in receipt || 'model' in receipt)) {
+      // The internal read DTO has two additional runtime fields; never render or reuse them as routing inputs.
+      const { provider: _provider, model: _model, ...publicReceipt } = receipt; receipt = publicReceipt;
+    }
+    return parsePublicAudioReceipt(receipt, { id: source.id, name: source.name, mime: source.mime, ...(source.sha256 === undefined ? {} : { sha256: source.sha256 }), ...(source.receiptId === undefined ? {} : { receiptId: source.receiptId }) }); };
   return {
     async create(source: AudioSource, clientRequestId: string, signal: AbortSignal) {
       const value = await request<unknown>(`/uploads/${identifier(source.id)}/transcriptions`, { method: 'POST', body: JSON.stringify({ clientRequestId: decodeURIComponent(identifier(clientRequestId)) }), signal });
@@ -30,3 +37,5 @@ export function createAudioTranscriptionClient(request: BoundPlatformClient['req
   };
 }
 export type AudioTranscriptionClient = ReturnType<typeof createAudioTranscriptionClient>;
+
+export type AudioReceipt = AudioTranscriptionReceipt | PublicAudioTranscriptionReceipt;
