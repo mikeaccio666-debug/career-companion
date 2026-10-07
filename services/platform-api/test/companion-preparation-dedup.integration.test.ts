@@ -182,12 +182,18 @@ test('initial collision draws quirks once and replay restores the same actual en
   assert.equal(seed.companionId, prepared.companionId); assert.deepEqual(seed.dimensions, neutral);
   assert.deepEqual(seed.quirks, one.quirks); assert.equal(seed.styleCard, one.styleCard); assert.equal(seed.inkToken, zero.inkToken);
   assert.equal(stored.companions[0].fingerprint, fingerprint(prepared.companionId, 1));
-  assert.equal(Object.keys(seed).at(-1), 'quirkDraw');
+  const { sourceReceiptVersion, sourceReceiptDigest, ...baseSeed } = seed;
+  assert.equal(Object.keys(baseSeed).at(-1), 'quirkDraw');
+  assert.equal(task.source_receipt_version, 1); assert.equal(sourceReceiptVersion, 1);
+  assert.match(sourceReceiptDigest, /^[0-9a-f]{64}$/);
+  const sourcePrefix = (await f.db.query('SELECT * FROM platform_companion_source_prefixes WHERE task_id=$1', [task.id])).rows;
+  assert.equal(sourcePrefix.length, 1); assert.equal(sourcePrefix[0].payload_digest, sourceReceiptDigest);
   assert.deepEqual(await watched.service.prepare(who, { expectedRevision: draft.revision }), prepared);
   assert.equal(watched.lookups(), 1); assert.deepEqual(await snapshot(f, who), stored);
   const fresh = observed(f, async () => assert.fail('Saved draw must not query later collisions.'));
   assert.deepEqual(await fresh.service.prepare(who, { expectedRevision: draft.revision }), prepared);
   assert.equal(fresh.lookups(), 0); assert.deepEqual(await snapshot(f, who), stored); await noExecution(f);
+  assert.deepEqual((await f.db.query('SELECT * FROM platform_companion_source_prefixes WHERE task_id=$1', [task.id])).rows, sourcePrefix);
 }));
 
 test('even a second collision is accepted after exactly one best-effort draw without a uniqueness promise', async () => isolated(async f => {

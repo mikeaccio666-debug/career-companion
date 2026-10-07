@@ -110,6 +110,12 @@ export class CompanionIdentityDrafts {
     if (!verified) throw new ApiError(409, 'COMPANION_PREVIEW_REQUIRED', 'Wait for the completed companion preview before naming it.');
     return verified;
   }
+  private async capturedSource(client: PoolClient, fixed: FixedSessionContext, taskId: string, signal?: AbortSignal) {
+    await this.storage.authorizeSession(client, fixed, signal);
+    const proof = await this.background.readSavedCompletedInTransaction(client, fixed, { taskId }, signal);
+    if (!proof) throw unavailable();
+    return proof.envelope;
+  }
   private async row(client: PoolClient, fixed: FixedSessionContext, companionId: string): Promise<DraftRow | undefined> {
     return (await client.query<DraftRow>('SELECT * FROM platform_companion_identity_drafts WHERE companion_id=$1 AND user_id=$2 FOR UPDATE',
       [companionId, fixed.userId])).rows[0];
@@ -179,7 +185,7 @@ export class CompanionIdentityDrafts {
     const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), input = record(value, ['taskId', 'operationId', 'payload']);
     if (!uuid(input.taskId) || !uuid(input.operationId) || typeof input.payload !== 'string' || Buffer.byteLength(input.payload, 'utf8') > 65536) throw unavailable();
     try {
-      const verified = await this.source(client, fixed, input.taskId, signal), current = await this.row(client, fixed, verified.source.companionId);
+      const verified = await this.capturedSource(client, fixed, input.taskId, signal), current = await this.row(client, fixed, verified.source.companionId);
       if (!current) throw unavailable();
       await this.decode(client, current, fixed, verified);
       const data = JSON.parse(input.payload);
