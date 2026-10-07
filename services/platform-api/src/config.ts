@@ -14,7 +14,7 @@ export interface PlatformConfig {
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
-  requireInvite: boolean; legalBundlePath?: string;
+  requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyDailyModelCallLimit: number;
   dataCrypto?: DataCrypto;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
@@ -66,6 +66,7 @@ function modelRoutes(env: NodeJS.ProcessEnv): PlatformConfig['modelRoutes'] {
   const variables: Record<ModelRoutePurpose, string> = {
     chat: 'PLATFORM_CHAT_PROVIDER', agent: 'PLATFORM_AGENT_PROVIDER',
     realtime: 'PLATFORM_REALTIME_PROVIDER', transcription: 'PLATFORM_TRANSCRIPTION_PROVIDER', speech: 'PLATFORM_SPEECH_PROVIDER',
+    safety_classify: 'PLATFORM_SAFETY_CLASSIFY_PROVIDER',
   };
   const routes: PlatformConfig['modelRoutes'] = {};
   for (const purpose of Object.keys(variables) as ModelRoutePurpose[]) {
@@ -87,6 +88,11 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   const dataCrypto = readDataCrypto(env);
   if (env.PLATFORM_LEGAL_BUNDLE_FILE !== undefined && (!env.PLATFORM_LEGAL_BUNDLE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_LEGAL_BUNDLE_FILE))) throw new Error('PLATFORM_LEGAL_BUNDLE_FILE must name a server-controlled file');
   const legalBundlePath = env.PLATFORM_LEGAL_BUNDLE_FILE === undefined ? undefined : path.resolve(workspaceRoot,env.PLATFORM_LEGAL_BUNDLE_FILE);
+  if (env.PLATFORM_SAFETY_PROFILE_FILE !== undefined && (!env.PLATFORM_SAFETY_PROFILE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_SAFETY_PROFILE_FILE))) throw new Error('PLATFORM_SAFETY_PROFILE_FILE must name a server-controlled file');
+  const safetyDetectorProfilePath = env.PLATFORM_SAFETY_PROFILE_FILE === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_SAFETY_PROFILE_FILE);
+  const safetyLimit = env.PLATFORM_SAFETY_DAILY_MODEL_CALL_LIMIT ?? '0';
+  if (/^(0|[1-9][0-9]{0,4})$/.exec(safetyLimit)?.[0] !== safetyLimit || Number(safetyLimit) > 10000) throw new Error('PLATFORM_SAFETY_DAILY_MODEL_CALL_LIMIT must be an integer from 0 to 10000');
+  const safetyDailyModelCallLimit = Number(safetyLimit);
   if (env.PLATFORM_ENABLE_WORKBENCH !== undefined && !['0', '1'].includes(env.PLATFORM_ENABLE_WORKBENCH)) {
     throw new Error('PLATFORM_ENABLE_WORKBENCH must be 0 or 1');
   }
@@ -148,7 +154,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
-    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, workbenchEnabled,
+    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, safetyDetectorProfilePath, safetyDailyModelCallLimit, workbenchEnabled,
     modelRoutes: configuredModelRoutes, exposeProviderDetails, dataCrypto,
     queueName, s3, mcp: readMcpConfig(env),
   };

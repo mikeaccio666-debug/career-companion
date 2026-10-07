@@ -53,10 +53,17 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
       return input.provider==='openai'?streamOpenAI(http,env,input,context):streamCompatible(http,env,input,context);
     },
     streamModelStep(input,context){
+      const safety = context.purpose === 'safety_classify';
+      if ((safety || context.responseFormat !== undefined) && input.provider !== 'openai') throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','No verified structured output adapter is available for this provider.',503);
       requireProvider(env,input.provider,context.tools.length?'agent':'chat');
-      const configured=providerStatuses(env).find(provider=>provider.id===input.provider)?.modelsByCapability?.chat;
+      const status=providerStatuses(env).find(provider=>provider.id===input.provider);
+      const configured=safety?status?.modelsByPurpose?.safety_classify:status?.modelsByCapability?.chat;
+      if(safety&&(!configured||configured.length!==1))throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','Configure an explicit server safety classification model.',503);
       if(!configured||configured.length!==1||input.model!==configured[0])invalid('The model step must use the configured server model.');
+      if(safety&&(!context.responseFormat||context.tools.length||context.toolChoice!=='none'||context.limits.maxOutputTokens>100||context.timeoutMs>1000||context.continuation!==undefined||context.toolResults!==undefined))invalid('Safety classification requires one bounded structured step without tools or continuation.');
       if(!input.messages.length||input.messages.length>200)invalid('A conversation must contain between 1 and 200 context messages.');
+      if(safety||context.responseFormat!==undefined)return streamModelStep(http,env,{...input,messages:input.messages.map(message=>({...message}))},
+        {...context,tools:[...context.tools],limits:{...context.limits},...(context.allowedToolNames?{allowedToolNames:[...context.allowedToolNames]}:{})});
       return streamModelStep(http,env,input,context);
     },
     async executeJob(input:CreateJobInput,context:JobExecutionContext):Promise<JobExecutionResult>{

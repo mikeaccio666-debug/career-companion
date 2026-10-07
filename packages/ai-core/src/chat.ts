@@ -7,6 +7,87 @@ import { localBase, model } from './config.ts';
 const OLLAMA_REASONING_TURN_BYTES = 256 * 1024;
 const OLLAMA_REASONING_STREAM_BYTES = 512 * 1024;
 const MAX_REPORTED_TOKENS = 2_147_483_647;
+const STRUCTURED_BYTES = 32 * 1024;
+const SCHEMA_TYPES = ['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'];
+type JsonSchema = Record<string, any>;
+function structuredInput(): never { invalid('Use a bounded strict JSON schema supported by this adapter.'); }
+function ownRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && [Object.prototype, null].includes(Object.getPrototypeOf(value))
+    && Reflect.ownKeys(value).every(key => typeof key === 'string' && Object.getOwnPropertyDescriptor(value, key)?.enumerable === true && Object.hasOwn(Object.getOwnPropertyDescriptor(value,key)!, 'value'));
+}
+/** Snapshot inert JSON only, before accounting/admission can await. Unsupported keywords fail closed. */
+function structuredFormat(value: unknown): NonNullable<ModelStepContext['responseFormat']> {
+  let nodes = 0;
+  function copy(input: unknown, depth = 0): any {
+    if (++nodes > 1000 || depth > 20) structuredInput();
+    if (input === null || typeof input === 'boolean' || typeof input === 'string' || typeof input === 'number' && Number.isFinite(input)) return input;
+    if (Array.isArray(input)) {
+      if (Reflect.ownKeys(input).some(key => key !== 'length' && (typeof key !== 'string' || !/^(0|[1-9][0-9]*)$/.test(key) || !Object.hasOwn(Object.getOwnPropertyDescriptor(input,key)!, 'value'))) || Object.keys(input).length !== input.length) structuredInput();
+      return Object.freeze(input.map(item => copy(item, depth + 1)));
+    }
+    if (!ownRecord(input)) structuredInput();
+    const out: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(input)) out[key] = copy(input[key], depth + 1);
+    return Object.freeze(out);
+  }
+  if (!ownRecord(value) || Reflect.ownKeys(value).length !== 2 || !Object.hasOwn(value,'name') || !Object.hasOwn(value,'schema')
+    || typeof value.name !== 'string' || /^[A-Za-z0-9_-]{1,64}$/.exec(value.name)?.[0] !== value.name) structuredInput();
+  const schema = copy(value.schema);
+  function check(node: unknown, depth = 0): void {
+    if (!ownRecord(node) || depth > 10) structuredInput();
+    const s = node as JsonSchema;
+    const allowed = ['type','properties','required','additionalProperties','items','enum','anyOf','description','title'];
+    if (Object.keys(s).some(key => !allowed.includes(key)) || ['description','title'].some(key => s[key] !== undefined && typeof s[key] !== 'string')) structuredInput();
+    if (Object.hasOwn(s,'anyOf')) {
+      if (Object.keys(s).some(key => !['anyOf','description','title'].includes(key)) || !Array.isArray(s.anyOf) || s.anyOf.length < 2 || s.anyOf.length > 8) structuredInput();
+      s.anyOf.forEach((branch: unknown) => check(branch, depth + 1)); return;
+    }
+    const types = Array.isArray(s.type) ? s.type : [s.type];
+    if (!types.length || types.length > 2 || new Set(types).size !== types.length || types.some(type => !SCHEMA_TYPES.includes(type)) || types.length === 2 && !types.includes('null')) structuredInput();
+    if (Object.hasOwn(s,'enum') && (!Array.isArray(s.enum) || !s.enum.length || s.enum.length > 100 || s.enum.some((item: unknown) => item !== null && !['string','number','boolean'].includes(typeof item)) || new Set(s.enum.map((item: unknown) => JSON.stringify(item))).size !== s.enum.length)) structuredInput();
+    if (types.includes('object')) {
+      if (!ownRecord(s.properties) || s.additionalProperties !== false || !Array.isArray(s.required) || s.required.some((key: unknown) => typeof key !== 'string') || new Set(s.required).size !== s.required.length
+        || s.required.length !== Object.keys(s.properties).length || Object.keys(s.properties).some(key => !s.required.includes(key))) structuredInput();
+      Object.values(s.properties).forEach(child => check(child, depth + 1));
+    } else if (['properties','required','additionalProperties'].some(key => Object.hasOwn(s,key))) structuredInput();
+    if (types.includes('array')) { if (!Object.hasOwn(s,'items')) structuredInput(); check(s.items, depth + 1); }
+    else if (Object.hasOwn(s,'items')) structuredInput();
+  }
+  check(schema);
+  if (schema.type !== 'object' || Buffer.byteLength(JSON.stringify(schema),'utf8') > STRUCTURED_BYTES) structuredInput();
+  return Object.freeze({ name: value.name, schema });
+}
+function schemaMatches(schema: JsonSchema, value: unknown): boolean {
+  if (schema.anyOf) return schema.anyOf.some((branch: JsonSchema) => schemaMatches(branch,value));
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  const matches = types.some((type: string) => type === 'null' ? value === null : type === 'array' ? Array.isArray(value) : type === 'object' ? ownRecord(value)
+    : type === 'integer' ? typeof value === 'number' && Number.isSafeInteger(value) : type === 'number' ? typeof value === 'number' && Number.isFinite(value) : typeof value === type);
+  if (!matches || schema.enum && !schema.enum.some((entry: unknown) => Object.is(entry,value))) return false;
+  if (value === null) return true;
+  if (Array.isArray(value)) return value.every(item => schemaMatches(schema.items,item));
+  if (typeof value === 'object') return schema.required.every((key: string) => Object.hasOwn(value!,key))
+    && Object.keys(value!).every(key => Object.hasOwn(schema.properties,key) && schemaMatches(schema.properties[key],(value as Record<string, unknown>)[key]));
+  return true;
+}
+function structuredResponse(output: unknown, format: NonNullable<ModelStepContext['responseFormat']>): string {
+  const bad = () => new ProviderError('INVALID_PROVIDER_RESPONSE','The provider returned an invalid structured result.',502);
+  if (!Array.isArray(output)) throw bad();
+  let text = '';
+  for (const item of output) {
+    if (item?.type === 'reasoning') continue;
+    if (item?.type !== 'message' || item.role !== 'assistant' || item.status !== 'completed' || !Array.isArray(item.content)) throw bad();
+    for (const part of item.content) {
+      if (part?.type === 'refusal') throw new ProviderError('PROVIDER_REFUSAL','The provider declined this structured request.',502);
+      if (part?.type !== 'output_text' || typeof part.text !== 'string') throw bad();
+      text += part.text; if (Buffer.byteLength(text,'utf8') > STRUCTURED_BYTES) throw bad();
+    }
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { throw bad(); }
+  if (!schemaMatches(format.schema,parsed)) throw bad();
+  return text;
+}
 
 function usageCollector(inputKey:string,outputKey:string){
   let usage:ModelCallUsage={status:'missing'};
@@ -137,6 +218,7 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
   let status: Extract<ModelCallEvent, { type: 'finished' }>['status'] = 'interrupted';
   const tools = ctx.tools.map(tool => ({ type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: false }));
   let output: any[] = [], completed = false, visible = false, text = '';
+  const format = !legacy ? ctx.responseFormat : undefined;
   const started = new Set<number>(), functionIndexes = new Map<string, number>();
   try {
     await ctx.onModelCall?.({ type: 'started', callId, index: ctx.callIndex, provider: input.provider, model: selectedModel, ...(ctx.purpose ? { purpose: ctx.purpose } : {}) });
@@ -144,19 +226,29 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
       timing.signal.throwIfAborted();
       const request = jsonPost({ model: selectedModel, input: state.messages, instructions: instruction(input), tools, stream: true, store: false,
         include: ['reasoning.encrypted_content'], max_output_tokens: ctx.limits.maxOutputTokens,
-        ...(!legacy ? { tool_choice: ctx.toolChoice === 'none' ? 'none' : ctx.allowedToolNames ? { type: 'allowed_tools', mode: 'auto', tools: ctx.allowedToolNames.map(name => ({ type: 'function', name })) } : 'auto' } : {}), ...(ctx.reasoningEffort ? { reasoning: { effort: ctx.reasoningEffort } } : {}) }, env.OPENAI_API_KEY!, timing.signal);
+        ...(!legacy ? { tool_choice: ctx.toolChoice === 'none' ? 'none' : ctx.allowedToolNames ? { type: 'allowed_tools', mode: 'auto', tools: ctx.allowedToolNames.map(name => ({ type: 'function', name })) } : 'auto' } : {}), ...(ctx.reasoningEffort ? { reasoning: { effort: ctx.reasoningEffort } } : {}),
+        ...(format ? { text: { format: { type: 'json_schema', name: format.name, schema: format.schema, strict: true } } } : {}) }, env.OPENAI_API_KEY!, timing.signal);
       const response = await http.request('https://api.openai.com/v1/responses', request, ctx.timeoutMs, ctx.requestAdmission);
       for await (const event of readSse(response)) {
+        if (format && completed) throw new ProviderError('INVALID_PROVIDER_RESPONSE','The structured stream continued after its terminal result.',502);
         if (['response.completed', 'response.failed', 'response.incomplete'].includes(event.type)) usage.observe(event.response?.usage);
         if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
-          if (event.delta.length) timing.observed(); visible ||= Boolean(event.delta.trim()); text += event.delta; yield { type: 'delta', text: event.delta };
+          if (event.delta.length) timing.observed(); visible ||= Boolean(event.delta.trim()); text += event.delta;
+          if (format && Buffer.byteLength(text,'utf8') > STRUCTURED_BYTES) throw new ProviderError('INVALID_PROVIDER_RESPONSE','The structured result exceeded its bound.',502);
+          if (!format) yield { type: 'delta', text: event.delta };
         } else if (event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
+          if (format) throw new ProviderError('INVALID_PROVIDER_RESPONSE','Structured classification cannot request tools.',502);
           if (!legacy && ((event.item.call_id !== undefined && !boundedCallIdentifier(event.item.call_id, 240)) || (event.item.name !== undefined && !boundedCallIdentifier(event.item.name, 128)))) invalid('The provider returned invalid bounded tool identifiers.');
           timing.observed(); const index = Number.isSafeInteger(event.output_index) ? event.output_index : started.size;
           if (typeof event.item.call_id === 'string') functionIndexes.set(event.item.call_id, index);
           if (!started.has(index)) { started.add(index); yield { type: 'tool_started', index, ...(typeof event.item.call_id === 'string' && event.item.call_id ? { callId: event.item.call_id } : {}), ...(typeof event.item.name === 'string' ? { name: event.item.name } : {}) }; }
         } else if (event.type === 'response.output_item.done') output.push(event.item);
-        else if (event.type === 'response.completed') { completed = true; output = event.response?.output ?? output; }
+        else if (format && ['response.refusal.delta','response.refusal.done'].includes(event.type)) throw new ProviderError('PROVIDER_REFUSAL','The provider declined this structured request.',502);
+        else if (event.type === 'response.completed') {
+          if (format && (event.response?.status !== 'completed' || event.response?.error)) throw new ProviderError('INVALID_PROVIDER_RESPONSE','The structured request did not complete.',502);
+          completed = true; output = event.response?.output ?? output;
+          if (format) { text = structuredResponse(output,format); visible = true; }
+        }
         else if (['error', 'response.failed', 'response.incomplete'].includes(event.type)) {
           if (!legacy && event.type === 'response.incomplete' && event.response?.incomplete_details?.reason === 'max_output_tokens') throw new ProviderError('PROVIDER_OUTPUT_LIMIT', 'The model reached its output limit. Try a smaller request.');
           throw new ProviderError('PROVIDER_GENERATION_FAILED', 'The model did not finish its response. Try a smaller request or check model access.');
@@ -167,7 +259,9 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
       status = 'complete';
     } catch (error) { status = failedCallStatus(error, ctx.signal); throw error; }
     finally { await ctx.onModelCall?.(finishEvent(callId, status, usage.result, ctx.signal)); }
+    if (format) { timing.signal.throwIfAborted(); yield { type: 'delta', text }; }
     const reported = usage.result; if (reported.status === 'reported') yield { type: 'usage', inputTokens: reported.inputTokens, outputTokens: reported.outputTokens };
+    if (format) return { text, calls: [] };
     const functions = output.filter(item => item.type === 'function_call');
     const calls: ModelToolCall[] = functions.map(fn => ({ callId: fn.call_id, name: fn.name, arguments: fn.arguments, ...(functionIndexes.has(fn.call_id) ? { index: functionIndexes.get(fn.call_id) } : {}) }));
     state.messages.push(...output);
@@ -241,9 +335,14 @@ function validateStep(input: ChatInput, ctx: ModelStepContext) {
   if (!Number.isSafeInteger(ctx.timeoutMs) || ctx.timeoutMs < 1 || ctx.timeoutMs > 600_000 || (ctx.firstTokenTimeoutMs !== undefined && (!Number.isSafeInteger(ctx.firstTokenTimeoutMs) || ctx.firstTokenTimeoutMs < 1 || ctx.firstTokenTimeoutMs > ctx.timeoutMs))) invalid('Use bounded server-owned model timeouts.');
   if (ctx.allowedToolNames && (!Array.isArray(ctx.allowedToolNames) || new Set(ctx.allowedToolNames).size !== ctx.allowedToolNames.length || ctx.allowedToolNames.some(name => !ctx.tools.some(tool => tool.name === name)))) invalid('The allowed-tool mask must be a subset of the server catalogue.');
   if (!['auto', 'none'].includes(ctx.toolChoice) || !Array.isArray(ctx.tools) || ctx.tools.length > 128) invalid('Use a valid server-owned tool set.');
+  if (ctx.responseFormat !== undefined) {
+    if (input.provider !== 'openai') throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','No verified structured output adapter is available for this provider.',503);
+    if (ctx.tools.length || ctx.toolChoice !== 'none') invalid('Strict structured output requires a tools-disabled step.');
+  }
 }
 export async function* streamModelStep(http: HttpClient, env: NodeJS.ProcessEnv, input: ChatInput, ctx: ModelStepContext): AsyncGenerator<ModelStepEvent, ModelStepResult> {
   validateStep(input, ctx);
+  if (ctx.responseFormat !== undefined) ctx = { ...ctx, responseFormat: structuredFormat(ctx.responseFormat) };
   const out = yield* (input.provider === 'openai' ? openAIStep(http, env, input, ctx, false) : compatibleStep(http, env, input, ctx, false));
   const ids = new Set<string>();
   for (const [index, call] of out.calls.entries()) {
@@ -251,7 +350,7 @@ export async function* streamModelStep(http: HttpClient, env: NodeJS.ProcessEnv,
     if (!boundedCallIdentifier(call.callId, 240) || !boundedCallIdentifier(call.name, 128) || typeof call.arguments !== 'string' || call.arguments.length > 64_000 || ids.has(call.callId)) invalid('The provider returned invalid tool call data.');
     ids.add(call.callId);
   }
-  return { text: out.text, calls: out.calls, continuation: out.continuation };
+  return { text: out.text, calls: out.calls, ...(out.continuation === undefined ? {} : { continuation: out.continuation }) };
 }
 async function* legacyChat(http: HttpClient, env: NodeJS.ProcessEnv, input: ChatInput, ctx: ChatContext): AsyncGenerator<ChatStreamEvent> {
   let continuation: object | undefined, toolResults: ModelToolResult[] | undefined, calls = 0;

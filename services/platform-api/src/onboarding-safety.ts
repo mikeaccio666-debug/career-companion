@@ -11,6 +11,8 @@ import { parseOnboardingSafetyClaim, parseOnboardingSafetyDecision, type Onboard
 export type SafetyFailure = 'unavailable' | 'timeout' | 'invalid_result';
 /** Injected only by a trusted server runtime. Tests use explicit fictional fixtures, never an HTTP-supplied decision. */
 export type IntakeClassifier = (input: Readonly<{ text: string; questionId: OnboardingSafetyClaim['questionId'] }>, admission: ProviderRequestAdmission) => Promise<unknown>;
+/** Server-bound policy guard, called under the actual claim locks before launch and result acceptance. Never HTTP input. */
+export type IntakeExecutionGuard = (client: PoolClient, signal?: AbortSignal) => Promise<void>;
 export interface SafetyProcessReceipt { submissionId: string; status: 'detected'; advanced: boolean; replayed: boolean; }
 const MAX_REVISION = 2147483647;
 function options(value: { detectorRevision: number; leaseMs?: number }) {
@@ -70,12 +72,15 @@ export class OnboardingSafety {
     signal?.throwIfAborted(); if (!valid.rowCount) throw safetyClaimChanged();
     return { draft, rows, row };
   }
-  private admission(claim: Readonly<OnboardingSafetyClaim>, executionToken: string, parent?: AbortSignal, onComplete?: () => void): ProviderRequestAdmission {
+  private admission(claim: Readonly<OnboardingSafetyClaim>, executionToken: string, parent?: AbortSignal, onComplete?: () => void, guard?: IntakeExecutionGuard): ProviderRequestAdmission {
     return async <T>(launch: (signal: AbortSignal) => Promise<T>, requestSignal?: AbortSignal): Promise<T> => {
       const cancelled = new AbortController(), signal = AbortSignal.any([cancelled.signal, ...(parent ? [parent] : []), ...(requestSignal ? [requestSignal] : [])]);
       let pending: Promise<T> | undefined;
       try {
         const started = await this.db.withBoundedTransaction(async client => {
+          await this.owned(client, claim, signal, false, executionToken);
+          await guard?.(client, signal);
+          // Policy lock waits also consume time. Recheck the exact claim before launch.
           await this.owned(client, claim, signal, false, executionToken); signal.throwIfAborted();
           // Launch is accepted under the real claim locks. Wait for classifier/provider I/O after COMMIT.
           pending = Promise.resolve(launch(signal)); pending.catch(() => {}); return { pending };
@@ -98,10 +103,11 @@ export class OnboardingSafety {
     const next = resolveOnboardingText(draft, result, { at: await this.storage.at(client) });
     await this.storage.write(client, draft, next); return true;
   }
-  async process(value: OnboardingSafetyClaim, classify: IntakeClassifier, signal?: AbortSignal): Promise<SafetyProcessReceipt> {
+  async process(value: OnboardingSafetyClaim, classify: IntakeClassifier, signal?: AbortSignal, guard?: IntakeExecutionGuard): Promise<SafetyProcessReceipt> {
     const claim = captured(value);
     const input = await this.db.withBoundedTransaction(async client => {
       const owned = await this.owned(client, claim, signal, true);
+      await guard?.(client, signal);
       if (owned.row.status === 'detected') return { replay: true as const };
       if (owned.row.execution_token !== null) throw safetyClaimChanged();
       const operation = (await client.query<IntakeOperationRow>(`SELECT operation_id,draft_id,applied_revision,request_ciphertext
@@ -119,9 +125,9 @@ export class OnboardingSafety {
     // The internal classifier must use this admission at each actual provider request; merely returning a guessed decision is insufficient.
     let admitted = false;
     const deadline = AbortSignal.timeout(1000), requestSignal = AbortSignal.any([deadline, ...(signal ? [signal] : [])]);
-    const pending = this.admission(claim, input.executionToken, requestSignal)(async guardedSignal => {
+    const pending = this.admission(claim, input.executionToken, requestSignal, undefined, guard)(async guardedSignal => {
       // Outer transaction failure cancels the actual request admission as well, not just this wait.
-      const admission = this.admission(claim, input.executionToken, guardedSignal, () => { admitted = true; });
+      const admission = this.admission(claim, input.executionToken, guardedSignal, () => { admitted = true; }, guard);
       return classify(Object.freeze({ text: input.text, questionId: claim.questionId }), admission);
     });
     pending.catch(() => {});
@@ -148,6 +154,7 @@ export class OnboardingSafety {
     catch { throw new ApiError(400, 'INVALID_SAFETY_RESULT', 'Use a valid bound intake detection result.'); }
     return this.db.withBoundedTransaction(async client => {
       const owned = await this.owned(client, claim, signal, true, input.executionToken);
+      await guard?.(client, signal);
       if (owned.row.status === 'detected') {
         if (JSON.stringify(this.storage.decodeResult(owned.row)) !== JSON.stringify(result)) throw new ApiError(409, 'ONBOARDING_SAFETY_RESULT_CONFLICT', 'The detection result was already saved.');
         return { submissionId: claim.submissionId, status: 'detected', advanced: false, replayed: true };
