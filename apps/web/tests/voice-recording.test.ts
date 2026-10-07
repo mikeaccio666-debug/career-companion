@@ -85,7 +85,7 @@ test('explicit stop completes one bounded multipart-compatible recording, includ
   value.recording.stop(); value.recording.stop(); value.recording.start();
   assert.deepEqual(value.events, ['stopped', 'complete']); assert.equal(value.errors.length, 0); assert.equal(value.audio.length, 1);
   assert.equal(value.audio[0].type, 'audio/webm'); assert.equal(await value.audio[0].text(), 'Fictional first chunk. Final fixture chunk.');
-  const uploaded = transcriptionForm(value.audio[0], 'fictional-provider').get('file') as File;
+  const uploaded = transcriptionForm(value.audio[0]).get('file') as File;
   assert.equal(uploaded.name, 'recording.webm'); assert.equal(uploaded.type, 'audio/webm');
   assert.equal(value.recorder.stops, 1); released(value);
 });
@@ -95,7 +95,7 @@ test('MP4 and Ogg recordings retain their actual container and multipart extensi
     const value = setup({ mime, supported: (candidate) => candidate === mime }); value.recording.start();
     value.recorder.data(new Blob(['Fictional encoded bytes.'], { type: mime })); value.recording.stop();
     assert.equal(value.audio[0].type, mime.split(';')[0]);
-    assert.equal((transcriptionForm(value.audio[0], 'fictional').get('file') as File).name, `recording.${extension}`);
+    assert.equal((transcriptionForm(value.audio[0]).get('file') as File).name, `recording.${extension}`);
     released(value);
   }
 });

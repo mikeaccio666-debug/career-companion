@@ -11,7 +11,7 @@ import { Database } from '../src/database.ts';
 import { readVoiceContext } from '../src/voice-context.ts';
 import { authorizeFixedSession, tokenHash } from '../src/auth.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig();
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'voice-fixture', PLATFORM_AGENT_PROVIDER: 'voice-fixture', PLATFORM_REALTIME_PROVIDER: 'voice-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'voice-fixture', PLATFORM_SPEECH_PROVIDER: 'voice-fixture' });
 const schema = `voice_context_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl);
 const url = new URL(base.databaseUrl); url.searchParams.set('options', `-c search_path=${schema}`);
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(yes => { resolve = yes; }); return { promise, resolve }; }
@@ -33,7 +33,7 @@ class GatedDatabase extends Database {
 const db = new GatedDatabase(url.toString()), issuedInputs: VoiceSessionInput[] = [];
 const forbidden = async (): Promise<never> => { throw new Error('No model or media calls are used in this fixture.'); };
 const runtime: PlatformProviderRuntime = {
-  capabilities: () => [{ id: 'voice-fixture', name: 'Synthetic context issuer', enabled: true, keyConfigured: true, capabilities: ['realtime'], models: ['synthetic-voice'], envVariables: [] }],
+  capabilities: () => [{ id: 'voice-fixture', name: 'Synthetic context issuer', enabled: true, keyConfigured: true, capabilities: ['realtime'], models: ['synthetic-voice'], voiceOptions: { speech: { voices: ['synthetic-voice'], defaultVoice: 'synthetic-voice' }, realtime: { voices: ['synthetic-voice'], defaultVoice: 'synthetic-voice', turnTaking: true } }, envVariables: [] }],
   async *streamChat() { throw new Error('No chat model is used.'); }, executeJob: forbidden, transcribe: forbidden, speech: forbidden,
   async createVoiceSession(input) {
     issuedInputs.push({ ...input });
@@ -73,7 +73,7 @@ async function message(conversationId: string, text: string, options: { role?: s
   return id;
 }
 async function start(actor: Actor, conversationId?: string) {
-  return request(actor, 'POST', '/voice/session', { provider: 'voice-fixture', ...(conversationId ? { conversationId } : {}) });
+  return request(actor, 'POST', '/voice/session', { ...(conversationId ? { conversationId } : {}) });
 }
 async function release(actor: Actor, sessionId: string) { assert.equal((await request(actor, 'POST', '/voice/session/release', { sessionId })).statusCode, 200); }
 async function counts(actor: Actor) {
@@ -86,10 +86,10 @@ async function counts(actor: Actor) {
 test('an explicit owner snapshot preserves complete text order without sending history or identity to the issuer', async () => {
   const actor = await register(), id = await conversation(actor);
   const first = await message(id, 'Synthetic user observation'), second = await message(id, 'Synthetic assistant explanation', { role: 'assistant' });
-  const before = issuedInputs.length, response = await request(actor, 'POST', '/voice/session', { provider: 'voice-fixture', conversationId: id.toUpperCase(), voice: 'synthetic-voice', turnTaking: 'patient' });
+  const before = issuedInputs.length, response = await request(actor, 'POST', '/voice/session', { conversationId: id.toUpperCase() });
   assert.equal(response.statusCode, 200, response.body); const result = response.json();
   assert.deepEqual(result.serverContext, { source: 'server_conversation', conversationId: id, items: [{ messageId: first, role: 'user', text: 'Synthetic user observation' }, { messageId: second, role: 'assistant', text: 'Synthetic assistant explanation' }], truncated: false });
-  assert.deepEqual(issuedInputs[before], { provider: 'voice-fixture', model: undefined, persona: undefined, voice: 'synthetic-voice', turnTaking: 'patient' });
+  assert.deepEqual(issuedInputs[before], { provider: 'voice-fixture', model: 'synthetic-voice', voice: 'synthetic-voice', turnTaking: 'patient' });
   assert.equal(response.headers['cache-control'], 'private, no-store');
   const marker = (await db.query('SELECT * FROM platform_voice_sessions WHERE id=$1', [result.sessionId])).rows[0];
   assert.equal(marker.conversation_id, id); assert.equal(marker.user_id, actor.id);
@@ -162,10 +162,10 @@ test('a foreign, missing, invalid or client-authored context cannot create usage
     // Invalid attempts still consume the real request limiter. Keep each account
     // below its four-per-hour limit so the test reaches the input/owner checks.
     if (attempts++ === 3) bob = await register();
-    const response = await request(bob, 'POST', '/voice/session', { provider: 'voice-fixture', ...body }); assert.equal(response.statusCode, expected, response.body);
+    const response = await request(bob, 'POST', '/voice/session', { ...body }); assert.equal(response.statusCode, expected, response.body);
     assert.deepEqual(await counts(bob), { leases: 0, markers: 0, usage: 0 });
   }
-  const switched = await request(alice, 'POST', '/voice/session', { provider: 'voice-fixture', conversationId: id }, bob.id); assert.equal(switched.statusCode, 409, switched.body);
+  const switched = await request(alice, 'POST', '/voice/session', { conversationId: id }, bob.id); assert.equal(switched.statusCode, 409, switched.body);
   assert.equal(issuedInputs.length, before); assert.deepEqual(await counts(bob), { leases: 0, markers: 0, usage: 0 }); assert.deepEqual(await counts(alice), { leases: 0, markers: 0, usage: 0 });
 });
 

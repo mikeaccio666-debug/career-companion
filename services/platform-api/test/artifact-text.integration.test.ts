@@ -17,7 +17,7 @@ import { ApiError } from '../src/errors.ts';
 import { ARTIFACT_TEXT_SOURCE_BYTES, parseArtifactTextInput } from '../src/artifact-text.ts';
 import { LocalBlobStorage, type BlobReadOptions, type BlobReadResult } from '../src/storage.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig(), schema = `artifact_text_${randomUUID().replaceAll('-', '')}`;
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai' }), schema = `artifact_text_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl); url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
 type Actor = { id: string; cookie: string };
@@ -169,14 +169,14 @@ test('actual Responses adapter lists a private CLI result and receives its saved
   agentSource = await saved(alice); agentMode = 'chain'; agentTurn = 0;
   const count = (await db.query('SELECT count(*) AS count FROM platform_jobs')).rows[0].count;
   const conv = await exchange('/conversations', alice, { method: 'POST', body: { mode: 'agent' } }); const conversationId = JSON.parse(conv.body).conversation.id;
-  const result = await exchange(`/conversations/${conversationId}/messages`, alice, { method: 'POST', body: { mode: 'agent', provider: 'openai', content: 'Read the fictional code I saved and discuss it; do not execute anything.' } });
+  const result = await exchange(`/conversations/${conversationId}/messages`, alice, { method: 'POST', body: { mode: 'agent', content: 'Read the fictional code I saved and discuss it; do not execute anything.' } });
   assert.equal(result.status, 200, result.body); assert.match(result.body, /event: done/); assert.match(result.body, /actual saved text/); assert.equal(agentTurn, 3); assert.equal(storage.getCalls, 0); assert.equal((await db.query('SELECT count(*) AS count FROM platform_jobs')).rows[0].count, count);
 });
 
 test('actual Agent tool returns safe owner errors as data so it can make a subsequent tool call', async () => {
   agentSource = await saved(bob); recoveredSource = await saved(alice); agentMode = 'recover'; agentTurn = 0;
   const conv = await exchange('/conversations', alice, { method: 'POST', body: { mode: 'agent' } }); const conversationId = JSON.parse(conv.body).conversation.id;
-  const result = await exchange(`/conversations/${conversationId}/messages`, alice, { method: 'POST', body: { mode: 'agent', provider: 'openai', content: 'Fictional invalid private-artifact lookup, no permission to execute.' } });
+  const result = await exchange(`/conversations/${conversationId}/messages`, alice, { method: 'POST', body: { mode: 'agent', content: 'Fictional invalid private-artifact lookup, no permission to execute.' } });
   assert.equal(result.status, 200); assert.equal(agentTurn, 4); assert.match(result.body, /NOT_FOUND/); assert.match(result.body, /INVALID_INPUT/); assert.match(result.body, /event: done/); assert.equal(result.body.includes(directory), false);
 });
 

@@ -8,7 +8,8 @@ import type { InjectOptions } from 'fastify';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import type { CreateJobInput, JobExecutionContext, PlatformProviderRuntime } from '@companion/platform-contracts';
 import { buildApp } from '../src/app.ts';
-import { tokenHash } from '../src/auth.ts';
+import { authorizeFixedSession, tokenHash } from '../src/auth.ts';
+import { CollectingTurnSink } from '../src/turn-sinks.ts';
 import { readConfig } from '../src/config.ts';
 import { Database } from '../src/database.ts';
 import { ApiError } from '../src/errors.ts';
@@ -18,7 +19,7 @@ import { mcpSchemaHash } from '../src/mcp-config.ts';
 import type { McpTransport } from '../src/mcp-transport-port.ts';
 import { createStorage } from '../src/storage.ts';
 
-const base = readConfig(), schema = `workbench_policy_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '0', PLATFORM_CHAT_PROVIDER: 'policy-fixture', PLATFORM_AGENT_PROVIDER: 'policy-fixture' }), schema = `workbench_policy_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -144,10 +145,18 @@ test('live Agent tools and the dedicated MCP task route cannot bypass shared adm
       const value = kind === 'mcp' ? mcp : await input(owner, kind);
       toolRequest = kind === 'mcp' ? { name: 'prepare_mcp_task', args: { ...value.options, goal: value.prompt } }
         : { name: 'create_job', args: { ...value } };
-      const response = await request(owner, 'POST', `/conversations/${owner.conversationId}/messages`,
-        { content: 'Synthetic Agent preparation', provider: 'policy-fixture', mode: 'agent' });
-      assert.equal(response.statusCode, 200, response.body); assert.match(response.body, /WORKBENCH_DISABLED/);
-      assert(!response.body.includes('event: approval'));
+      const blocked = await request(owner, 'POST', `/conversations/${owner.conversationId}/messages`,
+        { content: 'Synthetic Agent preparation', mode: 'agent' });
+      assert.equal(blocked.statusCode, 400, blocked.body);
+      const override = await request(owner, 'POST', `/conversations/${owner.conversationId}/messages`,
+        { content: 'Synthetic Agent preparation', provider: 'policy-fixture' });
+      assert.equal(override.statusCode, 400, override.body);
+      const sink = new CollectingTurnSink(), session = Object.freeze({ userId: owner.userId, tokenHash: tokenHash(owner.cookie.split('=')[1]) });
+      await system.conversationTurns.submit({ userId: owner.userId, conversationId: owner.conversationId,
+        data: { content: 'Synthetic Agent preparation', provider: 'policy-fixture', mode: 'agent' } }, sink,
+        { assertAccount: signal => db.transaction(client => authorizeFixedSession(client, session, signal)) });
+      assert(sink.opened); assert.match(JSON.stringify(sink.events), /WORKBENCH_DISABLED/);
+      assert(!sink.events.some(item => item.event === 'approval'));
     }
   } finally { toolRequest = undefined; }
   const response = await request(owner, 'POST', '/mcp/tasks', { ...mcp.options, goal: mcp.prompt });

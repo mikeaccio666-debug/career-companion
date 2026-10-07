@@ -5,13 +5,13 @@ export type ChatMode = Platform.ChatMode;
 export type JobKind = Platform.JobKind;
 export type User = Platform.User;
 export type Provider = Platform.ProviderStatus & { description?: string };
-export type Conversation = Platform.Conversation;
+export type Conversation = Platform.PublicConversation & Partial<Pick<Platform.Conversation, 'mode' | 'persona'>>;
 export type Upload = Platform.Attachment;
 // Optimistic messages only need display fields until the server returns persisted metadata.
-export type Message = Pick<Platform.Message, 'id' | 'role' | 'content'> & Partial<Omit<Platform.Message, 'id' | 'role' | 'content'>>;
+export type Message = Pick<Platform.PublicMessage, 'id' | 'role' | 'content'> & Partial<Omit<Platform.PublicMessage, 'id' | 'role' | 'content'>>;
 export type Artifact = Platform.Artifact;
 export type Job = Platform.Job;
 export type Memory = Platform.Memory;
 export type Approval = Platform.Approval;
-export interface PlatformState { status?: 'connected' | 'unavailable'; execution?: ExecutionAvailability; checkedAt?: string; providers: Provider[]; error?: string }
-export type VoiceSession = Platform.VoiceSessionResponse;
+export interface PlatformState { status?: 'connected' | 'unavailable'; execution?: ExecutionAvailability; checkedAt?: string; providers: Provider[]; capabilities?: Platform.PublicCapabilities; features?: Platform.PlatformFeatures; error?: string }
+export type VoiceSession = Platform.PublicVoiceSessionResponse;

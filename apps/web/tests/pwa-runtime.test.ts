@@ -112,12 +112,12 @@ function timing() { let run: (() => void) | null = null; let delay = 0; return {
 
 test('each explicit bootstrap retry rechecks actual me/options and only uses four read-only routes', async () => {
   const paths: string[] = []; let turn = 0;
-  const read = async (path: string) => { paths.push(path); if (path === '/auth/options') return options; if (path === '/auth/me') { if (!turn) throw Object.assign(new Error('Fictional anonymous.'), { status: 401 }); return { user: fixtureUser }; } return path === '/capabilities' ? { providers: [] } : { status: 'ok' }; };
+  const read = async (path: string) => { paths.push(path); if (path === '/auth/options') return options; if (path === '/auth/me') { if (!turn) throw Object.assign(new Error('Fictional anonymous.'), { status: 401 }); return { user: fixtureUser }; } return path === '/capabilities' ? { capabilities: { chat: false } } : path === '/features' ? { version: 1, workbench: false, providerDetails: false } : { status: 'ok' }; };
   const clock = timing(); const first = await readWorkspaceBootstrap(read, new AbortController().signal, parseAuthOptions, anonymous, clock);
   assert.equal(first.account, null); assert.deepEqual(first.options, options); assert.equal(clock.pending, false);
   ++turn; const second = await readWorkspaceBootstrap(read, new AbortController().signal, parseAuthOptions, anonymous, clock);
   assert.deepEqual(second.account, { user: fixtureUser }); assert.equal(clock.pending, false);
-  assert.deepEqual(paths, ['/auth/options', '/auth/me', '/ready', '/capabilities', '/auth/options', '/auth/me', '/ready', '/capabilities']);
+  assert.deepEqual(paths, ['/auth/options', '/auth/me', '/ready', '/capabilities', '/features', '/auth/options', '/auth/me', '/ready', '/capabilities', '/features']);
 });
 
 test('network failure while browser says online remains a public bootstrap failure, never an anonymous success', async () => {
@@ -133,7 +133,7 @@ test('bootstrap timeout/cancel is bounded and ignores late transport completion 
     assert.equal(clock.delay, WORKSPACE_CONNECTION_TIMEOUT_MS);
     if (mode === 'timeout') clock.fire(); else external.abort();
     await assert.rejects(operation, { name: 'AbortError' }); assert.equal(clock.pending, false);
-    assert.equal(signals.length, 4); assert.ok(signals.every((signal) => signal.aborted));
+    assert.equal(signals.length, 5); assert.ok(signals.every((signal) => signal.aborted));
     pending.resolve(options); await flush();
   }
   let calls = 0; const cancelled = new AbortController(); cancelled.abort();
