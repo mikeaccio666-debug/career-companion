@@ -8,6 +8,9 @@ const REPO_ROOT = resolve(__dirname, '../../..');
 const ROOT_BARREL = 'packages/contracts/src/index.ts';
 const WIZARD = 'packages/apply-kernel/src/rules/wizardIdentity.ts';
 const PACKAGE = 'packages/contracts/package.json';
+const HOST_RESTRICTIONS = 'packages/apply-kernel/src/gate/hostRestrictions.ts';
+const HOST_VETO = 'packages/apply-kernel/src/gate/hostVeto.ts';
+const BROWSER_POLICY = 'packages/apply-kernel/src/policy.ts';
 // Reviewed resolved edges, not source bytes. Changes require dependency-boundary review.
 const APPROVED_EDGES = JSON.parse(readFileSync(resolve(__dirname, 'field-lab-runtime-edges.json'), 'utf8'));
 const CONTRACT_EXPORTS = {
@@ -74,6 +77,33 @@ function assertStaticRuntime(sources: ReadonlyMap<string, string>): void {
   }
 }
 
+/** These two rules consume input data; browser/storage/env capabilities belong elsewhere. */
+function assertPureHostRules({ edges, sources }: Awaited<ReturnType<typeof runtimeGraph>>): void {
+  expect(sources.has(BROWSER_POLICY), 'FIELD_LAB_BROWSER_POLICY_REACHABLE').toBe(false);
+  for (const [file, approvedImports] of [
+    [HOST_RESTRICTIONS, []],
+    [HOST_VETO, [`import-statement:${HOST_RESTRICTIONS}`]],
+  ] as const) {
+    expect(edges.find(([entry]) => entry === file), `FIELD_LAB_HOST_RULE_IMPORTS:${file}`)
+      .toEqual([file, approvedImports]);
+    expect(sources.has(file), `FIELD_LAB_HOST_RULE_MISSING:${file}`).toBe(true);
+    const ast = ts.createSourceFile(file, sources.get(file)!, ts.ScriptTarget.Latest, true);
+    const forbidden: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && [
+        'browser', 'chrome', 'localStorage', 'sessionStorage', 'indexedDB', 'caches',
+        'window', 'document', 'location', 'navigator', 'self', 'globalThis', 'global',
+        'process', 'fetch', 'XMLHttpRequest', 'WebSocket',
+      ].includes(node.text)) forbidden.push(node.text);
+      if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword)
+        forbidden.push('import.meta');
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+    expect(forbidden, `FIELD_LAB_HOST_RULE_CAPABILITY:${file}`).toEqual([]);
+  }
+}
+
 function assertContractPackage(contents: string): void {
   const pkg = JSON.parse(contents);
   expect({ type: pkg.type, sideEffects: pkg.sideEffects, browser: pkg.browser, imports: pkg.imports }).toEqual({
@@ -90,6 +120,7 @@ describe('Field Lab resolved runtime boundary', () => {
     const { edges, sources } = await runtimeGraph();
     expect(sources.has(ROOT_BARREL), 'FIELD_LAB_ROOT_BARREL_REACHABLE').toBe(false);
     assertStaticRuntime(sources);
+    assertPureHostRules({ edges, sources });
     expect(edges, 'FIELD_LAB_RUNTIME_EDGE_DRIFT').toEqual(APPROVED_EDGES);
   });
 
@@ -100,6 +131,7 @@ describe('Field Lab resolved runtime boundary', () => {
     ]));
     expect(sources.has(ROOT_BARREL)).toBe(false);
     assertStaticRuntime(sources);
+    assertPureHostRules({ edges, sources });
     expect(edges).toEqual(APPROVED_EDGES);
   });
 
@@ -116,6 +148,28 @@ describe('Field Lab resolved runtime boundary', () => {
       [WIZARD, `${read(WIZARD)}\nexport * from '../../../contracts/src/deployment.ts';\n`],
     ]));
     expect(() => expect(edges).toEqual(APPROVED_EDGES)).toThrow();
+  });
+
+  it('rejects browser policy entering through the pure host rules', async () => {
+    const graph = await runtimeGraph(new Map([
+      [HOST_VETO, `${read(HOST_VETO)}\nexport * from '../policy';\n`],
+    ]));
+    expect(graph.sources.has(BROWSER_POLICY)).toBe(true);
+    expect(() => assertPureHostRules(graph)).toThrow('FIELD_LAB_BROWSER_POLICY_REACHABLE');
+    expect(() => expect(graph.edges).toEqual(APPROVED_EDGES)).toThrow();
+  });
+
+  it.each([
+    'export const probe = () => browser.storage.local.get("probe");',
+    'export const probe = () => localStorage.getItem("probe");',
+    'export const probe = () => import.meta.env.PROBE;',
+  ])('rejects ambient capability in either pure host rule: %s', async (probe) => {
+    for (const file of [HOST_RESTRICTIONS, HOST_VETO]) {
+      const graph = await runtimeGraph(new Map([[file, `${read(file)}\n${probe}\n`]]));
+      // Ambient access creates no import edge, so the source guard must catch it.
+      expect(graph.edges).toEqual(APPROVED_EDGES);
+      expect(() => assertPureHostRules(graph)).toThrow(`FIELD_LAB_HOST_RULE_CAPABILITY:${file}`);
+    }
   });
 
   it('rejects unresolved Node I/O in a browser runtime dependency', async () => {

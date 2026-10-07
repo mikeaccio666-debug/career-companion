@@ -132,6 +132,16 @@
     ]
   ],
   [
+    "packages/apply-kernel/src/gate/hostRestrictions.ts",
+    []
+  ],
+  [
+    "packages/apply-kernel/src/gate/hostVeto.ts",
+    [
+      "import-statement:packages/apply-kernel/src/gate/hostRestrictions.ts"
+    ]
+  ],
+  [
     "packages/apply-kernel/src/grant.ts",
     []
   ],
@@ -269,6 +279,7 @@
   [
     "packages/apply-kernel/src/write/setValue.ts",
     [
+      "import-statement:packages/apply-kernel/src/gate/hostVeto.ts",
       "import-statement:packages/apply-kernel/src/grant.ts",
       "import-statement:packages/apply-kernel/src/write/allowlist.ts"
     ]
