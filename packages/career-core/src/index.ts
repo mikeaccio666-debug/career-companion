@@ -10,3 +10,5 @@ export * from './companion/onboarding.ts';
 export * from './companion/mapping.ts';
 export * from './companion/questionnaire.ts';
 export * from './companion/safety-response.ts';
+export * from './companion/identity.ts';
+export * from './companion/style.ts';
