@@ -149,7 +149,7 @@ import {
 import { nextFaceRetryDelayMs } from '../lib/autofillDockDecision';
 import type { AutofillAffordance } from '../product-panel/affordance';
 import { createDockPortalIntent, type DockPortalPage } from '../lib/dockPortalIntent';
-import { createDockSignOutIntent } from '../lib/dockSignOutIntent';
+import { parseDockVaultTransitionIntent } from '../lib/accountVaultTransitionIntent';
 import { isDockSessionChanged } from '../lib/dockSessionChanged';
 import { isDockProfileChanged } from '../lib/dockProfileChanged';
 import { createDockDiagnostic, createDockErrorDiagnostic, type DockErrorCode, type DockPlainCode } from '../lib/dockDiagnostic';
@@ -784,18 +784,16 @@ export default defineContentScript({
       const response = await browser.runtime.sendMessage({ kind: 'diagnostics/recent' }).catch(() => null) as { codes?: unknown } | null;
       return Array.isArray(response?.codes) ? response.codes.filter((c): c is string => typeof c === 'string') : [];
     };
-    // 退出登录：worker 清会话后重新报到，脸自然换成「登录 ArgoLand」。
-    const signOut = (): void => {
+    // Open the real extension confirmation page from this trusted dock click.
+    const signOut = (event: MouseEvent, shadowRoot: ShadowRoot): void => {
+      if (captureTrustedShadowGesture(event, shadowRoot) === null) { dockHandle?.reportBlocked('GESTURE_UNTRUSTED'); return; }
       if (!runtimeAlive()) { extensionUpdated(); return; }
-      void sendToWorker(createDockSignOutIntent())
-        .then((reply) => {
-          const ok = (reply as { ok?: unknown } | null)?.ok === true;
-          if (!ok) { dockHandle?.toast(dockCopy(dockLocale()).toast.signOutFailed); return; }
-          // 先换脸再提示：提示要打在换过的那张脸上，否则随旧面板一起被拆掉。
-          lastHelloAt = 0;
-          return hello().then(() => { dockHandle?.toast(dockCopy(dockLocale()).toast.signedOut); });
-        })
-        .catch(() => { dockHandle?.toast(dockCopy(dockLocale()).toast.signOutFailed); });
+      const intent = withDocumentPath(parseDockVaultTransitionIntent({ kind: 'dock/vault-transition', version: 1,
+        origin: location.origin, pathname: location.pathname, payload: { step: 'PREPARE_LOGOUT' } }), document);
+      if (intent === null) return;
+      void sendToWorker(intent).then((reply) => {
+        if ((reply as { ok?: unknown } | null)?.ok !== true) dockHandle?.toast(dockCopy(dockLocale()).toast.signOutFailed);
+      }).catch(() => { dockHandle?.toast(dockCopy(dockLocale()).toast.signOutFailed); });
     };
     const openPortal = (page: DockPortalPage): void => {
       if (!runtimeAlive()) { extensionUpdated(); return; }
@@ -2181,6 +2179,8 @@ export default defineContentScript({
       });
     };
     let accountNow: { name: string; email: string } | null = null;
+    let helloGeneration = 0;
+    let helloRequest = 0;
     let profileSummaryNow: string | null = null;
     let resumeSummaryNow: string | null = null;
     // 代填授权的一键同意（2026-09-28）：没同意当前版本、也没撤回过的人，浮层里一张卡请他同意。要不要请由 worker 判、
@@ -2197,8 +2197,10 @@ export default defineContentScript({
     });
     /** 用预取的那份档案与简历问询画头像和「你的资料」；取不到就维持设计里的通用副标题。 */
     const refreshAccount = async (): Promise<void> => {
+      const generation = helloGeneration;
       warmProfile();
       const reply = await profileWarm?.reply.catch(() => null);
+      if (generation !== helloGeneration) return;
       // 等的时候换了人（2026-10-04）：这一份是上一个人的，不画。
       if (reply?.kind === 'PROFILE' && reply.session !== undefined && reply.session !== sessionNow) return;
       if (reply?.kind === 'PROFILE') {
@@ -2210,6 +2212,7 @@ export default defineContentScript({
         profileSummaryNow = [name, email].filter((part) => part !== '').join(' · ') || null;
       }
       const seam = await resumeWarm?.seam.catch(() => undefined);
+      if (generation !== helloGeneration) return;
       if (seam !== undefined) resumeSummaryNow = dockCopy(dockLocale()).resumeDefault(seam.fileName);
       dockHandle?.refreshAccount();
     };
@@ -2232,6 +2235,7 @@ export default defineContentScript({
     };
     /** 上一个人的东西：预取的档案与简历问询、头像名字与「你的资料」、AI 开关、同意卡、编辑器里那一份（连同没存的修改）。 */
     const forgetUser = (): void => {
+      helloGeneration += 1;
       profileWarm = null;
       resumeWarm = null;
       accountNow = null;
@@ -2521,8 +2525,8 @@ export default defineContentScript({
         // 正在替他翻页的那一下若还没按就不按，翻过去了也不接着填。
         ...(gestureFace ? { onStop: () => { fillToReviewNow?.end(); gestureStop?.abort(); } } : {}),
         // 浮层被拆了（换脸、让给助手、让给顶层帧）：它驱动的那一轮连填一并作废（2026-09-28），账号墙那一套一并收掉。
-        onDismissed: () => { fillToReviewNow?.end(); account?.dispose(); codePage?.dispose(); submitCodeHook.read = () => null; },
-        ...(account === null ? {} : { accountAccess: account.handlers }),
+        onDismissed: () => { fillToReviewNow?.end(); gestureStop?.abort(); account?.dispose(); codePage?.dispose(); submitCodeHook.read = () => null; },
+        ...(account === null ? {} : { accountAccess: account.handlers, vaultManagement: account.vaultManagement }),
         ...(codePage === null ? {} : { verificationCode: codePage.handlers }),
         // AI 代答的开关（账户菜单里那一项）：手势路那几张脸上都摆——绑着任务的页（READY）也走手势路，
         // 同一轮里照样会用 AI 代答（2026-09-24），开关得让他在这一页上也够得着。
@@ -2649,6 +2653,15 @@ export default defineContentScript({
     // 登录态变了（worker 广播）：重新报到换脸。只认 worker 发来的、不带值的那一条。
     browser.runtime.onMessage.addListener((raw, sender) => {
       if (!isDockSessionChanged(raw) || sender.id !== browser.runtime.id || sender.tab) return;
+      if (assistant) return;
+      // Retire actual writers and plaintext immediately, before awaiting hello.
+      gestureRunSerial += 1;
+      gestureStop?.abort();
+      wizardAdvance.disarm(); submitter.disarm();
+      forgetUser();
+      // dismiss synchronously ends the dock's chain and disposes its credential/code pages.
+      // Keep the gesture-only driver dependency inside showFace for Assistant tree shaking.
+      dockHandle?.dismiss(); dockHandle = null;
       lastHelloAt = 0;
       void hello();
     });
@@ -2723,6 +2736,9 @@ export default defineContentScript({
       const now = Date.now();
       if (now - lastHelloAt < 2000) return Promise.resolve();
       lastHelloAt = now;
+      const generation = helloGeneration;
+      const request = ++helloRequest;
+      let acceptedGeneration = generation;
       if (!evidenceJustRead) pageEvidence?.refresh();
       return Promise.all([
         browser.runtime.sendMessage({
@@ -2735,6 +2751,7 @@ export default defineContentScript({
           .catch(() => ({} as Record<string, unknown>)),
       ])
         .then(([reply, stored]) => {
+          if (generation !== helloGeneration || request !== helloRequest) return;
           answered = true;
           // 他在这台电脑上对这一版代填授权说过「暂不」（2026-09-28）：这一版不再请他。
           signingReconsent.restoreDeclined((stored as Record<string, unknown> | undefined)?.[SIGNING_RECONSENT_DECLINED_KEY]);
@@ -2760,12 +2777,16 @@ export default defineContentScript({
           }
           // 此刻登录的是谁（2026-10-04）：换了人，先把上一个人的东西全丢掉，再换脸（脸没变也照样按新的人重读）。
           const switched = observeSession((reply as { session?: unknown } | null | undefined)?.session);
+          // This accepted reply may itself retire the previous owner. Its own
+          // rendering failure still needs a diagnostic; older transport errors do not.
+          acceptedGeneration = helloGeneration;
           showFace(reply);
           if (switched) afterSessionChange();
           // 重问按后台的回答判：HIDDEN（这一页什么都不挂）是结论，不重问；只有没答上来才是 null（2026-10-03）。
           scheduleFaceRetry(parseDockFaceReply(reply));
         })
         .catch((error: unknown) => {
+          if (acceptedGeneration !== helloGeneration || request !== helloRequest) return;
           // SW 未醒/通道抖动：报到失败只影响 tab 定位，不留任何状态。
           // 但这一页上还没有脸，所以照样再问一次——一次抖动不该让插件永久消失。
           // 答上来之后才抛的（挂浮层那一段的错）记一个码，只有类名。

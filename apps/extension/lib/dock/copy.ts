@@ -488,6 +488,12 @@ const zh = {
    * 同意的来源只说「资料页的代填授权」、详见隐私政策，不在这里复述条款。
    */
   siteAccount: {
+    vaultList: {
+      loading: '正在读取保存的网站…', empty: '还没有关联到网站的账号。', unavailable: '暂时读不到保存的网站，请稍后再试。',
+      keyMissing: '本机密钥丢失，保存的密码无法恢复，请到网站上重设。', unreadable: '保存内容读不出来，请到网站上重设密码。',
+      pending: '注册还没完成', registered: '已注册', saved: '已保存密码', needsPassword: '需要你保存密码',
+      manage: '打开插件设置 / 导出', view: '在插件设置里查看', note: '换电脑或清除浏览器数据前先导出。密码只在插件自己的设置页查看。',
+    },
     /** 浮层上怎么称呼这一家：「NVIDIA 的 Workday」；公司名读不出就只说厂商。 */
     site: (company: string, vendor: string) => (company === '' ? vendor : `${company} 的 ${vendor}`),
     register: '注册并自动填写',
@@ -503,9 +509,9 @@ const zh = {
     },
     done: {
       REGISTERED: (site: string, email: string) => `已替你在${site}注册账号（${email}）`,
-      generated: '已为你生成一条密码，只存在这台电脑上；账户菜单「招聘网站账号」里能看',
+      generated: '已为这家网站生成独立密码，只存在这台电脑上；插件设置「招聘网站账号」里能看',
       SIGNED_IN: (site: string, email: string) => `已替你登录${site}（${email}）`,
-      ACCOUNT_EXISTS: (site: string) => `${site}已经有你的账号，改用你保存的密码登录`,
+      ACCOUNT_EXISTS: (site: string) => `${site}已经有你的账号，请输入这个网站的密码继续`,
       TERMS_ACCEPTED: (site: string) => `已替你同意${site}注册所需的网站条款`,
     },
     continuing: '已登录，正在填写申请表…',
@@ -522,7 +528,7 @@ const zh = {
         title: '去邮箱点一下验证链接',
         /** `from`：规则里写的发件地址（2026-10-04）；没写就不提。 */
         sub: (site: string, email: string, from: string | null) =>
-          `${site}给 ${email} 发了一封验证邮件${from === null ? '' : `（发件地址一般是 ${from}）`}。点一下里面的链接，回到这一页，我接着填。没看到就看一眼垃圾邮件。`,
+          `${site}给 ${email} 发了一封验证邮件${from === null ? '' : `（发件地址一般是 ${from}）`}。点一下里面的链接，再回到这一页。若仍需登录，我们会请你输入这个网站的密码。没看到就看一眼垃圾邮件。`,
         primary: '我已验证，继续',
       },
       CONSENT: {
@@ -535,9 +541,9 @@ const zh = {
         sub: '这个版本暂时不能替你注册、登录。在网站上登录（或注册）之后，点「自动填写」接着填。',
       },
       NO_EMAIL: {
-        title: '还没有注册邮箱',
-        sub: '在账户菜单「招聘网站账号」里填上注册邮箱（或先在资料里填邮箱），再点一次。',
-        primary: '填写注册邮箱',
+        title: '暂时无法确认登录邮箱',
+        sub: '新注册请先核对资料里的邮箱；已有网站账号可以先在网站上手动登录，再点「自动填写」。',
+        primary: '打开我的资料',
       },
       UNAVAILABLE: { title: '暂时没法替你登录', sub: '稍后再试；或者在网站上自己登录之后，点「自动填写」接着填。' },
       CAPTCHA: { title: '网站要你先完成人机验证', sub: '在网站上完成验证，我们接着往下填。' },
@@ -553,31 +559,7 @@ const zh = {
     retry: '再试一次',
     /** 人机验证、验证码那张卡上：这一轮还在等他。 */
     waiting: '等你在网站上完成',
-    menu: {
-      item: '招聘网站账号',
-      email: '注册邮箱',
-      emailDefault: '资料里的邮箱',
-      emailMissing: '还没有：先在资料里填邮箱',
-      password: '密码',
-      passwordMissing: '还没有：第一次替你注册时自动生成',
-      show: '显示',
-      hide: '隐藏',
-      copy: '复制',
-      copied: '已复制',
-      copyFailed: '没能复制，点「显示」之后手动选中复制。',
-      change: '修改',
-      save: '保存',
-      cancel: '取消',
-      useDefault: '用资料里的邮箱',
-      rules: '至少 12 位，要有大写、小写、数字和特殊字符。',
-      weak: '不合要求：至少 12 位，要有大写、小写、数字和特殊字符。',
-      invalidEmail: '邮箱格式不对。',
-      saveFailed: '没能保存，请稍后再试。',
-      saved: '已保存',
-      unavailable: '暂时读不到，请稍后再试。',
-      note: '需要账号的招聘网站（如 Workday、iCIMS）共用这一条密码。密码只存在这台电脑上，不会发到 ArgoLand 的服务器；退出 ArgoLand 时一并删除。',
-      sites: (count: number) => `另有 ${count} 个网站用了它们自己的密码。`,
-    },
+    menu: { item: '招聘网站账号' },
   },
 
   /**
@@ -1384,6 +1366,12 @@ const en: typeof zh = {
   },
 
   siteAccount: {
+    vaultList: {
+      loading: 'Loading saved sites…', empty: 'No accounts linked to a site yet.', unavailable: 'Saved sites are unavailable. Please try again later.',
+      keyMissing: 'The local key is missing. These passwords cannot be recovered; reset them on each site.', unreadable: 'Saved data could not be read. Reset the passwords on each site.',
+      pending: 'Registration unfinished', registered: 'Registered', saved: 'Password saved', needsPassword: 'Password needed',
+      manage: 'Open extension settings / export', view: 'View in extension settings', note: 'Export before switching computers or clearing browser data. View passwords only in extension settings.',
+    },
     site: (company, vendor) => (company === '' ? vendor : `${company}’s ${vendor}`),
     register: 'Sign up & autofill',
     signIn: 'Sign in & autofill',
@@ -1397,9 +1385,9 @@ const en: typeof zh = {
     },
     done: {
       REGISTERED: (site, email) => `Created your account on ${site} (${email})`,
-      generated: 'Made a password for you. It stays on this computer; see it under “Job site accounts” in the account menu',
+      generated: 'Made a separate password for this site. It stays on this computer; view it under “Job site accounts” in extension settings',
       SIGNED_IN: (site, email) => `Signed you in to ${site} (${email})`,
-      ACCOUNT_EXISTS: (site) => `You already have an account on ${site}, so we signed in with your saved password`,
+      ACCOUNT_EXISTS: (site) => `You already have an account on ${site}. Enter this site’s password to continue`,
       TERMS_ACCEPTED: (site) => `Accepted the terms ${site} requires for signing up`,
     },
     continuing: 'Signed in. Filling in the application…',
@@ -1415,7 +1403,7 @@ const en: typeof zh = {
       VERIFY_EMAIL: {
         title: 'Click the link in your email',
         sub: (site, email, from) =>
-          `${site} sent a verification email to ${email}${from === null ? '' : ` (usually from ${from})`}. Click the link in it, come back to this page, and we’ll keep going. Not there? Check spam.`,
+          `${site} sent a verification email to ${email}${from === null ? '' : ` (usually from ${from})`}. Click the link and return to this page. If you still need to sign in, we’ll ask for this site’s password. Not there? Check spam.`,
         primary: 'I’ve verified, continue',
       },
       CONSENT: {
@@ -1428,9 +1416,9 @@ const en: typeof zh = {
         sub: 'This version can’t sign up or sign in for you yet. Sign in (or sign up) on the site, then press “Autofill” to keep filling.',
       },
       NO_EMAIL: {
-        title: 'No sign-up email yet',
-        sub: 'Add a sign-up email under “Job site accounts” in the account menu (or add an email to your profile), then try again.',
-        primary: 'Add sign-up email',
+        title: 'Can’t confirm the sign-in email',
+        sub: 'For a new account, check the email in your profile. If you already have an account on this site, sign in there yourself, then press “Autofill”.',
+        primary: 'Open my profile',
       },
       UNAVAILABLE: { title: 'Can’t sign you in right now', sub: 'Try again later, or sign in on the site yourself and press “Autofill” to keep filling.' },
       CAPTCHA: { title: 'The site wants you to prove you’re human', sub: 'Finish the check on the site and we’ll keep filling.' },
@@ -1445,31 +1433,7 @@ const en: typeof zh = {
     },
     retry: 'Try again',
     waiting: 'Waiting for you on the site',
-    menu: {
-      item: 'Job site accounts',
-      email: 'Sign-up email',
-      emailDefault: 'Email from your profile',
-      emailMissing: 'None yet: add an email to your profile',
-      password: 'Password',
-      passwordMissing: 'None yet: we’ll make one the first time we sign you up',
-      show: 'Show',
-      hide: 'Hide',
-      copy: 'Copy',
-      copied: 'Copied',
-      copyFailed: 'Couldn’t copy. Press “Show” and copy it by hand.',
-      change: 'Change',
-      save: 'Save',
-      cancel: 'Cancel',
-      useDefault: 'Use my profile email',
-      rules: 'At least 12 characters, with uppercase, lowercase, a number and a special character.',
-      weak: 'Not strong enough: at least 12 characters, with uppercase, lowercase, a number and a special character.',
-      invalidEmail: 'That email doesn’t look right.',
-      saveFailed: 'Couldn’t save. Please try again later.',
-      saved: 'Saved',
-      unavailable: 'Can’t load this right now. Please try again later.',
-      note: 'Job sites that need an account (like Workday and iCIMS) share this one password. It stays on this computer and is never sent to ArgoLand’s servers; signing out of ArgoLand deletes it.',
-      sites: (count) => `${count} more ${count === 1 ? 'site uses its' : 'sites use their'} own password.`,
-    },
+    menu: { item: 'Job site accounts' },
   },
 
   signed: {
