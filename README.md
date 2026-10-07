@@ -4,7 +4,7 @@
 
 首版是手机优先的 Web，手机端的 Discord 私信按渠道分期接入；不用 Discord 也必须能完整使用。产品决定以 [docs/product/ 产品规格入口](docs/product/README.md) 为准，定位、分期、渠道与实施分别见 [01](docs/product/01-vision-and-users.md)、[07](docs/product/07-first-cohort-mvp.md)、[10](docs/product/10-channels-discord-and-mobile.md) 和 [09](docs/product/09-implementation-roadmap.md)。产品不做个人签证或工作资格判断，相关问题交给学校 DSO 或雇主核实。
 
-目前仍在把现有底座收拢为学生产品。主理人、专家协作、共享记忆和 Discord 尚未完整接入；下面记录已实现的能力与验证限制，不表示第 0 步或学生上线已完成。
+目前仍在把现有底座收拢为学生产品。网页已接入 O0 邀请注册与当前协议确认，完成后停在 `/welcome`；初见、第一封信与学生导航尚未开放。主理人、专家协作、共享记忆和 Discord 尚未完整接入；下面记录保留底座的能力与历史验证范围，不表示当前网页开放了这些工具、第 0 步或学生上线已完成。
 
 ## 底座能力（内部）
 
@@ -54,9 +54,13 @@ pnpm infra:up
 pnpm dev:platform
 ```
 
-打开 [本地工作台](http://localhost:4321/)。首次创建本地账号；会话、明确保存的记忆、审批和任务属于该账号。API 监听 localhost4320，独立 worker 从队列取任务，PostgreSQL 和 Redis 分别监听 localhost5442、6388。停止开发进程用 Ctrl C；`pnpm infra:stop` 停止本项目容器并保留数据卷。
+打开 [本地账号入口](http://localhost:4321/)。API 监听 localhost4320，独立 worker 从队列取任务，PostgreSQL 和 Redis 分别监听 localhost5442、6388。停止开发进程用 Ctrl C；`pnpm infra:stop` 停止本项目容器并保留数据卷。
 
-新的浏览器、CLI、工作流、图片、视频及 MCP 工作台任务默认关闭，创建、重试和首次批准返回 `403 WORKBENCH_DISABLED`。已有任务的读取、取消、拒绝审批及已接受任务的执行和恢复继续使用原有授权；普通聊天、保存资料及独立语音接口保留。内部开发需要这些底座任务时，在忽略的服务端配置中显式设置 `PLATFORM_ENABLE_WORKBENCH=1` 并重启。该开关不授予员工身份、工具授权或商业调用权限；真实员工授权尚未实现，production 会拒绝开启。学生界面的全面收拢与服务端模型选择仍待后续 PR。
+当前网页实现 O0 注册与协议确认：一次性邮箱绑定邀请码、不预勾的协议确认，以及登录前可读的 `/terms` 和 `/privacy`。未配置正式协议正文，或正文与数据库当前政策不匹配时，显示“尚未开放”，不能注册或调用模型。协议须由负责的法务与产品人员提供，通过服务端文件和数据库政策显式配置；迁移和启动不会生成协议、邀请码或用户同意。邀请码默认必需；开发环境可显式设置 `PLATFORM_REQUIRE_INVITE=0`，生产拒绝关闭。详细接口和配置见 [Platform API](services/platform-api/README.md#student-registration-and-model-consent)。
+
+所有网页登录账户目前在邮箱验证、当前协议确认后停留于 `/welcome`，如实说明初见尚未开放；不会从旧账号记录推断主理人初见已经完成。O1 之后的初见、第一封信和学生导航仍需后续实现，员工工作台的网页身份入口也尚未接通。历史工具组件保留在底座中。
+
+新的浏览器、CLI、工作流、图片、视频及 MCP 工作台任务默认关闭，创建、重试和首次批准返回 `403 WORKBENCH_DISABLED`。已有任务的读取、取消、拒绝审批及已接受任务的恢复继续使用原有授权。保留的聊天、语音和后台模型请求还必须通过当前协议同意检查；任务准备或旧审批不能代替同意。内部开发底座任务可在忽略的服务端配置中显式设置 `PLATFORM_ENABLE_WORKBENCH=1` 并重启，但该开关不授予员工身份、网页工作台访问、工具授权或商业调用权限。员工组织元数据与角色读取已实现，员工工作台权限尚未接入，production 仍拒绝开启工作台。模型与供应商由服务端路由选择。
 
 模型配置只放在后端。首次配置且 `.env.platform` 尚不存在时，将根目录 `.env.example` 复制为忽略的 `.env.platform`；已有该文件时只补充需要的配置，保留本地模型设置。填写自己的供应商配置后重启。商业请求还受 `PLATFORM_ALLOW_PROVIDER_CALLS` 控制，默认关闭。[ChatGPT 订阅与开发者 API 分别计费](https://help.openai.com/en/articles/9039756-managing-billing-settings-on-chatgpt-web-and-platform)，接入前确认对应账户有模型权限和预算；不要在聊天、浏览器存储或源码中放密钥。
 

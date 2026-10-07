@@ -1,3 +1,5 @@
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -14,10 +16,10 @@ import { ApiError } from '../src/errors.ts';
 import { JobService, TaskQueue, connectionFromUrl, createWorker, jobDefinitionHash, processJob, recoverInterrupted } from '../src/jobs.ts';
 import { ProducerQueue, QUEUE_DISPATCH_TIMEOUT_MS } from '../src/queue-connection.ts';
 
-const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }),schema=`queue_recovery_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl);
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}),schema=`queue_recovery_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl);
 const url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string;
-before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'queue-recovery-fixtures-'));});
+before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'queue-recovery-fixtures-'));});
 after(async()=>{await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 const delay=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 async function eventually(check:()=>Promise<boolean>|boolean,message:string,ms=5_000){const until=Date.now()+ms;while(!await check()){if(Date.now()>until)assert.fail(message);await delay(25);}}
@@ -31,10 +33,10 @@ function fixture(redisUrl=base.redisUrl){
     async executeJob(input,context){calls.push({input,context});return execute?execute(input,context):{text:'Fictional queue result; no model was called.',artifacts:[]};},
     createVoiceSession:async()=>{throw new Error('unused');},transcribe:async()=>({text:''}),speech:async()=>{throw new Error('unused');},
   };
-  const jobs=new JobService(db,{...base,databaseUrl:url.toString(),redisUrl,storageDir:directory,queueName},runtime,new LocalBlobStorage(directory));
+  const jobs=new JobService(db,{...base,databaseUrl:url.toString(),redisUrl,storageDir:directory,queueName},runtime,new LocalBlobStorage(directory),undefined,undefined,FICTIONAL_LEGAL);
   const queue=new TaskQueue(jobs),control=new ProducerQueue(queueName,base.redisUrl);const workers:Worker[]=[];
   return {jobs,queue,control,calls,queueName,setExecute(value:typeof execute){execute=value;},
-    async user(){const id=randomUUID();users.push(id);await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)',[id,`${id}@example.invalid`,'Fictional queue owner','not-a-real-password-hash']);return id;},
+    async user(){const id=randomUUID();users.push(id);await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)',[id,`${id}@example.invalid`,'Fictional queue owner','not-a-real-password-hash']); await seedFictionalConsent(db,id);return id;},
     async create(kind:CreateJobInput['kind']='image',provider='fixture'){const uid=await this.user(),result=await jobs.create(uid,{kind,provider,prompt:'Fictional execution input',...(kind==='workflow'?{options:{steps:[{kind:'chat',provider:'fixture',prompt:'Fictional step'}]}}:{})});if(result.approval)await jobs.decide(uid,result.approval.id,'approved');return {uid,...result};},
     worker(){const worker=createWorker(jobs);worker.on('error',()=>{});workers.push(worker);return worker;},
     track(worker:Worker){worker.on('error',()=>{});workers.push(worker);return worker;},

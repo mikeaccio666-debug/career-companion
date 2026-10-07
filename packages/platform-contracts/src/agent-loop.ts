@@ -1,4 +1,4 @@
-import type { ChatInput, ModelCallEvent, ProviderChatMessage, ToolDefinition } from './index.ts';
+import type { ChatInput, ModelCallEvent, ProviderChatMessage, ToolDefinition, ProviderRequestAdmission } from './index.ts';
 
 export const EXPERT_KEYS = Object.freeze(['planner', 'guide', 'coach', 'interviewer', 'networker', 'applier'] as const);
 export type ExpertKey = typeof EXPERT_KEYS[number];
@@ -29,6 +29,7 @@ export interface ModelStepResult {
   continuation?: ModelStepContinuation;
 }
 export interface ModelStepContext {
+  requestAdmission?: ProviderRequestAdmission;
   tools: ToolDefinition[];
   /** Stable full catalogue plus a per-step permission mask. Compatible adapters send only this subset. */
   allowedToolNames?: string[];
@@ -60,6 +61,7 @@ export interface AgentToolExecution {
 }
 /** All callbacks are server-owned. Tools and model binding never come from a student request. */
 export interface AgentLoopContext {
+  requestAdmission?: ProviderRequestAdmission;
   turnId: string;
   purpose: string;
   limits: AgentLoopLimits;

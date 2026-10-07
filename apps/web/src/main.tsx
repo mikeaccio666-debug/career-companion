@@ -5,6 +5,7 @@ import { PwaShell } from './PwaStatus';
 import { pwaRuntime } from './pwa-runtime';
 import { startSessionNotifications } from './session-events';
 import './styles.css';
+import './student-entry.css';
 const stopSessionNotifications = startSessionNotifications();
 pwaRuntime.start({
   production: import.meta.env.PROD,

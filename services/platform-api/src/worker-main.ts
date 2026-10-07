@@ -1,3 +1,4 @@
+import { loadLegalBundle } from './legal-documents.ts';
 import { createProviderRuntime } from '@companion/ai-core';
 import { Database } from './database.ts';
 import { readConfig } from './config.ts';
@@ -6,7 +7,7 @@ import { createWorker, JobService, recoverInterrupted } from './jobs.ts';
 import { startAccountEmailWorker } from './account-mail.ts';
 import { startWorkerHeartbeat } from './worker-heartbeat.ts';
 const config=readConfig(),db=new Database(config.databaseUrl,{max:config.databasePoolMax,connectionTimeoutMillis:config.databaseConnectTimeoutMs});
-const jobs=new JobService(db,config,createProviderRuntime(),createStorage(config));
+const jobs=new JobService(db,config,createProviderRuntime(),createStorage(config),undefined,undefined,await loadLegalBundle(config.legalBundlePath));
 await db.query('SELECT 1');await recoverInterrupted(jobs);
 const worker=createWorker(jobs);
 const accountEmailWorker=startAccountEmailWorker(db,config.accountEmail);

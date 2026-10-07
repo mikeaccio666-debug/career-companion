@@ -128,7 +128,7 @@ export async function generateFal(http:HttpClient,env:NodeJS.ProcessEnv,input:Cr
       return {artifacts,providerTaskId:encodeFal(task)};
     }
     if(!['IN_QUEUE','IN_PROGRESS'].includes(status.status))throw new ProviderError('INVALID_PROVIDER_RESPONSE','The media provider returned an unknown task status.');await ctx.onProgress?.(status.status==='IN_QUEUE'?10:Math.min(90,25+attempt));await waitPoll(polling.interval,ctx.signal);
-  }}catch(error){if(ctx.signal?.aborted)await http.json(task.cancel,{method:'PUT',headers,signal:AbortSignal.timeout(5000)}).catch(()=>{});throw error;}
+  }}catch(error){if(ctx.signal?.aborted)await http.cancelFal(task.id,task.cancel,headers).catch(()=>{});throw error;}
   throw new ProviderError('PROVIDER_TASK_PENDING','The provider task is still running. Retry this task to resume checking the same provider task.',504);
 }
 export async function generateComfyUI(http:HttpClient,env:NodeJS.ProcessEnv,input:CreateJobInput,ctx:JobExecutionContext):Promise<JobExecutionResult>{

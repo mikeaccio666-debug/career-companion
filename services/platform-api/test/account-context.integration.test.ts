@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER, PLATFORM_ACCOUNT_QUERY, type PlatformProviderRuntime } from '@companion/platform-contracts';
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
@@ -16,7 +17,7 @@ import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 // Node explicitly replays cookies; this does not reproduce a browser's cookie jar.
 const prefix = '/api/platform', origin = 'http://localhost:4321';
 const password = 'Fictional-account-context-password-2026';
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'account-context-fixture', PLATFORM_AGENT_PROVIDER: 'account-context-fixture', PLATFORM_REALTIME_PROVIDER: 'account-context-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'account-context-fixture', PLATFORM_SPEECH_PROVIDER: 'account-context-fixture' }), schema = `account_context_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'account-context-fixture', PLATFORM_AGENT_PROVIDER: 'account-context-fixture', PLATFORM_REALTIME_PROVIDER: 'account-context-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'account-context-fixture', PLATFORM_SPEECH_PROVIDER: 'account-context-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `account_context_${randomUUID().replaceAll('-', '')}`;
 const databaseUrl = new URL(base.databaseUrl);
 assert(['127.0.0.1', 'localhost', '[::1]'].includes(databaseUrl.hostname), 'This fixture must use a loopback PostgreSQL instance.');
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
@@ -91,7 +92,7 @@ function multipart(provider = false) {
 }
 async function register(name: string): Promise<Actor> {
   const email = `context-${randomUUID()}@example.invalid`;
-  const response = await exchange('/auth/register', { method: 'POST', payload: { name, email, password } });
+  const response = await exchange('/auth/register', { method: 'POST', payload: await fictionalRegistration(db,{ name, email, password }) });
   assert.equal(response.status, 201, response.bytes.toString());
   assert.match(response.headers['set-cookie']![0]!, /Path=\//); assert.match(response.headers['set-cookie']![0]!, /HttpOnly/);
   return { id: json(response).user.id, email, cookie: response.headers['set-cookie']![0]!.split(';')[0]! };
@@ -115,9 +116,9 @@ async function state() {
 }
 function sideEffects() { return { ...calls, puts: storage.puts, stats: storage.stats, opens: storage.opens }; }
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); createdSchema = true; await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); createdSchema = true; await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-account-context-')); storage = new TrackingStorage(directory);
-  system = await buildApp({ db, storage, runtime, enableQueue: false,
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage, runtime, enableQueue: false,
     config: { ...base, databaseUrl: databaseUrl.toString(), storageDir: directory, s3: undefined, webStaticDir: undefined,
       accountEmail: undefined, requireVerifiedEmail: false, allowedOrigins: new Set([origin]) } });
   await system.app.listen({ host: '127.0.0.1', port: 0 }); port = (system.app.server.address() as AddressInfo).port;

@@ -1,3 +1,4 @@
+import { requireModelConsent } from './model-routing.ts';
 import { randomUUID } from 'node:crypto';
 import type { ChatInput, ChatMode, Message, PlatformProviderRuntime, ToolDefinition } from '@companion/platform-contracts';
 import type { Database } from './database.ts';
@@ -48,7 +49,7 @@ export interface ConversationTurnRequest {
   suppressSavedPersona?: boolean;
 }
 /** The trusted channel supplies its captured identity check; this service does not authenticate. */
-export interface ConversationTurnAccess { assertAccount(signal: AbortSignal): Promise<void>; }
+export interface ConversationTurnAccess { assertAccount(signal: AbortSignal): Promise<void>; requestAdmission?: import('@companion/platform-contracts').ProviderRequestAdmission; }
 export interface ConversationTurnServices {
   db: Database;
   runtime: PlatformProviderRuntime;
@@ -62,7 +63,7 @@ export interface ConversationTurnServices {
 
 /** PR1 extraction: one existing assistant response, with unchanged validation and execution order. */
 export class ConversationTurns {
-  constructor(private readonly services: ConversationTurnServices) {}
+  constructor(private readonly services: ConversationTurnServices) { this.services={...services,runtime:requireModelConsent(services.runtime)}; }
   async submit(request: ConversationTurnRequest, sink: TurnSink, access: ConversationTurnAccess): Promise<void> {
     const {conversationId:id,userId:uid,data}=request;
     const {db,runtime,jobs,knowledge,audioTranscriptions,goalPlans,goalPlanProposals,goalPlanReaders}=this.services;
@@ -127,7 +128,7 @@ export class ConversationTurns {
       const analysisAllowed=new Set(['get_execution_capabilities','get_artifact_reference','read_artifact_text','get_browser_observation','list_jobs','read_saved_memories','search_knowledge','read_knowledge_passage','list_mcp_tools','read_mcp_result']);
       const availableTools=conversationTools(safeTools,jobs.config.workbenchEnabled);
       const analysisTools=availableTools.filter(tool=>analysisAllowed.has(tool.name));
-      for await(const event of runtime.streamChat(input,{signal:abort.signal,tools:requestedMode==='agent'?(planAnalysis?analysisTools:availableTools):undefined,
+      for await(const event of runtime.streamChat(input,{signal:abort.signal,requestAdmission:access.requestAdmission,tools:requestedMode==='agent'?(planAnalysis?analysisTools:availableTools):undefined,
         onModelCall:async event=>{if(hasAudioContext&&event.type==='started'){await access.assertAccount(abort.signal);await db.transaction(client=>authorizeAssistantTurn(client,uid,{conversationId:id,messageId:assistantId},abort.signal));}await recordCall(event);if(event.type==='started')hasCallAccounting=true;},
         executeTool:async(name:string,args:Record<string,unknown>)=>{
           assertConversationToolAdmission(name,jobs.config.workbenchEnabled);

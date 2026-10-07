@@ -121,7 +121,7 @@ export async function* runAgentLoop(adapter: ProviderAdapter, initial: ChatInput
       try {
         stream = adapter.stream(input, { tools: catalogue, allowedToolNames: tools.map(tool => tool.name), toolChoice: forceNone ? 'none' : 'auto', limits: { maxOutputTokens: limits.maxOutputTokens }, callIndex: ++callIndex, purpose: ctx.purpose,
           timeoutMs, firstTokenTimeoutMs: ctx.firstTokenTimeoutMs === undefined ? undefined : Math.min(ctx.firstTokenTimeoutMs, timeoutMs), reasoningEffort: ctx.reasoningEffort,
-          signal: attemptSignal, onModelCall: ctx.onModelCall, continuation, invocation, toolResults });
+          signal: attemptSignal, requestAdmission: ctx.requestAdmission, onModelCall: ctx.onModelCall, continuation, invocation, toolResults });
         while (true) {
           const next = await raceSignal(stream.next(), attemptSignal); if (next.done) { out = next.value; break; }
           await active(); const event = next.value;

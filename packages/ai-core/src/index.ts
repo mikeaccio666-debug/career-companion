@@ -75,20 +75,20 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
       if(input.kind==='image'||input.kind==='video')validateMediaJobInput(input);
       if(input.provider==='browser'&&input.kind==='browser')return executeBrowser(input,context,env);
       if(input.provider==='cli'&&input.kind==='cli')return executeCli(input,context,env);
-      if(input.provider==='openai'&&input.kind==='image')return generateOpenAIImage(http,env,input,context);
+      if(input.provider==='openai'&&input.kind==='image')return generateOpenAIImage(http.withAdmission(context.requestAdmission),env,input,context);
       if(input.kind==='speech'){
-        return {artifacts:[await runtime.speech({provider:input.provider,text:input.prompt,model:input.model,...speechJobOptions(input.options)},{signal:context.signal})]};
+        return {artifacts:[await runtime.speech({provider:input.provider,text:input.prompt,model:input.model,...speechJobOptions(input.options)},{signal:context.signal,requestAdmission:context.requestAdmission})]};
       }
-      if(input.provider==='ark'&&input.kind==='video')return generateArkVideo(http,env,input,context);
-      if(input.provider==='fal'&&['image','video'].includes(input.kind))return generateFal(http,env,input,context);
-      if(input.provider==='comfyui')return generateComfyUI(http,env,input,context);
+      if(input.provider==='ark'&&input.kind==='video')return generateArkVideo(http.withAdmission(context.requestAdmission),env,input,context);
+      if(input.provider==='fal'&&['image','video'].includes(input.kind))return generateFal(http.withAdmission(context.requestAdmission),env,input,context);
+      if(input.provider==='comfyui')return generateComfyUI(http.withAdmission(context.requestAdmission),env,input,context);
       throw new ProviderError('PROVIDER_UNSUPPORTED','No executor is available for this task.',400);
     },
-    async createVoiceSession(input:VoiceSessionInput={},context={}){requireVoiceProvider(env,input.provider,'realtime');return realtimeOpenAI(http,env,input,context.signal);},
-    async transcribe(input:ProviderAttachment,context:TranscriptionContext={}){const provider=requireVoiceProvider(env,context.provider,'transcription');return provider==='faster-whisper'?transcribeLocal(http,env,input,context):transcribeOpenAI(http,env,input,context.signal);},
+    async createVoiceSession(input:VoiceSessionInput={},context={}){requireVoiceProvider(env,input.provider,'realtime');return realtimeOpenAI(http.withAdmission(context.requestAdmission),env,input,context.signal);},
+    async transcribe(input:ProviderAttachment,context:TranscriptionContext={}){const provider=requireVoiceProvider(env,context.provider,'transcription');return provider==='faster-whisper'?transcribeLocal(http.withAdmission(context.requestAdmission),env,input,context):transcribeOpenAI(http.withAdmission(context.requestAdmission),env,input,context.signal);},
     async speech(input:SpeechInput,context={}){const provider=requireVoiceProvider(env,input.provider,'speech');
-      if(provider==='elevenlabs')return speechElevenLabs(http,env,input,context.signal);
-      return provider==='kokoro'?speechKokoro(http,env,input,context.signal):speechOpenAI(http,env,input,context.signal);},
+      if(provider==='elevenlabs')return speechElevenLabs(http.withAdmission(context.requestAdmission),env,input,context.signal);
+      return provider==='kokoro'?speechKokoro(http.withAdmission(context.requestAdmission),env,input,context.signal):speechOpenAI(http.withAdmission(context.requestAdmission),env,input,context.signal);},
   };return runtime;
 }
 

@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -8,7 +9,7 @@ import { readConfig } from '../src/config.ts';
 import { Database } from '../src/database.ts';
 
 const origin = 'http://localhost:4321', prefix = '/api/platform';
-const base = readConfig({ ...process.env, NODE_ENV: 'development', PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_EXPOSE_PROVIDER_DETAILS: '1' });
+const base = readConfig({ ...process.env, NODE_ENV: 'development', PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_EXPOSE_PROVIDER_DETAILS: '1' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema = `staff_routes_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -26,18 +27,19 @@ let system: Awaited<ReturnType<typeof buildApp>>, closed: typeof system;
 type Actor = { id: string; cookie: string };
 
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate(); await seedFictionalActiveLegal(db);
   const config = { ...base, databaseUrl: url.toString(), mcp: undefined };
-  system = await buildApp({ db, config, runtime, enableQueue: false });
-  closed = await buildApp({ db, config: { ...config, exposeProviderDetails: false }, runtime, enableQueue: false });
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, config, runtime, enableQueue: false });
+  closed = await buildApp({legalBundle:FICTIONAL_LEGAL, db, config: { ...config, exposeProviderDetails: false }, runtime, enableQueue: false });
 });
 after(async () => {
   await Promise.all([system?.app.close(), closed?.app.close()]); await db.close();
   if (schemaCreated) await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.close();
 });
+let registrationAddress=0;
 async function actor(extra: Record<string, unknown> = {}): Promise<Actor> {
-  const response = await system.app.inject({ method: 'POST', url: prefix + '/auth/register', headers: { origin },
-    payload: { email: `${randomUUID()}@example.invalid`, name: 'Fictional access fixture', password: 'fictional-staff-access-password', ...extra } });
+  const response = await system.app.inject({ method: 'POST', url: prefix + '/auth/register', remoteAddress:'127.13.0.'+(++registrationAddress), headers: { origin },
+    payload: await fictionalRegistration(db,{ email: `${randomUUID()}@example.invalid`, name: 'Fictional access fixture', password: 'fictional-staff-access-password', ...extra }) });
   assert.equal(response.statusCode, 201, response.body);
   return { id: response.json().user.id, cookie: String(response.headers['set-cookie']).split(';')[0] };
 }
@@ -59,7 +61,11 @@ async function audits(who: Actor) {
 }
 
 test('public registration and forged staff headers cannot create a staff identity, even with a role row', async () => {
-  const who = await actor({ account_kind: 'staff', role: 'org_admin', isAdmin: true }), orgId = await organization();
+  const forgedEmail=randomUUID()+'@example.invalid';
+  const forged=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:'127.13.1.1',headers:{origin},payload:await fictionalRegistration(db,{email:forgedEmail,name:'Fictional rejected self-promotion',password:'fictional-staff-access-password',account_kind:'staff',role:'org_admin',isAdmin:true})});
+  assert.equal(forged.statusCode,400,forged.body);assert.equal(forged.json().error.code,'INVALID_INPUT');
+  assert.equal((await db.query('SELECT id FROM platform_users WHERE email=$1',[forgedEmail])).rowCount,0);
+  const who = await actor(), orgId = await organization();
   await grant(who, orgId, 'org_admin', false);
   const current = await db.query('SELECT account_kind FROM platform_users WHERE id=$1', [who.id]);
   assert.equal(current.rows[0].account_kind, 'student');

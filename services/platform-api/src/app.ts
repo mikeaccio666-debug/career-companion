@@ -10,7 +10,7 @@ import type { Conversation, PlatformProviderRuntime, ProviderAttachment, User, V
 import { createProviderRuntime } from '@companion/ai-core';
 import { Database } from './database.ts';
 import { readConfig, type PlatformConfig } from './config.ts';
-import { authorizeFixedSession, checkPassword, fixedRequestSession, getUser, hashPassword, logout, setSession } from './auth.ts';
+import { authorizeFixedSession, checkPassword, fixedRequestSession, getUser, hashPassword, logout, setSession, setSessionCookie } from './auth.ts';
 import { AccountActions } from './account-actions.ts';
 import { KnowledgeSources } from './knowledge-sources.ts';
 import { ApiError, identifier, invalid, notFound, object, string } from './errors.ts';
@@ -38,6 +38,9 @@ import { AudioTranscriptions, providersWithChatAttachments } from './audio-trans
 import { assertHttpWorkbench, serverConversationInput, serverMessageInput, serverPublicCapabilities } from './student-channel.ts';
 import { resolveModelRoute } from './model-routing.ts';
 import { StaffAccess } from './staff-access.ts';
+import { loadLegalBundle, parseLegalBundle, legalAvailability, publicLegalDocuments, type LegalBundle } from './legal-documents.ts';
+import { StudentEntry } from './student-entry.ts';
+import { ModelConsent, requireModelConsent } from './model-routing.ts';
 import {
   projectPlatformFeatures, projectPublicAccountUsage, projectPublicApproval, projectPublicAudioTranscriptionReceipt,
   projectPublicConversation, projectPublicConversationTaskPage, projectPublicError, projectPublicGoalPlan,
@@ -58,14 +61,16 @@ function staffReadFailure(cause:unknown):never {
   throw new ApiError(503,'STAFF_ACCESS_UNAVAILABLE','Staff access could not be verified. Try again later.');
 }
 
-export interface AppOptions { config?:PlatformConfig; db?:Database; runtime?:PlatformProviderRuntime; storage?:BlobStorage; queue?:TaskQueue; enableQueue?:boolean; requestLimits?:RequestLimitsOptions; mcp?:McpTransport; }
+export interface AppOptions { legalBundle?:LegalBundle|null; config?:PlatformConfig; db?:Database; runtime?:PlatformProviderRuntime; storage?:BlobStorage; queue?:TaskQueue; enableQueue?:boolean; requestLimits?:RequestLimitsOptions; mcp?:McpTransport; }
 export async function buildApp(options:AppOptions={}) {
   const config=options.config??readConfig();
   const present=<T,P>(value:T,project:(value:T)=>P):T|P=>config.workbenchEnabled?value:project(value);
   const db=options.db??new Database(config.databaseUrl,{max:config.databasePoolMax,connectionTimeoutMillis:config.databaseConnectTimeoutMs});
-  const runtime=options.runtime??createProviderRuntime();
+  const bundle=options.legalBundle===undefined?await loadLegalBundle(config.legalBundlePath):parseLegalBundle(options.legalBundle);
+  const entry=new StudentEntry(db,config,bundle),modelConsent=new ModelConsent(db,bundle);
+  const runtime=requireModelConsent(options.runtime??createProviderRuntime());
   const storage=options.storage??createStorage(config);
-  const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp);
+  const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
   const accountActions=new AccountActions(db,config.accountEmail);
   const staff=new StaffAccess(db);
@@ -173,15 +178,19 @@ export async function buildApp(options:AppOptions={}) {
     try{return {memberships:await staff.listMembers(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}
     catch(cause){staffReadFailure(cause);}finally{cancellation.dispose();}
   });
-  app.get(`${prefix}/auth/options`,{preHandler:anonymousLimit('public')},async()=>({emailActionsEnabled:Boolean(config.accountEmail),requireVerifiedEmail:config.requireVerifiedEmail}));
+  app.get(`${prefix}/auth/options`,{preHandler:anonymousLimit('public')},async(_request,reply)=>{reply.header('Cache-Control','private, no-store');return {emailActionsEnabled:Boolean(config.accountEmail),requireVerifiedEmail:config.requireVerifiedEmail,requireInvite:config.requireInvite,legal:legalAvailability(await entry.availableBundle())};});
+  app.get(`${prefix}/auth/legal-documents`,{preHandler:anonymousLimit('public')},async(_request,reply)=>{reply.header('Cache-Control','no-store');return publicLegalDocuments(await entry.availableBundle());});
+  app.get(`${prefix}/auth/consent`,limitedAccount,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {consent:await entry.status(fixedRequestSession(request,userId(request)),cancellation.signal)};}finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/auth/consent`,limitedAccount,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {consent:await entry.accept(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}finally{cancellation.dispose();}
+  });
   app.post(`${prefix}/auth/register`,{preHandler:anonymousLimit('auth-register')},async(request,reply)=>{
-    const data=object(request.body),email=string(data.email,'email',254).toLowerCase(),name=string(data.name,'name',100);
-    const password=passwordInput(data.password);
-    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||password.length<10)throw invalid('Use a valid email and a password of at least 10 characters.');
-    const id=randomUUID();
-    try{await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)',[id,email,name,await hashPassword(password)]);}
-    catch(error){if((error as {code?:string}).code==='23505')throw new ApiError(409,'EMAIL_EXISTS','An account already exists for this email.');throw error;}
-    await setSession(db,config,reply,id,'0');reply.code(201);return {user:{id,email,name,emailVerified:false}};
+    const cancellation=requestSignal(request,reply);
+    try{const result=await entry.register(request.body,cancellation.signal);setSessionCookie(config,reply,result.session);reply.code(201).header('Cache-Control','private, no-store');return {user:result.user};}finally{cancellation.dispose();}
   });
   app.post(`${prefix}/auth/login`,{preHandler:anonymousLimit('auth-login')},async(request,reply)=>{
     const data=object(request.body),email=string(data.email,'email',254).toLowerCase(),password=passwordInput(data.password);
@@ -259,6 +268,7 @@ export async function buildApp(options:AppOptions={}) {
     const id=params(request),uid=userId(request),data=serverMessageInput(config,runtime,request.body),sink=new SseTurnSink(request,reply);
     await conversationTurns.submit({userId:uid,conversationId:id,data,...(!config.workbenchEnabled?{suppressSavedPersona:true}:{})},config.workbenchEnabled?sink:new ProjectingTurnSink(sink),{
       assertAccount:signal=>assertRequestAccount(request,uid,signal),
+      requestAdmission:modelConsent.forSession(fixedRequestSession(request,uid)),
     });
   });
 
@@ -329,7 +339,7 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/artifacts/:id/reference-attachment`,secure,async request=>jobs.referenceAttachment(userId(request),params(request)));
   app.post(`${prefix}/uploads/:id/transcriptions`,secured('transcription'),async(request,reply)=>{
     const cancellation=requestSignal(request,reply),uid=userId(request),session=fixedRequestSession(request,uid);
-    try{const result=await audioTranscriptions.create(uid,params(request),request.body,cancellation.signal,(client,signal)=>authorizeFixedSession(client,session,signal));reply.code(result.created?201:200).header('Cache-Control','private, no-store');return {...result,receipt:present(result.receipt,projectPublicAudioTranscriptionReceipt)};}
+    try{const result=await audioTranscriptions.create(uid,params(request),request.body,cancellation.signal,(client,signal)=>authorizeFixedSession(client,session,signal),modelConsent.forSession(session,cancellation.signal));reply.code(result.created?201:200).header('Cache-Control','private, no-store');return {...result,receipt:present(result.receipt,projectPublicAudioTranscriptionReceipt)};}
     finally{cancellation.dispose();}
   });
   app.get(`${prefix}/uploads/:id/transcriptions/:clientRequestId`,secure,async(request,reply)=>{
@@ -366,7 +376,7 @@ export async function buildApp(options:AppOptions={}) {
         cancellation.signal.throwIfAborted();
       });
       acquired=true;await assertRequestAccount(request,uid,cancellation.signal);
-      const result=await runtime.createVoiceSession({provider,model,voice,...(turnTaking===undefined?{}:{turnTaking})},{signal:cancellation.signal});
+      const result=await runtime.createVoiceSession({provider,model,voice,...(turnTaking===undefined?{}:{turnTaking})},{signal:cancellation.signal,requestAdmission:modelConsent.forSession(session,cancellation.signal)});
       await assertRequestAccount(request,uid,cancellation.signal);
       await rememberVoiceSession(db,uid,sessionId,provider,result.model,{conversationId,authorize:client=>authorizeFixedSession(client,session,cancellation.signal)});
       await db.query('UPDATE platform_usage SET model=$3 WHERE id=$1 AND user_id=$2',[usageId,uid,string(result.model,'voice model',150)]);
@@ -379,7 +389,7 @@ export async function buildApp(options:AppOptions={}) {
   });
   app.post(`${prefix}/voice/session/release`,control,async request=>{const data=object(request.body);await releaseVoiceSession(db,userId(request),identifier(data.sessionId));return {ok:true};});
   app.post(`${prefix}/voice/transcribe`,secured('transcription'),async(request,reply)=>{
-    const cancellation=requestSignal(request,reply);
+    const cancellation=requestSignal(request,reply),session=fixedRequestSession(request,userId(request));
     try{
       let audio:ProviderAttachment|undefined;
       for await(const part of request.parts({limits:{fileSize:20*1024*1024,files:1,fields:1,parts:2,fieldSize:80,fieldNameSize:32}})){
@@ -398,18 +408,18 @@ export async function buildApp(options:AppOptions={}) {
       if(!audio)throw invalid('An audio file is required.');
       const {provider}=resolveModelRoute(config,runtime,'transcription');
       cancellation.signal.throwIfAborted();
-      return await withVoiceLease(db,userId(request),()=>{cancellation.signal.throwIfAborted();return runtime.transcribe(audio!,{provider,signal:cancellation.signal});});
+      return await withVoiceLease(db,userId(request),()=>{cancellation.signal.throwIfAborted();return runtime.transcribe(audio!,{provider,signal:cancellation.signal,requestAdmission:modelConsent.forSession(session,cancellation.signal)});});
     }
     finally{cancellation.dispose();}
   });
   app.post(`${prefix}/voice/speech`,secured('speech'),async(request,reply)=>{
-    const cancellation=requestSignal(request,reply);
+    const cancellation=requestSignal(request,reply),session=fixedRequestSession(request,userId(request));
     try{
       const data=voiceBody(request.body,config.workbenchEnabled?['text']:['text','message_id']);
       if(!config.workbenchEnabled)throw new ApiError(403,'SPEECH_NOT_AVAILABLE','Speech playback is not available on this channel.');
       const text=string(data.text,'text',4000),{provider,model,voice}=resolveModelRoute(config,runtime,'speech'),input={provider,text,voice,model};
       cancellation.signal.throwIfAborted();
-      const audio=await withVoiceLease(db,userId(request),()=>{cancellation.signal.throwIfAborted();return runtime.speech(input,{signal:cancellation.signal});});
+      const audio=await withVoiceLease(db,userId(request),()=>{cancellation.signal.throwIfAborted();return runtime.speech(input,{signal:cancellation.signal,requestAdmission:modelConsent.forSession(session,cancellation.signal)});});
       cancellation.signal.throwIfAborted();const attachment=await saveUpload(userId(request),audio.name,audio.mime,audio.bytes);reply.code(201);return {attachment};
     }finally{cancellation.dispose();}
   });

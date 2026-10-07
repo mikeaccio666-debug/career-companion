@@ -112,9 +112,9 @@ export interface PwaNotice { id: 'offline' | 'update' | 'ready' | 'unavailable';
 export function pwaNotices(state: PwaSnapshot): PwaNotice[] {
   const notices: PwaNotice[] = [];
   if (!state.online) notices.push({ id: 'offline', title: '当前离线', text: '恢复网络后，请自行确认并继续发送。当前页面的文字不会自动提交。', dismissible: false });
-  if (state.updateReady) notices.push({ id: 'update', title: '新版工作台已准备好', text: '先保存或复制需要保留的内容，结束录音或对话，再关闭所有工作台窗口重新打开。', dismissible: true });
+  if (state.updateReady) notices.push({ id: 'update', title: '新版已准备好', text: '先保存或复制需要保留的内容，结束录音或对话，再关闭所有页面窗口重新打开。', dismissible: true });
   else if (state.offlineReady) notices.push({ id: 'ready', title: '离线入口已准备好', text: '登录、会话、资料和模型仍需联网。', dismissible: true });
-  else if (state.registration === 'unavailable') notices.push({ id: 'unavailable', title: '暂时无法准备离线入口', text: '离线入口暂不可用。联网后可以重新打开工作台。', dismissible: true });
+  else if (state.registration === 'unavailable') notices.push({ id: 'unavailable', title: '暂时无法准备离线入口', text: '离线入口暂不可用。联网后可以重新打开账号入口。', dismissible: true });
   return notices;
 }
 
@@ -162,7 +162,7 @@ export async function readWorkspaceBootstrap<Options>(
 }
 
 export function publicConnectionCopy(online: boolean, connecting: boolean) {
-  if (!online) return { title: '当前无法联网', text: '这里是工作台的公共入口。登录、会话、资料和模型需要连接服务。恢复网络后，再重试连接。' };
-  if (connecting) return { title: '正在连接你的工作台…', text: '正在确认账号服务和当前会话。' };
-  return { title: '暂时无法连接工作台', text: '这里是工作台的公共入口。当前无法确认登录状态或读取资料。请检查网络，稍后重试。' };
+  if (!online) return { title: '当前无法联网', text: '这里是求职伙伴的公共入口。登录和账号信息需要连接服务。恢复网络后，再重试连接。' };
+  if (connecting) return { title: '正在连接你的求职账号…', text: '正在确认账号服务和当前登录状态。' };
+  return { title: '暂时无法连接账号服务', text: '这里是求职伙伴的公共入口。当前无法确认登录状态或读取账号信息。请检查网络，稍后重试。' };
 }

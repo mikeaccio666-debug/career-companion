@@ -374,6 +374,9 @@ function aliasErrorCodes(codes: readonly string[], code: string, message: string
 // Exact, controlled error codes only. Original error text can reflect configuration
 // or third-party details and is never used to classify or rewrite user content.
 keepErrorCodes(['AUTH_REQUIRED'], 'Sign in to continue.');
+keepErrorCodes(['LEGAL_DOCUMENTS_UNAVAILABLE'], 'The current legal documents are not available.');
+keepErrorCodes(['TERMS_CONFIRMATION_REQUIRED', 'TERMS_VERSION_CHANGED'], 'Read and confirm the current legal documents before using AI.');
+keepErrorCodes(['INVITE_REQUIRED', 'INVITE_INVALID'], 'Use a valid invitation for this email.');
 keepErrorCodes(['INVALID_CREDENTIALS'], 'Email or password is incorrect.');
 keepErrorCodes(['EMAIL_VERIFICATION_REQUIRED'], 'Verify your email to continue.');
 keepErrorCodes(['EMAIL_EXISTS'], 'An account already exists for this email.');

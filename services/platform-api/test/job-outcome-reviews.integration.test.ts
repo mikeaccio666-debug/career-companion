@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +16,7 @@ import { processJob } from '../src/jobs.ts';
 import { mcpSchemaHash } from '../src/mcp-config.ts';
 import type { McpTransport } from '../src/mcp-transport-port.ts';
 
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }), prefix = '/api/platform', origin = 'http://localhost:4321';
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}), prefix = '/api/platform', origin = 'http://localhost:4321';
 const schema = `outcome_review_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), databaseUrl = new URL(base.databaseUrl);
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`); databaseUrl.searchParams.set('application_name', schema); const db = new Database(databaseUrl.toString());
 let system: Awaited<ReturnType<typeof buildApp>>, directory: string, executions = 0, mcpCalls = 0, registrations = 0;
@@ -47,14 +48,14 @@ const transport: McpTransport = {
   async call(_entry, _input, context) { await context.beforeCall(); ++mcpCalls; throw new ApiError(502, 'MCP_CALL_UNCERTAIN', 'Fictional transport disconnected after the durable started boundary.'); },
 };
 async function start() {
-  system = await buildApp({ db, runtime, mcp: transport, enableQueue: false,
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, runtime, mcp: transport, enableQueue: false,
     config: { ...base, databaseUrl: databaseUrl.toString(), storageDir: directory, requireVerifiedEmail: false, accountEmail: undefined, maxActiveJobs: 100,
       mcp: { entries: [{ id: 'fictional-outcome', name: 'Fictional reviewed reference', url: 'https://mcp.example.invalid/not-fetched', tools: [{ name: 'fictional_lookup', schemaHash: mcpSchemaHash(inputSchema) }] }], fixtureOrigins: [] } },
     requestLimits: { policies: { api: { max: 2000, windowSeconds: 60 }, control: { max: 2000, windowSeconds: 60 }, 'auth-register': { max: 1000, windowSeconds: 60 } } } });
 }
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'An explicitly supplied loopback QA database is required.');
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-outcome-review-')); await start();
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-outcome-review-')); await start();
 });
 after(async () => { await system?.app.close(); await db.close(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.close(); if (directory) await fs.rm(directory, { recursive: true, force: true }); });
 async function exchange(actor: Actor | undefined, method: 'GET' | 'POST', route: string, payload?: any, override: Record<string, string | undefined> = {}) {
@@ -63,7 +64,7 @@ async function exchange(actor: Actor | undefined, method: 'GET' | 'POST', route:
   return system.app.inject({ method, url: prefix + route, remoteAddress: `127.0.4.${Math.min(++registrations, 250)}`, headers, payload });
 }
 async function actor(): Promise<Actor> {
-  const response = await exchange(undefined, 'POST', '/auth/register', { name: 'Fictional manual reviewer', email: `${randomUUID()}@example.invalid`, password: 'Fictional-password-123' });
+  const response = await exchange(undefined, 'POST', '/auth/register', await fictionalRegistration(db,{ name: 'Fictional manual reviewer', email: `${randomUUID()}@example.invalid`, password: 'Fictional-password-123' }));
   assert.equal(response.statusCode, 201, response.body); return { id: response.json().user.id, cookie: (response.headers['set-cookie'] as string).split(';')[0] };
 }
 async function create(owner: Actor, kind: CreateJobInput['kind'] = 'image', provider?: string) {

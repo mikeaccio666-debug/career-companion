@@ -1,3 +1,6 @@
+import { ModelConsent } from '../src/model-routing.ts';
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -19,7 +22,7 @@ import { mcpSchemaHash } from '../src/mcp-config.ts';
 import type { McpTransport } from '../src/mcp-transport-port.ts';
 import { createStorage } from '../src/storage.ts';
 
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '0', PLATFORM_CHAT_PROVIDER: 'policy-fixture', PLATFORM_AGENT_PROVIDER: 'policy-fixture' }), schema = `workbench_policy_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '0', PLATFORM_CHAT_PROVIDER: 'policy-fixture', PLATFORM_AGENT_PROVIDER: 'policy-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `workbench_policy_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -63,15 +66,15 @@ const transport: McpTransport = {
 
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'This write fixture requires a loopback database.');
-  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-workbench-policy-'));
   const config = { ...base, databaseUrl: url.toString(), storageDir: directory, maxActiveJobs: 100, requireVerifiedEmail: false,
     accountEmail: undefined, s3: undefined, webStaticDir: undefined, allowedOrigins: new Set([origin]), workbenchEnabled: true,
     mcp: { entries: [{ id: 'policy-catalog', name: 'Synthetic reviewed catalog', url: 'https://policy-fixture.example.invalid/mcp',
       tools: [{ name: 'synthetic_lookup', schemaHash }] }], fixtureOrigins: [] } };
   const storage = createStorage(config);
-  on = new JobService(db, config, runtime, storage, undefined, transport);
-  system = await buildApp({ db, config: { ...config, workbenchEnabled: false }, storage, runtime, mcp: transport, enableQueue: false,
+  on = new JobService(db, config, runtime, storage, undefined, transport,FICTIONAL_LEGAL);
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, config: { ...config, workbenchEnabled: false }, storage, runtime, mcp: transport, enableQueue: false,
     requestLimits: { policies: { api: { max: 2000, windowSeconds: 60 }, chat: { max: 2000, windowSeconds: 60 }, control: { max: 2000, windowSeconds: 60 } } } });
   off = system.jobs; onPlans = new GoalPlans(db, on, runtime); offPlans = new GoalPlans(db, off, runtime);
 });
@@ -84,7 +87,7 @@ after(async () => {
 async function actor() {
   const userId = randomUUID(), conversationId = randomUUID(), token = randomBytes(32).toString('base64url');
   await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)',
-    [userId, `${userId}@example.invalid`, 'Synthetic admission user', 'synthetic-unused-password-hash']);
+    [userId, `${userId}@example.invalid`, 'Synthetic admission user', 'synthetic-unused-password-hash']); await seedFictionalConsent(db,userId);
   await db.query("INSERT INTO platform_sessions(token_hash,user_id,expires_at,auth_version) VALUES($1,$2,now()+interval '1 hour',0)", [tokenHash(token), userId]);
   await db.query("INSERT INTO platform_conversations(id,user_id,title,mode) VALUES($1,$2,'Synthetic admission conversation','agent')", [conversationId, userId]);
   return { userId, conversationId, cookie: `companion_session=${token}` };
@@ -154,7 +157,7 @@ test('live Agent tools and the dedicated MCP task route cannot bypass shared adm
       const sink = new CollectingTurnSink(), session = Object.freeze({ userId: owner.userId, tokenHash: tokenHash(owner.cookie.split('=')[1]) });
       await system.conversationTurns.submit({ userId: owner.userId, conversationId: owner.conversationId,
         data: { content: 'Synthetic Agent preparation', provider: 'policy-fixture', mode: 'agent' } }, sink,
-        { assertAccount: signal => db.transaction(client => authorizeFixedSession(client, session, signal)) });
+        { requestAdmission:new ModelConsent(db,FICTIONAL_LEGAL).forSession(session), assertAccount: signal => db.transaction(client => authorizeFixedSession(client, session, signal)) });
       assert(sink.opened); assert.match(JSON.stringify(sink.events), /WORKBENCH_DISABLED/);
       assert(!sink.events.some(item => item.event === 'approval'));
     }
@@ -315,7 +318,7 @@ test('disablement leaves an already running accepted task and its lease intact u
   const owner = await actor(), created = await on.create(owner.userId, { ...await input(owner, 'image'), prompt: 'Synthetic held execution' });
   let begun!: () => void; const started = new Promise<void>(resolve => { begun = resolve; }); entered = begun;
   hold = new Promise<void>(resolve => { release = resolve; });
-  const changingConfig = { ...on.config }, changing = new JobService(db, changingConfig, runtime, on.storage, undefined, transport);
+  const changingConfig = { ...on.config }, changing = new JobService(db, changingConfig, runtime, on.storage, undefined, transport,FICTIONAL_LEGAL);
   const execution = processJob(changing, created.job.id, 1);
   try {
     await started; const running = await row(created.job.id), before = await state(owner.userId);

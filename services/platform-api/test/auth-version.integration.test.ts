@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -10,14 +11,14 @@ import { decryptAccountEmail } from '../src/account-mail.ts';
 import type { AccountEmailConfig } from '../src/account-mail.ts';
 
 const origin='http://localhost:4321',prefix='/api/platform',schema=`auth_version_${randomUUID().replaceAll('-','')}`;
-const base=readConfig(),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);
+const base=readConfig({...process.env,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);
 url.searchParams.set('options',`-c search_path=${schema}`);
 const databases=[new Database(url.toString()),new Database(url.toString())];
 const mail:AccountEmailConfig={apiKey:'fictional-mail-key',from:'noreply@example.invalid',webOrigin:origin,encryptionKey:Buffer.alloc(32,17)};
 const systems:Awaited<ReturnType<typeof buildApp>>[]=[];
 before(async()=>{
-  await admin.query(`CREATE SCHEMA ${schema}`);await databases[0].migrate();
-  for(const db of databases)systems.push(await buildApp({db,config:{...base,databaseUrl:url.toString(),accountEmail:mail},enableQueue:false}));
+  await admin.query(`CREATE SCHEMA ${schema}`);await databases[0].migrate(); await seedFictionalActiveLegal(databases[0]);
+  for(const db of databases)systems.push(await buildApp({legalBundle:FICTIONAL_LEGAL,db,config:{...base,databaseUrl:url.toString(),accountEmail:mail},enableQueue:false}));
 });
 after(async()=>{await Promise.all(systems.map(system=>system.app.close()));await Promise.all(databases.map(db=>db.close()));await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();});
 function request(instance:number,route:string,body?:unknown,cookie?:string){return systems[instance].app.inject({method:body===undefined?'GET':'POST',url:prefix+route,headers:{origin,...(cookie?{cookie}:{}),...(body===undefined?{}:{'content-type':'application/json'})},...(body===undefined?{}:{payload:JSON.stringify(body)})});}
@@ -25,7 +26,7 @@ function cookie(response:{headers:Record<string,unknown>}){return String(respons
 
 test('a login checked against the old password cannot acquire a usable session after a concurrent reset',async()=>{
   const address='login-race@example.invalid',oldPassword='fictional-old-password',newPassword='fictional-new-password';
-  const registration=await request(0,'/auth/register',{email:address,name:'Fictional login race',password:oldPassword});
+  const registration=await request(0,'/auth/register',await fictionalRegistration(databases[0]!,{email:address,name:'Fictional login race',password:oldPassword}));
   assert.equal(registration.statusCode,201);const owner=registration.json().user.id,oldCookie=cookie(registration);
   const second=await request(1,'/auth/login',{email:address,password:oldPassword});assert.equal(second.statusCode,200);const secondCookie=cookie(second);
   await new AccountActions(databases[1],mail).requestPasswordReset(address);
