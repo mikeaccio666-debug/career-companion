@@ -71,6 +71,7 @@ test('actual Workbox generation retains every integrity, private-route boundary 
   const value = await fixture();
   try {
     const options = platformPwaOptions(() => value.directory); assert.equal(options.injectRegister, false); assert.equal(options.registerType, 'prompt');
+    assert.equal(options.workbox!.cacheId, 'companion');
     const generated = await generateSW({ ...options.workbox, globDirectory: value.directory, swDest: path.join(value.directory, 'sw.js'), mode: 'development' });
     assert.equal(generated.count, value.entries.length); assert.deepEqual(generated.warnings, []);
     const worker = await readFile(path.join(value.directory, 'sw.js'), 'utf8');
@@ -86,14 +87,18 @@ test('actual Workbox generation retains every integrity, private-route boundary 
   } finally { await value.dispose(); }
 });
 
-test('legacy cache cleanup waits for zero same-origin windows including uncontrolled pages and only deletes the exact old product cache', async () => {
+test('legacy cleanup waits for zero same-origin windows and deletes only exact old names for its registration scope', async () => {
   const code = await readFile(path.join(sourceRoot, 'public/pwa-legacy-cleanup.js'), 'utf8');
-  for (const windows of [[], [{ id: 'fictional-old-controlled-page' }]]) {
+  const scope = 'https://fictional.example.test/';
+  const names = ['openfield-shell-v1', `openfield-precache-v2-${scope}`, 'openfield-shell-v10', 'openfield-precache-v2-https://other.example.test/', 'openfield-precache-v2-https://fictional.example.test/other/', 'companion-precache-v2-https://fictional.example.test/', 'unrelated-application-cache'];
+  for (const windows of [[], [{ id: 'fictional-old-controlled-page' }], [{ id: 'fictional-uncontrolled-page' }]]) {
     let activate!: (event: { waitUntil(value: Promise<unknown>): void }) => void;
     const deleted: string[] = []; let pending!: Promise<unknown>;
-    vm.runInNewContext(code, { self: { addEventListener(type: string, callback: typeof activate) { assert.equal(type, 'activate'); activate = callback; }, clients: { async matchAll(options: unknown) { assert.equal(JSON.stringify(options), '{"type":"window","includeUncontrolled":true}'); return windows; } } }, caches: { async delete(name: string) { deleted.push(name); return true; } } });
+    let enumerations = 0;
+    vm.runInNewContext(code, { self: { registration: { scope }, addEventListener(type: string, callback: typeof activate) { assert.equal(type, 'activate'); activate = callback; }, clients: { async matchAll(options: unknown) { assert.equal(JSON.stringify(options), '{"type":"window","includeUncontrolled":true}'); return windows; } } }, caches: { async keys() { enumerations++; return names; }, async delete(name: string) { deleted.push(name); return true; } } });
     activate({ waitUntil(value) { pending = value; } }); await pending;
-    assert.deepEqual(deleted, windows.length ? [] : ['openfield-shell-v1']);
+    assert.equal(enumerations, windows.length ? 0 : 1);
+    assert.deepEqual(deleted, windows.length ? [] : ['openfield-shell-v1', `openfield-precache-v2-${scope}`]);
   }
 });
 
@@ -102,7 +107,7 @@ test('public install icons are real correctly sized PNG files and maskable artwo
     const bytes = await readFile(path.join(sourceRoot, 'public/icons', name));
     assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a'); assert.equal(bytes.readUInt32BE(16), size); assert.equal(bytes.readUInt32BE(20), size);
   }
-  const manifest = JSON.parse(await readFile(path.join(sourceRoot, 'public/manifest.webmanifest'), 'utf8'));
-  assert.ok(manifest.icons.some((entry: any) => entry.src === '/icons/maskable-512.png' && entry.purpose === 'maskable'));
+  const manifest = platformPwaOptions(() => sourceRoot).manifest;
+  assert.ok(manifest && typeof manifest === 'object' && manifest.icons?.some((entry) => entry.src === '/icons/maskable-512.png' && entry.purpose === 'maskable'));
   assert.notDeepEqual(await readFile(path.join(sourceRoot, 'public/icons/icon-512.png')), await readFile(path.join(sourceRoot, 'public/icons/maskable-512.png')));
 });

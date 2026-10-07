@@ -46,7 +46,7 @@ export default function BrowserPanel({ providers, jobs, onCreate, onCancel, onRe
   }
 
   return <section className="feature-page browser-page">
-    <div className="page-kicker"><Globe2 size={15} />BROWSER WORKSPACE</div>
+
     <h1>把一个网页，<span>变成能继续讨论的线索。</span></h1>
     <p className="page-description">先读取公开网页，也可以设计点击、填写、选择与滚动的计划。每次执行都先审阅并批准；浏览器结果可以带回 Agent，让它帮助你判断下一步。</p>
     <form className="browser-editor" onSubmit={prepareReview}><fieldset disabled={disabled}>

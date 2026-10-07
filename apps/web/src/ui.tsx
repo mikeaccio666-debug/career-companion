@@ -1,3 +1,4 @@
+import { BRAND } from './brand';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ArrowUpRight, Check, CheckCircle2, Circle, Clock3, Download, Loader2, RotateCcw, X } from 'lucide-react';
 import type { Artifact, Job, Provider } from './types';
@@ -29,7 +30,7 @@ export function providerModels(provider: Provider | undefined, capability: strin
   return provider?.models || [];
 }
 export function Brand({ compact = false }: { compact?: boolean }) {
-  return <div className={`brand ${compact ? 'compact' : ''}`}><img src="/mark.svg" alt="" /><span>openfield<span className="brand-dot">.</span></span></div>;
+  return <div className={`brand ${compact ? 'compact' : ''}`}><img src={BRAND.mark} alt="" /><span>{BRAND.name}<small>{BRAND.aiLabel}</small></span></div>;
 }
 export function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'green' | 'amber' | 'red' }) { return <span className={`badge ${tone}`}>{children}</span>; }
 export function Empty({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) { return <div className="empty-state"><div className="empty-icon">{icon}</div><h3>{title}</h3><p>{children}</p></div>; }
