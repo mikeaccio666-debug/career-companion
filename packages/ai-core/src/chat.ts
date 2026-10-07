@@ -89,19 +89,25 @@ function wireStructuredSchema(schema: JsonSchema): JsonSchema {
   if (schema.anyOf) projected.anyOf = schema.anyOf.map((value: JsonSchema) => wireStructuredSchema(value));
   return projected;
 }
-function structuredResponse(output: unknown, format: NonNullable<ModelStepContext['responseFormat']>): string {
+function structuredText(output: unknown): string {
   const bad = () => new ProviderError('INVALID_PROVIDER_RESPONSE','The provider returned an invalid structured result.',502);
   if (!Array.isArray(output)) throw bad();
-  let text = '';
+  let text = '', hasText = false;
   for (const item of output) {
     if (item?.type === 'reasoning') continue;
     if (item?.type !== 'message' || item.role !== 'assistant' || item.status !== 'completed' || !Array.isArray(item.content)) throw bad();
     for (const part of item.content) {
       if (part?.type === 'refusal') throw new ProviderError('PROVIDER_REFUSAL','The provider declined this structured request.',502);
       if (part?.type !== 'output_text' || typeof part.text !== 'string') throw bad();
-      text += part.text; if (Buffer.byteLength(text,'utf8') > STRUCTURED_BYTES) throw bad();
+      hasText = true; text += part.text; if (Buffer.byteLength(text,'utf8') > STRUCTURED_BYTES) throw bad();
     }
   }
+  if (!hasText) throw bad();
+  return text;
+}
+function structuredResponse(text: string, format: NonNullable<ModelStepContext['responseFormat']>, completedOutcome: boolean): string {
+  const bad = () => new ProviderError(completedOutcome ? 'PROVIDER_STRUCTURED_VALIDATION_FAILED' : 'INVALID_PROVIDER_RESPONSE',
+    'The provider returned an invalid structured result.',502);
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { throw bad(); }
   if (!schemaMatches(format.schema,parsed)) throw bad();
@@ -228,15 +234,19 @@ function stepSignal(ctx: ModelStepContext) {
   const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
   return { signal, observed() { if (first) clearTimeout(first); }, close() { clearTimeout(timeout); if (first) clearTimeout(first); } };
 }
-function finishEvent(callId: string, status: Extract<ModelCallEvent, { type: 'finished' }>['status'], usage: ModelCallUsage, signal?: AbortSignal): ModelCallEvent {
-  return { type: 'finished', callId, status: signal?.aborted ? failedCallStatus(signal.reason, signal) : status, usage };
+function finishEvent(callId: string, status: Extract<ModelCallEvent, { type: 'finished' }>['status'], usage: ModelCallUsage, signal?: AbortSignal,
+  structuredOutcome?: Extract<ModelCallEvent,{type:'finished'}>['structuredOutcome']): ModelCallEvent {
+  const actualStatus = signal?.aborted ? failedCallStatus(signal.reason, signal) : status;
+  return { type: 'finished', callId, status: actualStatus, usage,
+    ...(structuredOutcome && actualStatus === 'failed' && !signal?.aborted ? { structuredOutcome } : {}) };
 }
-async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: ChatInput, ctx: ModelStepContext, legacy: boolean): AsyncGenerator<ModelStepEvent, ParsedStepResult> {
+async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: ChatInput, ctx: ModelStepContext, legacy: boolean, backgroundCompletionEvidence = false): AsyncGenerator<ModelStepEvent, ParsedStepResult> {
   const selectedModel = legacy ? model(env, 'OPENAI_CHAT_MODEL', input.model, 'gpt-6-astra') : input.model!;
   const state = resumeState(http, input, selectedModel, ctx), timing = stepSignal(ctx), callId = randomUUID(), usage = usageCollector('input_tokens', 'output_tokens');
   let status: Extract<ModelCallEvent, { type: 'finished' }>['status'] = 'interrupted';
   const tools = ctx.tools.map(tool => ({ type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: false }));
   let output: any[] = [], completed = false, visible = false, text = '';
+  let structuredOutcome: Extract<ModelCallEvent,{type:'finished'}>['structuredOutcome'];
   const format = !legacy ? ctx.responseFormat : undefined;
   const started = new Set<number>(), functionIndexes = new Map<string, number>();
   try {
@@ -250,6 +260,8 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
       const response = await http.request('https://api.openai.com/v1/responses', request, ctx.timeoutMs, ctx.requestAdmission);
       for await (const event of readSse(response)) {
         if (format && completed) throw new ProviderError('INVALID_PROVIDER_RESPONSE','The structured stream continued after its terminal result.',502);
+        if (format && ['response.output_item.added','response.output_item.done'].includes(event.type)
+          && !['message','reasoning'].includes(event.item?.type)) throw new ProviderError('INVALID_PROVIDER_RESPONSE','Structured output cannot request tools or unknown output items.',502);
         if (['response.completed', 'response.failed', 'response.incomplete'].includes(event.type)) usage.observe(event.response?.usage);
         if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
           if (event.delta.length) timing.observed(); visible ||= Boolean(event.delta.trim()); text += event.delta;
@@ -264,9 +276,10 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
         } else if (event.type === 'response.output_item.done') output.push(event.item);
         else if (format && ['response.refusal.delta','response.refusal.done'].includes(event.type)) throw new ProviderError('PROVIDER_REFUSAL','The provider declined this structured request.',502);
         else if (event.type === 'response.completed') {
-          if (format && (event.response?.status !== 'completed' || event.response?.error)) throw new ProviderError('INVALID_PROVIDER_RESPONSE','The structured request did not complete.',502);
+          if (format && (event.response?.status !== 'completed' || event.response?.error != null
+            || event.response?.incomplete_details != null || !Array.isArray(event.response?.output))) throw new ProviderError('INVALID_PROVIDER_RESPONSE','The structured request did not complete.',502);
           completed = true; output = event.response?.output ?? output;
-          if (format) { text = structuredResponse(output,format); visible = true; }
+          if (format) { text = structuredText(output); visible = true; }
         }
         else if (['error', 'response.failed', 'response.incomplete'].includes(event.type)) {
           if (!legacy && event.type === 'response.incomplete' && event.response?.incomplete_details?.reason === 'max_output_tokens') throw new ProviderError('PROVIDER_OUTPUT_LIMIT', 'The model reached its output limit. Try a smaller request.');
@@ -274,10 +287,20 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
         }
       }
       timing.signal.throwIfAborted(); if (!completed) throw new ProviderError('PROVIDER_STREAM_INTERRUPTED', 'The response stream ended before completion.');
+      if (format) {
+        // Only a normal, fully read terminal stream can establish content failure.
+        // Refusal, bad envelope, trailing events, transport interruption and
+        // cancellation exit earlier without this server-owned evidence.
+        try { text = structuredResponse(text,format,backgroundCompletionEvidence && ctx.purpose === 'companion_generation'); }
+        catch (error) {
+          if (error instanceof ProviderError && error.code === 'PROVIDER_STRUCTURED_VALIDATION_FAILED') structuredOutcome = 'invalid_format';
+          throw error;
+        }
+      }
       if (!visible && !output.some(item => item.type === 'function_call')) throw emptyResponse();
       status = 'complete';
     } catch (error) { status = failedCallStatus(error, ctx.signal); throw error; }
-    finally { await ctx.onModelCall?.(finishEvent(callId, status, usage.result, ctx.signal)); }
+    finally { await ctx.onModelCall?.(finishEvent(callId, status, usage.result, ctx.signal,structuredOutcome)); }
     if (format) { timing.signal.throwIfAborted(); yield { type: 'delta', text }; }
     const reported = usage.result; if (reported.status === 'reported') yield { type: 'usage', inputTokens: reported.inputTokens, outputTokens: reported.outputTokens };
     if (format) return { text, calls: [] };
@@ -430,7 +453,7 @@ export async function* streamBackgroundChat(http: HttpClient, env: NodeJS.Proces
   };
   const step = openAIStep(http,env,input,{ invocation: Object.freeze({}), tools: [], toolChoice: 'none', callIndex: 1,
     purpose: background.purpose, responseFormat: background.responseFormat, limits: background.limits, timeoutMs: background.timeoutMs,
-    signal: ctx.signal, requestAdmission: admission, onModelCall: ctx.onModelCall },false);
+    signal: ctx.signal, requestAdmission: admission, onModelCall: ctx.onModelCall },false,true);
   try {
     let usage: Extract<ChatStreamEvent,{ type:'usage' }> | undefined;
     while (true) {

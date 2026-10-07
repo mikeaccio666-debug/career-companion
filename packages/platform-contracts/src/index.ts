@@ -223,7 +223,9 @@ export interface ChatContext extends ProviderRequestContext {
 export type ModelCallUsage = { status: 'reported'; inputTokens: number; outputTokens: number } | { status: 'missing' | 'invalid' };
 export type ModelCallEvent =
   | { type: 'started'; callId: string; index: number; provider: string; model: string; purpose?: string }
-  | { type: 'finished'; callId: string; status: 'complete' | 'failed' | 'cancelled' | 'interrupted'; usage: ModelCallUsage };
+  | { type: 'finished'; callId: string; status: 'complete' | 'failed' | 'cancelled' | 'interrupted'; usage: ModelCallUsage;
+      /** Server adapter evidence: normal terminal completion, but JSON/schema validation failed. Never a successful reply or execution grant. */
+      structuredOutcome?: 'invalid_format' };
 export interface AccountUsage {
   period: { from: string; to: string; timeZone: 'UTC' };
   chat: {

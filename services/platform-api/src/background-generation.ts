@@ -24,6 +24,7 @@ interface TaskRow {
   status: string; seed_ciphertext: Buffer; answers_ciphertext: Buffer; fingerprint: string; companion_status: string;
   current_revision: number; draft_rerolls: number; generation: number; lease_token: string | null;
   runtime_lease_id: string | null; lease_until: Date | null;
+  quirk_draw: number;
 }
 interface Seed {
   readonly dimensions: Readonly<CompanionDimensions>; readonly quirks: CompanionQuirks;
@@ -39,6 +40,7 @@ interface CallRow {
   provider: string; model: string; purpose: string; reservation_id: string; status: string; usage_status: string;
   input_tokens: number | null; output_tokens: number | null; admitted_at: Date | null; finished_at: Date | null;
   validation_status: string | null;
+  structured_outcome: string | null;
 }
 const MAX_OUTPUT = 1536, TIMEOUT = 15_000;
 const uuid = (value: unknown): value is string => typeof value === 'string'
@@ -47,6 +49,8 @@ const unavailable = () => new ApiError(503, 'COMPANION_GENERATION_UNAVAILABLE', 
 const sourceChanged = () => new ApiError(409, 'COMPANION_DRAFT_SOURCE_CHANGED', 'Read the current intake before generating a companion.');
 const lost = () => new ApiError(409, 'COMPANION_GENERATION_CANCELLED', 'The companion generation is no longer authorized.');
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const invalidPreviewCall = (row: CallRow) => row.status === 'complete' && ['blocked', 'requires_review', 'invalid_format'].includes(row.validation_status!)
+  || row.status === 'failed' && row.structured_outcome === 'invalid_format' && row.validation_status === 'invalid_format';
 function taskInput(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw invalid();
   const descriptors = Object.getOwnPropertyDescriptors(value), entry = descriptors.taskId;
@@ -98,7 +102,8 @@ export class BackgroundGeneration {
     if (!sourceRow || sourceRow.id !== row.source_draft_id || sourceRow.revision !== row.source_revision) throw sourceChanged();
     const source = this.storage.decode(sourceRow);
     if (row.questionnaire_revision !== 1 || row.rules_revision !== 1 || row.generator_version !== 1 || row.purpose !== 'companion_preview' || row.draft_rerolls !== 0) throw intakeUnavailable();
-    const compiled = compileFallbackCompanionStyle({ companionId: row.companion_id, dimensions: { ...prepared.dimensions } });
+    if (![0, 1].includes(row.quirk_draw) || Object.is(row.quirk_draw, -0)) throw intakeUnavailable();
+    const compiled = compileFallbackCompanionStyle({ companionId: row.companion_id, dimensions: { ...prepared.dimensions }, quirkDraw: row.quirk_draw as 0 | 1 });
     const ruleStyle = { dimensions: { ...prepared.dimensions }, quirks: { ...compiled.quirks }, inkToken: compiled.inkToken, styleCard: compiled.styleCard };
     const answers = { schemaVersion: 1, id: row.answers_id, userId: fixed.userId, sourceDraftId: source.id,
       sourceRevision: source.revision, fastTrack: source.fastTrack, answersPartial: source.answersPartial };
@@ -108,7 +113,8 @@ export class BackgroundGeneration {
     catch { throw intakeUnavailable(); }
     const expected = { schemaVersion: 1, taskId: row.id, userId: fixed.userId, companionId: row.companion_id, answersId: row.answers_id,
       sourceDraftId: source.id, sourceRevision: source.revision, authVersion: String(row.auth_version), questionnaireRevision: 1,
-      rulesRevision: 1, generatorVersion: 1, purpose: 'companion_preview', provider: data?.provider, model: data?.model, ...ruleStyle };
+      rulesRevision: 1, generatorVersion: 1, purpose: 'companion_preview', provider: data?.provider, model: data?.model, ...ruleStyle,
+      ...(row.quirk_draw === 1 ? { quirkDraw: 1 } : {}) };
     try {
       if (row.fingerprint !== hash({ dimensions: ruleStyle.dimensions, quirks: ruleStyle.quirks, inkToken: ruleStyle.inkToken })
         || this.storage.crypto!.openUtf8(row.answers_ciphertext, { table: 'platform_companion_answers', column: 'payload_ciphertext', rowId: row.answers_id,
@@ -178,7 +184,7 @@ export class BackgroundGeneration {
         callIds.push(result.callId);
         if (result.preview) return await this.save(fixed, claim, result.preview, 'model', callIds, signal);
         if (result.timedOut || attempt === 3) {
-          const fallback = compileFallbackCompanionStyle({ companionId: claim.row.companion_id, dimensions: { ...claim.seed.dimensions } });
+          const fallback = compileFallbackCompanionStyle({ companionId: claim.row.companion_id, dimensions: { ...claim.seed.dimensions }, quirkDraw: claim.row.quirk_draw as 0 | 1 });
           const preview = parseCompanionModelPreview({ summary: fallback.summary, samples: [...fallback.samples] });
           if (!outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw unavailable();
           return await this.save(fixed, claim, preview, 'fallback', callIds, signal);
@@ -241,6 +247,16 @@ export class BackgroundGeneration {
     [callId, fixed.userId, claim.row.id, claim.generation, claim.leaseToken, claim.runtimeLeaseId, claim.row.auth_version, fixed.tokenHash]);
     signal.throwIfAborted(); if (!saved.rowCount) throw unavailable();
   }
+  private async priorAttempts(client: PoolClient, claim: Claim, attempt: number) {
+    const rows = (await client.query<CallRow>(`SELECT c.* FROM platform_companion_generation_calls c
+      JOIN platform_cost_ledger l ON l.reservation_id=c.reservation_id AND l.user_id=c.user_id AND l.source_id=c.task_id
+        AND l.source_kind='job' AND l.capability='background' AND l.purpose=c.purpose AND l.provider=c.provider AND l.model=c.model
+      WHERE c.task_id=$1 AND c.user_id=$2 AND c.generation=$3 AND c.attempt<$4 ORDER BY c.attempt FOR UPDATE OF c,l`,
+    [claim.row.id, claim.row.user_id, claim.generation, attempt])).rows;
+    if (rows.length !== attempt - 1 || rows.some((row, i) => row.attempt !== i + 1 || !row.admitted_at || !row.finished_at
+      || row.companion_id !== claim.row.companion_id || row.provider !== claim.seed.provider || row.model !== claim.seed.model
+      || row.purpose !== 'companion_generation' || !invalidPreviewCall(row))) throw unavailable();
+  }
   private async attempt(fixed: FixedSessionContext, claim: Claim, attempt: number, parent?: AbortSignal): Promise<{ callId: string; preview?: CompanionModelPreview; timedOut?: true }> {
     const input = this.prompt(claim), reserveId = randomUUID();
     // UTF-8 bytes upper-bound text tokens here; reserve extra room for the fixed
@@ -251,7 +267,7 @@ export class BackgroundGeneration {
       purpose: 'companion_generation', provider: input.provider, model: input.model!, maxInputTokens, maxOutputTokens: MAX_OUTPUT,
       ttlSeconds: 120, reservationId: reserveId };
     let callId: string | undefined, binding: Readonly<CostReservationBinding> | undefined;
-    let launched = false, admitted = false, finished: string | undefined, timedOut = false;
+    let launched = false, admitted = false, finished: string | undefined, structuredOutcome: string | undefined, timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let removeDeadlineListener: (() => void) | undefined;
     const cancelled = new AbortController(), timeout = new AbortController();
@@ -265,6 +281,7 @@ export class BackgroundGeneration {
         const next = event.callId;
         const saved = await this.db.withBoundedTransaction(async client => {
           await this.current(client, fixed, claim, signal);
+          await this.priorAttempts(client, claim, attempt);
           const decision = await this.costs.reserveInTransaction(client, costInput, signal);
           if (decision.decision === 'block' || decision.decision === 'degrade') throw new ApiError(503, 'COMPANION_GENERATION_BUDGET_UNAVAILABLE', 'The companion generation budget is unavailable.');
           await client.query(`INSERT INTO platform_companion_generation_calls(call_id,task_id,user_id,companion_id,generation,attempt,
@@ -277,24 +294,25 @@ export class BackgroundGeneration {
       }
       if (event.type !== 'finished' || !callId || !binding || event.callId !== callId || finished
         || !['complete', 'failed', 'cancelled', 'interrupted'].includes(event.status) || event.status === 'complete' && !admitted) throw unavailable();
-      const actual = usageSnapshot(event.usage), status = event.status;
+      const actual = usageSnapshot(event.usage), status = event.status, outcome = event.structuredOutcome;
+      if (outcome !== undefined && (outcome !== 'invalid_format' || status !== 'failed' || !admitted || !launched)) throw unavailable();
       await this.db.withBoundedTransaction(async client => {
         // Accounting must survive cancellation, reset and lease expiry. It does
         // not grant permission to publish an output under an obsolete claim.
         const user = await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE', [fixed.userId]);
         if (!user.rowCount) throw unavailable();
         const row = (await client.query<CallRow>('SELECT * FROM platform_companion_generation_calls WHERE call_id=$1 FOR UPDATE', [callId])).rows[0];
-        if (!matches(row) || !['prepared', 'admitted'].includes(row.status) || status === 'complete' && row.admitted_at === null) throw unavailable();
+        if (!matches(row) || !['prepared', 'admitted'].includes(row.status) || (status === 'complete' || outcome !== undefined) && row.admitted_at === null) throw unavailable();
         if (launched) await this.costs.settleDispatchRiskInTransaction(client, binding!, actual);
         else {
           if (actual.status === 'reported' && (actual.inputTokens !== 0 || actual.outputTokens !== 0)) throw unavailable();
           await this.costs.releaseRiskInTransaction(client, binding!);
         }
         await client.query(`UPDATE platform_companion_generation_calls SET status=$2,usage_status=$3,input_tokens=$4,output_tokens=$5,
-          finished_at=clock_timestamp() WHERE call_id=$1`, [callId, status, actual.status,
-        actual.status === 'reported' ? actual.inputTokens : null, actual.status === 'reported' ? actual.outputTokens : null]);
+          structured_outcome=$6,finished_at=clock_timestamp() WHERE call_id=$1`, [callId, status, actual.status,
+        actual.status === 'reported' ? actual.inputTokens : null, actual.status === 'reported' ? actual.outputTokens : null, outcome ?? null]);
       });
-      finished = status;
+      finished = status; structuredOutcome = outcome;
     };
     const admission: ProviderRequestAdmission = async <T>(launch: (signal: AbortSignal) => Promise<T>, requestSignal?: AbortSignal): Promise<T> => {
       if (!callId || !binding || launched || admitted || finished) throw unavailable();
@@ -313,6 +331,7 @@ export class BackgroundGeneration {
       try {
         const result = await this.db.withBoundedTransaction(async client => {
           await this.current(client, fixed, claim, actualSignal);
+          await this.priorAttempts(client, claim, attempt);
           const route = resolveModelRoute(this.configuration, this.runtime, 'companion_generation');
           if (route.provider !== input.provider || route.model !== input.model) throw unavailable();
           const decision = await this.costs.reserveInTransaction(client, costInput, actualSignal);
@@ -347,6 +366,9 @@ export class BackgroundGeneration {
     finally { if (timer) clearTimeout(timer); removeDeadlineListener?.(); }
     if (!callId || !binding || !launched || !admitted || !finished) throw unavailable();
     if (parent?.aborted) parent.throwIfAborted();
+    if (finished === 'failed' && structuredOutcome === 'invalid_format') {
+      await this.validation(fixed, claim, callId, 'invalid_format', ['preview.invalid_format'], parent); return { callId };
+    }
     if (timedOut && ['interrupted', 'cancelled', 'failed'].includes(finished)) {
       await this.validation(fixed, claim, callId, 'timed_out', [], parent); return { callId, timedOut: true };
     }
@@ -363,7 +385,10 @@ export class BackgroundGeneration {
     await this.db.withBoundedTransaction(async client => {
       await this.current(client, fixed, claim, signal);
       const saved = await client.query(`UPDATE platform_companion_generation_calls SET validation_status=$2 WHERE call_id=$1
-        AND task_id=$3 AND generation=$4 AND finished_at IS NOT NULL AND admitted_at IS NOT NULL AND validation_status IS NULL RETURNING call_id`,
+        AND task_id=$3 AND generation=$4 AND finished_at IS NOT NULL AND admitted_at IS NOT NULL AND validation_status IS NULL
+        AND (($2='invalid_format' AND (status='complete' OR (status='failed' AND structured_outcome='invalid_format')))
+          OR ($2 IN ('passed_rules','blocked','requires_review') AND status='complete' AND structured_outcome IS NULL)
+          OR ($2='timed_out' AND status IN ('failed','cancelled','interrupted') AND structured_outcome IS NULL)) RETURNING call_id`,
       [callId, status, claim.row.id, claim.generation]);
       if (!saved.rowCount) throw unavailable();
       if (status !== 'passed_rules' && status !== 'timed_out') await client.query('INSERT INTO platform_companion_output_blocks(call_id,rules) VALUES($1,$2)', [callId, rules.length ? rules.slice(0, 32) : ['preview.requires_review']]);
@@ -382,17 +407,16 @@ export class BackgroundGeneration {
     const rows = (await client.query<CallRow>(`SELECT c.* FROM platform_companion_generation_calls c JOIN platform_cost_ledger l
       ON l.reservation_id=c.reservation_id AND l.user_id=c.user_id AND l.source_id=c.task_id AND l.capability='background'
       AND l.source_kind='job' AND l.purpose=c.purpose AND l.provider=c.provider AND l.model=c.model
-      WHERE c.task_id=$1 AND c.user_id=$2 AND c.generation=$3 ORDER BY attempt FOR UPDATE OF c`,
+      WHERE c.task_id=$1 AND c.user_id=$2 AND c.generation=$3 ORDER BY attempt FOR UPDATE OF c,l`,
     [claim.row.id, claim.row.user_id, claim.generation])).rows;
     if (rows.length !== callIds.length || rows.some((row, i) => row.call_id !== callIds[i] || row.attempt !== i + 1
       || row.companion_id !== claim.row.companion_id || row.provider !== claim.seed.provider || row.model !== claim.seed.model
       || row.purpose !== 'companion_generation' || !row.admitted_at || !row.finished_at)) throw unavailable();
-    const invalidOutput = (r: CallRow) => r.status === 'complete' && ['blocked', 'requires_review', 'invalid_format'].includes(r.validation_status!);
     if (generatedBy === 'model') {
-      if (!rows.slice(0, -1).every(invalidOutput) || rows.at(-1)!.status !== 'complete' || rows.at(-1)!.validation_status !== 'passed_rules') throw unavailable();
+      if (!rows.slice(0, -1).every(invalidPreviewCall) || rows.at(-1)!.status !== 'complete' || rows.at(-1)!.validation_status !== 'passed_rules') throw unavailable();
     } else if (generatedBy === 'fallback') {
-      if (!(rows.length === 3 && rows.every(invalidOutput))
-        && !(rows.slice(0, -1).every(invalidOutput) && rows.at(-1)!.validation_status === 'timed_out'
+      if (!(rows.length === 3 && rows.every(invalidPreviewCall))
+        && !(rows.slice(0, -1).every(invalidPreviewCall) && rows.at(-1)!.validation_status === 'timed_out'
           && ['failed', 'cancelled', 'interrupted'].includes(rows.at(-1)!.status))) throw unavailable();
     } else throw unavailable();
   }

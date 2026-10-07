@@ -4,6 +4,7 @@ import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { createProviderRuntime } from '@companion/ai-core';
+import { compileFallbackCompanionStyle, type CompanionDimensions } from '@companion/career-core';
 import type { PlatformProviderRuntime } from '@companion/platform-contracts';
 import { Database } from '../src/database.ts';
 import { readConfig } from '../src/config.ts';
@@ -68,12 +69,12 @@ async function policy(who: FixedSessionContext, hard = '100000000') {
     VALUES($1,'fictional-explicit-generation-policy','week','notify',1,$2,$3,clock_timestamp(),clock_timestamp())`,
   [who.userId, hard, approver.userId]);
 }
-async function pending(who: FixedSessionContext, runtime: PlatformProviderRuntime) {
+async function pending(who: FixedSessionContext, runtime: PlatformProviderRuntime, preparationDatabase: Database = db) {
   let draft = (await store.save(who, { expectedRevision: 0, operationId: randomUUID(), action: { kind: 'start', mode: 'fast_track' } })).draft;
   while (draft.currentQuestion) draft = (await store.save(who, { expectedRevision: draft.revision, operationId: randomUUID(),
     action: { kind: 'skip', questionId: draft.currentQuestion } })).draft;
   assert.equal(draft.state, 'intake_ready');
-  const prepared = await new CompanionDraftPreparation(db, config, FICTIONAL_LEGAL, runtime)
+  const prepared = await new CompanionDraftPreparation(preparationDatabase, config, FICTIONAL_LEGAL, runtime)
     .prepare(who, { expectedRevision: draft.revision });
   return { draft, prepared };
 }
@@ -225,11 +226,10 @@ test('a blocked first completion can be replaced by a genuinely admitted valid s
   });
 });
 
-test('structurally invalid or refused HTTP cannot be counted as completed validation failures or create fallback', async () => {
-  for (const mode of ['schema', 'refusal', 'provider_error'] as const) {
+test('refusal and upstream errors cannot be counted as completed validation failures or create fallback', async () => {
+  for (const mode of ['refusal', 'provider_error'] as const) {
     await loopback((_body, reply) => {
-      if (mode === 'schema') respond(reply, { ...validPreview, dimensions: { warmth: 1 } });
-      else if (mode === 'refusal') respond(reply, validPreview, { output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'refusal', refusal: 'Fictional refusal.' }] }] });
+      if (mode === 'refusal') respond(reply, validPreview, { output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'refusal', refusal: 'Fictional refusal.' }] }] });
       else { reply.writeHead(503); reply.end('Fictional private upstream failure.'); }
     }, async (runtime, bodies) => {
       const { who, prepared } = await ready(runtime), service = generator(runtime);
@@ -238,10 +238,84 @@ test('structurally invalid or refused HTTP cannot be counted as completed valida
       assert.equal(current.tasks[0].status, 'failed'); assert.equal(current.revisions.length, 0); assert.equal(current.companions[0].status, 'drafting');
       assert.equal(await service.read(who, { taskId: prepared.taskId }), null);
       assert.equal(current.calls.length, 1); assert.notEqual(current.calls[0].status, 'complete');
+      assert.equal(current.calls[0].structured_outcome, null); assert.equal(current.calls[0].validation_status, null);
       assert.equal(current.reservations.length, 1); assert.equal(current.costs.length, 1);
       assert.equal(current.leases.length, 0); assert.deepEqual(current.effects, noConversation);
       const terminal = await stored(who); await assert.rejects(service.generate(who, { taskId: prepared.taskId }), error => error instanceof Error);
       assert.equal(bodies.length, 1); assert.deepEqual(await stored(who), terminal);
+    });
+  }
+});
+
+test('three fully received completed responses with invalid format produce a marked fallback and exact accounting', async () => {
+  for (const text of ['{"summary":"Fictional malformed output.', JSON.stringify({ ...validPreview, dimensions: { warmth: 1 } }),
+    JSON.stringify({ ...validPreview, samples: [validPreview.samples[0]] }), '']) {
+    await loopback((_body, reply) => respond(reply, validPreview, { output: [{ type: 'message', role: 'assistant', status: 'completed',
+      content: [{ type: 'output_text', text }] }] }), async (runtime, bodies) => {
+      const { who, prepared } = await ready(runtime), service = generator(runtime);
+      const view = await service.generate(who, { taskId: prepared.taskId }); assertPrivatePreview(view, prepared.companionId, 'fallback');
+      const current = await stored(who); assert.equal(bodies.length, 3); assert.equal(current.calls.length, 3);
+      assert(current.calls.every(row => row.status === 'failed' && row.structured_outcome === 'invalid_format'
+        && row.validation_status === 'invalid_format' && row.admitted_at instanceof Date && row.finished_at instanceof Date));
+      assert.equal(current.costs.length, 3); assert(current.costs.every(row => row.usage_status === 'reported' && row.cost_micros === '76' && !row.estimated));
+      assert.equal(current.blocks.length, 3); assert(current.blocks.every(row => JSON.stringify(row.rules) === '["preview.invalid_format"]'));
+      assert.equal(current.revisions.length, 1); const saved = payload(current.revisions[0], who);
+      assert.equal(saved.generatedBy, 'fallback'); assert.deepEqual([...saved.callIds].sort(), current.calls.map(row => row.call_id).sort());
+      for (const value of [JSON.stringify(current.calls), JSON.stringify(current.blocks), JSON.stringify(saved)]) {
+        assert.equal(value.includes('Fictional malformed output'), false); assert.equal(value.includes('structuredOutcome'), false);
+      }
+      assert.equal(current.leases.length, 0); assert.deepEqual(current.effects, noConversation);
+      assert.deepEqual(await service.read(who, { taskId: prepared.taskId }), view);
+      assert.deepEqual(await generator(runtime).generate(who, { taskId: prepared.taskId }), view);
+      assert.equal(bodies.length, 3); assert.deepEqual(await stored(who), current);
+    });
+  }
+});
+
+test('a completed format failure can be followed by a valid model result or combine with rejected content', async () => {
+  for (const fallback of [false, true]) {
+    let attempt = 0;
+    await loopback((_body, reply) => {
+      attempt++;
+      respond(reply, attempt === 1 ? { ...validPreview, extra: 'Fictional unrequested field.' }
+        : fallback ? { ...validPreview, summary: '保证拿到 offer。' } : validPreview);
+    }, async (runtime, bodies) => {
+      const { who, prepared } = await ready(runtime), service = generator(runtime);
+      const view = await service.generate(who, { taskId: prepared.taskId }); assertPrivatePreview(view, prepared.companionId, fallback ? 'fallback' : 'model');
+      const current = await stored(who), ordered = [...current.calls].sort((a, b) => a.attempt - b.attempt);
+      assert.equal(bodies.length, fallback ? 3 : 2); assert.equal(current.costs.length, bodies.length);
+      assert.equal(ordered[0].structured_outcome, 'invalid_format'); assert.equal(ordered[0].validation_status, 'invalid_format');
+      assert(ordered.slice(1).every(row => row.status === 'complete' && row.structured_outcome === null
+        && row.validation_status === (fallback ? 'blocked' : 'passed_rules')));
+      assert.equal(current.revisions.length, 1); assert.equal(payload(current.revisions[0], who).callIds.length, bodies.length);
+      assert.equal(current.leases.length, 0); assert.deepEqual(current.effects, noConversation);
+    });
+  }
+});
+
+test('provider self-report, malformed envelopes and post-terminal events cannot supply completed-format proof', async () => {
+  for (const mode of ['self_report', 'missing_output', 'incomplete', 'post_terminal', 'transport_cut'] as const) {
+    await loopback((_body, reply) => {
+      const response = { status: mode === 'incomplete' ? 'incomplete' : 'completed',
+        output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '{' }] }],
+        usage: { input_tokens: 34, output_tokens: 21 }, structuredOutcome: 'invalid_format' };
+      if (mode === 'self_report') respond(reply, validPreview, { ...response, error: { code: 'PROVIDER_STRUCTURED_VALIDATION_FAILED' } });
+      else if (mode === 'missing_output') respond(reply, validPreview, { ...response, output: undefined });
+      else if (mode === 'incomplete') respond(reply, validPreview, response);
+      else {
+        reply.writeHead(200, { 'content-type': 'text/event-stream' });
+        reply.write(`data: ${JSON.stringify({ type: 'response.completed', response })}\n\n`);
+        if (mode === 'post_terminal') reply.end('data: {"type":"response.output_text.delta","delta":"Fictional late text"}\n\ndata: [DONE]\n\n');
+        else setTimeout(() => reply.destroy(), 15);
+      }
+    }, async (runtime, bodies) => {
+      const { who, prepared } = await ready(runtime), service = generator(runtime);
+      await assert.rejects(service.generate(who, { taskId: prepared.taskId }), error => error instanceof ApiError);
+      const current = await stored(who); assert.equal(bodies.length, 1); assert.equal(current.calls.length, 1);
+      assert.equal(current.calls[0].structured_outcome, null); assert.equal(current.calls[0].validation_status, null);
+      assert.equal(current.revisions.length, 0); assert.equal(current.blocks.length, 0); assert.equal(current.tasks[0].status, 'failed');
+      assert.equal(current.costs.length, 1); assert.equal(current.leases.length, 0); assert.deepEqual(current.effects, noConversation);
+      assert.equal(await service.read(who, { taskId: prepared.taskId }), null);
     });
   }
 });
@@ -457,7 +531,7 @@ test('actual task and runtime lease expiry fence late HTTP completion while pres
 
 test('nonconforming server ports cannot substitute deltas for actual admission and terminal settlement', async () => {
   const available = requireModelConsent(createProviderRuntime({ env: providerEnv, fetch: () => { assert.fail('This counterexample has no HTTP adapter.'); } }));
-  for (const mode of ['no_start', 'no_admission', 'no_finish'] as const) {
+  for (const mode of ['no_start', 'no_admission', 'unadmitted_format', 'no_finish'] as const) {
     const who = await actor(); await policy(who); const { prepared } = await pending(who, available);
     const runtime: PlatformProviderRuntime = { ...available, async *streamChat(input, context) {
       const callId = randomUUID();
@@ -467,6 +541,10 @@ test('nonconforming server ports cannot substitute deltas for actual admission a
       if (mode === 'no_admission') {
         // Swallow the guard's genuine refusal, then maliciously return text.
         await assert.rejects(Promise.resolve(context!.onModelCall!({ type: 'finished', callId, status: 'complete', usage: { status: 'reported', inputTokens: 34, outputTokens: 21 } })), error => error instanceof ApiError);
+      }
+      if (mode === 'unadmitted_format') {
+        await assert.rejects(Promise.resolve(context!.onModelCall!({ type: 'finished', callId, status: 'failed',
+          structuredOutcome: 'invalid_format', usage: { status: 'reported', inputTokens: 0, outputTokens: 0 } })), error => error instanceof ApiError);
       }
       yield { type: 'delta', text: JSON.stringify(validPreview) };
     } };
@@ -482,6 +560,19 @@ test('nonconforming server ports cannot substitute deltas for actual admission a
     }
     assert.equal(await generator(runtime).read(who, { taskId: prepared.taskId }), null);
   }
+});
+
+test('lost completed-format evidence cannot be inferred from a legacy failed row when reading a saved fallback', async () => {
+  await loopback((_body, reply) => respond(reply, { ...validPreview, extra: true }), async (runtime, bodies) => {
+    const { who, prepared } = await ready(runtime), service = generator(runtime);
+    const view = await service.generate(who, { taskId: prepared.taskId }); assertPrivatePreview(view, prepared.companionId, 'fallback');
+    const current = await stored(who); assert.equal(bodies.length, 3);
+    await db.query('UPDATE platform_companion_generation_calls SET structured_outcome=NULL WHERE call_id=$1', [current.calls[0].call_id]);
+    const damaged = await stored(who);
+    await assert.rejects(service.read(who, { taskId: prepared.taskId }), code('COMPANION_GENERATION_UNAVAILABLE'));
+    await assert.rejects(service.generate(who, { taskId: prepared.taskId }), code('COMPANION_GENERATION_UNAVAILABLE'));
+    assert.equal(bodies.length, 3); assert.deepEqual(await stored(who), damaged);
+  });
 });
 
 test('superseded encrypted TEXT and missing safety receipt remain barriers before and after generation', async () => {
@@ -568,13 +659,13 @@ test('actual deferred PostgreSQL COMMIT failure cannot return a ghost preview an
 // timestamp expiry in the same isolated database. They never replace a query,
 // grant, model event, receipt or row count with an invented result.
 class QueryGateDatabase extends Database {
-  constructor(private readonly gate: (client: PoolClient, text: string) => Promise<void>,
+  constructor(private readonly gate: (client: PoolClient, text: string, values: unknown) => Promise<void>,
     private readonly observed: (text: string, rowCount: number | null) => void) { super(url.toString()); }
   override withBoundedTransaction<T>(run: (client: PoolClient) => Promise<T>, options: { readOnly?: boolean; timeoutMs?: number } = {}) {
     return super.withBoundedTransaction(client => run(new Proxy(client, { get: (target, key) => {
       if (key === 'query') return async (...args: unknown[]) => {
         const text = typeof args[0] === 'string' ? args[0] : '';
-        await this.gate(target, text);
+        await this.gate(target, text, args[1]);
         const result = await Reflect.apply(target.query, target, args);
         this.observed(text, result.rowCount); return result;
       };
@@ -582,6 +673,67 @@ class QueryGateDatabase extends Database {
     } })), options);
   }
 }
+
+test('a genuinely prepared collision draw is preserved by generation, fallback and completed replay', async () => {
+  for (const fallback of [false, true]) {
+    await loopback((_body, reply) => respond(reply, fallback ? { ...validPreview, extra: true } : validPreview), async (runtime, bodies) => {
+      const who = await actor(), other = await actor(); await policy(who); let lookups = 0;
+      const gated = new QueryGateDatabase(async (client, text, input) => {
+        if (!text.includes('FROM platform_companions WHERE fingerprint=$1')) return;
+        const values = input as string[]; lookups++;
+        await client.query("INSERT INTO platform_companions(id,user_id,status,fingerprint) VALUES($1,$2,'drafting',$3)", [randomUUID(), other.userId, values[0]]);
+      }, () => {});
+      try {
+        const { draft, prepared } = await pending(who, runtime, gated), before = await stored(who);
+        assert.equal(lookups, 1); assert.equal(before.tasks[0].quirk_draw, 1);
+        const dimensions: CompanionDimensions = { warmth: 0, directness: 0, drive: 0, structure: 0, levity: 0, code_mix: 0, length: 'medium' };
+        const zero = compileFallbackCompanionStyle({ companionId: prepared.companionId, dimensions });
+        const one = compileFallbackCompanionStyle({ companionId: prepared.companionId, dimensions, quirkDraw: 1 });
+        const preparer = new CompanionDraftPreparation(gated, config, FICTIONAL_LEGAL, runtime);
+        assert.deepEqual(await preparer.prepare(who, { expectedRevision: draft.revision }), prepared); assert.equal(lookups, 1);
+        const service = new BackgroundGeneration(gated, config, FICTIONAL_LEGAL, runtime);
+        const view = await service.generate(who, { taskId: prepared.taskId }); assertPrivatePreview(view, prepared.companionId, fallback ? 'fallback' : 'model');
+        assert.deepEqual(view.quirks, one.quirks); assert.equal(view.styleCard, one.styleCard); assert.equal(view.inkToken, zero.inkToken);
+        if (fallback) { assert.equal(view.summary, zero.summary); assert.deepEqual(view.samples, zero.samples); }
+        const current = await stored(who); assert.equal(current.tasks[0].quirk_draw, 1);
+        assert.equal(bodies.length, fallback ? 3 : 1); assert.equal(current.costs.length, bodies.length);
+        assert.deepEqual(await service.read(who, { taskId: prepared.taskId }), view);
+        await assert.rejects(preparer.prepare(who, { expectedRevision: draft.revision }), code('COMPANION_EXISTS'));
+        assert.equal(lookups, 1); assert.deepEqual(await service.generate(who, { taskId: prepared.taskId }), view);
+        assert.deepEqual(await stored(who), current);
+      } finally { await gated.close(); }
+    });
+  }
+});
+
+test('a retry rechecks actual prior validation, completion proof and cost binding at dispatch admission', async () => {
+  for (const mode of ['validation', 'completion_proof', 'cost_receipt'] as const) {
+    await loopback((_body, reply) => respond(reply, { ...validPreview, extra: true }), async (runtime, bodies) => {
+      const { who, prepared } = await ready(runtime); let changed = false;
+      const gated = new QueryGateDatabase(async (client, text) => {
+        if (changed || !text.includes('c.attempt<$4')) return;
+        const second = (await client.query('SELECT call_id FROM platform_companion_generation_calls WHERE task_id=$1 AND attempt=2', [prepared.taskId])).rows[0];
+        if (!second) return;
+        const prior = (await client.query('SELECT * FROM platform_companion_generation_calls WHERE task_id=$1 AND attempt=1', [prepared.taskId])).rows[0];
+        assert.equal(prior.structured_outcome, 'invalid_format'); assert.equal(prior.validation_status, 'invalid_format');
+        if (mode === 'validation') await client.query('UPDATE platform_companion_generation_calls SET validation_status=NULL WHERE call_id=$1', [prior.call_id]);
+        else if (mode === 'completion_proof') await client.query('UPDATE platform_companion_generation_calls SET structured_outcome=NULL WHERE call_id=$1', [prior.call_id]);
+        else assert.equal((await client.query('DELETE FROM platform_cost_ledger WHERE reservation_id=$1', [prior.reservation_id])).rowCount, 1);
+        changed = true;
+      }, () => {});
+      try {
+        await assert.rejects(new BackgroundGeneration(gated, config, FICTIONAL_LEGAL, runtime).generate(who, { taskId: prepared.taskId }), code('COMPANION_GENERATION_UNAVAILABLE'));
+        assert.equal(changed, true); assert.equal(bodies.length, 1);
+        const current = await stored(who), ordered = [...current.calls].sort((a, b) => a.attempt - b.attempt);
+        assert.equal(ordered.length, 2); assert.equal(ordered[1].admitted_at, null); assert.equal(ordered[1].structured_outcome, null);
+        assert.equal(current.costs.length, 1); assert.equal(current.revisions.length, 0); assert.equal(current.leases.length, 0);
+        assert.equal(current.tasks[0].status, 'failed'); assert.deepEqual(current.effects, noConversation);
+        // The gate's actual SQL mutation rolled back with denied admission.
+        assert.equal(ordered[0].structured_outcome, 'invalid_format'); assert.equal(ordered[0].validation_status, 'invalid_format');
+      } finally { await gated.close(); }
+    });
+  }
+});
 
 test('final dispatch grant rejects prices or global policy that expire after earlier admission checks', async () => {
   await loopback(() => assert.fail('An expired final money grant must not launch HTTP.'), async (runtime, bodies) => {
