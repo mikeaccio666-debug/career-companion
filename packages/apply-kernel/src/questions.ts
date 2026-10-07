@@ -1,5 +1,13 @@
 import type { ApplyFieldDescriptor } from './contracts';
 
+/** 控件的本地补充题面；只读 placeholder／aria-describedby，不读取或传递填写值。 */
+export function questionContextOf(element: Element): string {
+  return [element.getAttribute('placeholder') ?? '',
+    ...(element.getAttribute('aria-describedby') ?? '').split(/\s+/u).filter(Boolean)
+      .map((id) => element.ownerDocument.getElementById(id)?.textContent ?? ''),
+  ].map((part) => part.replace(/\s+/gu, ' ').trim()).filter(Boolean).join(' · ');
+}
+
 export type QuestionControlType = 'TEXT' | 'TEXTAREA' | 'SINGLE_CHOICE' | 'MULTI_CHOICE';
 
 /** Value-free description of a host question, shaped like the backend's question packet item. */

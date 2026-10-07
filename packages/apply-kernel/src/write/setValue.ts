@@ -27,8 +27,22 @@ import {
   EVENT_PROFILES,
 } from './allowlist';
 import type { BeginMainWorldBridge, MainWorldBridge } from './mainWorldBridge';
+import { evaluateHostVeto } from '../gate/hostVeto';
 
 type Writable = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+
+/** Read the target's document rather than any caller-supplied scan origin. */
+function hostTargetStillAllowed(element: Element): boolean {
+  try {
+    const location = element.ownerDocument.location;
+    return location !== null && !evaluateHostVeto({
+      hostname: location.hostname, pathname: location.pathname,
+      policy: { deniedHostSuffixes: [] },
+    }).vetoed;
+  } catch {
+    return false;
+  }
+}
 
 /** A text write plus the best-effort MAIN notification it started while active. */
 export interface TextWriteAttempt {
@@ -71,10 +85,12 @@ function nativeSelectedIndexSetter(element: HTMLSelectElement): ((index: number)
  * receive a blur envelope: typeahead-like controls can clear their value when
  * they observe blur before a concrete option selection.
  */
-function notifyHost(element: Writable, kind: 'text' | 'textarea' | 'select'): void {
+function notifyHost(element: Writable, kind: 'text' | 'textarea' | 'select'): boolean {
   for (const event of EVENT_PROFILES[kind]) {
+    if (!hostTargetStillAllowed(element)) return false;
     dispatchHostEvent(element, event);
   }
+  return true;
 }
 
 /**
@@ -88,7 +104,7 @@ function writeNativeTextValue(
   value: string,
   authority: HostWriteAuthority,
   ticket: WriteTicket,
-): Result<string, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'WRITE_REVERTED'> {
+): Result<string, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'WRITE_REVERTED' | 'POLICY_DISABLED'> {
   // The opaque ticket is a compile-time precondition issued only by the undo
   // journal. It intentionally has no inspectable data, so it cannot leak an
   // original value into this low-level writer.
@@ -98,6 +114,7 @@ function writeNativeTextValue(
 
   const setter = nativeValueSetter(element);
   if (!setter) return { ok: false, code: 'WRITE_REVERTED' };
+  if (!hostTargetStillAllowed(element)) return { ok: false, code: 'POLICY_DISABLED' };
   setter(value);
   return { ok: true, value };
 }
@@ -107,9 +124,11 @@ export function writeTextValue(
   value: string,
   authority: HostWriteAuthority,
   ticket: WriteTicket,
-): Result<string, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'WRITE_REVERTED'> {
+): Result<string, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'WRITE_REVERTED' | 'POLICY_DISABLED'> {
   const written = writeNativeTextValue(element, value, authority, ticket);
   if (!written.ok) return written;
+  // Once the setter ran, this is a real write attempt. Stop the envelope if
+  // host identity changes, but keep its witness for C6 and the Undo journal.
   notifyHost(element, element instanceof HTMLTextAreaElement ? 'textarea' : 'text');
   return written;
 }
@@ -144,7 +163,7 @@ export function writeDateSegment(
   value: string,
   authority: HostWriteAuthority,
   ticket: WriteTicket,
-): Result<string, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'WRITE_REVERTED' | 'TARGET_NOT_WRITABLE'> {
+): Result<string, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'WRITE_REVERTED' | 'TARGET_NOT_WRITABLE' | 'POLICY_DISABLED'> {
   void ticket;
   const access = checkActiveCapability(authority, 'set-text');
   if (!access.ok) return access;
@@ -153,8 +172,12 @@ export function writeDateSegment(
   if (group === null || (active !== null && group.contains(active))) return { ok: false, code: 'TARGET_NOT_WRITABLE' };
   const setter = nativeValueSetter(element);
   if (!setter) return { ok: false, code: 'WRITE_REVERTED' };
+  if (!hostTargetStillAllowed(element)) return { ok: false, code: 'POLICY_DISABLED' };
   setter(value);
-  for (const event of DATE_SEGMENT_SECTION_EVENTS) dispatchHostEvent(element, event);
+  for (const event of DATE_SEGMENT_SECTION_EVENTS) {
+    if (!hostTargetStillAllowed(element)) break;
+    dispatchHostEvent(element, event);
+  }
   return { ok: true, value };
 }
 
@@ -164,7 +187,10 @@ export function writeDateSegment(
  */
 export function commitDateSegment(element: HTMLInputElement, authority: HostWriteAuthority): boolean {
   if (!checkActiveCapability(authority, 'set-text').ok || !element.isConnected) return false;
-  for (const event of DATE_SEGMENT_COMMIT_EVENTS) dispatchHostEvent(element, event);
+  for (const event of DATE_SEGMENT_COMMIT_EVENTS) {
+    if (!hostTargetStillAllowed(element)) return false;
+    dispatchHostEvent(element, event);
+  }
   return true;
 }
 
@@ -182,11 +208,21 @@ export function writeTextValueWithMainWorld(
   authority: HostWriteAuthority,
   ticket: WriteTicket,
   startBridge: BeginMainWorldBridge,
-): Result<TextWriteAttempt, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'WRITE_REVERTED'> {
+): Result<TextWriteAttempt, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'WRITE_REVERTED' | 'POLICY_DISABLED'> {
   const written = writeNativeTextValue(element, value, authority, ticket);
   if (!written.ok) return written;
+  if (!hostTargetStillAllowed(element)) {
+    // The setter changed material, but no MAIN request has started. Keep a
+    // cancelled transport outcome so the runner preserves its mutation ticket.
+    return { ok: true, value: { expected: written.value,
+      bridge: { settled: Promise.resolve('aborted'), abort: () => undefined } } };
+  }
   const bridge = startBridge(element, authority, ticket);
-  notifyHost(element, element instanceof HTMLTextAreaElement ? 'textarea' : 'text');
+  if (!notifyHost(element, element instanceof HTMLTextAreaElement ? 'textarea' : 'text')) {
+    // Retire pending MAIN retries, but retain the real setter/bridge attempt
+    // so C6 can account for changed material instead of abandoning its ticket.
+    try { bridge.abort(); } catch { /* The caller retains the original bounded handle. */ }
+  }
   return { ok: true, value: { expected: written.value, bridge } };
 }
 
@@ -244,7 +280,7 @@ export function writeSelectValue(
   ticket: WriteTicket,
 ): Result<
   string,
-  'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'NO_OPTION_MATCH' | 'AMBIGUOUS_OPTION'
+  'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'NO_OPTION_MATCH' | 'AMBIGUOUS_OPTION' | 'POLICY_DISABLED'
 > {
   void ticket;
   const access = checkActiveCapability(authority, 'set-select');
@@ -257,6 +293,7 @@ export function writeSelectValue(
   const byPrefix = resolved.index;
 
   const setter = nativeValueSetter(element);
+  if (!hostTargetStillAllowed(element)) return { ok: false, code: 'POLICY_DISABLED' };
   if (setter) setter(options[byPrefix].value);
   else element.selectedIndex = byPrefix;
   notifyHost(element, 'select');
@@ -275,7 +312,7 @@ export function writeSelectIndex(
   index: number,
   authority: HostWriteAuthority,
   ticket: WriteTicket,
-): Result<void, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'NO_OPTION_MATCH'> {
+): Result<void, 'GESTURE_UNTRUSTED' | 'GESTURE_EXPIRED' | 'CAPABILITY_DISABLED' | 'NO_OPTION_MATCH' | 'POLICY_DISABLED'> {
   void ticket;
   const access = checkActiveCapability(authority, 'set-select');
   if (!access.ok) return access;
@@ -284,6 +321,7 @@ export function writeSelectIndex(
   }
 
   const setter = nativeSelectedIndexSetter(element);
+  if (!hostTargetStillAllowed(element)) return { ok: false, code: 'POLICY_DISABLED' };
   if (setter) setter(index);
   else element.selectedIndex = index;
   notifyHost(element, 'select');

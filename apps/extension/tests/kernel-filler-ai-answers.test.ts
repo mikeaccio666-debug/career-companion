@@ -192,7 +192,121 @@ const aiRows = (view: { rows: readonly unknown[] }) =>
   view.rows.filter((row) => (row as { aiAnswered?: unknown }).aiAnswered === true)
     .map((row) => [(row as { label: string }).label, (row as { status: string }).status]);
 
+describe('实际 AI 写入口不能绕过当前身份依据', () => {
+  async function directAudit(): Promise<KernelFillAudit> {
+    const audits: KernelFillAudit[] = [];
+    await fillFromGesture({
+      proof: trustedClick().proof, scan: scanNow(), policy: livePolicy(), profile: PROFILE,
+      progress: { onOutcome: () => {}, shouldStop: () => false } as never,
+      onAudit: (audit: KernelFillAudit) => audits.push(audit),
+      jobRegionCode: 'CA',
+      workAuthorizations: [{ regionCode: 'US', authorizedToWork: 'YES', requiresSponsorship: 'YES' }],
+    } as never);
+    return audits[0]!;
+  }
+
+  it.each([
+    'Are you legally authorized to work in Canada?',
+    'Are you legally entitled to work in Canada?',
+    'Are you eligible to work in Canada?',
+    'Will you require sponsorship in Canada?',
+    'Are you a citizen or lawful permanent resident?',
+    'Do you have a green card?',
+    'Are you a U.S. person under export-control regulations?',
+    'What is your export-control eligibility status?',
+  ])('%s：直接调用 AI writer、即使真实点击也不写入', async (label) => {
+    mountForm();
+    document.querySelector('#auth-question legend')!.textContent = label;
+    const audit = await directAudit();
+    const field = audit.scanFields!().find((candidate) => candidate.label === label)!;
+    expect(field).toBeDefined();
+    const result = await audit.writeAiAnswers!([{ questionId: 'pretend-ordinary-question', element: field.element, value: 'Yes' }], trustedClick().proof, { fillEmptyOnly: true });
+    expect(result).toEqual({ ok: false, code: 'MANUAL_ONLY' });
+    expect(checked('auth')).toBeNull();
+    expect(value('first_name')).toBe('Sample');
+    expect(audit.prefills.size).toBe(0);
+  });
+
+  it.each([
+    'Describe your visa and work authorization status.',
+    'Applicants must be a U.S. person under export-control rules.',
+    'Applicants must hold a green card.',
+  ])('题名普通但真实描述说明涉及身份：%s，直接 AI writer 仍拒绝', async (context) => {
+    mountForm();
+    document.querySelector('#why')!.setAttribute('aria-describedby', 'identity-description');
+    const description = document.createElement('p');
+    description.id = 'identity-description';
+    description.textContent = context;
+    document.body.append(description);
+    const audit = await directAudit();
+    expect(await audit.writeAiAnswers!([{ questionId: 'ordinary', element: document.querySelector('#why')!, value: 'I am authorized.' }], trustedClick().proof, { fillEmptyOnly: true }))
+      .toEqual({ ok: false, code: 'MANUAL_ONLY' });
+    expect(value('why')).toBe('');
+  });
+
+  it.each([false, true])('普通题和身份题混合批次（身份先到=%s）：整批零写入、无成功 AI 审计行', async (identityFirst) => {
+    mountForm();
+    const label = 'Are you legally entitled to work in Canada?';
+    document.querySelector('#auth-question legend')!.textContent = label;
+    const audit = await directAudit();
+    const field = audit.scanFields!().find((candidate) => candidate.label === label)!;
+    const identity = { questionId: 'auth', element: field.element, value: 'Yes' };
+    const ordinary = { questionId: 'why', element: document.querySelector('#why')!, value: WHY };
+    expect(await audit.writeAiAnswers!(identityFirst ? [identity, ordinary] : [ordinary, identity], trustedClick().proof, { fillEmptyOnly: true }))
+      .toEqual({ ok: false, code: 'MANUAL_ONLY' });
+    expect(value('why')).toBe('');
+    expect(checked('auth')).toBeNull();
+    expect(aiRows(audit.recheck())).toEqual([]);
+  });
+
+  it('普通职业开放题的实际 AI 写入仍可用', async () => {
+    mountForm();
+    const audit = await directAudit();
+    expect(await audit.writeAiAnswers!([{ questionId: 'why', element: document.querySelector('#why')!, value: WHY }], trustedClick().proof, { fillEmptyOnly: true }))
+      .toMatchObject({ ok: true, written: 1 });
+    expect(value('why')).toBe(WHY);
+  });
+
+  it('本人在当前页面新确认加拿大题的 No，仍走独立人工回答入口', async () => {
+    mountForm();
+    const label = 'Are you legally entitled to work in Canada?';
+    document.querySelector('#auth-question legend')!.textContent = label;
+    const audit = await directAudit();
+    const question = audit.questions.find((candidate) => candidate.text === label)!;
+    expect(question).toBeDefined();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const button = document.createElement('button');
+    shadow.append(button);
+    let written: ReturnType<KernelFillAudit['answer']> | undefined;
+    button.addEventListener('click', (event) => {
+      written = audit.answer(event, shadow, [{ questionId: question.questionId, value: 'No' }]);
+    });
+    button.dispatchEvent(new TrustedClick('click'));
+    expect(written).toBeDefined();
+    expect((await written!).some((result) => result.ok)).toBe(true);
+    expect(checked('auth')).toBe('No');
+  });
+});
+
 describe('挑题与请求', () => {
+  it.each([
+    'Are you legally entitled to work in Canada?',
+    'Do you have the right to work in Canada?',
+    'Are you a U.S. person under export-control regulations?',
+  ])('同源身份判据也用于模型请求挑题：%s 不发送，普通职业题仍发送', async (label) => {
+    mountForm();
+    document.querySelector('#auth-question legend')!.textContent = label;
+    const ai = aiPort(() => ({ fills: [], noEvidence: [] }));
+    const { ai: handle } = await run(ai.port);
+    await handle!.outcome;
+    expect(ai.sent).toHaveLength(1);
+    expect(ai.sent[0]!.some((field) => field.label === label)).toBe(false);
+    expect(ai.sent[0]!.some((field) => field.label === 'Why do you want to work here?')).toBe(true);
+    expect(checked('auth')).toBeNull();
+  });
+
   it('只送规则答不了、而且空着的题；只能本人答的、他人信息、已经有值的一概不送；按契约校验得过、没有选择器与现值', async () => {
     mountForm();
     const ai = aiPort(() => ({ fills: [], noEvidence: [] }));

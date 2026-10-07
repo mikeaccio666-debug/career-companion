@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApplyPlan } from '../src/engine';
+import { SIGNING_CONSENT_KINDS } from '../src/dict/signOnBehalf';
 import { fieldSignature } from '../src/fieldIdentity';
 import { runApplyPlan } from '../src/runner';
 import { createScanRoot } from '../src/scanRoot';
@@ -57,6 +58,7 @@ async function run(options: { consent: boolean; policyOn?: boolean }) {
   const { terms, signature, root, descriptor } = mount();
   const plan = buildApplyPlan(descriptor as never, { firstName: 'Ada', lastName: 'Lovelace' } as never, {
     capabilities: { 'sign-on-behalf': true },
+    signOnBehalfKinds: new Set(SIGNING_CONSENT_KINDS),
   } as never);
   expect(plan.entries.map((entry) => entry.key)).toEqual(['termsConsent', 'signatureName']);
   const summary = await runApplyPlan({
@@ -139,7 +141,7 @@ describe('选择题', () => {
 
   async function runChoices(beforeRun?: () => void) {
     const { yes, no, privacy, root, descriptor } = mountChoices();
-    const plan = buildApplyPlan(descriptor as never, {} as never, { capabilities: { 'sign-on-behalf': true } } as never);
+    const plan = buildApplyPlan(descriptor as never, {} as never, { capabilities: { 'sign-on-behalf': true }, signOnBehalfKinds: new Set(SIGNING_CONSENT_KINDS) } as never);
     expect(plan.entries.map((entry) => [entry.key, entry.value, entry.signOnBehalf])).toEqual([
       ['truthAttestation', 'Yes', 'TRUTH_ATTESTATION'],
       ['termsConsent', 'Consent', 'TERMS_CONSENT'],

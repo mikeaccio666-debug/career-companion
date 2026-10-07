@@ -1,9 +1,11 @@
 import type { QuestionDescription } from '@edaix/apply-kernel/questions';
+import { isManualIdentityQuestion } from '@edaix/apply-kernel/engine';
 import { employerContactSubject } from '@edaix/apply-kernel/signOnBehalf';
 import { workAuthorizationQuestionKind } from '@edaix/apply-kernel/workAuthorization';
 import {
   applicationAnswerCategoryKeyV1,
   applicationAnswerTextKeyV1,
+  fullAiManualField,
   normalizeApplicationQuestionTextV1,
   type ApplicationAnswerCategory,
   type ApplicationQuestionCandidateV1,
@@ -27,11 +29,15 @@ import {
  * · 多选控件暂不复用（一条记忆对多个勾选框，写入器今天只写一个值）。
  */
 /**
- * 能不能联系他的雇主或推荐人（2026-09-28）：只按资料里那一问答（RULE-GLOBAL-HUMAN-AUTHORIZATION 例外二，还要运行时包放行
- * `sign-on-behalf`），不进答案记忆、也不从记忆里带出——记忆复用不看那个开关，记下来就绕过了它。浮层里当场答的这一题记进资料。
+ * 泛化的记忆键没有当前国家、档案或逐项授权的绑定。身份与同意题只能按当前确认资料
+ * 或由本人当场回答；不新建记忆，也不带出以前留下的记忆（产品 11 §3.3、10A）。
  */
-function answeredFromProfileOnly(question: QuestionDescription): boolean {
-  return employerContactSubject(question.text) !== null;
+export function requiresCurrentApplicationEvidence(question: QuestionDescription, context = '', autocomplete = ''): boolean {
+  const text = [question.text, context, ...question.options.map((option) => option.text)].join(' ');
+  return employerContactSubject(text) !== null
+    || workAuthorizationQuestionKind(text) !== null
+    || isManualIdentityQuestion(text)
+    || fullAiManualField({ label: text, context: '', autocomplete, options: question.options.map((option) => ({ id: option.optionId, label: option.text })) });
 }
 
 export interface AnswerKeys {
@@ -87,7 +93,7 @@ export async function matchRememberedAnswers(
   const byKey = new Map(answers.map((answer) => [answer.answerKey, answer]));
   const matches: RememberedMatch[] = [];
   for (const question of questions) {
-    if (answeredFromProfileOnly(question)) continue;
+    if (requiresCurrentApplicationEvidence(question)) continue;
     const keys = await answerKeysFor(question);
     for (const key of [keys.textKey, keys.categoryKey]) {
       if (key === null) continue;
@@ -112,7 +118,7 @@ export function memoryCandidates(
 ): readonly ApplicationQuestionCandidateV1[] {
   const byQuestion = new Map(matches.map((match) => [match.questionId, match]));
   return questions.map((question) => {
-    const match = byQuestion.get(question.questionId);
+    const match = requiresCurrentApplicationEvidence(question) ? undefined : byQuestion.get(question.questionId);
     if (match === undefined) {
       return Object.freeze({ questionId: question.questionId, disposition: 'NEEDS_USER_INPUT' as const, reasonCode: 'QUESTION_NO_EVIDENCE' as never, answer: null, confidence: 'NONE' as const, provenance: [] });
     }
@@ -135,7 +141,7 @@ export async function rememberRequestsFor(
   question: QuestionDescription,
   value: string,
 ): Promise<readonly PutApplicationAnswerRequestV1[]> {
-  if (answeredFromProfileOnly(question)) return [];
+  if (requiresCurrentApplicationEvidence(question)) return [];
   const controlType: ApplicationAnswerControlType = question.controlType;
   const answer = controlType === 'SINGLE_CHOICE' || controlType === 'MULTI_CHOICE'
     ? { kind: 'CHOICES' as const, optionTexts: value.split('\n').map((item) => item.trim()).filter(Boolean) }

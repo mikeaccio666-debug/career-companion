@@ -1,4 +1,4 @@
-import { isHostDenied, type ApplyPolicy } from '../policy';
+import { isHostDenied, isLocallyAutomationDenied, type HostRestrictionPolicy } from './hostRestrictions';
 
 /**
  * 主机级注入否决。**纯函数，不碰 DOM**——所以它能在最便宜的位置先跑一遍。
@@ -16,6 +16,8 @@ export const HOST_VETO_REASONS = [
   'EMPLOYER_CONSOLE',
   /** 公共部门门户（社保、税务、签证、公立医疗）。 */
   'PUBLIC_SECTOR',
+  /** 本地产品禁止自动操作的站点；远程策略不能解除。 */
+  'LOCAL_AUTOMATION_DENY',
   /** 远程策略下发的否决后缀 —— 唯一的线上止血通道。 */
   'REMOTE_DENYLIST',
 ] as const;
@@ -167,15 +169,19 @@ export interface HostVetoInput {
    * 非共域主机上它不参与判断，行为与加这个字段之前逐字相同。
    */
   readonly pathname?: string;
-  readonly policy: ApplyPolicy;
+  readonly policy: HostRestrictionPolicy;
 }
 
 export function evaluateHostVeto(input: HostVetoInput): HostVetoVerdict {
   const host = input.hostname.trim().toLowerCase().replace(/\.$/, '');
   if (host === '') return { vetoed: false };
 
-  // 远程否决排最前：它是运维在事故中用的，必须优先于任何本地判断，
-  // 也必须在最便宜的位置就生效。
+  if (isLocallyAutomationDenied(host)) {
+    return { vetoed: true, reason: 'LOCAL_AUTOMATION_DENY' };
+  }
+
+  // 本地不可解除的产品限制之后，远程事故否决仍先于厂商/页面归属，
+  // 在最便宜的位置就生效。
   if (isHostDenied(input.policy, host)) return { vetoed: true, reason: 'REMOTE_DENYLIST' };
   if (EMPLOYER_CONSOLE_HOSTS.some((entry) => matchesSuffix(host, entry))) {
     return { vetoed: true, reason: 'EMPLOYER_CONSOLE' };

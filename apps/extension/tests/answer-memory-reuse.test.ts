@@ -95,3 +95,33 @@ describe('能不能联系雇主或推荐人：只按资料答，不进记忆（2
     expect(await rememberRequestsFor(relocate, 'Yes')).not.toEqual([]);
   });
 });
+
+describe('当前身份与授权依据不能由泛化记忆替代', () => {
+  it.each([
+    'Are you legally authorized to work in Canada?',
+    'Are you legally authorized to work in the country where this job is based?',
+    'Are you eligible to work without sponsorship?',
+    'Will you now or in the future require sponsorship?',
+    'Are you currently on a visa or do you require sponsorship?',
+    'Are you a United States citizen or lawful permanent resident?',
+    'Do you have a green card?',
+    'Are you a U.S. person under export-control regulations?',
+    'What is your export-control eligibility status?',
+    'Do you consent to the privacy policy?',
+    'What is your gender?',
+  ])('%s：不记、不读旧文本／类别记忆、不预选候选', async (text) => {
+    const question = q('identity', text, 'SINGLE_CHOICE', ['Yes', 'No']);
+    const keys = await answerKeysFor(question);
+    const answers = [keys.textKey, keys.categoryKey].filter((key): key is string => key !== null)
+      .map((key) => remembered(key, 'SINGLE_CHOICE', { kind: 'CHOICES', optionTexts: ['Yes'] }));
+    expect(await rememberRequestsFor(question, 'Yes')).toEqual([]);
+    expect(await matchRememberedAnswers([question], answers)).toEqual([]);
+    expect(memoryCandidates([question], [{ questionId: 'identity', value: 'Yes', answerKey: answers[0]!.answerKey }]))
+      .toMatchObject([{ disposition: 'NEEDS_USER_INPUT', answer: null }]);
+  });
+
+  it('旧美国授权类别不能用于另一国的标准工作授权题', async () => {
+    const canada = q('ca', 'Are you legally entitled to work in Canada?', 'SINGLE_CHOICE', ['Yes', 'No']);
+    expect(await matchRememberedAnswers([canada], [remembered('cat:work-authorization', 'SINGLE_CHOICE', { kind: 'CHOICES', optionTexts: ['Yes'] })])).toEqual([]);
+  });
+});

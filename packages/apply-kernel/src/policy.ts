@@ -10,6 +10,11 @@ import type { ExecutionRuntimeWriteCapability } from '@edaix/contracts';
 
 import { APPLY_VENDORS, type ApplyVendor } from './contracts';
 import type { WriteCapability } from './grant';
+import { LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES } from './gate/hostRestrictions';
+
+// Preserve the existing browser policy API; the shared rules no longer import
+// browser storage or Vite/WXT ambient types into server consumers.
+export { LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES, isHostDenied, isLocallyAutomationDenied } from './gate/hostRestrictions';
 
 export const APPLY_POLICY_CACHE_KEY = 'vibeApplyPolicy';
 export const APPLY_POLICY_INSTALLED_AT_KEY = 'vibeApplyPolicyInstalledAt';
@@ -405,9 +410,9 @@ export function createBundledApplyPolicy(builtAt = bundledBuildTime()): ApplyPol
       'set-work-authorization': false,
     },
     minConfidence: 0.7,
-    // 包内基线是**空表**：否决只从远程来。写死一份内置黑名单等于把它变成
-    // 只能发版才能改的东西，而这个通道存在的全部意义就是"不发版也能止血"。
-    deniedHostSuffixes: [],
+    // 本地产品限制不能由远程空表解除；远程仍可增加事故止血后缀。
+    // 政府与雇主后台的现有纯规则在 gate/hostVeto.ts，所有操作门共用。
+    deniedHostSuffixes: LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES,
     inferredRequiresConfirm: true,
     notAfter: builtAt + APPLY_POLICY_LIFETIME_MS,
     source: 'bundled',
@@ -441,25 +446,6 @@ function parseHostSuffixes(value: unknown): readonly string[] {
   return [...new Set(out)];
 }
 
-/**
- * 这个主机名是否被否决。
- *
- * 按**标签边界**匹配，不是纯字符串后缀：`nav.no` 命中 `nav.no` 与 `www.nav.no`，
- * 但**不**命中 `notnav.no`。纯 `endsWith` 会让一条否决意外扩散到无关域名上，
- * 而否决表本身就是给运维在事故中用的，误伤范围必须可预测。
- */
-export function isHostDenied(policy: ApplyPolicy, hostname: string): boolean {
-  const host = hostname.trim().toLowerCase().replace(/\.$/, '');
-  if (host === '') return false;
-  return policy.deniedHostSuffixes.some((raw) => {
-    // 后缀也要归一化：`parseHostSuffixes` 出来的已经是小写，但这个谓词是导出的，
-    // 调用方可能拿一份手工构造的 policy 进来（测试、以及将来的内置基线）。
-    // 只归一化一边的谓词是个半成品——它在大部分调用点碰巧对。
-    const suffix = raw.trim().toLowerCase().replace(/^\.+/, '').replace(/\.+$/, '');
-    return suffix !== '' && (host === suffix || host.endsWith(`.${suffix}`));
-  });
-}
-
 export function tighten(bundled: ApplyPolicy, remote: unknown): ApplyPolicy {
   const parsed = parseRemotePolicy(remote);
   if (!parsed) return disabledPolicy(bundled);
@@ -486,7 +472,11 @@ export function tighten(bundled: ApplyPolicy, remote: unknown): ApplyPolicy {
     // 并集：远程只能**增加**否决。这是 tighten 单调性的一部分——
     // 任何"远程可以取消一条否决"的写法都会让止血通道反过来变成开洞通道。
     deniedHostSuffixes: [
-      ...new Set([...bundled.deniedHostSuffixes, ...parsed.deniedHostSuffixes]),
+      ...new Set([
+        ...LOCAL_AUTOMATION_DENIED_HOST_SUFFIXES,
+        ...bundled.deniedHostSuffixes,
+        ...parsed.deniedHostSuffixes,
+      ]),
     ],
     source: 'remote',
   };

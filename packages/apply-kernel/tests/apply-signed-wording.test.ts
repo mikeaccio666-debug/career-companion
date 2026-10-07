@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ApplyFormDescriptor } from '../src/contracts';
 import { buildAuditView } from '../src/audit';
 import { buildApplyPlan } from '../src/engine';
+import { SIGNING_CONSENT_KINDS } from '../src/dict/signOnBehalf';
 import { createScanRoot } from '../src/scanRoot';
 import { ashbyAdapter } from '../src/sites/ashby/applyForm';
 
@@ -36,7 +37,7 @@ const RAMP_PHONE = `
   </form></div>`;
 
 function signedRows(descriptor: ApplyFormDescriptor) {
-  const plan = buildApplyPlan(descriptor, { phone: '+1 415 555 0100' } as never, { fillEmptyOnly: true, capabilities: { 'sign-on-behalf': true } } as never);
+  const plan = buildApplyPlan(descriptor, { phone: '+1 415 555 0100' } as never, { fillEmptyOnly: true, capabilities: { 'sign-on-behalf': true }, signOnBehalfKinds: new Set(SIGNING_CONSENT_KINDS) } as never);
   const view = buildAuditView(plan, plan.entries.map((entry) => ({ key: entry.key, label: entry.label, ok: true })) as never);
   return { plan, rows: view.rows.filter((row) => row.key === 'smsConsent') };
 }

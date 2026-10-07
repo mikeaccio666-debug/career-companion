@@ -761,6 +761,33 @@ describe('verified intent → exact backend runtime mapping', () => {
     expect(outcome.stop).toBe('NO_AUTHORIZED_FIELD');
   });
 
+  it.each([
+    ['www.linkedin.com', 'LOCAL_AUTOMATION_DENY'],
+    ['apply.indeed.com', 'LOCAL_AUTOMATION_DENY'],
+    ['smartapply.indeed.com', 'LOCAL_AUTOMATION_DENY'],
+    ['www.usajobs.gov', 'PUBLIC_SECTOR'],
+  ])('a verified mapping and remote empty denylist cannot inject on %s', async (hostname, refusal) => {
+    const value = bundle();
+    expect(value.policy.deniedHostSuffixes).toEqual([]);
+    const target = { ...TARGET, canonicalOrigin: `https://${hostname}` };
+    const authority = createBackgroundExecutionRuntimeAuthority({ client: clientFor(value) });
+    const execution = await authority.authorize(target);
+    const discovery = await authority.authorizeDiscovery(target);
+    if (!execution.ok || !discovery.ok) throw new Error('SYNTHETIC_MAPPING_UNAVAILABLE');
+    const resolved = await resolveStoredExecutionRuntimeAuthority({ stored: stored(value), authorization: execution.value, nowMs: NOW, extensionVersion: '1.0.0' });
+    const readOnly = await resolveStoredDiscoveryRuntimeAuthority({ stored: stored(value), authorization: discovery.value, nowMs: NOW, extensionVersion: '1.0.0' });
+    if (!resolved.ok || !readOnly.ok) throw new Error('SYNTHETIC_POLICY_UNAVAILABLE');
+    expect(resolved.value.policy.deniedHostSuffixes).toEqual(['linkedin.com', 'indeed.com']);
+    expect(readOnly.value.hostPolicy.deniedHostSuffixes).toEqual(['linkedin.com', 'indeed.com']);
+    mountGreenhouseForm();
+    const loc = { hostname, origin: target.canonicalOrigin, pathname: '/acme/jobs/12345' };
+    const gate = runtimeScanGate();
+    const apply = await scanCurrentPageWithRuntimeAuthority(resolved.value, document, loc, gate);
+    const preview = await scanCurrentPageWithDiscoveryAuthority(readOnly.value, document, loc, gate);
+    expect(apply).toMatchObject({ scan: null, refusal, vendor: null });
+    expect(preview).toMatchObject({ scan: null, refusal, vendor: null });
+  });
+
   it('retains the remote denied-host suffixes in the physically write-disabled discovery policy', async () => {
     const value = withPolicy(bundle(), {
       automationLevelCeiling: 'L0_PREVIEW_ONLY',

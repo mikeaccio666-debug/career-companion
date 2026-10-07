@@ -39,6 +39,7 @@ import {
   type HostWriteAuthority,
 } from './grant';
 import { isApplyPolicyEnabled, type ApplyPolicy } from './policy';
+import { evaluateHostVeto } from './gate/hostVeto';
 import type { UndoJournal, WriteTicket } from './undo';
 import {
   commitDateSegment,
@@ -973,11 +974,26 @@ export async function runApplyPlan(input: RunApplyPlanInput): Promise<ApplyRunSu
     await nextMutationDeliveryTask();
     await additionalCheckpoint;
   };
-  const policyStillEnabled = () =>
-    isApplyPolicyEnabled(policy, plan.vendor, now()) &&
-    Number.isFinite(policy.minConfidence) &&
-    policy.minConfidence >= 0 &&
-    policy.minConfidence <= 1;
+  const policyStillEnabled = () => {
+    if (!isApplyPolicyEnabled(policy, plan.vendor, now()) ||
+      !Number.isFinite(policy.minConfidence) ||
+      policy.minConfidence < 0 || policy.minConfidence > 1) return false;
+    // The scan's caller-owned origin binding remains separate. This exported write
+    // boundary re-reads the actual target document at every existing policy fence,
+    // including after a yield; a stale plan or remote empty table cannot bypass it.
+    try {
+      return plan.entries.every((entry) => {
+        const location = entry.element.ownerDocument.location;
+        return location !== null && !evaluateHostVeto({
+          hostname: location.hostname,
+          pathname: location.pathname,
+          policy,
+        }).vetoed;
+      });
+    } catch {
+      return false;
+    }
+  };
   const signOnBehalfStillAllowed = (kind: SignOnBehalfKind) => {
     if (policy.capabilities['sign-on-behalf'] !== true || !policyStillEnabled()) return false;
     try {
@@ -1225,6 +1241,11 @@ export async function runApplyPlan(input: RunApplyPlanInput): Promise<ApplyRunSu
 
         // 写前的检查都过了：这一栏此刻真的要动手了。
         announceLive(input.onFieldStart, index);
+        const afterStart = currentExecutionError();
+        if (afterStart !== null) {
+          stopAfterExecutionCallback(afterStart);
+          break;
+        }
 
         // File bytes are L1 and potentially large. Prove the live target and
         // set-file capability before asking background to retrieve anything.
@@ -2011,7 +2032,7 @@ export async function runApplyPlan(input: RunApplyPlanInput): Promise<ApplyRunSu
         // 任务落地），现在才让焦点「离开」这个日期组，组件拿刚渲染的整个日期提交进表单、跑离开校验。
         // 每一段各提交一次：月份那一次会让 Workday 短暂报一下 Invalid Date，紧接着年份那一次就把它清掉；
         // 只提交最后一段的话，最后一段因为别的原因没写成时，前一段就只停在显示里。
-        if (isDateSegmentEntry(entry) && !signal?.aborted && commitDateSegment(entry.element, writeAuthority)) {
+        if (isDateSegmentEntry(entry) && currentExecutionError() === null && commitDateSegment(entry.element, writeAuthority)) {
           await deliverHostMutations();
         }
 
