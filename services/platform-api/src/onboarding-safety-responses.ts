@@ -42,11 +42,39 @@ function decode(storage: OnboardingStorage, row: SafetyResponseRow): SafetyRespo
     return response;
   } catch { throw responseStorageUnavailable(); }
 }
-function publicResponse(response: SafetyResponseRenderResult) {
+export function publicSafetyResponse(response: SafetyResponseRenderResult) {
   // Reviewer references and policy provenance are internal, never a student-visible resource field.
   return Object.freeze({ text:response.text, ...(response.question===undefined?{}:{question:response.question}),
     resourceCard:Object.freeze({ ...response.resourceCard,
       contacts:Object.freeze(response.resourceCard.contacts.map(({ reviewRef: _privateReview, ...contact })=>Object.freeze(contact))) }) });
+}
+
+/** Shared, transaction-local authentication of the complete captured response history.
+ * A captured response is not evidence of transport, presentation or user acknowledgment.
+ */
+export async function readAuthenticatedSafetyResponses(client: PoolClient, storage: OnboardingStorage,
+  userId: string, sources: SafetySubmissionRow[]) {
+  const rows=(await client.query<SafetyResponseRow>(`SELECT * FROM platform_onboarding_safety_responses
+    WHERE user_id=$1 ORDER BY submitted_revision,id FOR UPDATE`,[userId])).rows;
+  if (rows.length!==sources.filter(source=>source.status==='detected'&&source.level!=='L0').length) throw responseStorageUnavailable();
+  const captures: {row: SafetyResponseRow;response: SafetyResponseRenderResult|null}[]=[];
+  for (const row of rows) {
+    const source=sources.find(source=>source.id===row.submission_id);
+    if (!source) throw responseStorageUnavailable();
+    assertSafetyResponseSource(row,source,storage.decodeResult(source));
+    const events=(await client.query(`SELECT * FROM platform_safety_events WHERE response_id=$1 FOR UPDATE`,[row.id])).rows;
+    if (row.status==='pending') {
+      if (events.length) throw responseStorageUnavailable();
+      captures.push({row,response:null}); continue;
+    }
+    const event=events[0];
+    if (events.length!==1 || event.user_id!==row.user_id || event.submission_id!==row.submission_id
+      || event.source_kind!=='onboarding' || event.event_kind!=='response_prepared' || event.level!==row.level
+      || event.detector_revision!==row.detector_revision || event.detector_mode!==row.detector_mode
+      || event.created_at.toISOString()!==row.prepared_at!.toISOString() || event.retention_until.toISOString()!==row.retention_until!.toISOString()) throw responseStorageUnavailable();
+    captures.push({row,response:decode(storage,row)});
+  }
+  return captures;
 }
 
 /** Server-only preparation and authenticated private read. Ready means captured, not sent/seen/asked.
@@ -68,24 +96,7 @@ export class OnboardingSafetyResponses {
     signal?.throwIfAborted(); return { draft,sources };
   }
   private async rows(client: PoolClient, userId: string, sources: SafetySubmissionRow[]) {
-    const rows=(await client.query<SafetyResponseRow>(`SELECT * FROM platform_onboarding_safety_responses
-      WHERE user_id=$1 ORDER BY submitted_revision,id FOR UPDATE`,[userId])).rows;
-    if (rows.length!==sources.filter(source=>source.status==='detected'&&source.level!=='L0').length) throw responseStorageUnavailable();
-    for (const row of rows) {
-      const source=sources.find(source=>source.id===row.submission_id);
-      if (!source) throw responseStorageUnavailable();
-      assertSafetyResponseSource(row,source,this.storage.decodeResult(source));
-      const events=(await client.query(`SELECT * FROM platform_safety_events WHERE response_id=$1 FOR UPDATE`,[row.id])).rows;
-      if (row.status==='pending') { if (events.length) throw responseStorageUnavailable(); continue; }
-      const event=events[0];
-      if (events.length!==1 || event.user_id!==row.user_id || event.submission_id!==row.submission_id
-        || event.source_kind!=='onboarding' || event.event_kind!=='response_prepared' || event.level!==row.level
-        || event.detector_revision!==row.detector_revision || event.detector_mode!==row.detector_mode
-        || event.created_at.toISOString()!==row.prepared_at!.toISOString() || event.retention_until.toISOString()!==row.retention_until!.toISOString()) throw responseStorageUnavailable();
-      // Authenticate every ready capture, so damaged history cannot be silently ignored for a later response.
-      decode(this.storage,row);
-    }
-    return rows;
+    return (await readAuthenticatedSafetyResponses(client,this.storage,userId,sources)).map(capture=>capture.row);
   }
   async prepareSubmission(value: string, signal?: AbortSignal) {
     const id=submissionId(value);
@@ -154,7 +165,7 @@ export class OnboardingSafetyResponses {
       const at=(await client.query<{ at:Date }>('SELECT clock_timestamp() AS at')).rows[0].at;
       const result=rows.map(row=>Object.freeze({responseId:row.id,submissionId:row.submission_id,level:row.level,
         status:row.status==='ready' && row.retention_until!<=at?'expired' as const:row.status,
-        ...(row.status==='ready'&&row.retention_until!>at?{response:publicResponse(decode(this.storage,row))}:{})}));
+        ...(row.status==='ready'&&row.retention_until!>at?{response:publicSafetyResponse(decode(this.storage,row))}:{})}));
       await authorizeFixedSession(client,fixed,signal); return Object.freeze(result);
     });
   }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import type { PoolClient } from 'pg';
-import { compileFallbackCompanionStyle, type CompanionDimensions } from '@companion/career-core';
+import { compileFallbackCompanionStyle, createOnboardingDraft, transitionOnboardingDraft, prepareOnboardingDimensions, type CompanionDimensions } from '@companion/career-core';
 import type { OnboardingDraft, ProviderStatus } from '@companion/platform-contracts';
 import { Database } from '../src/database.ts';
 import { readConfig } from '../src/config.ts';
@@ -11,7 +11,6 @@ import { readDataCrypto } from '../src/data-crypto.ts';
 import { tokenHash, type FixedSessionContext } from '../src/auth.ts';
 import { ApiError } from '../src/errors.ts';
 import { OnboardingDrafts } from '../src/onboarding-drafts.ts';
-import { CompanionIntakePreparation } from '../src/companion-intake-preparation.ts';
 import { CompanionDraftPreparation } from '../src/companion-draft-preparation.ts';
 import { FICTIONAL_LEGAL, seedFictionalActiveLegal, seedFictionalConsent } from './fixtures/student-entry.ts';
 
@@ -81,6 +80,35 @@ async function ready(f: Fixture, who: FixedSessionContext): Promise<OnboardingDr
   while (draft.currentQuestion) draft = (await f.store.save(who, { expectedRevision: draft.revision, operationId: randomUUID(),
     action: { kind: 'skip', questionId: draft.currentQuestion } })).draft;
   assert.equal(draft.state, 'intake_ready'); return draft;
+}
+/** Seed an actual pre-036 fixture in its historical schema. Current services require current migrations;
+ * do not weaken their history checks merely to invoke new code against a deliberately old database.
+ * These are fictional, explicit skip operations using the compatible revision-1 encrypted format.
+ */
+async function legacyReady(f: Fixture, who: FixedSessionContext): Promise<OnboardingDraft> {
+  return f.db.transaction(async client => {
+    const at = (await client.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
+    let draft = createOnboardingDraft({ id: randomUUID(), userId: who.userId, at });
+    const operations: { operationId: string; appliedRevision: number; input: string }[] = [];
+    const save = (action: { kind: 'start'; mode: 'fast_track' } | { kind: 'skip'; questionId: NonNullable<OnboardingDraft['currentQuestion']> }) => {
+      const command = { operationId: randomUUID(), expectedRevision: draft.revision, action };
+      draft = transitionOnboardingDraft(draft, command, { at });
+      operations.push({ operationId: command.operationId, appliedRevision: draft.revision, input: JSON.stringify(command) });
+    };
+    save({ kind: 'start', mode: 'fast_track' });
+    while (draft.currentQuestion) save({ kind: 'skip', questionId: draft.currentQuestion });
+    const ciphertext = crypto.sealUtf8(JSON.stringify(draft), { table: 'platform_onboarding_drafts', column: 'payload_ciphertext',
+      rowId: draft.id, ownerId: who.userId, revision: draft.revision });
+    await client.query(`INSERT INTO platform_onboarding_drafts(id,user_id,revision,payload_ciphertext,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,$5)`, [draft.id, who.userId, draft.revision, ciphertext, at]);
+    for (const operation of operations) {
+      const request = crypto.sealUtf8(operation.input, { table: 'platform_onboarding_operations', column: 'request_ciphertext',
+        rowId: operation.operationId, ownerId: who.userId, revision: operation.appliedRevision });
+      await client.query(`INSERT INTO platform_onboarding_operations(user_id,operation_id,draft_id,applied_revision,request_ciphertext)
+        VALUES($1,$2,$3,$4,$5)`, [who.userId, operation.operationId, draft.id, operation.appliedRevision, request]);
+    }
+    assert.equal(draft.state, 'intake_ready'); return draft;
+  });
 }
 async function snapshot(f: Fixture, who: FixedSessionContext) {
   const [companions, answers, tasks] = await Promise.all([
@@ -229,8 +257,8 @@ test('draw-one replay still rejects a new session/auth version and changed sourc
 }));
 
 test('actual pre-036 encrypted zero seed survives the new default column unchanged and replays without dedup', async () => isolated(async f => {
-  const who = await actor(f), draft = await ready(f, who);
-  const prepared = await new CompanionIntakePreparation(f.db, config, FICTIONAL_LEGAL).prepare(who, { expectedRevision: draft.revision });
+  const who = await actor(f), draft = await legacyReady(f, who);
+  const prepared = prepareOnboardingDimensions(draft);
   assert.deepEqual(prepared.dimensions, neutral);
   const companionId = randomUUID(), taskId = randomUUID(), answersId = randomUUID();
   const compiled = compileFallbackCompanionStyle({ companionId, dimensions: neutral });

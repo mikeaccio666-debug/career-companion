@@ -383,6 +383,11 @@ keepErrorCodes(['STUDENT_ACCOUNT_REQUIRED'], 'Use a student account to continue.
 keepErrorCodes(['DATA_STORAGE_UNAVAILABLE'], 'Private intake data could not be saved or read.');
 keepErrorCodes(['ONBOARDING_REVISION_CHANGED', 'ONBOARDING_STATE_CHANGED'], 'Read the current intake progress before continuing.');
 keepErrorCodes(['ONBOARDING_OPERATION_CONFLICT'], 'Use a new operation identifier for a different intake change.');
+keepErrorCodes(['ONBOARDING_SAFETY_UNAVAILABLE', 'ONBOARDING_SAFETY_RESPONSE_UNAVAILABLE'], 'Intake text or support resources are temporarily unavailable.');
+keepErrorCodes(['ONBOARDING_SAFETY_REQUIRED', 'ONBOARDING_SAFETY_REVIEW_REQUIRED'], 'Read the current support response before continuing intake.');
+keepErrorCodes(['ONBOARDING_SAFETY_CLAIM_CHANGED'], 'Read the current intake safety progress before retrying.');
+keepErrorCodes(['ONBOARDING_SAFETY_PRESENTATION_REQUIRED', 'ONBOARDING_SAFETY_ACKNOWLEDGMENT_REQUIRED'], 'Read and acknowledge the current support response before continuing.');
+keepErrorCodes(['ONBOARDING_SAFETY_RESPONSE_EXPIRED'], 'A current reviewed support response is needed.');
 keepErrorCodes(['EMAIL_EXISTS'], 'An account already exists for this email.');
 keepErrorCodes(['ACCOUNT_CONTEXT_REQUIRED', 'ACCOUNT_CONTEXT_INVALID', 'ACCOUNT_CONTEXT_CHANGED'], 'Reload the current account before continuing.');
 keepErrorCodes(['ACCOUNT_ACTION_INVALID'], 'This account link is invalid or expired. Request a new email.');

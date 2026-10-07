@@ -9,6 +9,7 @@ import { ApiError } from './errors.ts';
 import { assertActiveLegal, type LegalBundle } from './legal-documents.ts';
 import { parseOnboardingSafetyClaim, type OnboardingSafetyClaim } from './onboarding-safety-protocol.ts';
 import { enqueueSafetyResponse } from './onboarding-safety-response-outbox.ts';
+import { readHandledOnboardingSources } from './onboarding-safety-followup-protocol.ts';
 
 export interface IntakeDraftRow { id: string; user_id: string; revision: number; payload_ciphertext: Buffer; updated_at: Date; }
 export interface IntakeOperationRow { operation_id: string; draft_id: string; applied_revision: number; request_ciphertext: Buffer; }
@@ -129,8 +130,12 @@ export class OnboardingStorage {
     }
     return rows;
   }
-  safetyState(rows: SafetySubmissionRow[]): IntakeSafetyState {
-    const blockedLevel = rows.some(row => row.level === 'L2') ? 'L2' : rows.some(row => row.level === 'L1') ? 'L1' : null;
+  async handledSources(client: PoolClient, draft: OnboardingDraft, rows: SafetySubmissionRow[]): Promise<ReadonlySet<string>> {
+    return readHandledOnboardingSources(client, this, draft, rows);
+  }
+  safetyState(rows: SafetySubmissionRow[], handled: ReadonlySet<string> = new Set()): IntakeSafetyState {
+    const unhandled = rows.filter(row => !handled.has(row.id));
+    const blockedLevel = unhandled.some(row => row.level === 'L2') ? 'L2' : unhandled.some(row => row.level === 'L1') ? 'L1' : null;
     const pendingCount = rows.filter(row => row.status !== 'detected').length;
     return { status: blockedLevel ? 'blocked' : pendingCount ? 'pending' : 'clear', pendingCount, blockedLevel };
   }

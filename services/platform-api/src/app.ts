@@ -40,6 +40,7 @@ import { resolveModelRoute } from './model-routing.ts';
 import { StaffAccess } from './staff-access.ts';
 import { loadLegalBundle, parseLegalBundle, legalAvailability, publicLegalDocuments, type LegalBundle } from './legal-documents.ts';
 import { StudentEntry } from './student-entry.ts';
+import { createOnboardingEntry } from './onboarding-entry.ts';
 import { ModelConsent, requireModelConsent } from './model-routing.ts';
 import {
   projectPlatformFeatures, projectPublicAccountUsage, projectPublicApproval, projectPublicAudioTranscriptionReceipt,
@@ -69,6 +70,7 @@ export async function buildApp(options:AppOptions={}) {
   const bundle=options.legalBundle===undefined?await loadLegalBundle(config.legalBundlePath):parseLegalBundle(options.legalBundle);
   const entry=new StudentEntry(db,config,bundle),modelConsent=new ModelConsent(db,bundle);
   const runtime=requireModelConsent(options.runtime??createProviderRuntime());
+  const onboarding=await createOnboardingEntry(db,config,bundle,runtime);
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
@@ -187,6 +189,34 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/auth/consent`,limitedAccount,async(request,reply)=>{
     const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
     try{return {consent:await entry.accept(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/onboarding`,secure,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {entry:await onboarding.read(fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.patch(`${prefix}/onboarding`,secure,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {result:await onboarding.save(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/onboarding/safety/retry`,secure,async(request,reply)=>{
+    if(Object.keys(object(request.body)).length)throw invalid('Safety retry does not accept classifier inputs.');
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {entry:await onboarding.retrySafety(fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  // Fixed resources and receipt declarations do not consume ordinary API quota or depend on current terms/provider availability.
+  const resourceAccess={preHandler:[authenticated,accountContext()]};
+  app.get(`${prefix}/onboarding/safety`,resourceAccess,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {followup:await onboarding.resources(fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/onboarding/safety`,resourceAccess,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {result:await onboarding.followup.act(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
   });
   app.post(`${prefix}/auth/register`,{preHandler:anonymousLimit('auth-register')},async(request,reply)=>{
     const cancellation=requestSignal(request,reply);

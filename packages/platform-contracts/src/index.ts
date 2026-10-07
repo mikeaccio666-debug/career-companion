@@ -288,3 +288,4 @@ export * from './agent-loop.ts';
 export * from './staff.ts';
 export * from './student-entry.ts';
 export * from './onboarding.ts';
+export * from './onboarding-followup.ts';

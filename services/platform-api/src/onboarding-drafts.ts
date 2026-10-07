@@ -67,6 +67,9 @@ export class OnboardingDrafts {
         const row = await this.storage.row(client, fixed.userId);
         const previous = row ? this.storage.decode(row) : null;
         const submissions = previous ? await this.storage.recover(client, previous) : [];
+        const followupCollision = await client.query(`SELECT operation_id FROM platform_onboarding_safety_followups
+          WHERE user_id=$1 AND operation_id=$2 FOR UPDATE`, [fixed.userId, command.operationId]);
+        if (followupCollision.rowCount) throw new ApiError(409, 'ONBOARDING_OPERATION_CONFLICT', 'Use a new operation identifier for a different intake change.');
         const found = await client.query<OperationRow>(`SELECT operation_id,draft_id,applied_revision,request_ciphertext
           FROM platform_onboarding_operations WHERE user_id=$1 AND operation_id=$2 FOR UPDATE`, [fixed.userId, command.operationId]);
         const operation = found.rows[0];
@@ -84,7 +87,8 @@ export class OnboardingDrafts {
           await authorizeFixedSession(client, fixed, signal);
           return { draft: previous, operation: { id: operation.operation_id, appliedRevision: operation.applied_revision, replayed: true } };
         }
-        if (this.storage.safetyState(submissions).status === 'blocked') throw new ApiError(409, 'ONBOARDING_SAFETY_REVIEW_REQUIRED', 'The intake safety response must be handled before continuing.');
+        const handled = previous ? await this.storage.handledSources(client, previous, submissions) : new Set<string>();
+        if (this.storage.safetyState(submissions, handled).status === 'blocked') throw new ApiError(409, 'ONBOARDING_SAFETY_REVIEW_REQUIRED', 'The intake safety response must be handled before continuing.');
         if (command.expectedRevision !== (previous?.revision ?? 0)) throw changed();
         const at = await this.storage.at(client);
         const initial = previous ?? createOnboardingDraft({ id: randomUUID(), userId: fixed.userId, at });

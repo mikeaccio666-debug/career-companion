@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ONBOARDING_BASIC_QUESTIONS, ONBOARDING_SCENARIO_QUESTIONS, type OnboardingAction, type OnboardingDraft } from '@companion/platform-contracts';
-import { OnboardingError, createOnboardingDraft, parseOnboardingCommand, parseOnboardingDraft, parseOnboardingSafetyResult, resolveOnboardingText, transitionOnboardingDraft } from '../src/index.ts';
+import { OnboardingError, createOnboardingDraft, parseOnboardingCommand, parseOnboardingDraft, parseOnboardingSafetyResult, resolveOnboardingText, resumeOnboardingDraft, transitionOnboardingDraft } from '../src/index.ts';
 
 const at = '2026-10-07T12:00:00.000Z';
 const id = (number = 1) => `00000000-0000-4000-8000-${number.toString(16).padStart(12, '0')}`;
@@ -206,6 +206,96 @@ for (const level of ['L1', 'L2'] as const) test(`${level} pauses at the unresolv
   assert.equal(draft.answersPartial.extra, undefined); assert.equal(draft.currentQuestion, 'extra');
   rejects(() => send(draft, { kind: 'skip', questionId: 'extra' }), 'ONBOARDING_ACTION_NOT_ALLOWED');
   rejects(() => resolveOnboardingText(pending, { ...result, resolution: { kind: 'unmatched' } }, { at }));
+});
+for (const level of ['L1', 'L2'] as const) test(`server resumption from ${level} returns to the same unanswered question without classifying or skipping it`, () => {
+  for (const before of [started(), extra()]) {
+    const questionId = before.currentQuestion!, pending = send(before, { kind: 'text', questionId, text: 'Fictional paused intake text.' });
+    const paused = resolveOnboardingText(pending, { textId: pending.pendingText!.id, submittedAtRevision: pending.revision,
+      level, detectorRevision: 2, mode: 'keyword_only' }, { at });
+    const original = structuredClone(paused), later = '2026-10-07T13:00:00.000Z';
+    const resumed = resumeOnboardingDraft(paused, { expectedRevision: paused.revision, at: later });
+    assert.equal(resumed.state, 'collecting'); assert.equal(resumed.step, paused.step); assert.equal(resumed.currentQuestion, questionId);
+    assert.equal(resumed.revision, paused.revision + 1); assert.equal(resumed.updatedAt, later);
+    assert.deepEqual(resumed.answersPartial, paused.answersPartial); assert.equal(resumed.answersPartial[questionId], undefined);
+    assert.equal(Object.hasOwn(resumed, 'safety'), false); assert.equal(Object.hasOwn(resumed, 'pendingText'), false);
+    assert.deepEqual(paused, original); assert.equal(paused.safety?.level, level);
+    // Legacy encrypted draft shape still decodes, and no new persisted field is required after resumption.
+    assert.deepEqual(parseOnboardingDraft(JSON.parse(JSON.stringify(paused))), original);
+    assert.deepEqual(parseOnboardingDraft(JSON.parse(JSON.stringify(resumed))), resumed);
+    const next = send(resumed, { kind: 'skip', questionId });
+    assert.equal(next.answersPartial[questionId]?.kind, 'skipped'); assert.equal(next.revision, resumed.revision + 1);
+  }
+});
+test('continuation is not accepted as a client command, a safety declaration or a detector result replacement', () => {
+  const pending = send(started(), { kind: 'text', questionId: 'study', text: 'Fictional high-risk test text.' });
+  const paused = resolveOnboardingText(pending, { textId: pending.pendingText!.id, submittedAtRevision: pending.revision,
+    level: 'L2', detectorRevision: 1, mode: 'full' }, { at });
+  for (const action of [{ kind: 'resume' }, { kind: 'continue_intake' }, { kind: 'clear_safety', level: 'L0' },
+    { kind: 'text', questionId: 'study', text: 'Fictional', handled: true }]) {
+    rejects(() => parseOnboardingCommand({ expectedRevision: paused.revision, operationId: id(99), action }));
+  }
+  for (const field of ['level', 'handled', 'safe', 'cleared', 'acknowledged', 'userId', 'questionId', 'safety']) {
+    rejects(() => resumeOnboardingDraft(paused, { expectedRevision: paused.revision, at, [field]: true }));
+  }
+  rejects(() => resumeOnboardingDraft(paused, { expectedRevision: paused.revision, at,
+    currentTextResult: { textId: paused.safety!.textId, submittedAtRevision: paused.safety!.submittedAtRevision,
+      level: 'L0', detectorRevision: 1, mode: 'full', resolution: { kind: 'unmatched' } } }));
+  rejects(() => resumeOnboardingDraft(paused, { expectedRevision: paused.revision - 1, at }), 'ONBOARDING_REVISION_CHANGED');
+  rejects(() => resumeOnboardingDraft(paused, { expectedRevision: paused.revision + 1, at }), 'ONBOARDING_REVISION_CHANGED');
+  assert.equal(paused.safety?.level, 'L2'); assert.equal(paused.state, 'safety_paused');
+});
+test('resumption validates its closed data context without evaluating accessors and cannot invent pending clearance', () => {
+  const pending = send(started(), { kind: 'text', questionId: 'study', text: 'Fictional pending text.' });
+  rejects(() => resumeOnboardingDraft(pending, { expectedRevision: pending.revision, at }), 'ONBOARDING_SAFETY_REQUIRED');
+  rejects(() => resumeOnboardingDraft(pending, { expectedRevision: pending.revision, at, currentTextResult: undefined }));
+  let called = false; const context = { expectedRevision: pending.revision, at };
+  Object.defineProperty(context, 'at', { get() { called = true; return at; } });
+  rejects(() => resumeOnboardingDraft(pending, context)); assert.equal(called, false);
+  rejects(() => resumeOnboardingDraft(pending, { expectedRevision: pending.revision, at: '2026-10-07' }));
+  for (const value of [create(), started(), basic(true)]) {
+    rejects(() => resumeOnboardingDraft(value, { expectedRevision: value.revision, at }), 'ONBOARDING_ACTION_NOT_ALLOWED');
+  }
+  const paused = resolveOnboardingText(pending, { textId: pending.pendingText!.id, submittedAtRevision: pending.revision,
+    level: 'L1', detectorRevision: 1, mode: 'full' }, { at });
+  const terminal = parseOnboardingDraft({ ...paused, revision: 2147483647, safety: { ...paused.safety!, submittedAtRevision: 2147483646 } });
+  rejects(() => resumeOnboardingDraft(terminal, { expectedRevision: terminal.revision, at }), 'ONBOARDING_INVALID_STATE');
+});
+test('a verified current L0 result resolves pending text once without making its binding stale after earlier superseded risk', () => {
+  const earlier = send(started(), { kind: 'text', questionId: 'study', text: 'Fictional first submission.' });
+  const historicalRisk = { textId: earlier.pendingText!.id, submittedAtRevision: earlier.revision,
+    level: 'L2' as const, detectorRevision: 1, mode: 'full' as const };
+  const current = send(earlier, { kind: 'text', questionId: 'study', text: 'Fictional replacement: CS.' });
+  const before = structuredClone(current), historyBefore = structuredClone(historicalRisk);
+  const persistedResult = { textId: current.pendingText!.id, submittedAtRevision: current.revision,
+    level: 'L0' as const, detectorRevision: 2, mode: 'full' as const,
+    resolution: { kind: 'answer' as const, questionId: 'study' as const, value: { degreeField: 'cs' as const, programChoice: null } } };
+  const resumed = resumeOnboardingDraft(current, { expectedRevision: current.revision, at, currentTextResult: persistedResult });
+  assert.equal(resumed.revision, current.revision + 1); assert.equal(resumed.currentQuestion, 'graduation');
+  assert.deepEqual(resumed.answersPartial.study, { kind: 'answered', value: { degreeField: 'cs', programChoice: null },
+    source: 'user_entered', textId: persistedResult.textId, appliedRevision: current.revision + 1 });
+  assert.deepEqual(resumed.safety, { textId: persistedResult.textId, questionId: 'study', submittedAtRevision: current.revision,
+    level: 'L0', detectorRevision: 2, mode: 'full' });
+  assert.deepEqual(current, before); assert.deepEqual(historicalRisk, historyBefore);
+  rejects(() => resumeOnboardingDraft(current, { expectedRevision: current.revision, at, currentTextResult: historicalRisk }), 'ONBOARDING_SAFETY_REQUIRED');
+  rejects(() => resumeOnboardingDraft(current, { expectedRevision: current.revision, at, currentTextResult: {
+    ...persistedResult, textId: earlier.pendingText!.id, submittedAtRevision: earlier.revision } }), 'ONBOARDING_TEXT_STALE');
+  rejects(() => resumeOnboardingDraft(current, { expectedRevision: current.revision, at, currentTextResult: {
+    ...persistedResult, mode: 'keyword_only' } }));
+  rejects(() => resumeOnboardingDraft(resumed, { expectedRevision: current.revision, at, currentTextResult: persistedResult }), 'ONBOARDING_REVISION_CHANGED');
+});
+test('current pending L0 resumption uses the real unmatched and extra results rather than a generic resume skip', () => {
+  for (const before of [started(), extra()]) {
+    const questionId = before.currentQuestion!, pending = send(before, { kind: 'text', questionId, text: 'Fictional classified text.' });
+    const result = { textId: pending.pendingText!.id, submittedAtRevision: pending.revision,
+      level: 'L0' as const, detectorRevision: 1, mode: 'full' as const,
+      ...(questionId === 'extra' ? {} : { resolution: { kind: 'unmatched' as const } }) };
+    const resumed = resumeOnboardingDraft(pending, { expectedRevision: pending.revision, at, currentTextResult: result });
+    assert.equal(resumed.revision, pending.revision + 1);
+    assert.deepEqual(resumed.answersPartial[questionId], questionId === 'extra'
+      ? { kind: 'answered', value: { textId: result.textId }, source: 'user_entered', textId: result.textId, appliedRevision: resumed.revision }
+      : { kind: 'skipped', reason: 'unmatched_text', textId: result.textId, appliedRevision: resumed.revision });
+    assert.equal(resumed.state, questionId === 'extra' ? 'intake_ready' : 'collecting');
+  }
 });
 test('keyword-only detection cannot approve L0 text or advance a pending question', () => {
   for (const before of [started(), extra()]) {
