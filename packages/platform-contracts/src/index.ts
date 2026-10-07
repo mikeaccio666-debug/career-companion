@@ -4,6 +4,7 @@ export * from './conversation-tasks.ts';
 export * from './audio-transcriptions.ts';
 import type { ChatAttachmentSupport, ReviewedAudioTranscript } from './audio-transcriptions.ts';
 import type { McpTaskSummary } from './mcp.ts';
+import type { ModelStepContext, ModelStepEvent, ModelStepResult, ToolEffect } from './agent-loop.ts';
 export const CHAT_MODES = ['chat', 'companion', 'agent'] as const;
 export type ChatMode = typeof CHAT_MODES[number];
 export const JOB_KINDS = ['image', 'video', 'speech', 'browser', 'cli', 'workflow', 'mcp'] as const;
@@ -191,6 +192,8 @@ export type ChatStreamEvent =
 
 export interface ToolDefinition {
   name: string; description: string; parameters: Record<string, unknown>;
+  /** Required by the shared agent loop; optional only for existing legacy tools. */
+  effect?: ToolEffect; progressPhrase?: string; endsTurn?: boolean;
 }
 export interface ProviderChatMessage { role: 'user' | 'assistant' | 'system'; content: string; attachments?:ProviderAttachment[]; }
 export interface ChatInput {
@@ -207,7 +210,7 @@ export interface ChatContext {
 }
 export type ModelCallUsage = { status: 'reported'; inputTokens: number; outputTokens: number } | { status: 'missing' | 'invalid' };
 export type ModelCallEvent =
-  | { type: 'started'; callId: string; index: number; provider: string; model: string }
+  | { type: 'started'; callId: string; index: number; provider: string; model: string; purpose?: string }
   | { type: 'finished'; callId: string; status: 'complete' | 'failed' | 'cancelled' | 'interrupted'; usage: ModelCallUsage };
 export interface AccountUsage {
   period: { from: string; to: string; timeZone: 'UTC' };
@@ -253,6 +256,8 @@ export interface PlatformProviderRuntime {
   captureComfyUITemplate?(): ComfyUITemplateSnapshot;
   validateComfyUITemplate?(snapshot: ComfyUITemplateSnapshot, binding: ExecutionTemplateBinding): void;
   streamChat(input: ChatInput, context?: ChatContext): AsyncIterable<ChatStreamEvent>;
+  /** One actual provider request. Optional only for trusted legacy runtime fixtures. */
+  streamModelStep?(input: ChatInput, context: ModelStepContext): AsyncGenerator<ModelStepEvent, ModelStepResult>;
   executeJob(input: CreateJobInput, context: JobExecutionContext): Promise<JobExecutionResult>;
   createVoiceSession(input?: VoiceSessionInput, context?: { signal?: AbortSignal }): Promise<VoiceSessionResult>;
   transcribe(input: ProviderAttachment, context?: TranscriptionContext): Promise<{ text: string }>;
@@ -263,3 +268,5 @@ export * from './goal-proposals.ts';
 export * from './job-outcome-reviews.ts';
 export * from './voice-context.ts';
 export * from './student-api.ts';
+
+export * from './agent-loop.ts';
