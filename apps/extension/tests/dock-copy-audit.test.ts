@@ -41,6 +41,15 @@ function everything(copy: unknown): string[] {
 const CODE = /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/;
 
 describe('浮层的话：说人话', () => {
+  it('uses the current display brand while preserving the version-bound legacy authorization text', () => {
+    for (const copy of [ZH, EN]) {
+      expect(copy.product).toBe('Career Companion');
+      expect(everything(copy).filter(line => /argoland/i.test(line))).toEqual([copy.profile.consentLabel]);
+    }
+    expect(ZH.profile.consentLabel).toBe('允许 ArgoLand 以我的名义处理申请表上的条款、声明和授权，并替我注册、登录招聘网站。详见隐私政策。');
+    expect(EN.profile.consentLabel).toBe('Let ArgoLand handle the terms, declarations and authorizations on application forms in my name, and sign up or sign in to job sites for me. See the Privacy Policy.');
+  });
+
   it('中英两套里没有一句露出内部的码', () => {
     for (const copy of [ZH, EN]) {
       const lines = everything(copy);

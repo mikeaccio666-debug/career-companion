@@ -643,8 +643,8 @@ export default defineConfig({
         }
     : {
         // 对用户无独立品牌（20 §2）：名称保持产品名，不出现"插件"人格。
-        name: ASSISTANT_READ_ENABLED ? 'ArgoLand.AI Staging Preview' : LOCAL_BUILD ? 'ArgoLand.AI (Local)' : 'ArgoLand.AI',
-        description: ASSISTANT_PROFILE_EDIT_ENABLED ? 'Staging-only owner profile editor' : ASSISTANT_READ_ENABLED ? 'Staging-only career profile and resume reader' : LOCAL_BUILD ? 'Local-only execution runner against a developer backend' : 'ArgoLand.AI fills job applications from your ArgoLand profile.',
+        name: ASSISTANT_READ_ENABLED ? 'Career Companion Staging Preview' : LOCAL_BUILD ? 'Career Companion (Local)' : 'Career Companion',
+        description: ASSISTANT_PROFILE_EDIT_ENABLED ? 'Staging-only owner profile editor' : ASSISTANT_READ_ENABLED ? 'Staging-only career profile and resume reader' : LOCAL_BUILD ? 'Local-only execution runner against a developer backend' : 'Career Companion prepares job applications from your saved profile.',
         // Same reason as the connected build below, and it applies here too: an
         // unpacked build with no key takes its id from the directory path, so it
         // is a different extension on every machine and on every move. Nothing
@@ -666,7 +666,7 @@ export default defineConfig({
         ...(ASSISTANT_READ_ENABLED ? {
           version: '0.0.5',
           minimum_chrome_version: '130',
-          action: { default_title: 'Open ArgoLand.AI' },
+          action: { default_title: 'Open Career Companion' },
           web_accessible_resources: [{ resources: ['assistant.html'], matches: ['http://*/*', 'https://*/*'], use_dynamic_url: true }],
         } : {}),
         ...(PILOT_UA1_DISCOVERY_ENABLED

@@ -205,7 +205,7 @@ describe('码不给用户看，但我们要定位时拿得到（2026-09-23 改�
     }, doc);
     handle.beginPreparing();
     handle.reportBlocked('AUTHORITY_UNAVAILABLE');
-    expect(text(handle)).toContain('暂时连不上 ArgoLand');
+    expect(text(handle)).toContain('暂时连不上 Career Companion');
     await tick();
     const tech = handle.sceneRoot()?.querySelector<HTMLElement>('.tech');
     expect(tech, '早期拒绝没有审计区，码只能在这里拿到').not.toBeNull();
@@ -227,7 +227,7 @@ describe('码不给用户看，但我们要定位时拿得到（2026-09-23 改�
 
   it('三个早期拒绝各有各的句子，不再共用「填写服务暂不可用」', () => {
     for (const [code, fragment] of [
-      ['AUTHORITY_UNAVAILABLE', '暂时连不上 ArgoLand'],
+      ['AUTHORITY_UNAVAILABLE', '暂时连不上 Career Companion'],
       ['RUNTIME_UNRESOLVED', '这一页暂时填不了'],
       ['RUN_FAILED', '填写中途出了问题'],
     ] as const) {

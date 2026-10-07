@@ -433,7 +433,7 @@ export function mountDock(
   // ── 面板 ───────────────────────────────────────────────────────
   const panel = h('section', 'panel');
   panel.setAttribute('role', 'dialog');
-  panel.setAttribute('aria-label', 'ArgoLand.AI');
+  panel.setAttribute('aria-label', COPY.product);
   panel.tabIndex = -1;
   const pbody = h('div', 'pbody');
 

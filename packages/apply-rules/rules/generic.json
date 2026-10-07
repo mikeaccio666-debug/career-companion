@@ -1,5 +1,5 @@
 {
-  "$comment": "不绑任何厂商的规则集（argoland #584 的 GENERIC / generic）。公司自建域名的申请页上，厂商的路径形态与 id 钩子两样都不存在，所以这份规则一条站点知识都不带：它靠**标准 HTML 的 autocomplete 词表**与**可见标签文案**认字段，靠 genericRoot 的「这一张表里有几个字段我们认得」找那张表。labelPatterns 是十一家去重后的全集（每条都注明被几家共用）——这不是新写的规则，而是把本来就与站点无关的那部分识别力从「先认出厂商、再命中锚点」后面解锁出来。anchors 为空是**故意**的，并且 schema 只对声明了 genericRoot 的规则放行：这份规则没有厂商，锚点对它是空概念，而 resolveRoot 先试 anchors——随便填一个能命中的，就会绕过数字段那道闸，把唯一判据架空。applyPath 写成永不匹配：通用路的 isApplyPath 只看「有没有声明 genericRoot」，真正的闸在 resolveRoot 里数字段。留一条能命中的路径正则，只会给非通用路的调用方一条本不该存在的入口。",
+  "$comment": "不绑任何厂商的规则集（GENERIC / generic）。公司自建域名的申请页上，厂商的路径形态与 id 钩子两样都不存在，所以这份规则一条站点知识都不带：它靠**标准 HTML 的 autocomplete 词表**与**可见标签文案**认字段，靠 genericRoot 的「这一张表里有几个字段我们认得」找那张表。labelPatterns 是十一家去重后的全集（每条都注明被几家共用）——这不是新写的规则，而是把本来就与站点无关的那部分识别力从「先认出厂商、再命中锚点」后面解锁出来。anchors 为空是**故意**的，并且 schema 只对声明了 genericRoot 的规则放行：这份规则没有厂商，锚点对它是空概念，而 resolveRoot 先试 anchors——随便填一个能命中的，就会绕过数字段那道闸，把唯一判据架空。applyPath 写成永不匹配：通用路的 isApplyPath 只看「有没有声明 genericRoot」，真正的闸在 resolveRoot 里数字段。留一条能命中的路径正则，只会给非通用路的调用方一条本不该存在的入口。",
   "schemaVersion": 2,
   "vendor": "generic",
   "finalSubmitControl": null,

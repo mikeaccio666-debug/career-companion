@@ -612,7 +612,7 @@ describe('「用 AI 写 / AI 改写」', () => {
   it('空着的长文本题：胶囊（帆船 + ArgoLand.AI）在框里右下角、让开滚动条，读屏念「用 AI 写这一题」', () => {
     const { chip } = withTools(vi.fn());
     expect(chip.dataset.fill).toBe('empty');
-    expect(chip.querySelector('.aic-word')?.textContent).toBe('ArgoLand.AI');
+    expect(chip.querySelector('.aic-word')?.textContent).toBe('Career Companion');
     expect(chip.querySelector('.aic-verb')?.textContent).toBe('用 AI 写');
     expect(chip.getAttribute('aria-label')).toBe('用 AI 写这一题');
     expect(chip.getAttribute('aria-haspopup')).toBe('dialog');

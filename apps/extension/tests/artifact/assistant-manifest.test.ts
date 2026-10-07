@@ -258,7 +258,7 @@ describe('complete assistant staging artifact', () => {
   });
   it('uses the Portal-configured development identity and limits credentials to staging', () => {
     const id = createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest('hex').slice(0, 32).replace(/[0-9a-f]/g, n => String.fromCharCode(97 + parseInt(n, 16)));
-    expect(manifest.name).toBe('ArgoLand.AI Staging Preview');
+    expect(manifest.name).toBe('Career Companion Staging Preview');
     expect(manifest.version).toBe('0.0.5');
     expect(manifest.minimum_chrome_version).toBe('130');
     expect(id).toBe(DEVELOPMENT_EXTENSION_ID);
@@ -271,6 +271,7 @@ describe('complete assistant staging artifact', () => {
   });
   it('ships a runtime-injected host and inert executor and a UI with no fixture or credential client', () => {
     const names = files(root).map(p => p.slice(root.length + 1));
+    expect(names.filter(name => /(?:alice|charlie|darren|xena).*\.webp$/iu.test(name))).toEqual([]);
     expect(names).toContain('assistant.html'); expect(names).toContain('intake-recorder.html'); expect(names.some(n => /pcm-worklet.*\.js$/.test(n))).toBe(true); expect(names.filter(n => n.startsWith('content-scripts/'))).toEqual(['content-scripts/apply.js', 'content-scripts/assistant-host.js']);
     const renderer = names.filter(n => (n.startsWith('chunks/') || n.startsWith('content-scripts/')) && n.endsWith('.js')).map(n => readFileSync(join(root, n), 'utf8')).join('\n');
     for (const marker of ['fictional.pdf', '测试用户 A', 'Mia Chen', 'refreshToken', 'Bearer ', '/auth/refresh', 'getAccessToken', 'createPreviewPorts']) expect(renderer).not.toContain(marker);

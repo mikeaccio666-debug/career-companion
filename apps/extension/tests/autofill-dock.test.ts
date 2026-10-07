@@ -98,13 +98,13 @@ describe('autofill dock', () => {
 
   it('addresses the user as this product, never as the one it is modelled on', () => {
     // The panel is modelled on Jobright's on purpose; being mistaken for it is
-    // not the goal. ArgoLand is this product's own name — the same one the
+    // not the goal. Career Companion is this product's own name — the same one the
     // Fable design uses. Pinned on the source because every sentence the dock
     // says, in either language, lives in this one file.
     // 2026-09-23 新浮层：文案都在 lib/dock/copy.ts；旧表 product-panel/dockCopy.ts 2026-09-26 删掉了。
     const copy = readFileSync(resolve(__dirname, '../lib/dock/copy.ts'), 'utf8');
     expect(copy).not.toMatch(/jobright/iu);
-    expect(copy).toContain('ArgoLand');
+    expect(copy).toContain('Career Companion');
   });
   it('puts nothing on a page it must stay off', () => {
     const doc = document.implementation.createHTMLDocument();

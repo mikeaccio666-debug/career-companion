@@ -127,7 +127,7 @@ test('anonymous capabilities are genuine booleans with selected chat attachments
   assert.deepEqual((await internal.app.inject({ url: prefix + '/features' })).json(), { version: 1, workbench: true, providerDetails: true });
   const closed = await request(student, owner, 'GET', '/capabilities/details'); assert.equal(closed.statusCode, 403); assert.equal(closed.json().error.code, 'PROVIDER_DETAILS_DISABLED');
   assert.equal((await request(internal, owner, 'GET', '/capabilities/details', undefined, stranger.userId)).statusCode, 409);
-  const details = await request(internal, owner, 'GET', '/capabilities/details'); assert.equal(details.statusCode, 200); assert.equal(details.json().providers[0].id, 'channel-fixture');
+  const details = await request(internal, owner, 'GET', '/capabilities/details'); assert.equal(details.statusCode, 403); assert.equal(details.json().error.code, 'STAFF_ROLE_REQUIRED');
   await db.query('DELETE FROM platform_sessions WHERE user_id=$1', [owner.userId]);
   assert.equal((await request(internal, owner, 'GET', '/capabilities/details')).statusCode, 401);
 });
