@@ -14,6 +14,7 @@ import { speechJobOptions } from './voice-input.ts';
 import { speechElevenLabs } from './elevenlabs.ts';
 export { parseExecutionTemplateBinding, validateComfyUITemplateSnapshot } from './comfyui-template.ts';
 export { ProviderError } from './errors.ts';
+export { cliModelConfiguration, OPENAI_CLI_ENDPOINT } from './cli-model.ts';
 export { workflowHash, workflowDefinitionHash } from './workflow.ts';
 export { validateMediaReferenceBinding, validateMediaJobInput, validateMediaReferenceImages, isArkSeedance25Model } from './media-input.ts';
 export { parseBrowserTaskOptions, browserDefinitionHash } from './browser-actions.ts';

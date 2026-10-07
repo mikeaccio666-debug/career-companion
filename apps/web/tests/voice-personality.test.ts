@@ -97,7 +97,7 @@ test('preferences and completed audio configuration survive navigation while cre
   const audioConfiguration = voiceAudioConfiguration(provider, 'warm', 'sage');
   editor.update((value) => ({ ...value, speechProviderId: provider.id, transcriptionProviderId: 'faster-whisper', chatProviderId: 'ollama', chatModel: 'fictional-model', voicePreferences: { roleId: 'career', speechVoices: { [provider.id]: 'sage' }, realtimeVoices: { [provider.id]: 'cedar' }, turnTaking: 'quick', vendorSecret: 'fictional-not-to-retain' } as VoicePreferences,
     speechSnapshot: { audio, input: excerptInput('speech_excerpt', 'Fictional text.', [audio.id]), audioConfiguration: { ...audioConfiguration, rawEvent: { type: 'fictional' } } as typeof audioConfiguration },
-    turns: [{ key: 'fictional-turn', itemId: 'fictional-item', contentIndex: 0, revision: 0, role: 'assistant', text: 'Fictional complete excerpt.', inputs: [], voiceRoleId: 'interviewer' }] }));
+    turns: [{ key: 'fictional-turn', itemId: 'fictional-item', contentIndex: 0, revision: 0, role: 'assistant', status: 'complete', text: 'Fictional complete excerpt.', inputs: [], voiceRoleId: 'interviewer' }] }));
   editor.close(); const restored = store.open(conversationId).getSnapshot();
   assert.equal(restored.voicePreferences.roleId, 'career'); assert.equal(restored.chatModel, 'fictional-model'); assert.equal(restored.speechProviderId, provider.id);
   assert.equal(restored.voicePreferences.realtimeVoices[provider.id], 'cedar'); assert.equal(restored.voicePreferences.turnTaking, 'quick');

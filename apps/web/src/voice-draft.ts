@@ -1,7 +1,7 @@
 import type { VoiceRecordInput } from '@companion/platform-contracts';
 import type { AccountOperationToken } from './account-operations.ts';
 import type { Artifact } from './types.ts';
-import { excerptInput, type RealtimeTurn } from './voice-history.ts';
+import { excerptInput, realtimeTurnRecordCount, type RealtimeTurn } from './voice-history.ts';
 import { copyVoiceAudioConfiguration, copyVoicePreferences, defaultVoicePreferences, voicePersonalityId, type VoiceAudioConfiguration, type VoicePreferences } from './voice-personality.ts';
 
 export interface VoiceDraft {
@@ -33,13 +33,16 @@ function copyDraft(draft: VoiceDraft): VoiceDraft {
   if (draft.text.length > 8000) throw new VoiceDraftLimitError('本次语音文字最多保留 8,000 字，请精简已有文字后继续。');
   if (draft.speechSnapshot && draft.speechSnapshot.input.text.length > 4000) throw new VoiceDraftLimitError('朗读草稿每次最多保留 4,000 字。');
   const bytes = draft.turns.reduce((total, turn) => total + new TextEncoder().encode(turn.text).byteLength, 0);
-  const records = draft.turns.reduce((total, turn) => total + turn.inputs.length, 0);
+  const records = draft.turns.reduce((total, turn) => total + realtimeTurnRecordCount(turn), 0);
   if (bytes > MAX_REALTIME_BYTES || records > MAX_REALTIME_RECORDS) throw new VoiceDraftLimitError('本次实时转写已达到 500 个片段或 1 MiB 上限，请先保存已有片段。');
   if (draft.turns.some((turn) => turn.inputs.some((input) => input.text.length > 8000))) throw new VoiceDraftLimitError('每个转写摘录最多保留 8,000 字。');
   if (draft.savedClientIds.length > MAX_REALTIME_RECORDS + 2) throw new VoiceDraftLimitError('本次语音草稿的保存记录已达到上限。');
   const snapshot = draft.speechSnapshot;
   return { providerId: draft.providerId, transcriptionProviderId: draft.transcriptionProviderId, speechProviderId: draft.speechProviderId, chatProviderId: draft.chatProviderId, chatModel: draft.chatModel, voicePreferences: copyVoicePreferences(draft.voicePreferences), text: draft.text, hasTranscription: draft.hasTranscription,
-    turns: draft.turns.map((turn) => ({ key: turn.key, itemId: turn.itemId, contentIndex: turn.contentIndex, revision: turn.revision, role: turn.role, text: turn.text, inputs: turn.inputs.map(copyInput), ...(turn.voiceRoleId ? { voiceRoleId: voicePersonalityId(turn.voiceRoleId) } : {}) })),
+    turns: draft.turns.map((turn) => {
+      const status = turn.status || (turn.role === 'user' ? 'complete' : 'unconfirmed');
+      return { key: turn.key, itemId: turn.itemId, contentIndex: turn.contentIndex, revision: turn.revision, role: turn.role, status, text: turn.text, inputs: status === 'complete' ? turn.inputs.map(copyInput) : [], ...(turn.voiceRoleId ? { voiceRoleId: voicePersonalityId(turn.voiceRoleId) } : {}) };
+    }),
     inputTranscriptionEnabled: draft.inputTranscriptionEnabled,
     transcriptInput: draft.transcriptInput ? copyInput(draft.transcriptInput) : null,
     speechSnapshot: snapshot ? { audio: { id: snapshot.audio.id, name: snapshot.audio.name, mime: snapshot.audio.mime, url: snapshot.audio.url, ...(snapshot.audio.size === undefined ? {} : { size: snapshot.audio.size }) }, input: copyInput(snapshot.input), ...(copyVoiceAudioConfiguration(snapshot.audioConfiguration) ? { audioConfiguration: copyVoiceAudioConfiguration(snapshot.audioConfiguration) } : {}) } : null,
@@ -53,7 +56,7 @@ export class VoiceDraftLimitError extends Error { constructor(message: string) {
 function hasUnsavedContent(draft: VoiceDraft): boolean {
   const saved = new Set(draft.savedClientIds);
   if (draft.text.trim() && (!draft.transcriptInput || draft.transcriptInput.text !== draft.text.trim() || !saved.has(draft.transcriptInput.clientRecordId))) return true;
-  if (draft.turns.some((turn) => turn.inputs.some((input) => !saved.has(input.clientRecordId)))) return true;
+  if (draft.turns.some((turn) => turn.status !== 'complete' && !!turn.text.trim() || turn.inputs.some((input) => !saved.has(input.clientRecordId)))) return true;
   return !!draft.speechSnapshot && !saved.has(draft.speechSnapshot.input.clientRecordId);
 }
 
@@ -111,6 +114,25 @@ export class VoiceDraftEditor {
     this.update((draft) => ({ ...draft, transcriptInput: input }));
     return input;
   }
+}
+
+/** Apply source-state downgrades before the caller ends a limited connection. */
+export function applyRealtimeDraftResult(origin: VoiceDraftEditor, captured: RealtimeTurn[], result: { changed: boolean; limitReached?: boolean }, onLimit?: () => void): { applied: boolean; limitReached: boolean } {
+  const oversized = captured.reduce((total, turn) => total + new TextEncoder().encode(turn.text).byteLength, 0) > MAX_REALTIME_BYTES
+    || captured.reduce((total, turn) => total + realtimeTurnRecordCount(turn), 0) > MAX_REALTIME_RECORDS;
+  let applied = false;
+  if (result.changed) {
+    const incoming = new Map(captured.map((turn) => [turn.key, turn]));
+    applied = origin.update((value) => ({ ...value, turns: oversized ? value.turns.flatMap((turn) => {
+      const next = incoming.get(turn.key);
+      if (!next) return [];
+      // Keep the bounded text already displayed, but never keep revoked save inputs.
+      return [{ ...turn, ...(next.status === 'complete' ? {} : { status: next.status, inputs: [] }) }];
+    }) : captured }));
+  }
+  const limitReached = !!result.limitReached || oversized;
+  if (limitReached && origin.isCurrent()) onLimit?.();
+  return { applied, limitReached };
 }
 
 export class VoiceDraftStore {

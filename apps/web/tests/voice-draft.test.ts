@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AccountOperationScope } from '../src/account-operations.ts';
-import { MAX_VOICE_DRAFTS, openVoiceDraft, VoiceDraftLimitError, VoiceDraftStore, StaleVoiceDraft, voiceDepartureNotice } from '../src/voice-draft.ts';
-import { excerptInput, quotedVoiceText, RealtimeTranscriptBuffer } from '../src/voice-history.ts';
+import { applyRealtimeDraftResult, MAX_VOICE_DRAFTS, openVoiceDraft, VoiceDraftLimitError, VoiceDraftStore, StaleVoiceDraft, voiceDepartureNotice } from '../src/voice-draft.ts';
+import { excerptInput, quotedVoiceText, realtimeTurnCanSave, RealtimeTranscriptBuffer } from '../src/voice-history.ts';
 
 function context() {
   const account = new AccountOperationScope(), store = new VoiceDraftStore();
@@ -16,6 +16,7 @@ function completeTurns() {
   buffer.receive({ type: 'response.output_audio_transcript.delta', item_id: 'partial', delta: 'Must not be retained.' });
   buffer.receive({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'question', transcript: 'Fictional practice question.' });
   buffer.receive({ type: 'response.output_audio_transcript.done', item_id: 'answer', transcript: 'Fictional practice answer.' });
+  buffer.receive({ type: 'response.done', response: { id: 'fictional-response', status: 'completed', output: [{ type: 'message', role: 'assistant', id: 'answer' }] } });
   return buffer.turns();
 }
 
@@ -157,7 +158,65 @@ test('oversized text, speech and realtime content fail without changing the exis
     (value: typeof before) => ({ ...value, text: 'x'.repeat(8001) }),
     (value: typeof before) => ({ ...value, turns: [{ ...turns[0], text: 'x'.repeat(1024 * 1024 + 1) }] }),
     (value: typeof before) => ({ ...value, turns: [{ ...turns[0], inputs: Array.from({ length: 501 }, () => turns[0].inputs[0]) }] }),
+    (value: typeof before) => ({ ...value, turns: Array.from({ length: 501 }, (_, index) => ({ ...turns[1], key: `pending-${index}`, status: 'unconfirmed' as const, inputs: [] })) }),
     (value: typeof before) => ({ ...value, speechSnapshot: { audio: { id: 'audio-id', url: '/api/platform/uploads/audio-id', name: 'speech.mp3', mime: 'audio/mpeg' }, input: excerptInput('speech_excerpt', 'x'.repeat(4001), ['audio-id']) } }),
   ];
   for (const candidate of candidates) { assert.throws(() => editor.update(candidate), VoiceDraftLimitError); assert.equal(draft.getSnapshot(), before); }
+});
+
+test('assistant completion states survive navigation and old draft shapes cannot retain complete-save inputs', () => {
+  for (const status of ['cancelled', 'failed', 'incomplete', 'truncated'] as const) {
+    const { store } = context(), draft = store.open('conversation-a'), editor = draft.edit();
+    const assistant = { ...completeTurns()[1], status };
+    editor.update((value) => ({ ...value, turns: [assistant] })); editor.close();
+    const restored = store.open('conversation-a').getSnapshot().turns[0];
+    assert.equal(restored.status, status); assert.equal(restored.text, assistant.text); assert.deepEqual(restored.inputs, []);
+  }
+  const { store } = context(), draft = store.open(null), legacy = completeTurns()[1];
+  assert.ok(legacy.inputs.length); Reflect.deleteProperty(legacy, 'status');
+  draft.edit().update((value) => ({ ...value, turns: [legacy] }));
+  assert.equal(draft.getSnapshot().turns[0].status, 'unconfirmed'); assert.deepEqual(draft.getSnapshot().turns[0].inputs, []);
+});
+
+test('unconfirmed transcript-only drafts cannot be silently evicted despite having no saveable inputs', () => {
+  const { store } = context();
+  const drafts = Array.from({ length: MAX_VOICE_DRAFTS }, (_, index) => {
+    const draft = store.open(`pending-${index}`), assistant = { ...completeTurns()[1], status: 'unconfirmed' as const, inputs: [] };
+    draft.edit().update((value) => ({ ...value, turns: [assistant] })); return draft;
+  });
+  const result = openVoiceDraft(store, 'extra', true);
+  assert.equal(result.draft, null); assert.match(result.error, /32 份上限/);
+  drafts.forEach((draft) => assert.equal(draft.isCurrent(), true));
+});
+
+test('the actual realtime draft boundary publishes terminal downgrades before ending a limited connection', () => {
+  for (const status of ['failed', 'cancelled']) for (const invalidId of [false, true]) {
+    const { store } = context(), draft = store.open('conversation-a'), editor = draft.edit(), buffer = new RealtimeTranscriptBuffer('fictional-session');
+    buffer.receive({ type: 'response.output_audio_transcript.done', response_id: 'response-a', item_id: 'a', content_index: 0, transcript: 'Fictional complete text.' });
+    buffer.receive({ type: 'response.done', response: { id: 'response-a', status: 'completed' } });
+    editor.update((value) => ({ ...value, turns: buffer.turns() })); assert.equal(realtimeTurnCanSave(draft.getSnapshot().turns[0]), true);
+    const events: string[] = [], unsubscribe = draft.subscribe(() => events.push('updated'));
+    const output = invalidId ? [{ type: 'message', role: 'assistant', id: '' }] : Array.from({ length: buffer.maximumTrackedItems + 1 }, () => ({ type: 'message', role: 'assistant', id: 'a' }));
+    const received = buffer.receive({ type: 'response.done', response: { id: 'response-a', status, output } });
+    const result = applyRealtimeDraftResult(editor, buffer.turns(), received, () => {
+      assert.equal(realtimeTurnCanSave(draft.getSnapshot().turns[0]), false);
+      assert.deepEqual(draft.getSnapshot().turns[0].inputs, []);
+      events.push('closed'); editor.close();
+    });
+    assert.deepEqual(result, { applied: true, limitReached: true }); assert.deepEqual(events, ['updated', 'closed']);
+    unsubscribe(); assert.equal(store.open('conversation-a').getSnapshot().turns[0].status, 'incomplete');
+  }
+});
+
+test('cumulative draft overflow keeps bounded old text while applying revocations and rejects a stale editor', () => {
+  const { store } = context(), draft = store.open('conversation-a'), editor = draft.edit(), original = completeTurns()[1];
+  editor.update((value) => ({ ...value, turns: [original] }));
+  const captured = [{ ...original, status: 'incomplete' as const, text: 'x'.repeat(1024 * 1024 + 1), inputs: [] }];
+  let stopped = 0;
+  const result = applyRealtimeDraftResult(editor, captured, { changed: true }, () => { stopped++; assert.equal(realtimeTurnCanSave(draft.getSnapshot().turns[0]), false); });
+  assert.deepEqual(result, { applied: true, limitReached: true }); assert.equal(stopped, 1);
+  assert.equal(draft.getSnapshot().turns[0].text, original.text); assert.deepEqual(draft.getSnapshot().turns[0].inputs, []);
+  editor.close();
+  assert.deepEqual(applyRealtimeDraftResult(editor, captured, { changed: true, limitReached: true }, () => { stopped++; }), { applied: false, limitReached: true });
+  assert.equal(stopped, 1);
 });
