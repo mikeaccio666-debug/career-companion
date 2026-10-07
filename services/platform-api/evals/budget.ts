@@ -1,4 +1,5 @@
 import type { ModelCallEvent } from '@companion/platform-contracts';
+import { assertEvalStudyPlan, studyEntry, type EvalStudyPlan } from './study-plan.ts';
 
 export type EvalPriceTier = 'development' | 'formal';
 export type EvalStage = 'pilot' | 'full' | 'formal_pilot' | 'formal';
@@ -22,6 +23,7 @@ export interface EvalPriceSnapshot {
 }
 export interface EvalCaseBinding {
   caseId: string;
+  studyDigest: string; scriptId: string; scriptDigest: string; seedInputDigest: string;
   stage: EvalStage;
   provider: string;
   model: string;
@@ -41,6 +43,7 @@ export class EvalBudgetError extends Error {
 }
 interface CallRecordIds {
   runId: string; caseId: string; stage: EvalStage; callId: string; index: number;
+  studyDigest: string; scriptId: string; scriptDigest: string; seedInputDigest: string;
   provider: string; model: string; purpose: EvalModelPurpose; priceSnapshotId: string;
   approvedConfigId: string; tariffProfileId: string; atMs: number;
 }
@@ -49,11 +52,12 @@ export type EvalBudgetLedgerEvent =
   | CallRecordIds & { type: 'started_reserve'; inputReserveTokens: number; outputReserveTokens: number; reservedMicroUsd: number }
   | CallRecordIds & { type: 'finished_settled'; status: 'complete' | 'failed' | 'cancelled' | 'interrupted'; usageStatus: 'reported'; inputTokens: number; outputTokens: number; actualMicroUsd: number; reservedMicroUsd: number }
   | CallRecordIds & { type: 'finished_uncertain'; status: 'complete' | 'failed' | 'cancelled' | 'interrupted'; usageStatus: 'missing' | 'invalid' | 'out_of_bounds'; actualMicroUsd: null; reservedMicroUsd: number }
-  | { type: 'case_completed'; runId: string; caseId: string; stage: EvalStage; calls: number; actualMicroUsd: number; atMs: number }
-  | { type: 'forecast_approved'; runId: string; totalEstimatedMicroUsd: number; formalBasis: 'own_pilot' | 'full_context'; atMs: number }
+  | { type: 'case_completed'; runId: string; caseId: string; studyDigest: string; stage: EvalStage; calls: number; actualMicroUsd: number; atMs: number }
+  | { type: 'forecast_approved'; runId: string; studyDigest: string; totalEstimatedMicroUsd: number; formalBasis: 'own_pilot' | 'full_context'; atMs: number }
   | { type: 'batch_stopped'; runId: string; reason: EvalBudgetStopReason; atMs: number };
 export interface EvalBudgetOptions {
   runId: string;
+  study: EvalStudyPlan;
   /** Strictly below USD 20. This guards the reviewed tariff estimate, not the upstream invoice. */
   capMicroUsd: number;
   prices: readonly EvalPriceSnapshot[];
@@ -81,6 +85,9 @@ export interface EvalBudgetForecast {
 }
 export interface EvalBudget {
   readonly signal: AbortSignal;
+  readonly runId: string;
+  readonly study: EvalStudyPlan;
+  bindingFor(caseId: string): Readonly<EvalCaseBinding>;
   accountingFor(caseId: string): (event: ModelCallEvent) => Promise<void>;
   completeCase(caseId: string): Promise<void>;
   snapshot(): EvalBudgetSnapshot;
@@ -129,6 +136,8 @@ interface CaseState { binding: Readonly<EvalCaseBinding>; calls: CallState[]; co
 
 /** Fresh-process budget only: no resume API, no main application tables, no secrets or model transport. */
 export function createEvalBudget(options: EvalBudgetOptions): EvalBudget {
+  try { assertEvalStudyPlan(options.study); } catch { invalid(); }
+  const study = options.study;
   const now = options.now ?? (() => new Date());
   const runId = options.runId, capMicroUsd = options.capMicroUsd, persistRecord = options.persist;
   if (!id(options.runId) || !integer(options.capMicroUsd, 1) || options.capMicroUsd >= 20_000_000 || typeof options.persist !== 'function' ||
@@ -139,7 +148,12 @@ export function createEvalBudget(options: EvalBudgetOptions): EvalBudget {
     if (prices.has(price.id)) invalid(); prices.set(price.id, price);
   }
   for (const candidate of options.cases) {
+    const fields = ['caseId', 'studyDigest', 'scriptId', 'scriptDigest', 'seedInputDigest', 'stage', 'provider', 'model', 'purpose', 'priceSnapshotId', 'maxOutputTokens', 'maxModelCalls'];
+    if (Object.keys(candidate).length !== fields.length || Object.keys(candidate).some(key => !fields.includes(key))) invalid();
     const binding = Object.freeze({ ...candidate }), price = prices.get(binding.priceSnapshotId);
+    let entry; try { entry = studyEntry(study, binding.caseId); } catch { invalid(); }
+    if (binding.studyDigest !== study.digest || binding.scriptId !== entry.scriptId || binding.scriptDigest !== entry.scriptDigest ||
+        binding.seedInputDigest !== entry.seedInputDigest || binding.purpose !== entry.purpose || binding.stage !== entry.stage) invalid();
     if (!id(binding.caseId) || cases.has(binding.caseId) || !stages.has(binding.stage) || !purposes.has(binding.purpose) || !price ||
         binding.provider !== price.provider || binding.model !== price.model || !tokens(binding.maxOutputTokens, 1) || binding.maxOutputTokens > price.maxOutputTokens ||
         !integer(binding.maxModelCalls, 1) || binding.maxModelCalls > 64 ||
@@ -164,6 +178,7 @@ export function createEvalBudget(options: EvalBudgetOptions): EvalBudget {
     try { await persistRecord(Object.freeze(event)); } catch { fail('persistence_failure'); }
   };
   const recordIds = (call: CallState): CallRecordIds => ({ runId, caseId: call.binding.caseId, stage: call.binding.stage, callId: call.callId, index: call.index,
+    studyDigest: study.digest, scriptId: call.binding.scriptId, scriptDigest: call.binding.scriptDigest, seedInputDigest: call.binding.seedInputDigest,
     provider: call.binding.provider, model: call.binding.model, purpose: call.binding.purpose, priceSnapshotId: call.price.id,
     approvedConfigId: call.price.approvedConfigId, tariffProfileId: call.price.tariffProfileId, atMs: timestamp() });
   const snapshot = (): EvalBudgetSnapshot => Object.freeze({ status: state, reason, capMicroUsd, actualSpentMicroUsd: spent, pendingReservedMicroUsd: reserved,
@@ -220,8 +235,9 @@ export function createEvalBudget(options: EvalBudgetOptions): EvalBudget {
   });
   const completeCase = async (caseId: string) => serialized(async () => {
     requireActive(); const item = cases.get(caseId);
-    if (!item || item.complete || !item.calls.length || item.calls.some(call => call.state !== 'settled')) fail('binding_invalid');
-    await persist({ type: 'case_completed', runId, caseId, stage: item.binding.stage, calls: item.calls.length, actualMicroUsd: item.calls.reduce((sum, call) => sum + call.actual!, 0), atMs: timestamp() });
+    if (!item || item.complete || !item.calls.length || item.calls.some(call => call.state !== 'settled') ||
+        item.calls.at(-1)?.finish?.status !== 'complete') fail('binding_invalid');
+    await persist({ type: 'case_completed', runId, caseId, studyDigest: study.digest, stage: item.binding.stage, calls: item.calls.length, actualMicroUsd: item.calls.reduce((sum, call) => sum + call.actual!, 0), atMs: timestamp() });
     requireActive(); item.complete = true; revision++;
   });
   const forecast = (request: EvalBudgetForecastRequest): EvalBudgetForecast => {
@@ -229,15 +245,16 @@ export function createEvalBudget(options: EvalBudgetOptions): EvalBudget {
     if (state !== 'active') reasons.push('batch_stopped');
     if (reserved) reasons.push('inflight_call');
     const fullIds = request?.fullCaseIds, formalIds = request?.formalCaseIds;
-    const validIds = (ids: readonly string[] | undefined, count: number) => Array.isArray(ids) && ids.length === count && new Set(ids).size === count && ids.every(value => typeof value === 'string' && cases.has(value));
-    if (!validIds(fullIds, 120) || !validIds(formalIds, 20) || fullIds.some(value => formalIds.includes(value))) reasons.push('invalid_suite');
+    const validIds = (ids: readonly string[] | undefined, expected: readonly string[]) => Array.isArray(ids) && ids.length === expected.length &&
+      new Set(ids).size === expected.length && ids.every(value => expected.includes(value) && cases.has(value));
+    if (!validIds(fullIds, study.developmentCaseIds) || !validIds(formalIds, study.formalCaseIds)) reasons.push('invalid_suite');
     const full = Array.isArray(fullIds) ? fullIds.flatMap(value => cases.get(value) ?? []) : [], formal = Array.isArray(formalIds) ? formalIds.flatMap(value => cases.get(value) ?? []) : [];
     for (const priceId of new Set([...full, ...formal].map(item => item.binding.priceSnapshotId))) {
       try { validatePrice(prices.get(priceId)!, clockMs(now)); } catch { reasons.push('price_unconfirmed'); }
     }
     if (full.some(item => !['pilot', 'full'].includes(item.binding.stage)) || formal.some(item => !['formal_pilot', 'formal'].includes(item.binding.stage))) reasons.push('invalid_suite');
     const pilots = full.filter(item => item.binding.stage === 'pilot'), formalPilots = formal.filter(item => item.binding.stage === 'formal_pilot');
-    if (pilots.length !== 12 || pilots.some(item => !item.complete)) reasons.push('pilot_incomplete');
+    if (pilots.length !== study.pilotCaseIds.length || pilots.some(item => !study.pilotCaseIds.includes(item.binding.caseId) || !item.complete)) reasons.push('pilot_incomplete');
     const oneProfile = (items: CaseState[]) => new Set(items.map(item => item.binding.priceSnapshotId)).size === 1;
     if (!oneProfile(full) || !oneProfile(formal)) reasons.push('mixed_price_profiles');
     const caseCost = (item: CaseState) => item.calls.reduce((sum, call) => sum + (call.actual ?? 0), 0);
@@ -264,7 +281,7 @@ export function createEvalBudget(options: EvalBudgetOptions): EvalBudget {
     if (!request || result.revision !== revision || result.status !== 'ready') throw new EvalBudgetError('EVAL_STAGE_BLOCKED', 'stage_blocked');
     const current = forecast(request);
     if (current.status !== 'ready') throw new EvalBudgetError('EVAL_STAGE_BLOCKED', 'stage_blocked');
-    await persist({ type: 'forecast_approved', runId, totalEstimatedMicroUsd: current.totalEstimatedMicroUsd!, formalBasis: current.formalBasis, atMs: timestamp() });
+    await persist({ type: 'forecast_approved', runId, studyDigest: study.digest, totalEstimatedMicroUsd: current.totalEstimatedMicroUsd!, formalBasis: current.formalBasis, atMs: timestamp() });
     requireActive();
     for (const caseId of [...request.fullCaseIds, ...request.formalCaseIds]) approvedCases.add(caseId);
     revision++;
@@ -273,7 +290,9 @@ export function createEvalBudget(options: EvalBudgetOptions): EvalBudget {
   if (options.signal) {
     if (options.signal.aborted) abort(); else options.signal.addEventListener('abort', abort, { once: true });
   }
-  return Object.freeze({ signal: controller.signal, accountingFor: (caseId: string) => {
+  return Object.freeze({ signal: controller.signal, runId, study, bindingFor: (caseId: string) => {
+    const item = cases.get(caseId); if (!item) invalid(); return item.binding;
+  }, accountingFor: (caseId: string) => {
     if (!cases.has(caseId)) invalid(); return (event: ModelCallEvent) => accounting(caseId, event);
   }, completeCase, snapshot, forecast, approveForecast, abort });
 }

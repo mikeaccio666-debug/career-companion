@@ -4,6 +4,7 @@ import type { PlatformProviderRuntime } from '@companion/platform-contracts';
 import { createEvalBudget, type EvalPriceSnapshot, type EvalCaseBinding, type EvalBudgetLedgerEvent } from '../evals/budget.ts';
 import { P0_EVAL_CASES } from '../evals/cases.ts';
 import { runProviderLoopBaseline } from '../evals/probe.ts';
+import { createEvalStudyPlan, studyEntry } from '../evals/study-plan.ts';
 
 const fixturePrice: EvalPriceSnapshot = {
   id: 'fixture-price', provider: 'openai', model: 'fictional-model', tier: 'development',
@@ -14,11 +15,13 @@ const fixturePrice: EvalPriceSnapshot = {
 };
 function setup(persist?: (event: Readonly<EvalBudgetLedgerEvent>) => Promise<void>) {
   const item = P0_EVAL_CASES.find(value => value.speaker === 'companion')!;
-  const binding: EvalCaseBinding = { caseId: 'fixture-development/' + item.id, stage: 'pilot',
+  const study = createEvalStudyPlan(), entry = studyEntry(study, 'development/' + item.id);
+  const binding: EvalCaseBinding = { caseId: entry.caseId, studyDigest: study.digest, scriptId: entry.scriptId,
+    scriptDigest: entry.scriptDigest, seedInputDigest: entry.seedInputDigest, stage: entry.stage,
     provider: 'openai', model: 'fictional-model', purpose: 'companion_reply',
     priceSnapshotId: fixturePrice.id, maxOutputTokens: 2048, maxModelCalls: 3 };
   const records: Readonly<EvalBudgetLedgerEvent>[] = [];
-  const budget = createEvalBudget({ runId: 'fixture-probe-run', capMicroUsd: 19_000_000,
+  const budget = createEvalBudget({ runId: 'fixture-probe-run', study, capMicroUsd: 19_000_000,
     prices: [fixturePrice], cases: [binding], now: () => new Date('2026-10-07T01:00:00Z'),
     persist: persist ?? (async event => { records.push(event); }) });
   return { item, binding, budget, records };
@@ -28,6 +31,7 @@ function fixtureRuntime(usage: 'reported' | 'missing' = 'reported'): Pick<Platfo
     assert.equal(input.model, 'fictional-model');
     assert.equal(context.toolChoice, 'none');
     assert.deepEqual(context.tools, []);
+    assert.equal(context.limits.maxOutputTokens, 2048);
     await context.onModelCall?.({ type: 'started', callId: 'fixture-probe-call', index: context.callIndex,
       provider: input.provider, model: input.model!, purpose: context.purpose });
     yield { type: 'delta', text: 'Fictional private response that must not reach logs.' };
@@ -42,10 +46,16 @@ test('shared loop probe records raw timing and known usage without pretending to
   const result = await runProviderLoopBaseline({ ...setupValue, runtime: fixtureRuntime(), nowMs: () => clock += 10 });
   assert.equal(result.status, 'completed');
   assert.equal(result.scope, 'isolated_provider_loop_baseline');
-  assert.equal(result.providerFirstDeltaMs, 10);
-  assert.equal(result.providerCompletedMs, 20);
+  assert.equal(result.baselineFirstDeltaMs, 10);
+  assert.equal(result.baselineCompletedMs, 20);
   assert.equal(result.qualityScore, null);
   assert.equal(result.qualityStatus, 'not_scored');
+  assert.equal(result.inputScope, 'prompt_only');
+  assert.equal(result.toolExecution, 'not_exercised');
+  assert.equal(result.timingBasis, 'loop_and_budget_accounting');
+  assert.equal(result.studyDigest, setupValue.budget.study.digest);
+  assert.equal(result.runId, 'fixture-probe-run');
+  assert.equal(result.seedInputDigest, setupValue.budget.bindingFor(result.caseId).seedInputDigest);
   assert(result.outputChars > 0);
   assert.match(result.outputDigest, /^[a-f0-9]{64}$/);
   assert(!JSON.stringify(result).includes('Fictional private response'));
@@ -57,6 +67,59 @@ test('shared loop probe records raw timing and known usage without pretending to
   for (const metric of Object.values(result.productMetrics)) {
     assert.equal(metric.value, null); assert.equal(metric.status, 'blocked');
   }
+});
+
+test('every separately supplied binding change is refused before runtime or reservation', async () => {
+  const changes: Partial<EvalCaseBinding>[] = [
+    { maxOutputTokens: 4096 }, { maxOutputTokens: 1024 }, { maxModelCalls: 4 }, { maxModelCalls: 1 },
+    { provider: 'fictional-other-provider' }, { model: 'fictional-other-model' },
+    { stage: 'full' }, { purpose: 'room_turn' }, { priceSnapshotId: 'fictional-other-price' },
+    { studyDigest: '0'.repeat(64) }, { scriptId: 'companion-02-en' },
+    { scriptDigest: '0'.repeat(64) }, { seedInputDigest: '0'.repeat(64) },
+  ];
+  for (const change of changes) {
+    const value = setup(); let invoked = 0;
+    const runtime: Pick<PlatformProviderRuntime, 'streamModelStep'> = { async *streamModelStep() {
+      invoked++; throw new Error('must not start');
+    } };
+    await assert.rejects(runProviderLoopBaseline({ ...value, binding: { ...value.binding, ...change }, runtime }), /EVAL_BASELINE_BINDING_MISMATCH/);
+    assert.equal(invoked, 0); assert.equal(value.records.length, 0); assert.equal(value.budget.snapshot().startedCalls, 0);
+  }
+  const value = setup();
+  await assert.rejects(runProviderLoopBaseline({ ...value,
+    binding: { ...value.binding, caseId: 'development/companion-02-en' }, runtime: fixtureRuntime() }), { code: 'EVAL_BUDGET_CONFIG_INVALID' });
+  assert.equal(value.records.length, 0);
+});
+
+test('same-ID revised input and an extra binding field cannot enter an evaluation request', async () => {
+  for (const part of ['prompt', 'facts', 'history'] as const) {
+    const value = setup(), item = structuredClone(value.item); let invoked = 0;
+    if (part === 'prompt') (item as { prompt: string }).prompt += ' Fictional revision';
+    else if (part === 'facts') (item.state.facts as string[]).push('Fictional added fact');
+    else (item.history as { role: 'user'; content: string }[]).push({ role: 'user', content: 'Fictional added turn' });
+    const runtime: Pick<PlatformProviderRuntime, 'streamModelStep'> = { async *streamModelStep() { invoked++; throw new Error('must not start'); } };
+    await assert.rejects(runProviderLoopBaseline({ ...value, item, runtime }), { code: 'EVAL_STUDY_INVALID' });
+    assert.equal(invoked, 0); assert.equal(value.records.length, 0);
+  }
+  const value = setup();
+  const binding = { ...value.binding, unchecked: 'fictional-extra' };
+  await assert.rejects(runProviderLoopBaseline({ ...value, binding, runtime: fixtureRuntime() }), /EVAL_BASELINE_BINDING_MISMATCH/);
+});
+
+test('baseline timing honestly includes slow durable accounting, not provider-only latency', async () => {
+  let clock = 0;
+  const value = setup(async event => {
+    if (event.type === 'started_reserve') clock += 250;
+    if (event.type === 'finished_settled') clock += 400;
+    if (event.type === 'case_completed') clock += 100;
+  });
+  const result = await runProviderLoopBaseline({ ...value, runtime: fixtureRuntime(), nowMs: () => clock });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.baselineFirstDeltaMs, 250);
+  assert.equal(result.baselineCompletedMs, 750);
+  assert.equal(result.timingBasis, 'loop_and_budget_accounting');
+  assert.equal(Object.hasOwn(result, 'providerFirstDeltaMs'), false);
+  assert.equal(Object.hasOwn(result, 'providerCompletedMs'), false);
 });
 
 test('missing usage preserves reservation and prevents completion or another script', async () => {
@@ -76,7 +139,7 @@ test('reservation persistence failure aborts before the injected runtime emits a
   assert.equal(result.status, 'failed');
   assert.equal(result.errorCode, 'USAGE_RECORD_UNCONFIRMED');
   assert.equal(result.outputChars, 0);
-  assert.equal(result.providerFirstDeltaMs, null);
+  assert.equal(result.baselineFirstDeltaMs, null);
   assert(!JSON.stringify(result).includes('fictional-sensitive-backend-error'));
   assert(setupValue.budget.snapshot().pendingReservedMicroUsd > 0);
 });
@@ -118,7 +181,7 @@ test('a bound script cannot be swapped or revised while the isolated request is 
   const result = await pending;
   assert.equal(result.status, 'completed');
   assert.equal(capturedPrompt, original);
-  const wrong = setup(); wrong.binding.caseId = 'fixture-development/wrong-script';
+  const wrong = setup(); wrong.binding.purpose = 'room_turn';
   await assert.rejects(runProviderLoopBaseline({ ...wrong, runtime: fixtureRuntime() }), /EVAL_BASELINE_BINDING_MISMATCH/);
   assert.equal(wrong.budget.snapshot().startedCalls, 0);
 });
