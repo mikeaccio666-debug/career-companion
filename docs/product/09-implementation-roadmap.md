@@ -1,21 +1,21 @@
 # 09 从现有代码到愿景：实施路线
 
-> 2026-10-06 · 写给 Codex（实现者）和产品负责人（排期与拍板）。
+> 2026-10-07（按 10-07 决定：主线、转发卡、单聊）· 写给 Codex（实现者）和产品负责人（排期与拍板）。
 >
-> 代码基线：`main` 的 `1c26b3a`（含 `97194b4` MCP 接入、`da4434a` 任务与来源对话绑定）。代码位置写「文件 + 函数名或路由」，不写行号。
+> 代码基线：`main` 的 `1c26b3a`（含 `97194b4` MCP 接入、`da4434a` 任务与来源对话绑定）；对话引擎的现状按 `e1ba2a4` 核对（15 §12）。代码位置写「文件 + 函数名或路由」，不写行号。
 >
-> 每个主题以负责文档为准：分期 07；数据对象、状态机、专家 key、记忆与敏感度、外部数据来源 03；视觉与文案 08；渠道 10；付费 06；蔓藤资产 04；插件 11；声线 12；主理人、危机、主动规则 02。本文只写哪一步、改哪里、怎样算做完。
+> 每个主题以负责文档为准：分期 07；主理人 agent、能力层、流式与丝滑标准 15；数据对象、状态机、专家 key、房间与谁接话、记忆与敏感度、外部数据来源 03；视觉与文案 08；渠道 10；付费 06；蔓藤资产 04；插件 11；声线 12；主理人、危机、主动规则 02。本文只写哪一步、改哪里、怎样算做完。
 
 ## 这份文档回答什么问题
 
-- 从「通用 AI 网页工作台 + 未接通的投递插件」走到「主理人 + 小组 + 五个界面 + 求职数据」，代码按什么顺序改；每步改哪里、建什么、怎样算做完。
+- 从「通用 AI 网页工作台 + 未接通的投递插件」走到「全能主理人 agent + 队员的转发卡与单聊 + 五个界面 + 求职数据」，代码按什么顺序改；每步改哪里、建什么、怎样算做完。
 - 哪些现有代码冻结；工程上先立哪些规矩。
 
 **结论**
 1. P0 = 第 0–8 步、第 8B 步，加 10A（做完不发布）。关键路径 0 → 1 → 2 → 3A/3B → 5 → 4，可后移项见 §1.6。
-2. 第 1 步（对话轮次服务）是小组、主动消息、Discord、语音的共同前提，第一个 PR 必须零行为变化。
+2. 第 1 步（主理人 Agent 与对话引擎）是主线与单聊、主动消息、Discord、语音的共同前提；PR1 必须零行为变化，PR3 前做一次小规模真实模型测试（产品负责人 2026-10-07 已批准：低价档跑全部、正式档抽样，15 §1.2）。
 3. 不随工期削减：危机模板不依赖模型、身份数字只来自审核过的配置（第 2 步）；要发给别人的消息和材料先进待确认（第 5 步）；付费建议护栏（第 8B 步）。
-4. 外部数据只经第 3D 步（复用 MCP，03 §2.8），不在关键路径上；插件授权在小组对话里一次问清、确认卡生效，浮层不提问（第 10 步）。
+4. 外部数据只经第 3D 步（复用 MCP，03 §2.8），不在关键路径上；插件授权在投的单聊里一次问清、确认卡生效，浮层不提问（第 10 步）。
 5. 最大风险：P0 七周的工程量；蔓藤授权卡住 3C 和题库；律师审核卡住插件发布。本文只给相对规模假设，不给工期。
 
 ---
@@ -38,11 +38,11 @@
 | 步 | 名称 | 分期（07） | 依赖 | 规模 |
 |---|---|---|---|---|
 | 0 | 收拢定位 | P0 · W0；P0-4 隐藏部分 | — | S |
-| 1 | 对话轮次服务 + 多发言者 | P0-3 | 0 | L |
+| 1 | 主理人 Agent 与对话引擎 | P0-3 | 0 | XL |
 | 2 | 主理人、安全分级、身份事实、第一封信 | P0-1、P0-2、P0-5 后端 | 1 | L |
 | 3 | 求职数据、共享记忆、组织库切片 | P0-9、P0-8、P0-11 | 1；3C 只依赖 026 | 3 × M |
 | 3D | 外部数据来源（复用 MCP） | B2 补齐集；`org` 来源 P1b | 1、3A；记账接 8 | M + M |
-| 4 | 五个界面与小组 UI | P0-4、P0-5（前端） | 外壳只依赖 0 | XL |
+| 4 | 五个界面与对话 UI | P0-4、P0-5（前端） | 外壳只依赖 0 | XL |
 | 5 | 对外发出类待确认 | P0-7 | 1、3A | M |
 | 6 | 今天：调度、通知、额度、保留期 | P0-6 | 1、2、3A；8 前接 `CostGuard` 桩 | L |
 | 7 | 面试官最小版 | P0-10 | 1、2、3C | L |
@@ -76,7 +76,7 @@
 
 | 编号 | 文件 | 步 | 说明 |
 |---|---|---|---|
-| 017 | `017_conversation_speakers.sql` | 1 | 03 §6；`companion_id` 外键在 018 补 |
+| 017 | `017_conversation_rooms.sql` | 1 | 03 §6：房间、消息加列、轮次、队员运行记录、事件；记账键与 `agent` 任务也在这里（§3）；不建参与者表；`companion_id` 外键在 018 补 |
 | 018 | `018_companions.sql` | 2 | 02 §15.2；安全资源、身份事实配置 |
 | 019 | `019_memories_v2.sql` | 3B | 03 §8.2 |
 | 020 | `020_career_data.sql` | 3A | `packet_id` 外键在 022 补 |
@@ -89,22 +89,23 @@
 | 027 | `027_external_identities.sql` | 9 | 10 §9 |
 | 028 | `028_extension_apply.sql` | 10 | 03 §10、11 §6.1 |
 | 029 | `029_voice_presets.sql` | 11 | 12 §5 |
-| 合并时的空号 | `mcp_standing_grants` | 3D | 03 §2.8；回执加列 |
+| 合并时的空号 | `mcp_standing_grants` | 3D | 03 §2.8；回执改主键与加列（3D 第 6 条） |
 
 ### 1.5 命名、鉴权与事件
 
 - **表**：`platform_` 前缀；求职数据 `platform_career_`；组织库 `platform_org_`。
 - **鉴权**：所有学生路由挂 `secure` 或 `secured(scope)`，都要求 `x-companion-account` 头（`src/account-context.ts`）。网页请求经 `api.ts` 的 `BoundPlatformClient` 和 `PlatformAccountClientProvider`；媒体与下载用 `expectedAccount` 查询参数；`ACCOUNT_CONTEXT_*` 错误在前端统一转到「确认账号」页。员工路由 `staffOnly` 叠加在 `secure` 上。唯一例外是插件的 `/api/platform/ext/*`（10B）。
 - **队员键**：只用 03 §6.9 的 `EXPERT_KEYS = ['planner','guide','coach','interviewer','networker','applier']`，只在 `platform-contracts` 定义一次，显示名映射也在那里（`guide → 前辈 / 前`，其余见 03 §1.1）。P0 只开放主理人、`guide`、`applier`、`interviewer`，由 `PLATFORM_TEAM_ENABLED` 控制。
-- **事件**：SSE 以 03 §6.6、事件日志以 03 §6.7、埋点名以 07 §7.5 白名单为准；下文只列各步要接入的名字。
+- **事件**：SSE 以 15 §8.1（03 §6.6）、事件日志以 03 §6.7、埋点名以 07 §7.5 白名单为准；下文只列各步要接入的名字。
 
 ### 1.6 P0 关键路径与可后移项
 
-关键路径：**0 → 1（PR1–3）→ 2 → 3A / 3B → 5 → 4（小组、今天、待确认）**；顺延规则见 07 第 2 节。下列工程项可后移到 B2，不影响 07 §3.16 的发布闸门：
+关键路径：**0 → 1（PR1–4）→ 2 → 3A / 3B → 5 → 4（对话、今天、待确认）**；顺延规则见 07 第 2 节。下列工程项可后移到 B2，不影响 07 §3.16 的发布闸门：
 
 | 可后移项 | P0 替代 | 最晚 |
 |---|---|---|
-| 1-PR4 订阅流 | 网页轮询 `GET /conversations/:id/messages?after=` | P1-2 Discord 闸门前 |
+| 1-PR5 订阅流 | 网页轮询 `GET /conversations/:id/messages?after=`，有轮次或任务在跑时每 3 秒（假设，15 §8.2） | B0（订阅流是 P0 必需） |
+| 1-PR6 后台任务 | 长任务在前台跑到墙钟上限，如实说做到哪了，用户再发一句接着做 | B1（P0-3 含后台任务，07 §3.3；07 §3.16 闸门含 15 §14 的后台任务条目） |
 | 删除单条消息 | 删会话、删记忆照常可用 | B2 |
 | 服务端 diff | 先展示新版本全文；「原稿里没有的事实」标记不能后移 | B2 |
 | 知识访问日志查询界面 | 日志照写，用 SQL 查 | P1-9 |
@@ -138,37 +139,46 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 ---
 
-## 3. 第 1 步 对话轮次服务 + 多发言者模型
+## 3. 第 1 步 主理人 Agent 与对话引擎
 
-**目标**：把发消息路由（`app.ts` 的 `POST /conversations/:id/messages`）里的历史、记忆、工具、流式落库、租约、心跳、记账抽成渠道无关的服务；消息带发言者；小组有参与者、入场离场、插话和编排。规格见 03 第 6、7 节。
+**目标**：把发消息路由（`app.ts` 的 `POST /conversations/:id/messages`）里的历史、记忆、工具、流式落库、租约、心跳、记账抽成渠道无关的轮次服务；把 `chat.ts` 的工具循环改成主理人和队员共用的 agent 循环；建房间（主线、单聊、面试间）、转发卡、叫名字和后台任务。规格：引擎 15（落地顺序 15 §12.3），房间、谁接话与消息模型 03 §4、§6、§7。
 
-**改动范围**（文件名按 03 §7.1）
-- `src/conversation-turns.ts`：`ConversationTurns`（`submit`、`cancel`、`post`）。顺序按 03 §4.1：用户消息落库 → **同步安全分级**（第 2 步实现，本步留接口）→ 插话判断 → `CostGuard.reserve`（第 8 步前是桩）→ 编排 → 逐段生成。分级对每条用户消息执行，含插话、Discord 消息和并进 `queued` 轮次的消息。
-- `src/orchestrator.ts`；纯规则放 `packages/career-core/src/team/`。
-- `SseTurnSink`（搬走路由里的响应头和心跳）、`CollectingTurnSink`（测试用）、`DiscordTurnSink`（第 9 步）。
-- `safeTools` 和 `executeTool` 搬进轮次服务，按 03 §2.7 按发言者挂载；路由只剩校验、鉴权、限流和一次 `submit`。
-- `platform-contracts` 按 03 §6.9 加类型；`ai-core/src/chat.ts` 的 `instruction()` 改为按层拼接。
-- 专家入场前调 `prepareCareerRun`；`blocked` 时按 03 §4.3–4.4（被 @ 时专家照常入场并自己问一句）。
+**改动范围**
+- `src/conversation-turns.ts`：`ConversationTurns`（`submit`、`cancel`、`post`）。顺序按 15 §3.1：落库并开始**同步安全分级**（第 2 步实现，本步留接口）→ 纯规则：房间已有轮次就是插话（只分级，返回 202，不发模型调用），否则定谁接 → 建轮次、取租约、`CostGuard.reserve`（第 8 步前是桩）→ 组装上下文 → 第一次模型调用（分级返回 L0 前不放出文字和进度短语、不执行工具）→ agent 循环。分级对每条用户消息执行，含插话、Discord 消息和并进 `queued` 轮次的消息。
+- `packages/ai-core/src/agent-loop.ts` 的 `runAgentLoop`；`streamOpenAI`、`streamCompatible` 改为 `streamModelStep` 的两个实现，循环经包装 `runtime.streamModelStep` 的 `ProviderAdapter` 调用（15 §3.1、§12.2）。
+- `src/capabilities.ts`（`toolsFor`、`executorFor`）取代 `safeTools` 和 `executeTool` 的 if 链，纯数据目录与权限矩阵放 `packages/career-core/src/capabilities.ts`（15 §4.7）；`use_skill` 与 `src/career-run-context.ts`（15 §4.1、03 §3.4），求职工具随 019、020、022 接入。
+- `src/expert-runner.ts` 的 `runExpert`：`consult`、叫名字、回复卡、卡上按钮共用（15 §5.1）；纯规则放 `packages/career-core/src/team/`（`members.ts`、`name-call.ts` 的 `detectNameCall`、`handoff.ts` 的 `buildHandoffNote`、`personas.ts`）。
+- `src/agent-run.ts`：后台任务（15 §4.6）。`src/context-assembly.ts` 先按 15 §6.1 的层次搭骨架，各层内容随第 2 步补。
+- `SseTurnSink`（搬走路由里的响应头和心跳）、`CollectingTurnSink`（测试和 worker）、`DiscordTurnSink`（第 9 步）。
+- `platform-contracts` 按 03 §6.9、15 §12.2 改类型；`ai-core/src/chat.ts` 的 `instruction()` 改为分层组装（第 2 步完成）。
+- `consult` 或单聊任务前调 `prepareCareerRun`；`blocked` 时按 03 §3.3（主理人请人时不出卡、自己先问；被叫名字、回复卡、点按钮或在单聊里时队员自己问缺的那一项）。
 
-**四个 PR**
-1. **纯抽取**：行为零变化，现有测试一行不改通过；给 platform-api 加 `@companion/career-core` 的 workspace 依赖。
-2. **发言者与参与者**：迁移 017；SSE 的 `start`、`done` 带 `speaker`。
-3. **编排、插话、取消**：插话取代 409 `CONVERSATION_BUSY`，返回 202 `{turnId, queued:true}`：当前段说完，后续段作废，开新一轮（L1、L2 立即中断）；`queued` 轮次拿不到租约重试 3 次，仍失败标 `failed`。新增 `POST /conversations/:id/turns/:turnId/cancel`。
-4. **订阅流**：`GET /conversations/:id/events` + `platform_conversation_events`（只存 `{type, message_id, card 引用}`）+ LISTEN/NOTIFY。网页用 fetch 流读取，带 `x-companion-account` 和 `Last-Event-ID`，不用原生 `EventSource`。可后移（§1.6）。
+**ai-core 改动**按 15 §12.2、§3.1–3.4（含 `streamModelStep`、`tool_started` 提前、按调用的上限与超时、按 `purpose` 记账）。
 
-**017 的表**（字段见 03 §6.2–6.7）：会话加 `kind`、`companion_id`、`parent_conversation_id`、`archived_at`；`platform_conversation_participants`；消息加 `speaker_kind`、`speaker_key`、`speaker_ref`、`participant_id`、`speaker_snapshot`、`kind`、`payload`、`channel`、`turn_id`、`segment_index`、`client_message_id`、`external_message_ref`、`excluded_from_context`；`platform_conversation_turns`；`platform_conversation_events`。回填：user → `user`，assistant → `legacy_assistant`，会话 `kind='legacy'`。
+**六个 PR**（每个都用假 runtime 测，不需要付费调用；只有 PR3 前的实测例外）
+1. **纯抽取**（不变）：行为零变化，现有测试一行不改通过；给 platform-api 加 `@companion/career-core` 的 workspace 依赖。
+2. **Agent 循环与能力目录**：ai-core 改动；能力目录与权限矩阵；技能清单与 `use_skill`。不改表。
+3. **轮次服务**：合并迁移 017（第 1 步的全部表，PR4、PR6 只用不改）；租约按轮次；记账键改造；插话取代 409 `CONVERSATION_BUSY`，返回 202 `{turnId, queued:true}`，在 agent 的下一步并入，进行中的工具不取消（L1、L2 立即中断）；`queued` 轮次拿不到租约重试 3 次，仍失败标 `failed`；`POST /conversations/:id/turns/:turnId/cancel`；断线不取消。**开工前**做 15 §1.2 的小规模真实模型测试（主理人与前、投、面各 30 段虚构脚本；产品负责人 2026-10-07 已批准：低价档跑全部、正式档抽 20 段，只在预发或远程开发机上为这次测试打开商业调用，密钥只在服务端）；结果写进 docs/platform/，再按实测调整 15 §1 与 07 §7.4。
+4. **房间与转发卡**：`GET /rooms`、`POST /rooms`（打开单聊、进面试间）；`runExpert` 写转发卡消息（`kind = forward_card`，做法同现在路由里 `send('approval')` 的闭包）；`detectNameCall`；引用回复与卡上按钮（`POST .../messages/:messageId/actions`）；交接便条；单聊结论回主线；`platform_expert_runs`。
+5. **订阅流**：`GET /conversations/:id/events`、`GET /rooms/events` + `platform_conversation_events`（只存 `{type, message_id, card 引用}`，`seq` 在会话行锁内分配；`/rooms/events` 按 15 §8.2 用快照加通知）+ LISTEN/NOTIFY。网页用 fetch 流读取（复用 `readMessageStream`），带 `x-companion-account` 和 `Last-Event-ID`，不用原生 `EventSource`。最晚 B0（§1.6）。
+6. **后台任务卡**（15 §4.6、§12.2）：`agent` 任务只由服务端路径建（`parseAgentJob`；`POST /jobs`、重试对 `agent` 返回 403）；`authorizeConversationTaskOrigin` 改为核轮次；检查点续跑，进度每 ≤ 10 秒。
 
-**接口与事件**：03 §6.10；SSE 按 03 §6.6（学生端 `tool` 不带入参和结果）；埋点 `message_sent`、`expert_joined`、`expert_left`、`mention_used`。
+**017 的表**：字段见 03 §6.2–6.5，不建参与者表；另含 `platform_chat_calls` 改键（重建 010 的约束，`message_id` 可空）、`platform_jobs.kind` 加 `agent` 与 `progress_label`、`progress_at`、016 的 `tool` CHECK 加 `start_background_task`、`start_task`（15 §12.2）。回填：user → `user`，assistant → `legacy_assistant`，会话 `kind='legacy'`。
 
-**保留**：每用户 2 个 chat 租约（小组、面试间各一）、15 秒心跳、`recoverStaleStreams`（扩展为把过期 `running` 轮次标 `failed`，含 L2 的除外）、附件上限、`chatAccounting` 按段记账、`platform_one_stream_per_conversation`。
+**接口与事件**：03 §6.10；SSE 按 15 §8.1（学生端不发 `tool`、`approval`、`usage`）；埋点 `message_sent`、`expert_consulted`、`forward_card_shown`、`forward_card_action`、`expert_room_opened`、`name_call_detected`、`interjection_joined`、`turn_stopped`、`skill_used`、`background_task_started`、`background_task_finished`（07 §7.5）。
 
-**验收**：03 第 13 节中轮次、发言者、工具、`prepareCareerRun` 的条目，另外：
+**保留**：每用户 2 个 chat 租约（主线和一个单聊或面试间可同时在跑；租约 id 改为轮次 id，L1 抢占时在轮次锁内交接，03 §6.5）、租约每 15 秒续期、已校验文字每 ≤ 2 秒写库（15 §8.2）、`recoverStaleStreams`（扩展为把过期 `running` 轮次标 `failed`，含 L2 的除外）、附件上限、`platform_one_stream_per_conversation`。
+
+**验收**：03 第 13 节和 15 §14 中轮次、房间、工具、`prepareCareerRun` 的条目，另外：
 - [ ] PR1 合并后现有测试一行不改通过；不经 HTTP 用 `CollectingTurnSink` 调 `submit` 能完成一轮。
-- [ ] 一轮两段、第一段中途 SSE 断线：轮次照常完成，重连后拿到两条完整消息；只有「停下」和 cancel 接口才取消（当前段 `cancelled`，后续段不开始）。
-- [ ] 小组会话里传 `persona`、`provider`、`model`、`mode` 返回 400；缺 `x-companion-account` 返回 409。
+- [ ] 假 runtime：同一步三个各 1 秒的只读调用总耗时 < 1.5 秒；工具出错不终止一轮；到上限时最后一步不带工具。
+- [ ] 「引子 + 转发卡」一轮中途 SSE 断线：轮次照常完成，重连后两条消息完整；只有「停下」和 cancel 接口才取消。生成中发的消息返回 202 并在下一步并入。
+- [ ] 主线里叫名字的轮次没有任何模型调用用于判断谁接；被叫的队员直接出卡、没有引子。
+- [ ] worker 重启后 `agent` 任务从检查点续跑、草稿不重复；进度间隔 ≤ 10 秒；学生直接 `POST /jobs` 建 `agent` 任务返回 403。
+- [ ] 传 `persona`、`provider`、`model`、`mode` 返回 400；缺 `x-companion-account` 返回 409。
 - [ ] 订阅流带 `Last-Event-ID` 重连，不丢、不重复。
 
-**风险**：流式链路回归代价最高。其他发言者的输出按 03 §6.8 处理，防止被当成指令。
+**风险**：流式链路和循环改造回归代价最高，PR1 的零变化和 PR2 的假 runtime 测试是护栏。其他发言者的输出和工具结果按 03 §6.8 作为数据处理，防止被当成指令。
 
 ---
 
@@ -179,25 +189,25 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 **改动范围**
 - `018_companions.sql`：`platform_companions`（含 `overlays` jsonb 数组，每项 `{kind, until, source_ref}`，`kind` 与合并规则见 02 §8.1；`paid_suggestions_mode`：`when_relevant`/`only_when_asked`）、`platform_companion_revisions`、`platform_companion_answers`、`platform_safety_events`（含 `retention_until`）、`platform_safety_resources`、`platform_immigration_facts`，其余按 02 §15.2；补 `companion_id` 外键。`voice_disclosed_at` 放用户级设置。
 - **`src/data-crypto.ts`**：`account-mail.ts` 的封装只在配了邮件时才有密钥、只收邮件字段，不能复用。新模块用专用密钥 `PLATFORM_DATA_KEY`（生产缺失时拒绝启动），AAD 按「表、列、行 id」区分，密文首字节记密钥版本。主理人自由文本、身份字段、待确认正文、通知载荷都用它。
-- `src/companion.ts`、`src/context-assembly.ts`（层次按 02 §15.4，每段调用）。纯逻辑放 `career-core/src/companion/`：情境题映射、互补规则、名字与印章字校验、说话方式卡、`canSendProactive`（读 `overlays`）、敏感度过滤（03 §8.5）、身份数字校验器。专家人格卡放 `career-core/src/team/`，带 `revision`；`apps/web/src/voice-personality.ts` 的面试官提示词迁来做初稿。
+- `src/companion.ts`、`src/context-assembly.ts`（层次按 02 §15.4，排列按 15 §6.1：稳定层在前、变化层在历史之后；每次模型调用前组装）。纯逻辑放 `career-core/src/companion/`：情境题映射、互补规则、名字与印章字校验、说话方式卡、`canSendProactive`（读 `overlays`）、敏感度过滤（03 §8.5）、身份数字校验器。专家人格卡放 `career-core/src/team/`，带 `revision`；`apps/web/src/voice-personality.ts` 的面试官提示词迁来做初稿。
 - `POST /conversations`、发消息、`/voice/session`（`persona`、`voice`）、`/voice/speech`（`voice`、`instructions`）收到客户端人格返回 400 `PERSONA_NOT_ACCEPTED`；前端删人格选择和语音页三个角色。
 - **后台生成路径** `src/background-generation.ts`：上下文组装 + `runtime.streamChat`，不进会话轮次、不占轮次锁；`acquireRuntimeLease` 加租约种类 `background`，不占 chat 名额；先 `CostGuard.reserve`，完成后 `post()` 写入。`/companion/drafts`、第一封信、晨报、`room_summary`、被拒后的回应都走它。
-- **第一封信**：`POST /companion/birth` 只建小组和诞生事件，不带 `voicePreset`。05 C6 之后（或用户选「直接写信吧」、离开超过 30 分钟）经后台生成写 `kind='letter'`：引用 ≥ 2 条用户本人提供的事实（记 `source_ref`），不足时写清下一步要了解什么；队伍介绍只列已上线的队员。
+- **第一封信**：`POST /companion/birth` 只建主线（`kind = main`）和诞生事件，不带 `voicePreset`。05 C6 之后（或用户选「直接写信吧」、离开超过 30 分钟）经后台生成写 `kind='letter'`：引用 ≥ 2 条用户本人提供的事实（记 `source_ref`），不足时写清下一步要了解什么；队伍介绍只列已上线的队员。
 - **快速通道**：跳过情境题，按 02 §2 的默认性格诞生。
 
 **安全分级（02 §10）**
-1. 用户消息落库后、插话判断前同步执行；诞生前的自由文本同样分级。检测器带版本号。
+1. 用户消息落库后立即同步执行，与插话判断、建轮次和上下文组装并行；第一次模型调用在这之后发出，返回 L0 前不放出文字和进度短语、不执行工具，L1、L2 时取消（15 §3.1）；诞生前的自由文本同样分级。检测器带版本号。
 2. 关键词 + 模型分类。模型超时（假设 1 秒）、出错、供应商不可用或 `PLATFORM_ALLOW_PROVIDER_CALLS=0` 时只用关键词，按 ≥ L1 处理。
-3. L1、L2 立即中断当前段、清空队列、抢先处理。
+3. L1、L2 立即中断当前轮次（含进行中的 `consult`，任何房间）、清空排队、抢先处理；发生在单聊或面试间时按 03 §4.1 第 2 步。
 4. L2 模板和资源卡由服务端确定性渲染（变量只有主理人名字和用户称呼），`post()` 直接写入；不调用模型，不受 `CostGuard`、`PLATFORM_FEATURE_*`、供应商状态、租约、限流影响；崩溃恢复时自动重放。
 5. 资源卡：988、911、741741 加学校资源。`platform_safety_resources`（`school_key`、`name`、`phone`、`url`、`hours`、`verified_at`、`verified_by`）由运营维护；学校未知时显示 988 和查找本校心理咨询中心的通用指引。
 
-**身份事实配置**：`platform_immigration_facts`（`key`、`value`、`unit`、`zh_text`、`reviewed_by`、`reviewed_at`、`next_review_at`、`status`：`draft`/`approved`/`retired`）。只有 `approved` 且未过复审日的行能作为模板片段注入，带「最近核实」日期和脚注「信息与提醒，不是法律意见」。每段输出过运行时校验，拦截不来自配置的天数、日期和政策数字，命中改用固定模板并记日志。P1-3 开关打开前，任何发言者都不计算待业天数和截止日期。
+**身份事实配置**：`platform_immigration_facts`（`key`、`value`、`unit`、`zh_text`、`reviewed_by`、`reviewed_at`、`next_review_at`、`status`：`draft`/`approved`/`retired`）。只有 `approved` 且未过复审日的行能作为模板片段注入，带「最近核实」日期和脚注「信息与提醒，不是法律意见」。每句输出过运行时校验，拦截不来自配置的天数、日期和政策数字，命中改用固定模板并记日志。P1-3 开关打开前，任何发言者都不计算待业天数和截止日期。
 
 **接口与事件**：02 §15.3；埋点 `intake_completed`、`companion_rerolled`、`companion_born`、`first_letter_delivered`、`safety_level_assigned`。`persona` 列冻结，`mode='companion'` 不再可选。
 
 **验收**：02 §15.6 全部满足，另外：
-- [ ] 前端没有人格提示词；每轮 `plan` 记「平台策略版本 + 发言者 revision + 主理人 revision」。
+- [ ] 前端没有人格提示词；每个轮次行记「平台策略版本 + 发言者 revision + 主理人 revision」。
 - [ ] 注入模型故障（分类超时、供应商 500、`PLATFORM_ALLOW_PROVIDER_CALLS=0`）时，危机消息仍在 2 秒内收到完整模板和资源卡；已到硬上限、开关关闭、流式中插话时同样；L2 轮次中途崩溃，重启后模板自动发出。
 - [ ] 构造的「OPT 还剩 41 天」被拦截并换成固定模板；未审核或过期的配置行不进上下文。
 - [ ] 换行或换表粘贴的密文无法解密。
@@ -243,7 +253,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 按 07 P0-11，只做 04 §4.3、§4.6、§4.8 的子集（前置条件：蔓藤完成授权）：
 - 表：`platform_content_licenses`（`license_id` 必填）、`platform_org_knowledge_sources`、`platform_org_knowledge_passages`、`platform_user_entitlements`（首批全部授予 `cohort`）、`platform_knowledge_access_log`、`platform_content_feedback`。`platform_orgs`、`platform_org_roles` 由 026 建；`platform_data_consents` 随 9D。
 - `OrgKnowledge` 服务、导入脚本 `src/org-content-import.ts`、编辑与审核分离；只导入题库、方法卡、对话模式卡；检索只用结构化筛选。
-- 04 §4.6 交来的三件事：`src/career-knowledge.ts` 实现 `CareerKnowledgePort`（合并查私人库与组织库）；`KnowledgeCitation` 加可选 `scope`、`assetClass`；为 `prepareCareerRun` 生成知识访问引用 `{input:'knowledge', id:'knowledge-access:<userId>', revision:<publish_batch>, ownerId:<userId>, state}`；entitlement 撤销只让该运行冻结的引用 `withdrawn`，新运行只查私人库（04 §4.6）。
+- 04 §4.6 交来的三件事：`src/career-knowledge.ts` 实现 `CareerKnowledgePort`（合并查私人库与组织库）；`KnowledgeCitation` 的 `revision` 从字符串改为数字，加可选 `scope`、`assetClass`；私人库查询含汉字时先跑 30 条中文夹具，recall@5 < 0.8 就同样加两字切分的 `tsvector` 列（15 §4.2）；为 `prepareCareerRun` 生成知识访问引用 `{input:'knowledge', id:'knowledge-access:<userId>', revision:<publish_batch>, ownerId:<userId>, state}`；entitlement 撤销只让该运行冻结的引用 `withdrawn`，新运行只查私人库（04 §4.6）。
 
 ### 第 3 步验收
 
@@ -253,7 +263,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 - [ ] 身份字段在库里是密文；`restricted` 不进专家上下文；没有 `eligible`、「剩余可待业天数」这类字段，也没有待业开始日。
 - [ ] 标记 `not_advanced` 后 48 小时内晨报只问候、不派任务；看板上没有红色和 Rejected；`no_response` 不触发覆盖。
 - [ ] `GET /career/progress` 与 `careerProgress()` 对同一组证据输出一致。
-- [ ] 3C：无 `license_id` 导入失败；审核人与编辑同一人时发布失败；跨权限返回 0；面入场时 prepare 返回 `ready_for_draft`；entitlement 撤销后冻结的引用 `blocked`、新运行仍 `ready_for_draft` 且只查私人库。
+- [ ] 3C：无 `license_id` 导入失败；审核人与编辑同一人时发布失败；跨权限返回 0；`consult` 面或在面的单聊里 prepare 返回 `ready_for_draft`；entitlement 撤销后冻结的引用 `blocked`、新运行仍 `ready_for_draft` 且只查私人库。
 
 **风险**：蔓藤授权卡住 3C 和第 7 步题库；简历抽取不稳，必须保留粘贴退路。
 
@@ -263,10 +273,10 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 1. **目录**：`mcp-config.ts` 的 `readMcpConfig` 接受 03 §2.8 列出的条目与工具新键，另加 `transport`（`remote`/`first_party`）、`licenseId`、`provenanceLabel` 和运营方写的说明（取代远端描述）；一份目录不拆文件，走 PR，新键进 `mcpCatalogHash`。
 2. **长期授权**：`platform_mcp_standing_grants` 与 `platform_apply_authorizations`（11 §6.1）同构、只追加，`items` 每项按 03 §2.8，加当前值视图；`external_grant` 卡确认时同一事务追加。
-3. **段内调用**：`McpConnections` 加段内调用，按 03 §2.8「执行」第 1 条；`assertAuthorized` 以「授权记录版本 + 分配表 + 轮次租约」代替审批行，`policy_hash`、schema 哈希、调用前重新发现照旧；不占 `PLATFORM_MAX_ACTIVE_JOBS`。
+3. **轮内调用**：`McpConnections` 加 `callInTurn`（15 §4.4），按 03 §2.8「执行」第 1 条；新增 `assertStandingGrant`，以「授权记录版本 + 分配表 + `policy_hash` + 轮次租约」代替审批行，schema 哈希、调用前重新发现照旧；不经 job，不占 `PLATFORM_MAX_ACTIVE_JOBS`；挂进能力目录时目录 id 为 `ext:<catalogId>/<tool>`，给模型的函数名是 `ext_<catalogKey>__<tool>`；单次 8 秒、一轮合计 ≤ 20 秒（假设）。
 4. **第一方岗位源**：`McpTransport`（`mcp-transport-port.ts`）加 `first_party` 实现，只对 Greenhouse、Lever、Ashby 的公开读取域名发只读请求，按单帖读取、只回紧凑字段（整板超过 64 KiB）；用户确认后存成岗位观察（3A）。
 5. **出站过滤**：career-core 纯函数，规则表与 10 §3.9 共用。
-6. **回执、上限、保留**：`platform_mcp_receipts` 加 03 §2.8「执行」第 4 条的列和 `grant_record_version`，照 `da4434a` 与调用同一事务写；按工具和全局每日上限计数（假设）；付费来源进成本账本（06 §12.4），单列 `external_tool`。
+6. **回执、上限、保留**：`platform_mcp_receipts` 迁移：加 `id uuid` 主键；`job_id` 去掉主键、改可空，加部分唯一索引 `(job_id) WHERE job_id IS NOT NULL`；加 `turn_id`、`conversation_id`、`speaker`、`purpose`、`grant_record_version`，`CHECK (job_id IS NOT NULL OR turn_id IS NOT NULL)`；`started`/`complete`/`interrupt`/`assertPublication` 改按回执 id；轮内结果存为按用户的私有文件（`private-files.ts`），回执记 `result_ref` 与 `response_hash`（15 §12.2）。照 `da4434a` 与调用同一事务写；按工具和全局每日上限计数（假设）；付费来源进成本账本（06 §12.4），单列 `external_tool`。
 7. **进上下文**：`untrusted_mcp` 说明从只在 agent 模式追加改为平台策略层（03 §6.8 第 5 条）。
 8. **蔓藤 MCP 服务**（04 §6.3）：蔓藤托管、公网 HTTPS、只读，凭据走 `bearerEnv`；调用前在我方核 entitlement（04 §4.12）；要按用户限流时只传 `HMAC(userId, catalogId)`。
 
@@ -280,14 +290,15 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 ---
 
-## 6. 第 4 步 五个界面的路由与小组 UI
+## 6. 第 4 步 五个界面的路由与对话 UI
 
-**目标**：用「今天、对话、待确认、旅程、我」替换工具型导航；对话页就是小组群聊；完成 token 迁移。流程见 05，组件、布局与文案见 08。
+**目标**：用「今天、对话、待确认、旅程、我」替换工具型导航；对话页是对话列表加当前房间（主线或某个单聊）；完成 token 迁移。流程见 05，组件、布局与文案见 08，事件与呈现见 15 §8。
 
 **改动范围**
 - **路由**：History API 最小路由 `apps/web/src/app/router.ts`；路径只在 05 §0.3 定名；`static-web.ts` 已回退到 `index.html`。深链打开时窗口账号与登录账号不一致，先显示「确认账号」。
-- **拆 `App.tsx`**（568 行、66 KB）：`app/`、`surfaces/today|group|pending|journey|me/`、`components/seal/`、`components/cards/`、`domain/`（沿用 `BoundPlatformClient`，解析 `TurnEvent`）。布局与群聊按 08 §7。
-- **印章字形（08 §5.3 交来的决定）**：构建时离线生成《通用规范汉字表》一级 3,500 字的 SVG path 作为静态资源（宋体 700，确认字体许可，脚本放 `scripts/`），运行时只查表，表外的字在诞生页提示换一个；墨色取该消息所属参与者版本的 `ink_token`。Discord 的 PNG 在第 9 步生成。
+- **拆 `App.tsx`**（568 行、66 KB）：`app/`、`surfaces/today|group|pending|journey|me/`（`group` 下分主线与单聊，路由见 05 §0.3）、`components/seal/`、`components/cards/`、`domain/`（沿用 `BoundPlatformClient`，解析 `TurnEvent`）。布局与组件（`ChatList`、`RoomHeader`、`ForwardCard`、`TaskCard`）按 08 §7。
+- **消息流**（15 §8.3）：一条消息一个气泡，以 `messageId` 为键、按 `start` 新建，`error` 只结束那一条（现在 `App.tsx` 一次流只建一个占位、`error` 结束整条流）；进度条目在 `agent-tool-status.ts` 的 `upsertAgentToolStatus` 上改，显示短语、不显示工具名；任务进度由订阅流驱动，删掉 `account-polling.ts` 的 12 秒轮询；输入框「发送 / 停下」按 08 §7.4。
+- **印章字形（08 §5.3 交来的决定）**：构建时离线生成《通用规范汉字表》一级 3,500 字的 SVG path 作为静态资源（宋体 700，确认字体许可，脚本放 `scripts/`），运行时只查表，表外的字在诞生页提示换一个；墨色取该消息 `speaker_snapshot` 里的 `ink_token`。Discord 的 PNG 在第 9 步生成。
 - **token**：按 08 第 10 节集中到 `apps/web/src/styles/tokens.css`；旧 `styles.css`（57 KB、最小字号 5px）先换 token、删装饰，之后逐块删除。
 - **PWA**：manifest 按 10 §2.3 改；`/sw.js` 由 Workbox `generateSW` 构建生成；离线只显示公共外壳和「没网了」，**不缓存晨报、三件事和任何私人接口**（docs/platform/mobile-web.md）。按界面分包。
 - `AuthView`、`AccountActionView`、`KnowledgePanel`（并入「我」）、`VoiceRecords` 保留；`CreativePanel`、`WorkflowPanel`、`BrowserPanel`、`TaskPanel`、`McpToolPanel`、旧 `SettingsPanel` 只给员工，挂 `/workbench`。
@@ -295,16 +306,16 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 **验收**
 - [ ] 五个界面都能直接打开 URL；刷新不丢状态；未登录的深链先登录再回原路由。
 - [ ] 390×844 和 1440×900 无横向滚动；CSS 无小于 12px 的字号、无 token 之外的十六进制颜色（CI 脚本）；墨色对比度通过 08 校验，深色模式可读。
-- [ ] 群聊渲染 03 §6.6 的全部事件，断线后能补齐。
+- [ ] 主线和单聊渲染 15 §8.1 的全部事件，断线后能补齐；生成中发消息显示「排队中」，空输入框的「停下」1 秒内生效。
 - [ ] 没有红点、连胜、打卡和红色 Rejected；任意截图都能看到 AI 标识；离线时不出现私人内容。
 
-**风险**：最容易做两遍。先做群聊、今天、待确认，旅程等 3A 接口稳定再做。
+**风险**：最容易做两遍。先做主线、单聊、今天、待确认，旅程等 3A 接口稳定再做。
 
 ---
 
 ## 7. 第 5 步 对外发出类待确认
 
-**目标**：要发给别人的消息和材料，都先进待确认；表单里哪些项可以替用户做，由用户在小组对话里逐项确认（见 11）；最终提交永远由用户本人点。确认绑定内容摘要，内容一改就作废，执行前复核。
+**目标**：要发给别人的消息和材料，都先进待确认；表单里哪些项可以替用户做，由用户在对话里逐项确认（见 11）；最终提交永远由用户本人点。确认绑定内容摘要，内容一改就作废，执行前复核。
 
 **改动范围**
 - `022_pending_items.sql`：`platform_pending_items`（含 `snoozed_until`）、`platform_pending_item_revisions`（正文经 `data-crypto.ts` 加密）、`platform_pending_item_decisions`，字段按 03 §9.2；补 `platform_career_applications.packet_id` 外键。
@@ -378,13 +389,13 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 ## 9. 第 7 步 面试官最小版
 
-**目标**（07 P0-10）：用户 @面或直接进面试间；面试官从蔓藤题库出题，逐回合练习（文字或英文语音），逐题按 rubric 反馈；小结回小组，好的回答经用户确认后存进故事库。
+**目标**（07 P0-10）：用户叫面，或在面的单聊里进面试间；面试官从蔓藤题库出题，逐回合练习（文字或英文语音），逐题按 rubric 反馈；小结以面的转发卡回主线，好的回答经用户确认后存进故事库。
 
 **改动范围**
-- `src/practice.ts`。**一个练习会话对应一个 `kind='interview_room'` 的会话**，`POST /group/rooms` 在同一事务里创建两者。每题的回答作为面试间消息走轮次服务（因此先过安全分级），由轮次服务写入 `platform_practice_answers`。出题用 `search_org_knowledge`（3C 题库）。
+- `src/practice.ts`。**一个练习会话对应一个 `kind='interview'` 的房间**（03 §6.2），从面的单聊进入，`POST /rooms` 在同一事务里创建两者。每题的回答作为面试间消息走轮次服务（因此先过安全分级），由轮次服务写入 `platform_practice_answers`。出题用 `search_org_knowledge`（3C 题库）。
 - 语音：逐回合走 `/voice/transcribe`、`/voice/speech`。转写加 `language` 参数并固定英文（`services/local-transcription` 不能指定语言，`VoicePanel.tsx` 写死 `zh-CN`，都要改）。
 - **面试官声线唯一来源** `PLATFORM_INTERVIEWER_VOICE`（12 §5.1）：朗读和 P1-11 实时会话都只读它，不读 `OPENAI_TTS_VOICE`、`OPENAI_REALTIME_VOICE`；客户端不能指定。P0 前做同名声线在朗读与实时两个接口上的 AB 听测（需批准）。第一次播放前弹 12 §6.1 的说明。
-- 小结：后台生成路径写 `room_summary`，`post()` 回小组。
+- 小结：后台生成路径写 `room_summary` 进面的单聊，结论以面的转发卡 `post()` 进主线（03 §4.6）。
 
 **024 的表**（语义按 05 §3.4）：`platform_practice_sessions`（`conversation_id` 唯一、模式 `turn`/`realtime`、题型、关联投递或面试、语言 `en`、`audio_retention` P0 固定 `none`）；`platform_practice_answers`（`message_id`、题目与 rubric 的引用和版本、转写引用、用时、各维度分数、做得好、最该改、是否不同意）。
 
@@ -392,7 +403,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 **验收**
 - [ ] 假 runtime 跑完 5 道题：每题单独落库，复盘逐题显示 rubric 各维度；每题能追溯到题库版本，撤回后显示「来源已撤回」。
-- [ ] 面试间里含自伤表达的回答与小组里一样收到 L2 模板和资源卡，练习暂停。
+- [ ] 面试间里含自伤表达的回答收到 L2 模板和资源卡（模板和资源卡同时写进面试间和主线，面试间给 [去主线]，02 §10.3），练习暂停。
 - [ ] 不保存录音；存进故事库前必须经用户确认；拒绝「在真实面试中替我答」；反馈不引入用户回答和已确认资料以外的经历与数字。
 - [ ] 同名声线跨朗读与实时接口的 AB 听测通过。
 
@@ -407,9 +418,9 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 **目标**（07 P0-13）：上线前用真实模型跑评测；每位用户有费用上限，所有渠道和 worker 都受约束。数值与降级顺序以 06 §12.3 为准（首批按周计；软上限只通知运营；到硬上限只保留主理人简短对话、查看与确认、记忆管理和危机流程）。
 
 **改动范围**
-- **模型路由**：`model-routing.ts` 扩展为「发言者 × 用途 → 供应商与模型」；不自动切换供应商。
-- **评测 harness** `services/platform-api/evals/`：直接调轮次服务、上下文组装和后台生成；评测集来自 02 §15.6、03、05，通过线按 07 §7.4，含「事实可追溯」（新增事实为 0）、≥ 10 条问签证情境（算剩余天数、cap-gap、Day-1 CPT）、口语夸张误报率、付费建议反例。**需产品负责人批准预算**，单独环境里 `PLATFORM_ALLOW_PROVIDER_CALLS=1`，数据全部虚构。
-- **成本护栏**（06 §12.4）：`025_cost_guard.sql` 建 `platform_model_prices`、`platform_cost_ledger`，`platform_chat_calls` 加 `cached_input_tokens`；`src/cost-guard.ts`（`reserve` → `ok`/`degrade`/`block`，`commit` 结算）替换桩，挂在轮次服务每段开始前、后台生成、`/voice/session`、朗读、转写、worker。`degrade`：本轮只留主理人，专家改为先问；`block`：只有主理人，不做路由调用；危机不经过护栏。实时语音改为按服务端时长记成本。
+- **模型路由**：`model-routing.ts` 扩展为「发言者 × 用途 → 供应商、模型、输出上限、推理强度、超时」（15 §7）；不自动切换供应商。
+- **评测 harness** `services/platform-api/evals/`：直接调轮次服务、上下文组装和后台生成；评测集来自 02 §15.6、03、05 和 15 §11.2（自己做还是请队员、叫名字识别、人格区分盲测、校验器误杀、技能成功率、权限、引擎行为），通过线按 07 §7.4，多轮流程用模拟用户跑，含「事实可追溯」（新增事实为 0）、≥ 10 条问签证情境（算剩余天数、cap-gap、Day-1 CPT）、口语夸张误报率、付费建议反例。**需产品负责人批准预算**，单独环境里 `PLATFORM_ALLOW_PROVIDER_CALLS=1`，数据全部虚构。
+- **成本护栏**（06 §12.4）：`025_cost_guard.sql` 建 `platform_model_prices`、`platform_cost_ledger`，`platform_chat_calls` 加 `cached_input_tokens`；`src/cost-guard.ts`（`reserve` → `ok`/`degrade`/`block`，`commit` 结算）替换桩，挂在每一轮、每次 `consult`、后台任务、后台生成、`/voice/session`、朗读、转写之前。`degrade`：主理人不主动 `consult`、改为先问，后台降到经济档；`block`：只有主理人的一句简短回答，不挂工具（03 §4.1 第 4 步）；危机不经过护栏。实时语音改为按服务端时长记成本。
 - **额度**：P0 不建会员表，额度检查把首批用户视为会员来源 `cohort`；会员表在 P1-C 收费前建（第 15 节）。
 - 降级提示是系统通知（`speaker_kind = system`），不由主理人说，不写「明天 0 点恢复」。`GET /usage` 只给员工。埋点 `cost_cap_hit`。
 
@@ -456,7 +467,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 **改动范围**
 - 新进程 `src/discord-main.ts`（结构同 `worker-main.ts`）：进程内直接调服务层，不走 HTTP，不涉及 `x-companion-account`，不持有用户的 cookie 或密码。
-- `src/discord-turn-sink.ts`：按段编辑，不逐 token 编辑。
+- `src/discord-turn-sink.ts`：按句缓冲、按条编辑，不逐 token 编辑；转发卡做成 embed（10 §3.11）。
 - **出站过滤**（渠道层之外再加一道，按 03 §8.5）：只放行 `normal`；`sensitive` 只给摘要，不出现第三方联系人姓名；`restricted` 只说「有一个你设置的日期提醒」；另拦截简历片段、身份日期、证件号格式。
 - **掉线恢复**：对全部未答消息逐条分级，不限时长；L0 按 10 §3.12 处理。
 - **授权只收紧**：两类授权卡在 Discord 里只能确认每项都是「不要」的（10 §3.7）；补问只在晨报提一行。
@@ -468,7 +479,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 **限流 scope**：`platform_request_limits` 的 CHECK 写死了 scope 和 subject（`011_request_limits.sql`），按 `013_account_action_limits.sql` 的写法换约束：subject_type 加 `external`（Discord 用户 id 的 SHA-256，每账号每小时 10 次验证码尝试）；scope 加 `discord-message`、`discord-interaction`、`link-code`、`org-knowledge`、`ext-api`、`ext-claim`，**建议随 021 一次做完**；同步 `src/request-limits.ts`。
 
-**接口与事件**：`/integrations/discord`（查询、`oauth/start`、`oauth/callback`、`link-code`、`DELETE`）；斜杠命令按 10 §3.6。私信消息写进同一个小组会话，`channel='discord'`。埋点 `discord_linked`、`discord_button_used`、`brief_engaged`。
+**接口与事件**：`/integrations/discord`（查询、`oauth/start`、`oauth/callback`、`link-code`、`DELETE`）；斜杠命令按 10 §3.6。私信消息写进主线（`kind = main`），`channel='discord'`；单聊在私信里只给回网页的链接（10 §3.4）。埋点 `discord_linked`、`discord_button_used`、`brief_engaged`。
 
 **验收**：10 第 10 节的 Discord 条目，另外：
 - [ ] 出站断言：构造的简历片段、身份日期、第三方联系人姓名全部被拦截。
@@ -482,7 +493,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 ## 13. 第 10 步 插件对话授权与后端接通
 
-问题目录、问法、底线、数据结构和代码改动点以 11 为准，授权卡与回执以 03 §9.1、§10 为准；底线（11 §5.1）不随任何步骤放宽。授权只在网页小组对话里确认，填写中浮层不提问（11 §4.1）。
+问题目录、问法、底线、数据结构和代码改动点以 11 为准，授权卡与回执以 03 §9.1、§10 为准；底线（11 §5.1）不随任何步骤放宽。授权只在网页里投的单聊确认，填写中浮层不提问（11 §4.1）。
 
 ### 10A 安全修正（P0 期间做完，不发布）
 
@@ -517,10 +528,10 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 ### 10C 对话授权主干
 
-做 11 §6.2 第 1–5、7–20 条，顺序：契约与问题目录 → 存储与确认卡 → 内核按回答与版本合成（必测组合见 11 §6.2 第 2 条）→ 「留给你」与补问 → 小组里的分组提问 → 老用户迁移（旧同意不转成任何「可以」，11 §4.4）。本文补充：
-- **小组里问**（03 §10.2）：投发四组 `auth_question` 提问卡（08 §7.14），按钮只改卡片状态（03 §6.10），自由文字不改设置；问完用 `draft_authorization_card` 发 `apply_authorization` 确认卡，确认后同一事务追加记录（`web_chat`）、照资料作答写进档案。修改同样出卡，Discord 只能收紧，正在填的那一份不受影响。
+做 11 §6.2 第 1–5、7–20 条，顺序：契约与问题目录 → 存储与确认卡 → 内核按回答与版本合成（必测组合见 11 §6.2 第 2 条）→ 「留给你」与补问 → 投的单聊里的分组提问 → 老用户迁移（旧同意不转成任何「可以」，11 §4.4）。本文补充：
+- **在投的单聊里问**（03 §10.2）：主线里投的转发卡 [去单聊回答] 发起；投在单聊里发四组 `auth_question` 提问卡（08 §7.14），按钮只改卡片状态（03 §6.10），自由文字不改设置；问完用 `draft_authorization_card` 发 `apply_authorization` 确认卡，确认后同一事务追加记录（`web_chat`）、照资料作答写进档案。修改同样出卡，Discord 只能收紧，正在填的那一份不受影响。
 - **插件**：`signingConsentProvider.ts` 改读 `/ext/apply-authorization`、按策略包的当前版本核对，按 11 §6.1 合成，不是「可以」的一律推入 `LEFT_TO_USER`（带原因）、不写入。浮层不提问：删掉 `signingReconsent.ts` 的一键同意卡和「暂不」的本机记忆，不新增浮层授权凭证，`attestationConfirmBar.ts` 不接线；只做「留给你」高亮和「继续自动填写」（11 §4.7，08 §10.3）。
-- **补问**：后端按问题去重，投在投递汇报之后一次问完、出一张只含这些问题的卡，同一批一天最多提醒一次。
+- **补问**：后端按问题去重，投在投递汇报的转发卡上提醒，学生在投的单聊里一次答完、出一张只含这些问题的卡，同一批一天最多提醒一次。
 
 ### 10D、10E
 
@@ -531,7 +542,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 - [ ] 11 §6.2 第 25 条的测试全部通过（含 11 §4.7 的六个用例、Discord 只能写 `LEAVE_TO_ME`）。
 - [ ] 聊天里说「都可以」不改授权；只有确认卡确认后才追加记录，卡面改了旧卡作废；填写全程浮层没有授权弹窗。
 - [ ] 远程策略包故意不带拒绝列表时，插件在 LinkedIn 和 Indeed Apply 上仍不做任何自动操作。
-- [ ] 端到端（field-lab 虚构 ATS 页面）：小组授权确认 → 确认材料包 → 签发意图 → 领取（第二次 409）→ 「留给你」高亮、不翻页 → 用户点提交 → 回执 → 看板「已投」→ 投递官汇报与补问。
+- [ ] 端到端（field-lab 虚构 ATS 页面）：投的单聊里确认授权 → 确认材料包 → 签发意图 → 领取（第二次 409）→ 「留给你」高亮、不翻页 → 用户点提交 → 回执 → 看板「已投」→ 主线里投的汇报转发卡与补问。
 - [ ] cookie 请求访问 `/ext/*` 被拒；插件令牌访问 `secure` 路由被拒；日志和载荷里搜不到密码和原文快照。
 
 **风险**：律师审核前不对外发布（07 P1-1：B3 以「不公开列出」方式只对自愿者开放），确认卡文案与记录方式在审核清单里（11 §7 第 12 条）；必须能按域名远程关停。
@@ -571,7 +582,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 ### 9C 被拒之后的信与复盘（P1a · P1-5）
 
 - 满足 3A 的条件时，下一个晨报时间经后台生成写一封 `kind='letter'` 的信（调度 `rejection_letter`），取代当天晨报、占常规额度；7 天最多 1 封，多家合并；三件事最多 1 件、可选。Discord 正文固定为「（主理人名）给你写了一封信」，不写公司名和结果。
-- 主理人在被拒满 24 小时后的晨报里提一次复盘邀请，用户接受后面再入场；复盘只给本人看。
+- 主理人在被拒满 24 小时后的晨报里提一次复盘邀请，用户接受后由面的转发卡 [去单聊复盘] 进入面的单聊；复盘只给本人看。
 - 验收：信里没有 Rejected 和红色；7 天内两家被拒只收到 1 封。
 
 ### 9D 面经与作战简报（P1a · P1-4）
@@ -583,7 +594,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 ### P1b（含 P1-C 收费前）
 
-- 规划师 P1-6、技能教练 P1-7：开放 `planner`、`coach`。周报 P1-8：`parent_report` 待确认 + `parent_report_draft`（并入晨报），正文不进 Discord。组织库完整版 P1-9：运营后台、`knowledge_contribution`。蔓藤导师交接 P1-10：`mentor_packet` + `platform_mentor_grants`（03 §11.2），真人导师进 `mentor_room` 子会话。
+- 规划师 P1-6、技能教练 P1-7：开放 `planner`、`coach`。周报 P1-8：`parent_report` 待确认 + `parent_report_draft`（并入晨报），正文不进 Discord。组织库完整版 P1-9：运营后台、`knowledge_contribution`。蔓藤导师交接 P1-10：`mentor_packet` + `platform_mentor_grants`（03 §11.2），真人导师进独立的 `mentor_room`（03 §11.3）。
 - P1-C 收费前（排在 P1-11 之前）：会员与额度页、`platform_plans`、`platform_memberships`、`platform_quota_usage`、产品内收款；额度检查从 `cohort` 切到会员表。
 - Web Push P1-14：推送订阅表（10 §9）；`generateSW` 不能加自定义事件，改用 `injectManifest` 或 `importScripts` 加 `push`、`notificationclick`，在这一步决定。
 
@@ -591,7 +602,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 | 方向 | 要点 | 依据 |
 |---|---|---|
-| Discord 社区 | webhook 让队员以自己的名字和头像发言；需要 Gateway 分片和特权意图 | 10 第 4 节 |
+| Discord 社区与队员单聊（评估） | 私人服务器里每位队员一个单聊频道，webhook 以队员的名字和头像发言；需要 Gateway 分片和特权意图 | 10 第 4 节 |
 | 批量预填 | 填到检查页、停在提交前、用户逐份提交；`BATCH_PREFILL` 为 `{enabled, dailyCap}`，用户只能调低 | 11 §5.2 |
 | App 包壳 | 五个界面稳定、Web Push 上线后评估 Capacitor | 10 第 7 节 |
 | 自托管声线 | 每人独有声线加相似度检查，需要 GPU | 12 §2.3、§5.3 |
