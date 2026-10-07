@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { OnboardingDraft, ProviderRequestAdmission } from '@companion/platform-contracts';
-import { resolveOnboardingText } from '@companion/career-core';
+import { resolveOnboardingText, resumeOnboardingDraft } from '@companion/career-core';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import { ApiError } from './errors.ts';
@@ -34,8 +34,10 @@ export class OnboardingSafety {
     return this.db.withBoundedTransaction(async client => {
       await this.storage.authorizeSession(client, fixed, signal);
       const row = await this.storage.row(client, fixed.userId);
-      const rows = row ? await this.storage.recover(client, this.storage.decode(row)) : [];
-      await authorizeFixedSession(client, fixed, signal); return this.storage.safetyState(rows);
+      const draft = row ? this.storage.decode(row) : null;
+      const rows = draft ? await this.storage.recover(client, draft) : [];
+      const handled = draft ? await this.storage.handledSources(client, draft, rows) : new Set<string>();
+      await authorizeFixedSession(client, fixed, signal); return this.storage.safetyState(rows, handled);
     });
   }
   async claim(context: FixedSessionContext, value: { detectorRevision: number; leaseMs?: number }, signal?: AbortSignal): Promise<Readonly<OnboardingSafetyClaim> | null> {
@@ -95,12 +97,22 @@ export class OnboardingSafety {
     };
   }
   private async advance(client: PoolClient, draft: OnboardingDraft, rows: SafetySubmissionRow[]): Promise<boolean> {
+    const handled = await this.storage.handledSources(client, draft, rows);
+    const safety = this.storage.safetyState(rows, handled);
+    if (draft.state === 'safety_paused' && draft.safety && safety.status === 'clear') {
+      const paused = rows.find(row => row.operation_id === draft.safety!.textId);
+      // A previous explicit continuation may have waited for another source to finish.
+      // Consume that authenticated request, never infer permission from classification alone.
+      if (!paused || !handled.has(paused.id)) return false;
+      const next = resumeOnboardingDraft(draft, { expectedRevision: draft.revision, at: await this.storage.at(client) });
+      await this.storage.write(client, draft, next); return true;
+    }
     if (draft.state !== 'safety_pending' || !draft.pendingText) return false;
     const row = rows.find(item => item.operation_id === draft.pendingText!.id);
     if (!row || row.status !== 'detected') return false;
     const result = this.storage.decodeResult(row);
     // A previous high-risk result remains a separate barrier. Never attribute it to the new message.
-    if (result.level === 'L0' && this.storage.safetyState(rows).status !== 'clear') return false;
+    if (result.level === 'L0' && safety.status !== 'clear') return false;
     const next = resolveOnboardingText(draft, result, { at: await this.storage.at(client) });
     await this.storage.write(client, draft, next); return true;
   }

@@ -290,3 +290,33 @@ export function resolveOnboardingText(value: OnboardingDraft, input: OnboardingS
   }
   return parseOnboardingDraft(draft);
 }
+
+/**
+ * Server-only state transition after persistence has authenticated the complete classification history,
+ * response receipts and the user's explicit request to continue. This is not an OnboardingCommand,
+ * a new classification, a clinical clearance, or permission to execute a task.
+ *
+ * A paused draft's safety pointer describes its current pause only. The immutable submission and
+ * classification history remain in storage when that pointer is removed. A pending draft instead
+ * consumes its already persisted, full-mode L0 result without inserting an artificial revision that
+ * would make the result stale. History handling and result provenance must be verified by the caller.
+ */
+export function resumeOnboardingDraft(value: OnboardingDraft, context: {
+  expectedRevision: number; at: string; currentTextResult?: OnboardingSafetyResult;
+}): OnboardingDraft {
+  const draft = parseOnboardingDraft(value), ctx = record(context, ['expectedRevision', 'at'], ['currentTextResult']);
+  const expectedRevision = integer(ctx.expectedRevision), at = timestamp(ctx.at);
+  if (expectedRevision !== draft.revision) fail('ONBOARDING_REVISION_CHANGED');
+  if (draft.state === 'safety_pending') {
+    if (!Object.hasOwn(ctx, 'currentTextResult')) fail('ONBOARDING_SAFETY_REQUIRED');
+    const result = parseOnboardingSafetyResult(ctx.currentTextResult);
+    if (result.level !== 'L0') fail('ONBOARDING_SAFETY_REQUIRED');
+    return resolveOnboardingText(draft, result, { at });
+  }
+  if (draft.state !== 'safety_paused') fail('ONBOARDING_ACTION_NOT_ALLOWED');
+  if (Object.hasOwn(ctx, 'currentTextResult')) fail();
+  if (draft.revision === MAX_REVISION) fail('ONBOARDING_INVALID_STATE');
+  ++draft.revision; draft.updatedAt = at; draft.state = 'collecting'; delete draft.safety;
+  // The unanswered question and all previous answers stay exactly where the user left them.
+  return parseOnboardingDraft(draft);
+}

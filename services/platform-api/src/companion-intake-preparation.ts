@@ -44,9 +44,10 @@ export class CompanionIntakePreparation {
     const row = await this.storage.row(client, fixed.userId);
     if (!row) throw new ApiError(404, 'NOT_FOUND', 'Complete the intake before preparing a companion.');
     const draft = this.storage.decode(row), submissions = await this.storage.recover(client, draft);
-    const safety = this.storage.safetyState(submissions);
+    const handled = await this.storage.handledSources(client, draft, submissions);
+    const safety = this.storage.safetyState(submissions, handled);
     if (safety.status === 'blocked') throw new ApiError(409, 'ONBOARDING_SAFETY_REVIEW_REQUIRED', 'The intake safety response must be handled before continuing.');
-    if (safety.status !== 'clear' || submissions.some(item => item.level !== 'L0' || item.detector_mode !== 'full')) {
+    if (safety.status !== 'clear' || submissions.some(item => !handled.has(item.id) && (item.level !== 'L0' || item.detector_mode !== 'full'))) {
       throw new ApiError(409, 'ONBOARDING_SAFETY_REQUIRED', 'Wait for the complete intake safety check before continuing.');
     }
     if (draft.revision !== expectedRevision) throw new ApiError(409, 'ONBOARDING_REVISION_CHANGED', 'Read the current intake progress before making another change.');

@@ -92,7 +92,14 @@ export function requireModelConsent(runtime:PlatformProviderRuntime):PlatformPro
       if(context?.background) requireRequestAdmission(context); else await check(context);
       yield* runtime.streamChat(input,context);
     },
-    ...(runtime.streamModelStep?{async *streamModelStep(input,context){await check(context);return yield* runtime.streamModelStep!(input,context);}}:{}),
+    ...(runtime.streamModelStep?{async *streamModelStep(input,context){
+      // A single model step records its actual started receipt before the adapter's
+      // HTTP launch. Its admission can validate that prepared receipt, the exact
+      // identity/consent and the live claim. A no-op preflight would run that guard
+      // before the receipt exists and cannot stand in for the real request.
+      requireRequestAdmission(context);
+      return yield* runtime.streamModelStep!(input,context);
+    }}:{}),
     async executeJob(input,context){await check(context);return runtime.executeJob(input,context);},
     async createVoiceSession(input,context){await check(context);return runtime.createVoiceSession(input,context);},
     async transcribe(input,context){await check(context);return runtime.transcribe(input,context);},

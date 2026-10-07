@@ -1,4 +1,6 @@
-import type { OnboardingQuestion } from '@companion/platform-contracts';
+import { ONBOARDING_BASIC_QUESTIONS, ONBOARDING_SCENARIO_QUESTIONS, type OnboardingAnswerSummary,
+  type OnboardingDraft, type OnboardingQuestion, type OnboardingQuestionValues, type OnboardingSkipReason } from '@companion/platform-contracts';
+import { parseOnboardingDraft } from './onboarding.ts';
 
 export interface OnboardingQuestionDefinition {
   readonly questionId: OnboardingQuestion;
@@ -32,4 +34,47 @@ const catalogue: Readonly<Record<OnboardingQuestion, OnboardingQuestionDefinitio
 export function onboardingQuestionDefinition(questionId: OnboardingQuestion): OnboardingQuestionDefinition {
   if (!Object.hasOwn(catalogue, questionId)) throw new Error('Unknown onboarding question.');
   return catalogue[questionId];
+}
+
+const programLabels: Readonly<Record<NonNullable<OnboardingQuestionValues['study']['programChoice']>, string>> = {
+  '12_month': '一年制', '16_month': '一年半', '24_month': '两年', other: '其他学制',
+};
+const skipLabels: Readonly<Record<OnboardingSkipReason, string>> = {
+  user: '已跳过', fast_track: '快速通道，未作答', remaining: '已跳过剩余情境题', unmatched_text: '文字未对应选项，此问暂未作答',
+};
+function choiceLabel(questionId: OnboardingQuestion, value: string): string {
+  // The domain allows a legacy explicitly selected "other" role even though it is not a current quick reply.
+  if (questionId === 'roles' && value === 'other') return '其他方向';
+  const choice = catalogue[questionId].choices.find(choice => choice.value === value);
+  if (!choice) throw new Error('The authenticated onboarding answer has no fixed label.');
+  return choice.label;
+}
+function answeredLabel(questionId: OnboardingQuestion, value: unknown): string {
+  if (questionId === 'extra') return '补充已提交';
+  // Values come from parseOnboardingDraft's question-specific codec, never raw submission text.
+  if (questionId === 'study') {
+    const study = value as OnboardingQuestionValues['study'];
+    return `${choiceLabel(questionId, study.degreeField)}${study.programChoice === null ? '' : ` · ${programLabels[study.programChoice]}`}`;
+  }
+  if (questionId === 'graduation') {
+    const graduation = value as OnboardingQuestionValues['graduation'];
+    return `${graduation.month} · ${graduation.graduated ? '已毕业' : '预计毕业'}`;
+  }
+  if (questionId === 'roles') {
+    const roles = value as OnboardingQuestionValues['roles'];
+    return roles.kind === 'undecided' ? choiceLabel(questionId, 'undecided') : roles.roles.map(role => choiceLabel(questionId, role)).join('、');
+  }
+  return choiceLabel(questionId, value as string);
+}
+/** O2–O4 completed answers only; this fixed projection neither recalls raw risk text nor confirms memory. */
+export function onboardingAnswerSummaries(value: OnboardingDraft): readonly OnboardingAnswerSummary[] {
+  const draft = parseOnboardingDraft(value), summaries: OnboardingAnswerSummary[] = [];
+  for (const questionId of [...ONBOARDING_BASIC_QUESTIONS, ...ONBOARDING_SCENARIO_QUESTIONS, 'extra'] as const) {
+    const answer = draft.answersPartial[questionId]; if (!answer) continue;
+    const common = { questionId, prompt: catalogue[questionId].prompt, appliedRevision: answer.appliedRevision };
+    summaries.push(Object.freeze(answer.kind === 'answered'
+      ? { ...common, kind: 'answered', label: answeredLabel(questionId, answer.value) }
+      : { ...common, kind: 'skipped', reason: answer.reason, label: questionId === 'extra' ? '补充已跳过' : skipLabels[answer.reason] }));
+  }
+  return Object.freeze(summaries);
 }
