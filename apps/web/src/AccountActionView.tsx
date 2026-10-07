@@ -23,7 +23,7 @@ function useActionRequest() {
 function actionPost<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> { return request(path, { method: 'POST', body: JSON.stringify(body), signal }); }
 
 function AccountCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
-  return <div className="auth-page account-action-page"><div className="auth-top"><Brand /><Badge>YOUR ACCOUNT</Badge></div><main className="account-action-layout"><section className="auth-form-card"><div className="auth-form-icon"><ShieldCheck size={24} /></div><h2>{title}</h2><p>{description}</p>{children}</section></main></div>;
+  return <div className="auth-page account-action-page"><div className="auth-top"><Brand /></div><main className="account-action-layout"><section className="auth-form-card"><div className="auth-form-icon"><ShieldCheck size={24} /></div><h2>{title}</h2><p>{description}</p>{children}</section></main></div>;
 }
 
 export function PasswordResetRequest({ options, initialEmail = '', onBack }: { options: AuthOptions | null; initialEmail?: string; onBack: () => void }) {

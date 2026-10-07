@@ -4,6 +4,7 @@
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
     if (clients.length) return;
-    return caches.delete('openfield-shell-v1');
+    const legacyNames = new Set(['openfield-shell-v1', `openfield-precache-v2-${self.registration.scope}`]);
+    return caches.keys().then((names) => Promise.all(names.filter((name) => legacyNames.has(name)).map((name) => caches.delete(name))));
   }));
 });

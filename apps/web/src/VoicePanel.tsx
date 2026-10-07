@@ -360,7 +360,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   }
   if (!accountClient.isCurrent()) return <section className="feature-page"><p role="status">登录状态已变化，语音工作台已关闭。</p></section>;
   return <section className="feature-page voice-page">
-    <div className="page-kicker"><AudioLines size={15} />VOICE STUDIO</div>
+
     <h1>有些想法，<span>说出来更好。</span></h1>
     <p className="page-description">实时交流、录音转写，或把文字变成声音。每次麦克风连接都由你开始。</p>
     <div className="voice-playback-control"><p role="status" aria-live="polite">{playingCount ? `正在播放 ${playingCount} 段语音` : '没有正在播放的语音'}</p><button type="button" className="secondary" onClick={() => playback.pauseAll()} disabled={!playingCount}><CircleStop size={16} />停止播放</button></div>
@@ -380,7 +380,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     {notice && <div className="voice-status" aria-live="polite">{notice}</div>}
     <p className="voice-save-target">当前会话：{conversation?.title || '首次发送或保存时创建“语音笔记”会话'}。发送问题和 AI 回答会保存到对话；语音摘录仍需点击保存。</p>
     {(turns.length > 0 || inputTranscriptionEnabled !== null) && <section className="live-transcript">
-      <div className="section-title"><h3>实时对话转写</h3><span>TRANSCRIPT STATUS</span></div>
+      <div className="section-title"><h3>实时对话转写</h3></div>
       <p className="voice-provenance">浏览器收到的未核验文本。结束实时交流后，可审阅并保存用户完成的转写和 AI 成功生成的完整文字；文字完成不代表音频已播放完。{inputTranscriptionEnabled === false && '用户音频转写待配置，可能仅有 AI 的转写。'}</p>
       {turns.map((turn) => <article className="live-turn" key={turn.key}><div className="voice-record-heading"><Badge>{turn.role === 'user' ? '用户' : turn.voiceRoleId ? `${voicePersonality(turn.voiceRoleId).label} · AI 转写` : 'AI 转写'}</Badge>{realtimeTurnCanSave(turn) && turn.inputs.every((input) => savedIds.has(input.clientRecordId)) && <span><Check size={12} />已保存</span>}</div><p>{turn.text}</p><p className="voice-provenance">{realtimeTurnStatusText(turn)}</p>{turn.revision > 0 && <p className="voice-provenance">服务更新了这个片段；可保存的修订会新增摘录。</p>}<div className="voice-excerpt-actions"><button className="text-button" disabled={saving || live !== 'idle' || !realtimeTurnCanSave(turn) || turn.inputs.every((input) => savedIds.has(input.clientRecordId))} onClick={() => saveInputs(turn.inputs)}><Save size={13} />保存完整片段</button><button className="text-button" disabled={saving || live !== 'idle' || !realtimeTurnCanSave(turn)} onClick={() => onBringToChat(quotedVoiceText('realtime_transcript', turn.text, turn.role))}><ArrowRight size={13} />带回对话草稿</button></div></article>)}
       {!!allRealtimeInputs.length && <button className="secondary" disabled={saving || live !== 'idle' || !hasUnsavedTurns} onClick={() => saveInputs(allRealtimeInputs)}><Save size={14} />{saving ? '保存中…' : hasUnsavedTurns ? '保存全部完整片段' : '完整片段已保存'}</button>}
