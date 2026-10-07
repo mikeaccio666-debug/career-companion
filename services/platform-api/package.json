@@ -12,6 +12,7 @@
     "worker": "tsx src/worker-main.ts",
     "migrate": "tsx src/migrate.ts",
     "operations": "tsx src/operations-main.ts",
+    "eval:plan": "tsx evals/main.ts",
     "check": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts"
   },
