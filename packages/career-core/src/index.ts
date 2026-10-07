@@ -12,3 +12,4 @@ export * from './companion/questionnaire.ts';
 export * from './companion/safety-response.ts';
 export * from './companion/identity.ts';
 export * from './companion/style.ts';
+export * from './companion/preview.ts';
