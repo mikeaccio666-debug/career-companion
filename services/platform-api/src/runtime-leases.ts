@@ -4,7 +4,7 @@ import type { Database } from './database.ts';
 import { ApiError } from './errors.ts';
 import { recoverChatUsage } from './chat-usage.ts';
 
-export async function acquireRuntimeLease(client:PoolClient,userId:string,kind:'chat'|'voice',id=randomUUID(),seconds=120){
+export async function acquireRuntimeLease(client:PoolClient,userId:string,kind:'chat'|'voice'|'background',id=randomUUID(),seconds=120){
   // Serialize runtime limits without blocking child rows' user FK KEY SHARE.
   await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[userId]);
   await client.query('DELETE FROM platform_runtime_leases WHERE user_id=$1 AND expires_at <= now()',[userId]);

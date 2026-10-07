@@ -37,7 +37,7 @@ function structuredFormat(value: unknown): NonNullable<ModelStepContext['respons
   function check(node: unknown, depth = 0): void {
     if (!ownRecord(node) || depth > 10) structuredInput();
     const s = node as JsonSchema;
-    const allowed = ['type','properties','required','additionalProperties','items','enum','anyOf','description','title'];
+    const allowed = ['type','properties','required','additionalProperties','items','enum','anyOf','description','title','minLength','maxLength','minItems','maxItems'];
     if (Object.keys(s).some(key => !allowed.includes(key)) || ['description','title'].some(key => s[key] !== undefined && typeof s[key] !== 'string')) structuredInput();
     if (Object.hasOwn(s,'anyOf')) {
       if (Object.keys(s).some(key => !['anyOf','description','title'].includes(key)) || !Array.isArray(s.anyOf) || s.anyOf.length < 2 || s.anyOf.length > 8) structuredInput();
@@ -53,6 +53,11 @@ function structuredFormat(value: unknown): NonNullable<ModelStepContext['respons
     } else if (['properties','required','additionalProperties'].some(key => Object.hasOwn(s,key))) structuredInput();
     if (types.includes('array')) { if (!Object.hasOwn(s,'items')) structuredInput(); check(s.items, depth + 1); }
     else if (Object.hasOwn(s,'items')) structuredInput();
+    for (const [kind, minimum, maximum] of [['string','minLength','maxLength'],['array','minItems','maxItems']] as const) {
+      for (const key of [minimum,maximum]) if (Object.hasOwn(s,key)
+        && (!types.includes(kind) || !Number.isSafeInteger(s[key]) || s[key] < 0 || s[key] > STRUCTURED_BYTES)) structuredInput();
+      if (Object.hasOwn(s,minimum) && Object.hasOwn(s,maximum) && s[minimum] > s[maximum]) structuredInput();
+    }
   }
   check(schema);
   if (schema.type !== 'object' || Buffer.byteLength(JSON.stringify(schema),'utf8') > STRUCTURED_BYTES) structuredInput();
@@ -65,10 +70,24 @@ function schemaMatches(schema: JsonSchema, value: unknown): boolean {
     : type === 'integer' ? typeof value === 'number' && Number.isSafeInteger(value) : type === 'number' ? typeof value === 'number' && Number.isFinite(value) : typeof value === type);
   if (!matches || schema.enum && !schema.enum.some((entry: unknown) => Object.is(entry,value))) return false;
   if (value === null) return true;
-  if (Array.isArray(value)) return value.every(item => schemaMatches(schema.items,item));
+  if (typeof value === 'string') {
+    const length = Array.from(value).length;
+    return (schema.minLength === undefined || length >= schema.minLength) && (schema.maxLength === undefined || length <= schema.maxLength);
+  }
+  if (Array.isArray(value)) return (schema.minItems === undefined || value.length >= schema.minItems)
+    && (schema.maxItems === undefined || value.length <= schema.maxItems) && value.every(item => schemaMatches(schema.items,item));
   if (typeof value === 'object') return schema.required.every((key: string) => Object.hasOwn(value!,key))
     && Object.keys(value!).every(key => Object.hasOwn(schema.properties,key) && schemaMatches(schema.properties[key],(value as Record<string, unknown>)[key]));
   return true;
+}
+/** Only documented transport keywords go on the wire; the original schema still validates the actual result. */
+function wireStructuredSchema(schema: JsonSchema): JsonSchema {
+  const projected: JsonSchema = { ...schema };
+  delete projected.minLength; delete projected.maxLength;
+  if (schema.properties) projected.properties = Object.fromEntries(Object.entries(schema.properties).map(([key,value]) => [key,wireStructuredSchema(value as JsonSchema)]));
+  if (schema.items) projected.items = wireStructuredSchema(schema.items);
+  if (schema.anyOf) projected.anyOf = schema.anyOf.map((value: JsonSchema) => wireStructuredSchema(value));
+  return projected;
 }
 function structuredResponse(output: unknown, format: NonNullable<ModelStepContext['responseFormat']>): string {
   const bad = () => new ProviderError('INVALID_PROVIDER_RESPONSE','The provider returned an invalid structured result.',502);
@@ -227,7 +246,7 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
       const request = jsonPost({ model: selectedModel, input: state.messages, instructions: instruction(input), tools, stream: true, store: false,
         include: ['reasoning.encrypted_content'], max_output_tokens: ctx.limits.maxOutputTokens,
         ...(!legacy ? { tool_choice: ctx.toolChoice === 'none' ? 'none' : ctx.allowedToolNames ? { type: 'allowed_tools', mode: 'auto', tools: ctx.allowedToolNames.map(name => ({ type: 'function', name })) } : 'auto' } : {}), ...(ctx.reasoningEffort ? { reasoning: { effort: ctx.reasoningEffort } } : {}),
-        ...(format ? { text: { format: { type: 'json_schema', name: format.name, schema: format.schema, strict: true } } } : {}) }, env.OPENAI_API_KEY!, timing.signal);
+        ...(format ? { text: { format: { type: 'json_schema', name: format.name, schema: wireStructuredSchema(format.schema), strict: true } } } : {}) }, env.OPENAI_API_KEY!, timing.signal);
       const response = await http.request('https://api.openai.com/v1/responses', request, ctx.timeoutMs, ctx.requestAdmission);
       for await (const event of readSse(response)) {
         if (format && completed) throw new ProviderError('INVALID_PROVIDER_RESPONSE','The structured stream continued after its terminal result.',502);
@@ -351,6 +370,81 @@ export async function* streamModelStep(http: HttpClient, env: NodeJS.ProcessEnv,
     ids.add(call.callId);
   }
   return { text: out.text, calls: out.calls, ...(out.continuation === undefined ? {} : { continuation: out.continuation }) };
+}
+/** Freeze the complete server-owned request synchronously, before the lazy generator or accounting can await. */
+export function snapshotBackgroundChat(input: ChatInput, ctx: ChatContext): { input: ChatInput; context: ChatContext } {
+  const closed = (value: unknown, keys: readonly string[], required: readonly string[] = keys): Record<string, unknown> => {
+    if (!ownRecord(value) || Object.keys(value).some(key => !keys.includes(key)) || required.some(key => !Object.hasOwn(value,key))) structuredInput();
+    return value;
+  };
+  const request = closed(input,['provider','model','mode','messages']);
+  const context = closed(ctx,['signal','requestAdmission','onModelCall','background'],['requestAdmission','onModelCall','background']);
+  const background = closed(context.background,['purpose','responseFormat','limits','timeoutMs']);
+  const limits = closed(background.limits,['maxOutputTokens']);
+  if (request.mode !== 'chat' || typeof request.provider !== 'string' || typeof request.model !== 'string'
+    || !request.model.trim() || request.model.trim() !== request.model || request.model.length > 150 || /[\x00-\x1f\x7f]/.test(request.model)
+    || background.purpose !== 'companion_generation' || typeof context.requestAdmission !== 'function' || typeof context.onModelCall !== 'function'
+    || context.signal !== undefined && !(context.signal instanceof AbortSignal)
+    || !Number.isSafeInteger(limits.maxOutputTokens) || (limits.maxOutputTokens as number) < 1 || (limits.maxOutputTokens as number) > 1536
+    || !Number.isSafeInteger(background.timeoutMs) || (background.timeoutMs as number) < 1 || (background.timeoutMs as number) > 15000) structuredInput();
+  const messages = request.messages;
+  if (!Array.isArray(messages) || Object.getPrototypeOf(messages) !== Array.prototype || messages.length < 1 || messages.length > 200
+    || Reflect.ownKeys(messages).some(key => key !== 'length' && (typeof key !== 'string' || !/^(0|[1-9][0-9]*)$/.test(key) || !Object.hasOwn(Object.getOwnPropertyDescriptor(messages,key)!, 'value')))
+    || Object.keys(messages).length !== messages.length) structuredInput();
+  let bytes = 0;
+  const savedMessages = messages.map(value => {
+    const message = closed(value,['role','content']);
+    if (!['system','user','assistant'].includes(message.role as string) || typeof message.content !== 'string') structuredInput();
+    bytes += Buffer.byteLength(message.content,'utf8');
+    if (bytes > 64 * 1024) structuredInput();
+    return Object.freeze({ role: message.role, content: message.content });
+  });
+  const format = structuredFormat(background.responseFormat);
+  return { input: Object.freeze({ provider: request.provider, model: request.model, mode: 'chat', messages: Object.freeze(savedMessages) }) as ChatInput,
+    context: Object.freeze({ ...(context.signal === undefined ? {} : { signal: context.signal }), requestAdmission: context.requestAdmission,
+      onModelCall: context.onModelCall, background: Object.freeze({ purpose: 'companion_generation', responseFormat: format,
+        limits: Object.freeze({ maxOutputTokens: limits.maxOutputTokens }), timeoutMs: background.timeoutMs }) }) as ChatContext };
+}
+/** A backend generation is one real tools-disabled provider request, not a conversation or agent loop. */
+export async function* streamBackgroundChat(http: HttpClient, env: NodeJS.ProcessEnv, input: ChatInput, ctx: ChatContext): AsyncGenerator<ChatStreamEvent> {
+  ctx.signal?.throwIfAborted();
+  const background = ctx.background!;
+  const admission: NonNullable<ChatContext['requestAdmission']> = async <T>(launch: (signal: AbortSignal) => Promise<T>,signal?: AbortSignal): Promise<T> => {
+    const cancelled = new AbortController();
+    let pending: Promise<T> | undefined;
+    try {
+      const response = await ctx.requestAdmission!(allowedSignal => {
+        if (pending || !(allowedSignal instanceof AbortSignal)) throw new ProviderError('PROVIDER_ADMISSION_INVALID','Background admission must launch exactly one provider request.',503);
+        // The trusted admission signal may add cancellation, never remove the
+        // checked request deadline or caller cancellation.
+        pending = launch(AbortSignal.any([allowedSignal,cancelled.signal,...(signal ? [signal] : [])]));
+        return pending;
+      },signal);
+      if (!pending || response !== await pending) throw new ProviderError('PROVIDER_ADMISSION_INVALID','Background admission did not return its actual provider response.',503);
+      return response;
+    } catch (error) {
+      cancelled.abort(error);
+      void pending?.then(value => { if (value instanceof Response) return value.body?.cancel().catch(() => {}); }).catch(() => {});
+      throw error;
+    }
+  };
+  const step = openAIStep(http,env,input,{ invocation: Object.freeze({}), tools: [], toolChoice: 'none', callIndex: 1,
+    purpose: background.purpose, responseFormat: background.responseFormat, limits: background.limits, timeoutMs: background.timeoutMs,
+    signal: ctx.signal, requestAdmission: admission, onModelCall: ctx.onModelCall },false);
+  try {
+    let usage: Extract<ChatStreamEvent,{ type:'usage' }> | undefined;
+    while (true) {
+      const next = await step.next();
+      if (next.done) {
+        ctx.signal?.throwIfAborted();
+        yield { type:'delta',text:next.value.text };
+        if (usage) yield usage;
+        return;
+      }
+      if (next.value.type === 'tool_started') throw new ProviderError('INVALID_PROVIDER_RESPONSE','Background generation cannot request tools.',502);
+      if (next.value.type === 'usage') usage = next.value;
+    }
+  } finally { await step.return(undefined as never); }
 }
 async function* legacyChat(http: HttpClient, env: NodeJS.ProcessEnv, input: ChatInput, ctx: ChatContext): AsyncGenerator<ChatStreamEvent> {
   let continuation: object | undefined, toolResults: ModelToolResult[] | undefined, calls = 0;

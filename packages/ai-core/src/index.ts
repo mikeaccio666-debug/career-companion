@@ -1,7 +1,7 @@
 import type { ChatInput, ChatContext, CreateJobInput, JobExecutionContext, JobExecutionResult, PlatformProviderRuntime, VoiceSessionInput, ProviderAttachment, ComfyUITemplateSnapshot, SpeechInput, TranscriptionContext, Capability } from '@companion/platform-contracts';
 import { HttpClient, type Fetch, type ResolveHost } from './http.ts';
 import { providerStatuses, requireProvider } from './config.ts';
-import { streamOpenAI, streamCompatible, streamModelStep } from './chat.ts';
+import { streamOpenAI, streamCompatible, streamModelStep, snapshotBackgroundChat, streamBackgroundChat } from './chat.ts';
 import { generateOpenAIImage, generateArkVideo, generateFal, generateComfyUI, realtimeOpenAI, transcribeOpenAI, speechOpenAI } from './media.ts';
 import { ProviderError, invalid } from './errors.ts';
 import { executeBrowser, executeCli } from './executors.ts';
@@ -48,6 +48,15 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
       checkComfyUIServer(checked,env);
     },
     streamChat(input:ChatInput,context:ChatContext={}){
+      if ('background' in context) {
+        const saved = snapshotBackgroundChat(input,context);
+        if (saved.input.provider !== 'openai') throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','No verified structured output adapter is available for this provider.',503);
+        requireProvider(env,saved.input.provider,'chat');
+        const configured = providerStatuses(env).find(provider => provider.id === 'openai')?.modelsByPurpose?.companion_generation;
+        if (!configured || configured.length !== 1) throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','Configure an explicit server companion generation model.',503);
+        if (saved.input.model !== configured[0]) invalid('Background generation must use the configured server model.');
+        return streamBackgroundChat(http,env,saved.input,saved.context);
+      }
       requireProvider(env,input.provider,input.mode==='agent'?'agent':'chat');
       if(!input.messages.length||input.messages.length>200)invalid('A conversation must contain between 1 and 200 context messages.');
       return input.provider==='openai'?streamOpenAI(http,env,input,context):streamCompatible(http,env,input,context);
