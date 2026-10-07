@@ -199,7 +199,7 @@ export async function executeWorkflow(runtime: PlatformProviderRuntime, input: C
       let result: JobExecutionResult;
       if (step.kind === 'chat') {
         let text = '';
-        for await (const event of runtime.streamChat({ provider: step.provider, model: step.model, mode: 'chat', messages: [{ role: 'user', content: prompt }] }, { signal: ctx.signal })) {
+        for await (const event of runtime.streamChat({ provider: step.provider, model: step.model, mode: 'chat', messages: [{ role: 'user', content: prompt }] }, { signal: ctx.signal, requestAdmission: ctx.requestAdmission })) {
           if (event.type === 'delta') { text += event.text; if (Buffer.byteLength(text) > MAX_TEXT_BYTES) throw new ProviderError('WORKFLOW_OUTPUT_LIMIT', 'The workflow text output exceeds its limit.', 413); }
         }
         result = { text, artifacts: [{ name: 'text.txt', mime: 'text/plain', bytes: new TextEncoder().encode(text) }] };

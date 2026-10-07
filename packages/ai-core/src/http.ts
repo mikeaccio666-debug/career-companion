@@ -1,15 +1,27 @@
 import { ProviderError } from './errors.ts';
+import type { ProviderRequestAdmission } from '@companion/platform-contracts';
 import { lookup } from 'node:dns/promises';
 export type Fetch = typeof globalThis.fetch;
 export type ResolveHost = (hostname: string) => Promise<{address:string;family:number}[]>;
 export class HttpClient {
-  constructor(readonly fetch: Fetch, readonly resolveHost: ResolveHost = hostname => lookup(hostname,{all:true})) {}
-  async request(url: string | URL, init: RequestInit = {}): Promise<Response> {
-    const timeout = AbortSignal.timeout(120_000);
+  constructor(readonly fetch: Fetch, readonly resolveHost: ResolveHost = hostname => lookup(hostname,{all:true}), readonly admission?: ProviderRequestAdmission) {}
+  withAdmission(admission?:ProviderRequestAdmission):HttpClient { return new HttpClient(this.fetch,this.resolveHost,admission); }
+  /** Only a queue task's validated exact cancel endpoint may use this control path. */
+  async cancelFal(taskId:string,cancelUrl:string,headers:Record<string,string>):Promise<void> {
+    const url=new URL(cancelUrl);
+    if(/^[A-Za-z0-9_-]+$/.exec(taskId)?.[0]!==taskId||url.origin!=='https://queue.fal.run'||url.username||url.password||url.search||url.hash||!url.pathname.endsWith('/requests/'+taskId+'/cancel'))throw new ProviderError('INVALID_PROVIDER_TASK','The saved cancel endpoint is invalid.',409);
+    const response=await new HttpClient(this.fetch,this.resolveHost).request(url,{method:'PUT',headers,signal:AbortSignal.timeout(5000)},5000);
+    await response.body?.cancel();
+  }
+  async request(url: string | URL, init: RequestInit = {}, timeoutMs = 120_000, admission = this.admission): Promise<Response> {
+    const timeout = AbortSignal.timeout(timeoutMs);
     const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
     let response: Response;
-    try { response = await this.fetch(url, { ...init, signal, redirect: 'error' }); }
-    catch { throw new ProviderError(signal.aborted ? 'PROVIDER_INTERRUPTED' : 'PROVIDER_UNREACHABLE', signal.aborted ? 'The provider request was interrupted or timed out.' : 'The provider could not be reached.', 502); }
+    const launch=async (allowedSignal:AbortSignal):Promise<Response>=>{
+      try { return await this.fetch(url, { ...init, signal:allowedSignal, redirect: 'error' }); }
+      catch { throw new ProviderError(allowedSignal.aborted ? 'PROVIDER_INTERRUPTED' : 'PROVIDER_UNREACHABLE', allowedSignal.aborted ? 'The provider request was interrupted or timed out.' : 'The provider could not be reached.', 502); }
+    };
+    response=admission?await admission(launch,signal):await launch(signal);
     if (!response.ok) {
       await response.body?.cancel();
       const code = response.status === 401 || response.status === 403 ? 'PROVIDER_AUTH_FAILED' : response.status === 429 ? 'PROVIDER_RATE_LIMIT' : 'PROVIDER_REJECTED';

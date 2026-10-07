@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, afterEach, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +20,7 @@ import { ApiError } from '../src/errors.ts';
 // Real loopback HTTP providers and API instances, isolated real PostgreSQL tables.
 // All addresses, passwords and credentials are fictional; no third-party service is contacted.
 const prefix='/api/platform', origin='https://account-actions.example.invalid';
-const base=readConfig(), schema=`account_actions_${randomUUID().replaceAll('-','')}`;
+const base=readConfig({...process.env,PLATFORM_REQUIRE_INVITE:'1'}), schema=`account_actions_${randomUUID().replaceAll('-','')}`;
 const admin=new Database(base.databaseUrl), url=new URL(base.databaseUrl);
 url.searchParams.set('options',`-c search_path=${schema}`);
 const databases=[new Database(url.toString()),new Database(url.toString()),new Database(url.toString())];
@@ -89,7 +90,7 @@ function assertSafe(result:ResponseData,expected:number){
 }
 async function register(instance=0):Promise<Actor>{
   const email=`account-${randomUUID()}@example.invalid`,password='Fictional-old-password-2026';
-  const result=await post(instance,'/auth/register',undefined,{email,password,name:'Fictional account owner'});
+  const result=await post(instance,'/auth/register',undefined,await fictionalRegistration(databases[0]!,{email,password,name:'Fictional account owner'}));
   assertSafe(result,201);const user=json(result).user;assert.equal(user.emailVerified,false);
   const setCookie=result.headers['set-cookie']?.[0];assert(setCookie);assert.match(setCookie,/HttpOnly/);assert.match(setCookie,/SameSite=Lax/);
   return {id:user.id,email,password,cookie:setCookie.split(';')[0]!};
@@ -106,11 +107,11 @@ async function until(run:()=>boolean){const end=Date.now()+2000;while(!run()){if
 
 before(async()=>{
   assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only the local isolated test database may be used.');
-  await admin.query(`CREATE SCHEMA ${schema}`);schemaCreated=true;await databases[0]!.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`);schemaCreated=true;await databases[0]!.migrate(); await seedFictionalActiveLegal(databases[0]!);
   directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-account-actions-'));
   await new Promise<void>(resolve=>provider.listen(0,'127.0.0.1',resolve));providerPort=(provider.address() as AddressInfo).port;
   for(let index=0;index<3;index++){
-    const system=await buildApp({db:databases[index],runtime,enableQueue:false,requestLimits:policies,
+    const system=await buildApp({legalBundle:FICTIONAL_LEGAL,db:databases[index],runtime,enableQueue:false,requestLimits:policies,
       config:{...base,databaseUrl:url.toString(),storageDir:directory,s3:undefined,webStaticDir:undefined,allowedOrigins:new Set([origin]),
         secureCookies:true,accountEmail:index===2?undefined:config,requireVerifiedEmail:index!==2}});
     await system.app.listen({host:'127.0.0.1',port:0});systems.push(system);ports.push((system.app.server.address() as AddressInfo).port);
@@ -134,7 +135,7 @@ test('disabled mail is truthful and performs no outbox or network work for known
   const result=await post(2,'/auth/email-verification/request',actor,{});assertSafe(result,503);
   assert.equal(await processAccountEmails(databases[2]!,undefined,{fetch:transport}),0);assert.equal(transportCalls,beforeCalls);
   assert.equal((await queued(actor)).length,0);assertSafe(await exchange(2,'/conversations',actor),200);
-  const status=await exchange(2,'/auth/options');assertSafe(status,200);assert.deepEqual(json(status),{emailActionsEnabled:false,requireVerifiedEmail:false});
+  const status=await exchange(2,'/auth/options');assertSafe(status,200);assert.deepEqual(json(status),{emailActionsEnabled:false,requireVerifiedEmail:false,requireInvite:true,legal:{status:'available',version:FICTIONAL_LEGAL.version,digest:FICTIONAL_LEGAL.digest}});
 });
 
 test('request HTTP responses do not enumerate accounts or issue secrets and target limits survive both instances',async()=>{

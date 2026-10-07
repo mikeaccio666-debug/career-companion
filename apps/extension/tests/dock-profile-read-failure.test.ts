@@ -59,13 +59,13 @@ describe('我的资料读不到：说出原因代号', () => {
 
   it('读得太慢（TIMEOUT）、资料正在别处保存（BUSY）：各说各的，不说「暂时读不到」（2026-10-04）', async () => {
     const slow = await openWith('TIMEOUT');
-    expect(slow?.textContent).toContain('ArgoLand 这次回得太慢，没读到你的资料。稍后再试。');
+    expect(slow?.textContent).toContain('Career Companion 这次回得太慢，没读到你的资料。稍后再试。');
     expect(slow?.querySelector('.pf-code')?.textContent).toBe('找我们帮忙时附上这一串：TIMEOUT');
     document.body.innerHTML = '';
     const busy = await openWith('BUSY');
     expect(busy?.textContent).toContain('你的资料正在别处保存，等几秒再打开这一页。');
     document.body.innerHTML = '';
-    expect((await openWith('TIMEOUT', 'en'))?.textContent).toContain('ArgoLand took too long to send your profile. Please try again in a moment.');
+    expect((await openWith('TIMEOUT', 'en'))?.textContent).toContain('Career Companion took too long to send your profile. Please try again in a moment.');
   });
 
   it('认不出的码不上屏（只认稳定码的形状）', async () => {

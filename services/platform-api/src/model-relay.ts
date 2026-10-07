@@ -1,11 +1,12 @@
+import { requireRequestAdmission } from './model-routing.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import type { ModelRelayRequest } from '@companion/platform-contracts';
+import type { ModelRelayRequest, ProviderRequestAdmission } from '@companion/platform-contracts';
 import type { Database } from './database.ts';
 import { ApiError } from './errors.ts';
 import { cliModelConfiguration, OPENAI_CLI_ENDPOINT } from '@companion/ai-core';
 
 export interface ModelRelayBinding {
-  jobId: string; userId: string; generation: number; leaseToken: string; signal: AbortSignal;
+  jobId: string; userId: string; generation: number; leaseToken: string; signal: AbortSignal; requestAdmission?: ProviderRequestAdmission;
 }
 export interface ModelRelayOptions { env?: NodeJS.ProcessEnv; fetch?: typeof globalThis.fetch; }
 export interface ModelRelayPolicy {
@@ -129,9 +130,11 @@ function inspectOutput(bytes:Uint8Array,stream:boolean,maxOutput:number,reserved
 
 /** Only the claimed worker receives this callback. There is no public relay HTTP route or container API key. */
 export function createJobModelRelay(db:Database,binding:ModelRelayBinding,options:ModelRelayOptions={}): (request:ModelRelayRequest)=>Promise<Response> {
+  binding=Object.freeze({...binding});
   const env={...(options.env??process.env)},fetch=options.fetch??globalThis.fetch;
   return async request=>{
     binding.signal.throwIfAborted();request.signal.throwIfAborted();
+    const admission=requireRequestAdmission(binding);
     let prepared=prepare(env,request,binding.userId);const auditId=randomUUID(),currentPolicy=configuredModelRelayPolicy(env),upstreamConfig=relayConfiguration(env);
     await db.transaction(async client=>{
       await client.query("SELECT pg_advisory_xact_lock(hashtext('platform-model-relay:'||$1))",[binding.userId]);
@@ -157,9 +160,9 @@ export function createJobModelRelay(db:Database,binding:ModelRelayBinding,option
     let upstream:Response|undefined,attempted=false;
     try{
       await authorize(db,binding,prepared.model);signal.throwIfAborted();
-      if(upstreamConfig.provider==='ollama')await confirmLocalOllama(upstreamConfig.endpoint,fetch,signal);
-      await authorize(db,binding,prepared.model);signal.throwIfAborted();attempted=true;
-      upstream=await fetch(upstreamConfig.endpoint,{method:'POST',headers:{'Content-Type':'application/json',...(upstreamConfig.provider==='openai'?{Authorization:`Bearer ${env.OPENAI_API_KEY}`}:{})},body:prepared.encoded,redirect:'error',signal});
+      if(upstreamConfig.provider==='ollama')await confirmLocalOllama(upstreamConfig.endpoint,((url,init)=>admission(allowedSignal=>fetch(url,{...init,signal:allowedSignal}),signal)) as typeof fetch,signal);
+      await authorize(db,binding,prepared.model);signal.throwIfAborted();
+      upstream=await admission(allowedSignal=>{attempted=true;return fetch(upstreamConfig.endpoint,{method:'POST',headers:{'Content-Type':'application/json',...(upstreamConfig.provider==='openai'?{Authorization:`Bearer ${env.OPENAI_API_KEY}`}:{})},body:prepared.encoded,redirect:'error',signal:allowedSignal});},signal);
       if(!upstream.ok){await upstream.body?.cancel();if(upstream.status>=500)throw new ApiError(502,'MODEL_RELAY_UNCERTAIN','The provider could not confirm the result. Review before retrying.');throw new ApiError(upstream.status===429?429:502,'MODEL_RELAY_PROVIDER_REJECTED','Check the model account, access and available credits.');}
       const contentType=(upstream.headers.get('content-type')??'').split(';')[0].trim().toLowerCase();
       const stream=prepared.body.stream===true;

@@ -311,30 +311,17 @@ export type DockAccountPrompt =
       site: string;
     }>;
 
-/** 账户菜单「招聘网站账号」那一块的样子（没有任何密码：密码只在他按「显示」「复制」时现取）。 */
-export interface DockAccountSettings {
-  /** 他改过的注册邮箱；null = 用资料里的邮箱。 */
-  readonly email: string | null;
-  /** 资料里的邮箱（读不到是 null）。 */
-  readonly defaultEmail: string | null;
-  /** 共用的那一条密码有没有（没有 = 第一次替他注册时生成）。 */
-  readonly hasPassword: boolean;
-  /** 几家网站用了自己的密码。 */
-  readonly sites: number;
-}
-
 export interface DockAccountHandlers {
   /** 他在浮层里输了这一家的密码、按了「用这个密码登录」。调用方必须在点击派发当中同步取证。 */
   readonly onSitePassword: (password: string, event: MouseEvent, shadowRoot: ShadowRoot) => void;
   /** 他按了「我已验证，继续」（邮箱验证之后）。调用方必须同步取证。 */
   readonly onResume: (event: MouseEvent, shadowRoot: ShadowRoot) => void;
-  readonly load: () => Promise<DockAccountSettings | null>;
-  /** 共用密码的明文（他按「显示」「复制」时现取；没有是 null）。 */
-  readonly reveal: () => Promise<string | null>;
-  /** 改注册邮箱（null = 改回用资料里的）。`INVALID` = 形状不对。 */
-  readonly setEmail: (email: string | null) => Promise<DockAccountSettings | 'INVALID' | null>;
-  /** 改共用密码。`WEAK` = 不合要求。 */
-  readonly setPassword: (password: string) => Promise<DockAccountSettings | 'WEAK' | null>;
+}
+
+/** The ATS dock receives metadata only. Secret operations live in the settings page. */
+export interface DockVaultManagement {
+  readonly list: (signal: AbortSignal) => Promise<import('../../assistant/features/account-vault/ports').VaultUiResult<import('../../assistant/features/account-vault/ports').VaultSnapshotView>>;
+  readonly openSettings: (origin: string | null, event: MouseEvent, shadowRoot: ShadowRoot) => Promise<boolean>;
 }
 
 /** 一页的运行为什么作废。 */
@@ -454,8 +441,8 @@ export interface AutofillDockHandlers {
    * lib/dockDiagnostic.ts）。2026-10-04 体检 11-2。
    */
   readonly onError?: (code: DockErrorCode, error: unknown) => void;
-  /** 退出登录。浮层只发一个意图；凭据与作废在 worker。没接这个处理器就没有这一项。 */
-  readonly onSignOut?: () => void;
+  /** 准备退出：真实点击交给调用方，由 worker 的确认流程决定何时清除。 */
+  readonly onSignOut?: (event: MouseEvent, shadowRoot: ShadowRoot) => void;
   /** 多页申请的「继续到下一页」。没接就没有这颗按钮。 */
   readonly nextStep?: DockNextStepHandlers;
   /**
@@ -517,6 +504,7 @@ export interface AutofillDockHandlers {
   readonly signingReconsent?: DockSigningReconsent;
   /** 招聘网站账号（2026-09-28）：账户菜单里那一块与账号墙上的两种输入。没接就都没有。 */
   readonly accountAccess?: DockAccountHandlers;
+  readonly vaultManagement?: DockVaultManagement;
   /** 网站要邮件里的验证码时，卡上那一格的「填进网站」（2026-10-04）。没接就只说去网站上输。 */
   readonly verificationCode?: DockCodeHandlers;
 }

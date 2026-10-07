@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { installApplyAdapters } from '@edaix/apply-kernel/registry';
+import type { TrustedGestureProof } from '@edaix/apply-kernel/grant';
 import { workdayAdapter } from '@edaix/apply-kernel/sites/workday';
 
 import { createAccountAccessPage, type AccountAccessPageDeps } from '../lib/accountAccessPage';
@@ -29,13 +30,14 @@ afterEach(() => { document.body.innerHTML = ''; });
 
 function setup(status: { consent: boolean; enabled: boolean; known: boolean } = { consent: true, enabled: true, known: false }, vendor: 'workday' | 'greenhouse' = 'workday') {
   const walls: (DockAccountWall | null)[] = [];
-  const dock = { setAccountWall: (wall: DockAccountWall | null) => { walls.push(wall); } } as unknown as AutofillDockHandle;
+  const dock = { reportBlocked: vi.fn(), accountPrompt: vi.fn(), setAccountWall: (wall: DockAccountWall | null) => { walls.push(wall); } } as unknown as AutofillDockHandle;
   let tick: (() => void) | null = null;
   const sent: unknown[] = [];
   const send = vi.fn(async (message: unknown): Promise<unknown> => {
     sent.push(message);
-    return { kind: 'ACCOUNT_STATUS', ...status };
+    return { kind: 'ACCOUNT_STATUS', ...status, operationId: '00000000-0000-4000-8000-000000000001', authEpoch: 1 };
   });
+  const fillPage = vi.fn(async () => {});
   const deps: AccountAccessPageDeps = {
     doc: document,
     here: () => HERE,
@@ -47,7 +49,7 @@ function setup(status: { consent: boolean; enabled: boolean; known: boolean } = 
     discovery: async () => null,
     dock: () => dock,
     chain: () => { throw new Error('not used'); },
-    fillPage: async () => {},
+    fillPage,
     restart: () => new AbortController(),
     site: () => 'Acme 的 Workday',
     onReturn: () => () => {},
@@ -55,7 +57,7 @@ function setup(status: { consent: boolean; enabled: boolean; known: boolean } = 
     clearInterval: () => { tick = null; },
   };
   const page = createAccountAccessPage(deps);
-  return { page, walls, sent, send, tick: () => tick?.(), ticking: () => tick !== null };
+  return { page, walls, sent, send, fillPage, tick: () => tick?.(), ticking: () => tick !== null };
 }
 
 describe('看着这一页', () => {
@@ -134,26 +136,69 @@ describe('看着这一页', () => {
   });
 });
 
-describe('账户菜单那几样都问 worker', () => {
-  it('改共用密码：不合要求在本机就挡下（不发）；合要求才发', async () => {
+describe('metadata-only vault management', () => {
+  it('lists exact worker metadata and never offers secret operations on the ATS page', async () => {
     const h = setup();
-    expect(await h.page.handlers.setPassword('short')).toBe('WEAK');
-    expect(h.send).not.toHaveBeenCalled();
-    h.send.mockResolvedValueOnce({ kind: 'ACCOUNT_SETTINGS', email: null, defaultEmail: null, hasPassword: true, sites: 0 });
-    expect(await h.page.handlers.setPassword('Brand-New-Pass-7')).toEqual({ email: null, defaultEmail: null, hasPassword: true, sites: 0 });
-    expect(h.send.mock.calls.at(-1)?.[0]).toMatchObject({ payload: { step: 'SETTINGS_SET_PASSWORD', password: 'Brand-New-Pass-7' } });
+    const snapshot = { kind: 'VAULT_LIST', status: 'READABLE', revision: 2, authEpoch: 1, email: 'student@example.test', defaultEmail: null,
+      sites: [{ origin: HERE.origin, email: 'student@example.test', source: 'GENERATED', state: 'PENDING', hasPassword: true, at: 1 }] };
+    h.send.mockResolvedValueOnce(snapshot);
+    expect(await h.page.vaultManagement.list(new AbortController().signal)).toEqual({ ok: true, value: snapshot });
+    expect(h.send.mock.calls[0]?.[0]).toMatchObject({ origin: HERE.origin, pathname: HERE.pathname, payload: { step: 'LIST' } });
+    expect(Object.keys(h.page.handlers).sort()).toEqual(['onResume', 'onSitePassword']);
   });
-
-  it('改注册邮箱：形状不对不发，交回 INVALID', async () => {
-    const h = setup();
-    expect(await h.page.handlers.setEmail('not-an-email')).toBe('INVALID');
-    expect(h.send).not.toHaveBeenCalled();
+  it('rejects a secret-shaped or unavailable list response', async () => {
+    const h = setup(); h.send.mockResolvedValueOnce({ kind: 'ACCOUNT_PASSWORD', password: 'fictional-secret' });
+    expect(await h.page.vaultManagement.list(new AbortController().signal)).toEqual({ ok: false, code: 'UNAVAILABLE' });
   });
+  it('drops an aborted metadata request', async () => {
+    const h = setup(); const request = new AbortController(); request.abort();
+    expect(await h.page.vaultManagement.list(request.signal)).toEqual({ ok: false, code: 'UNAVAILABLE' });
+  });
+  it('retiring the actual page fences late status responses before they reach a new dock', async () => {
+    document.body.innerHTML = fixture('account-create.html');
+    const h = setup(); let reply!: (value: unknown) => void;
+    h.send.mockImplementationOnce(() => new Promise((resolve) => { reply = resolve; }));
+    h.page.start(); h.page.dispose();
+    reply({ kind: 'ACCOUNT_STATUS', consent: true, enabled: true, known: false, operationId: '00000000-0000-4000-8000-000000000001', authEpoch: 1 });
+    await settle(); expect(h.walls).toEqual([]);
+  });
+  it('synthetic settings clicks cannot open a vault tab or send a message', async () => {
+    const h = setup(), host = document.createElement('div'); document.body.append(host);
+    const shadow = host.attachShadow({ mode: 'open' }), button = document.createElement('button'); shadow.append(button);
+    let opened: Promise<boolean> | undefined;
+    button.addEventListener('click', (event) => { opened = h.page.vaultManagement.openSettings(HERE.origin, event as MouseEvent, shadow); });
+    button.click(); expect(await opened).toBe(false); expect(h.send).not.toHaveBeenCalled();
+  });
+});
 
-  it('worker 答不上来：读、看都是 null（浮层照实说读不到）', async () => {
-    const h = setup();
-    h.send.mockRejectedValue(new Error('worker asleep'));
-    expect(await h.page.handlers.load()).toBeNull();
-    expect(await h.page.handlers.reveal()).toBeNull();
+
+describe('account continuation forwards the existing owner context', () => {
+  // This fixture is an opaque transport value. The fill executor is a spy;
+  // these tests do not manufacture or exercise DOM-write authority.
+  const proof = Object.freeze({}) as TrustedGestureProof;
+  const status = { kind: 'ACCOUNT_STATUS' as const, consent: true, enabled: true, known: false,
+    operationId: '00000000-0000-4000-8000-000000000001', authEpoch: 1 };
+  it.each([true, false])('wall already gone: original operation CHECK controls continuation (%s)', async (current) => {
+    document.body.innerHTML = '<form><input name="profile"></form>';
+    const h = setup(); h.send.mockResolvedValueOnce(current ? { kind: 'ACCOUNT_CURRENT' } : { kind: 'REFUSED', code: 'AUTH_CHANGED' });
+    await h.page.run(proof, status);
+    expect(h.send.mock.calls[0]?.[0]).toMatchObject({ payload: { step: 'CHECK', operationId: status.operationId, expectedEpoch: 1 } });
+    expect(h.fillPage).toHaveBeenCalledTimes(current ? 1 : 0);
+    expect(h.send.mock.calls.every(([message]) => (message as { payload: { step: string } }).payload.step !== 'STATUS')).toBe(true);
+  });
+  it.each([true, false])('NO_WALL after runtime lookup: fallback checks the same operation (%s)', async (current) => {
+    document.body.innerHTML = fixture('account-create.html');
+    const h = setup(); // discovery is unavailable: actual controller returns NO_WALL.
+    h.send.mockResolvedValueOnce(current ? { kind: 'ACCOUNT_CURRENT' } : { kind: 'REFUSED', code: 'AUTH_CHANGED' });
+    await h.page.run(proof, status);
+    expect(h.send.mock.calls[0]?.[0]).toMatchObject({ payload: { step: 'CHECK', operationId: status.operationId, expectedEpoch: 1 } });
+    expect(h.fillPage).toHaveBeenCalledTimes(current ? 1 : 0);
+  });
+  it('retiring the page during a deferred continuation CHECK drops the result', async () => {
+    document.body.innerHTML = '<form><input name="profile"></form>';
+    const h = setup(); let resolve!: (value: unknown) => void;
+    h.send.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const pending = h.page.run(proof, status); h.page.dispose(); resolve({ kind: 'ACCOUNT_CURRENT' });
+    await pending; expect(h.fillPage).not.toHaveBeenCalled();
   });
 });

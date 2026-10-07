@@ -55,7 +55,7 @@ describe('插件已更新：浮层换成一张卡、一颗「刷新页面」', (
     const handle = mount();
     expect(card(handle)).toBeNull();
     handle.extensionUpdated();
-    expect(text(card(handle))).toContain('ArgoLand.AI 已更新');
+    expect(text(card(handle))).toContain('Career Companion 已更新');
     expect(text(card(handle))).toContain('刷新这一页即可继续');
     expect(text(reload(handle))).toBe('刷新页面');
     expect(handle.autofillButton(), '「自动填写」不再摆着——按了也找不到插件').toBeNull();
@@ -64,7 +64,7 @@ describe('插件已更新：浮层换成一张卡、一颗「刷新页面」', (
   it('英文界面说英文', () => {
     const handle = mount({}, 'en');
     handle.extensionUpdated();
-    expect(text(card(handle))).toContain('ArgoLand.AI was updated');
+    expect(text(card(handle))).toContain('Career Companion was updated');
     expect(text(card(handle))).toContain('Reload this page to continue');
     expect(text(reload(handle))).toBe('Reload page');
   });

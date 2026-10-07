@@ -4,6 +4,12 @@ import { describe, expect, it } from 'vitest';
 
 import { DOCK_SESSION_CHANGED, isDockSessionChanged } from '../lib/dockSessionChanged';
 import { DOCK_PROFILE_CHANGED, isDockProfileChanged } from '../lib/dockProfileChanged';
+const read = (path: string): string => readFileSync(resolve(__dirname, '..', path), 'utf8');
+function section(text: string, start: string, end: string): string {
+  const from = text.indexOf(start), to = text.indexOf(end, from + start.length);
+  expect(from, start).toBeGreaterThanOrEqual(0); expect(to, end).toBeGreaterThan(from);
+  return text.slice(from, to);
+}
 
 describe('dock/session-changed', () => {
   it('只认那一个不带值的形状', () => {
@@ -14,22 +20,48 @@ describe('dock/session-changed', () => {
     }
   });
 
-  it('worker 在握手完成与退出登录后都广播，内容脚本收到就重新报到（源码形状闸）', () => {
+  it('worker 真实身份失效先停止写入并广播到内容脚本和设置页；握手完成后重新报到（接线闸）', () => {
     // 2026-09-21 测试台实测：连接完成后门户标签页自己关了，申请页上的浮层却要等用户切回来
     // 那一下 focus 才换脸；退出登录时别的标签页也停在「已连接」。
-    const background = readFileSync(resolve(__dirname, '..', 'entrypoints', 'background.ts'), 'utf8');
-    const content = readFileSync(resolve(__dirname, '..', 'entrypoints', 'apply.content.ts'), 'utf8');
+    const background = read('entrypoints/background.ts');
+    const content = read('entrypoints/apply.content.ts');
     const handoff = background.indexOf("if (kind === 'auth/handoff-complete' && response?.ok) {");
     expect(handoff).toBeGreaterThan(0);
     expect(background.slice(handoff, handoff + 400)).toContain('broadcastSessionChanged();');
-    const logout = background.indexOf('authClient.logout().then(');
-    expect(logout).toBeGreaterThan(0);
-    expect(background.slice(logout, logout + 200)).toContain('broadcastSessionChanged();');
-    expect(background).toContain('const broadcastSessionChanged = (): void => broadcastToTabs(DOCK_SESSION_CHANGED);');
+    const broadcast = section(background, 'const broadcastSessionChanged = (): void => {', 'browser.runtime.onMessageExternal.addListener(');
+    expect(broadcast).toContain('broadcastToTabs(DOCK_SESSION_CHANGED);');
+    expect(broadcast).toContain('browser.runtime.sendMessage(DOCK_SESSION_CHANGED)');
     expect(background).toContain('void browser.tabs.sendMessage(tab.id, message).catch(() => {});');
+    const auth = read('lib/authClient.ts');
+    const invalidation = section(auth, 'function notifySessionInvalidated(): void {', 'async function clearSession():');
+    expect(invalidation).toContain('vaultEpoch += 1;');
+    expect(invalidation).toContain('deps.onSessionInvalidated?.();');
+    const logout = auth.slice(auth.indexOf('async logout(expectedContext)'));
+    expect(logout.indexOf('notifySessionInvalidated();')).toBeGreaterThan(0);
+    expect(logout.indexOf('notifySessionInvalidated();')).toBeLessThan(logout.indexOf('withSessionTransition(async () => {'));
+    const authWiring = section(background, 'const authClient = createAuthClient({', '// 浮层「诊断」');
+    expect(authWiring).toContain('onSessionInvalidated: () => {');
+    expect(authWiring).toContain('vaultAuthInvalidated();');
+    expect(background).toContain('vaultAuthInvalidated = vaultLifecycle.onAuthInvalidated;');
+    expect(background).toContain('broadcastInvalidated: broadcastSessionChanged,');
+    const lifecycle = read('lib/accountVaultLifecycle.ts');
+    const retired = lifecycle.slice(lifecycle.indexOf('onAuthInvalidated: (): void => {'));
+    expect(retired.indexOf('deps.invalidateOperations();')).toBeGreaterThan(0);
+    expect(retired.indexOf('deps.invalidateOperations();')).toBeLessThan(retired.indexOf('deps.broadcastInvalidated();'));
     const listener = content.indexOf('if (!isDockSessionChanged(raw) || sender.id !== browser.runtime.id || sender.tab) return;');
     expect(listener).toBeGreaterThan(0);
-    expect(content.slice(listener, listener + 240)).toContain('hello();');
+    const contentInvalidation = section(content, 'if (!isDockSessionChanged(raw) || sender.id !== browser.runtime.id || sender.tab) return;', '// 资料或代填授权在插件里');
+    for (const retire of ['gestureRunSerial += 1;', 'gestureStop?.abort();', 'wizardAdvance.disarm();', 'submitter.disarm();', 'forgetUser();', 'dockHandle?.dismiss();']) {
+      expect(contentInvalidation.indexOf(retire), retire).toBeGreaterThan(0);
+      expect(contentInvalidation.indexOf(retire), retire).toBeLessThan(contentInvalidation.indexOf('void hello();'));
+    }
+    const forget = section(content, 'const forgetUser = (): void => {', 'const afterSessionChange = (): void => {');
+    for (const clear of ['helloGeneration += 1;', 'profileWarm = null;', 'resumeWarm = null;', 'accountNow = null;', 'dockHandle?.forgetUser();']) expect(forget).toContain(clear);
+    // Dismiss is synchronous and ends the gesture-only drivers inside showFace;
+    // importing those drivers into the outer listener would break Assistant isolation.
+    const dismissed = section(content, 'onDismissed: () => {', '...(account === null ? {} :');
+    for (const stop of ['fillToReviewNow?.end();', 'account?.dispose();', 'codePage?.dispose();']) expect(dismissed).toContain(stop);
+    expect(contentInvalidation).not.toContain('fillToReviewNow');
   });
 });
 

@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +11,7 @@ import { buildApp } from '../src/app.ts';
 import { readConfig } from '../src/config.ts';
 import { Database } from '../src/database.ts';
 
-const prefix='/api/platform',origin='http://localhost:4321',base=readConfig();
+const prefix='/api/platform',origin='http://localhost:4321',base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'voice-fixture', PLATFORM_AGENT_PROVIDER: 'voice-fixture', PLATFORM_REALTIME_PROVIDER: 'voice-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'voice-fixture', PLATFORM_SPEECH_PROVIDER: 'voice-fixture' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema=`voice_cancel_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);
 url.searchParams.set('options',`-c search_path=${schema}`);
 function deferred<T>() { let resolve!:(value:T)=>void;const promise=new Promise<T>(yes=>{resolve=yes;});return {promise,resolve}; }
@@ -29,7 +30,7 @@ let issuedSignal:AbortSignal|undefined;
 const sessionResult:VoiceSessionResult={clientSecret:'fictional-ephemeral-credential',model:'synthetic-voice-model',endpoint:'https://synthetic-voice.invalid/calls'};
 const forbidden=async():Promise<never>=>{throw new Error('This fixture only exercises voice-session transport.');};
 const runtime:PlatformProviderRuntime={
-  capabilities:()=>[{id:'voice-fixture',name:'Synthetic cancellable voice',enabled:true,keyConfigured:true,capabilities:['realtime'],models:['synthetic-voice-model'],envVariables:[]}],
+  capabilities:()=>[{id:'voice-fixture',name:'Synthetic cancellable voice',enabled:true,keyConfigured:true,capabilities:['realtime'],models: ['synthetic-voice-model'], voiceOptions: { speech: { voices: ['synthetic-voice'], defaultVoice: 'synthetic-voice' }, realtime: { voices: ['synthetic-voice'], defaultVoice: 'synthetic-voice', turnTaking: true } }, envVariables: []}],
   async *streamChat(){throw new Error('No chat model is used.');},executeJob:forbidden,transcribe:forbidden,speech:forbidden,
   async createVoiceSession(_input,context){
     assert(context?.signal,'The issuer receives the actual HTTP cancellation signal.');
@@ -48,8 +49,8 @@ const runtime:PlatformProviderRuntime={
 let system:Awaited<ReturnType<typeof buildApp>>,directory:string,httpOrigin:string,registrations=0;
 before(async()=>{
   assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only the local test database is allowed.');
-  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-voice-cancel-'));
-  system=await buildApp({db,runtime,enableQueue:false,config:{...base,databaseUrl:url.toString(),storageDir:directory,s3:undefined}});
+  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-voice-cancel-'));
+  system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,runtime,enableQueue:false,config:{...base,databaseUrl:url.toString(),storageDir:directory,s3:undefined}});
   httpOrigin=await system.app.listen({host:'127.0.0.1',port:0});
 });
 after(async()=>{
@@ -58,7 +59,7 @@ after(async()=>{
   if(directory)await fs.rm(directory,{recursive:true,force:true});
 });
 async function register(){
-  const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:`127.9.0.${++registrations}`,headers:{origin},payload:{name:'Synthetic cancellation tester',email:`${randomUUID()}@example.invalid`,password:'Fictional-voice-test-2026'}});
+  const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:`127.9.0.${++registrations}`,headers:{origin},payload:await fictionalRegistration(db,{name:'Synthetic cancellation tester',email:`${randomUUID()}@example.invalid`,password:'Fictional-voice-test-2026'})});
   assert.equal(response.statusCode,201,response.body);
   return {id:response.json().user.id as string,cookie:String(response.headers['set-cookie']).split(';')[0]};
 }
@@ -74,7 +75,7 @@ async function until(check:()=>Promise<boolean>){
   while(!await check()){if(Date.now()>deadline)throw new Error('Timed out waiting for actual voice cancellation cleanup.');await new Promise(resolve=>setTimeout(resolve,10));}
 }
 function begin(actor:Actor,controller:AbortController){
-  return fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id,'content-type':'application/json'},body:JSON.stringify({provider:'voice-fixture',voice:'synthetic-voice',turnTaking:'patient'}),signal:controller.signal})
+  return fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id,'content-type':'application/json'},body:JSON.stringify({}),signal:controller.signal})
     .then(response=>({status:response.status,aborted:false}),()=>({status:0,aborted:true}));
 }
 
@@ -113,7 +114,7 @@ test('disconnect after a real session insert releases both its persisted state a
 
 test('normal HTTP delivery retains its lease until the owner releases it, with idempotence and account isolation',async()=>{
   const owner=await register(),other=await register();
-  const response=await fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:owner.cookie, [PLATFORM_ACCOUNT_HEADER]: owner.id,'content-type':'application/json'},body:JSON.stringify({provider:'voice-fixture'})});
+  const response=await fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:owner.cookie, [PLATFORM_ACCOUNT_HEADER]: owner.id,'content-type':'application/json'},body:JSON.stringify({})});
   assert.equal(response.status,200);const {sessionId}=await response.json() as {sessionId:string};
   assert.deepEqual(await state(owner),{leases:1,sessions:[{released:false}],attempts:1});
   for(const actor of [other,owner,owner]){

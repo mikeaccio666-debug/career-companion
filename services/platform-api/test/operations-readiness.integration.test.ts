@@ -1,3 +1,5 @@
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +12,7 @@ import type { TaskQueue } from '../src/jobs.ts';
 import { OperationsReadiness, probeRedisReadOnly } from '../src/operations-readiness.ts';
 import { connectionFromUrl } from '../src/queue-connection.ts';
 
-const config = readConfig(), schema = `ops_ready_${randomUUID().replaceAll('-', '')}`, admin = new Database(config.databaseUrl);
+const config = readConfig({...process.env,PLATFORM_REQUIRE_INVITE:'1'}), schema = `ops_ready_${randomUUID().replaceAll('-', '')}`, admin = new Database(config.databaseUrl);
 const url = new URL(config.databaseUrl); url.searchParams.set('options', `-c search_path=${schema}`); url.searchParams.set('application_name', schema);
 const db = new Database(url.toString(), {max: 2, connectionTimeoutMillis: 100});
 const queueName = `ops-${randomUUID()}`, build = `build-${randomUUID()}`, instance = randomUUID();
@@ -24,7 +26,7 @@ before(async () => {
   await admin.query(`CREATE SCHEMA ${schema}`);
 });
 after(async () => { await db.close(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.close(); });
-async function fixtureApp(queueEnabled = false) { return buildApp({db, config: probeConfig, runtime, enableQueue: false, ...(queueEnabled ? {queue: fakeQueue} : {})}); }
+async function fixtureApp(queueEnabled = false) { return buildApp({legalBundle:FICTIONAL_LEGAL,db, config: probeConfig, runtime, enableQueue: false, ...(queueEnabled ? {queue: fakeQueue} : {})}); }
 async function heartbeat(patch: {queue?: string; code?: string; age?: string; state?: string; redis?: boolean; running?: boolean; paused?: boolean} = {}) {
   await db.query(`INSERT INTO platform_worker_heartbeats(instance_id,queue_name,code_version,started_at,reported_at,process_state,redis_ready,worker_running,worker_paused,pool_total,pool_idle,pool_waiting,pool_max)
     VALUES($1,$2,$3,clock_timestamp(),clock_timestamp()+$4::interval,$5,$6,$7,$8,1,0,0,2)
@@ -57,7 +59,7 @@ test('public process liveness survives empty or migration-incomplete data; probe
     assert.equal((await system.app.inject('/api/platform/health')).statusCode, 503);
     assert.equal((await db.query('SELECT count(*)::int AS count FROM pg_tables WHERE schemaname=$1', [schema])).rows[0].count, 0);
   } finally { await system.app.close(); }
-  await db.migrate();
+  await db.migrate(); await seedFictionalActiveLegal(db);
   system = await fixtureApp(); try {
     const ready = await system.app.inject('/api/platform/ready'); assert.equal(ready.statusCode, 200, ready.body); assert.equal(ready.json().execution, 'disabled');
     assert.equal((await system.app.inject('/api/platform/execution-ready')).statusCode, 503);
@@ -125,7 +127,7 @@ test('query/lock deadlines free the actual owned backend and no late callback ca
 });
 test('operator counts include only queued current-generation outbox rows and never dispatch or alter execution state', async () => {
   const owner = randomUUID(), ids = [randomUUID(), randomUUID(), randomUUID()];
-  await db.query("INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,'Fictional operations fixture','not-a-login-hash')", [owner, `${owner}@example.invalid`]);
+  await db.query("INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,'Fictional operations fixture','not-a-login-hash')", [owner, `${owner}@example.invalid`]); await seedFictionalConsent(db,owner);
   for (let index = 0; index < ids.length; ++index) {
     await db.query("INSERT INTO platform_jobs(id,user_id,kind,provider,prompt,status,generation) VALUES($1,$2,'image','fictional','Never executed',$3,$4)", [ids[index], owner, index === 2 ? 'cancelled' : 'queued', index === 0 ? 2 : 1]);
     await db.query("INSERT INTO platform_job_outbox(job_id,generation,created_at,dispatched_at) VALUES($1,$2,clock_timestamp()-interval '5 seconds',$3)", [ids[index], index === 0 ? 2 : 1, index === 1 ? new Date() : null]);

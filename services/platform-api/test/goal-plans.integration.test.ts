@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
@@ -18,7 +19,7 @@ import { recoverStaleStreams } from '../src/runtime-leases.ts';
 import { parseGoalPlanInput } from '../src/goal-plans.ts';
 import type { PoolClient } from 'pg';
 
-const base=readConfig(),prefix='/api/platform',origin='http://localhost:4321';
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'}),prefix='/api/platform',origin='http://localhost:4321';
 const schema=`goal_plans_test_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl),databaseUrl=new URL(base.databaseUrl);
 databaseUrl.searchParams.set('options',`-c search_path=${schema}`);const db=new Database(databaseUrl.toString());
 const inputSchema={type:'object',properties:{query:{type:'string'}},required:['query'],additionalProperties:false};
@@ -84,7 +85,7 @@ const transport:McpTransport={
   async call(_entry,input,context){await context.beforeCall();++mcpCalls;return {content:[{type:'text',text:`Fictional MCP evidence for ${input.arguments.query}`} ]};},
 };
 async function start(){
-  system=await buildApp({db,runtime,mcp:transport,enableQueue:false,
+  system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,runtime,mcp:transport,enableQueue:false,
     config:{...base,databaseUrl:databaseUrl.toString(),storageDir:directory,requireVerifiedEmail:false,accountEmail:undefined,maxActiveJobs:100,
       mcp:{entries:[{id:'fictional-plan-catalog',name:'Fictional plan evidence',url:'https://fictional-mcp.example.invalid/mcp',tools:[{name:'fictional_lookup',schemaHash}]}],fixtureOrigins:[]}},
     requestLimits:{policies:{api:{max:2000,windowSeconds:60},chat:{max:2000,windowSeconds:60},control:{max:2000,windowSeconds:60},'auth-register':{max:1000,windowSeconds:60}}},
@@ -92,7 +93,7 @@ async function start(){
 }
 before(async()=>{
   assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only an explicitly provided loopback QA database is allowed.');
-  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-goal-plans-'));await start();
+  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-goal-plans-'));await start();
 });
 after(async()=>{await system?.app.close();await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 interface Actor{id:string;cookie:string;conversationId:string}
@@ -102,7 +103,7 @@ async function request(actor:Actor|undefined,method:'GET'|'POST'|'PUT'|'DELETE',
   return system.app.inject({method,url:prefix+route,headers:h,payload});
 }
 async function actor():Promise<Actor>{
-  const response=await request(undefined,'POST','/auth/register',{email:`${randomUUID()}@example.invalid`,name:'Fictional goal-plan actor',password:'Fictional-password-123'});assert.equal(response.statusCode,201,response.body);
+  const response=await request(undefined,'POST','/auth/register',await fictionalRegistration(db,{email:`${randomUUID()}@example.invalid`,name:'Fictional goal-plan actor',password:'Fictional-password-123'}));assert.equal(response.statusCode,201,response.body);
   const user={id:response.json().user.id,cookie:(response.headers['set-cookie'] as string).split(';')[0],conversationId:''};
   const conv=await request(user,'POST','/conversations',{title:'Fictional persistent goal',mode:'chat'});assert.equal(conv.statusCode,201);user.conversationId=conv.json().conversation.id;return user;
 }

@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import { acquireRuntimeLease, recoverStaleStreams, withVoiceLease } from '../src
 
 const origin='http://localhost:4321',prefix='/api/platform';
 const schema=`platform_test_${randomUUID().replaceAll('-','')}`;
-const base=readConfig(),admin=new Database(base.databaseUrl);
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'local-test', PLATFORM_AGENT_PROVIDER: 'local-test' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl);
 const testUrl=new URL(base.databaseUrl);testUrl.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(testUrl.toString());
 let directory:string,system:Awaited<ReturnType<typeof buildApp>>;
@@ -45,13 +46,13 @@ const fake:PlatformProviderRuntime={
   speech:async()=>({name:'synthetic.wav',mime:'audio/wav',bytes:new Uint8Array([1,2,3])}),
 };
 before(async()=>{
-  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);
   directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-platform-test-'));
-  system=await buildApp({db,config:{...base,databaseUrl:testUrl.toString(),storageDir:directory,queueName:`companion-test-${randomUUID()}`},runtime:fake,enableQueue:false});
+  system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,config:{...base,databaseUrl:testUrl.toString(),storageDir:directory,queueName:`companion-test-${randomUUID()}`},runtime:fake,enableQueue:false});
 });
 after(async()=>{await system?.app.close();await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 async function register(name:string){
-  const response=await system.app.inject({method:'POST',url:`${prefix}/auth/register`,remoteAddress:`127.0.0.${++registrationCount}`,headers:{origin},payload:{name,email:`${name.toLowerCase()}-${randomUUID()}@example.invalid`,password:'Synthetic-password-123'}});
+  const response=await system.app.inject({method:'POST',url:`${prefix}/auth/register`,remoteAddress:`127.0.0.${++registrationCount}`,headers:{origin},payload:await fictionalRegistration(db,{name,email:`${name.toLowerCase()}-${randomUUID()}@example.invalid`,password:'Synthetic-password-123'})});
   assert.equal(response.statusCode,201,response.body);
   const cookie=response.headers['set-cookie'];assert.equal(typeof cookie,'string');
   assert.match(cookie as string,/HttpOnly/);assert.match(cookie as string,/SameSite=Lax/);
@@ -83,14 +84,14 @@ test('ownership applies to conversations, memories, uploads and message creation
   const upload=await system.app.inject({method:'POST',url:prefix+'/uploads',headers:{origin,cookie:alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.user.id,'content-type':`multipart/form-data; boundary=${boundary}`},payload});assert.equal(upload.statusCode,201,upload.body);
   const attachment=upload.json().attachment;
   assert.equal((await request(bob,'GET',`/uploads/${attachment.id}`)).statusCode,404);
-  const forbidden=await request(bob,'POST',`/conversations/${conversation.id}/messages`,{content:'test',provider:'local-test',mode:'chat'});assert.equal(forbidden.statusCode,404);
+  const forbidden=await request(bob,'POST',`/conversations/${conversation.id}/messages`,{content:'test',mode:'chat'});assert.equal(forbidden.statusCode,404);
   const ownConversation=(await request(bob,'POST','/conversations',{})).json().conversation;
-  const steal=await request(bob,'POST',`/conversations/${ownConversation.id}/messages`,{content:'test',provider:'local-test',mode:'chat',attachmentIds:[attachment.id]});assert.equal(steal.statusCode,404);
-  const chat=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'Synthetic question',provider:'local-test',mode:'companion',attachmentIds:[attachment.id]});assert.equal(chat.statusCode,200);assert.match(chat.body,/event: delta/);assert.match(chat.body,/event: done/);
+  const steal=await request(bob,'POST',`/conversations/${ownConversation.id}/messages`,{content:'test',mode:'chat',attachmentIds:[attachment.id]});assert.equal(steal.statusCode,404);
+  const chat=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'Synthetic question',mode:'companion',attachmentIds:[attachment.id]});assert.equal(chat.statusCode,200);assert.match(chat.body,/event: delta/);assert.match(chat.body,/event: done/);
   const saved=(await request(alice,'GET',`/conversations/${conversation.id}`)).json().messages;assert.equal(saved.length,2);assert.equal(saved[0].role,'user');assert.equal(saved[1].content,'Synthetic response');assert.equal(saved[1].status,'complete');
   assert.equal(saved[0].attachments[0].id,attachment.id);assert.equal(saved[0].attachments[0].name,'synthetic.txt');
   const usage=await db.query('SELECT * FROM platform_usage WHERE user_id=$1',[alice.user.id]);assert.equal(usage.rows[0].input_tokens,12);assert.equal(usage.rows[0].output_tokens,3);assert(!('prompt' in usage.rows[0]));
-  const followup=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'Ask about the attached document again',provider:'local-test',mode:'companion'});assert.match(followup.body,/event: done/);
+  const followup=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'Ask about the attached document again',mode:'companion'});assert.match(followup.body,/event: done/);
   assert.equal(lastChatInput?.messages[0].attachments?.[0].name,'synthetic.txt');assert.equal(new TextDecoder().decode(lastChatInput?.messages[0].attachments?.[0].bytes),'Synthetic document');assert.equal(lastChatInput?.messages.at(-1)?.attachments?.length,0);
 });
 
@@ -182,7 +183,7 @@ test('unconfigured providers fail before acceptance and active task limit is ato
 
 test('agent tools create approval-gated tasks owned by the current user',async()=>{
   const alice=await register('AgentAlice'),conversation=(await request(alice,'POST','/conversations',{mode:'agent'})).json().conversation;
-  const response=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'create synthetic browser task',provider:'local-test',mode:'agent'});assert.match(response.body,/event: approval/);assert.match(response.body,/event: tool/);
+  const response=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'create synthetic browser task',mode:'agent'});assert.match(response.body,/event: approval/);assert.match(response.body,/event: tool/);
   const jobs=await system.jobs.list(alice.user.id);assert.equal(jobs.length,1);assert.equal(jobs[0].status,'needs_approval');
 });
 
@@ -191,10 +192,10 @@ test('runtime leases enforce per-user concurrency and expire safely',async()=>{
   const first=await db.transaction(client=>acquireRuntimeLease(client,alice.user.id,'chat'));
   const second=await db.transaction(client=>acquireRuntimeLease(client,alice.user.id,'chat'));
   const conversation=(await request(alice,'POST','/conversations',{})).json().conversation;
-  const blocked=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'Synthetic',mode:'chat',provider:'local-test'});assert.equal(blocked.statusCode,429);
+  const blocked=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'Synthetic',mode:'chat'});assert.equal(blocked.statusCode,429);
   const bobsLease=await db.transaction(client=>acquireRuntimeLease(client,bob.user.id,'chat'));assert(bobsLease);
   await db.query("UPDATE platform_runtime_leases SET expires_at=now()-interval '1 second' WHERE id=ANY($1::uuid[])",[[first,second]]);
-  const accepted=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'Synthetic',mode:'chat',provider:'local-test'});assert.equal(accepted.statusCode,200);
+  const accepted=await request(alice,'POST',`/conversations/${conversation.id}/messages`,{content:'Synthetic',mode:'chat'});assert.equal(accepted.statusCode,200);
   let release:()=>void=()=>{};const gate=new Promise<void>(resolve=>{release=resolve;});
   let entered:()=>void=()=>{};const begun=new Promise<void>(resolve=>{entered=resolve;});
   const voice=withVoiceLease(db,alice.user.id,async()=>{entered();await gate;return 'done';});await begun;

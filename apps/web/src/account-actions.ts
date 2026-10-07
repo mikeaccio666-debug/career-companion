@@ -1,4 +1,6 @@
-export interface AuthOptions { emailActionsEnabled: boolean; requireVerifiedEmail: boolean }
+import type { StudentAuthOptions, StudentConsentStatus } from '@companion/platform-contracts';
+import { isCurrentStudentConsent, parseLegalAvailability } from './student-entry-state.ts';
+export type AuthOptions = StudentAuthOptions;
 export type AccountActionPurpose = 'password-reset' | 'verify-email';
 export type AccountActionLink = { kind: AccountActionPurpose; token: string } | { kind: 'invalid'; purpose?: AccountActionPurpose };
 
@@ -23,11 +25,22 @@ export class AccountActionInbox {
 
 export function parseAuthOptions(value: unknown): AuthOptions {
   if (!value || typeof value !== 'object' || typeof (value as AuthOptions).emailActionsEnabled !== 'boolean' || typeof (value as AuthOptions).requireVerifiedEmail !== 'boolean') throw new Error('服务没有返回有效的账号配置，请重试。');
-  return { emailActionsEnabled: (value as AuthOptions).emailActionsEnabled, requireVerifiedEmail: (value as AuthOptions).requireVerifiedEmail };
+  const data = value as AuthOptions;
+  if (data.requireInvite !== undefined && typeof data.requireInvite !== 'boolean') throw new Error('服务没有返回有效的邀请配置，请重试。');
+  return { emailActionsEnabled: data.emailActionsEnabled, requireVerifiedEmail: data.requireVerifiedEmail, requireInvite: data.requireInvite ?? true, legal: parseLegalAvailability(data.legal) };
 }
 
-export function canOpenPrivateWorkspace(options: AuthOptions | null, user: { emailVerified?: boolean } | null, action: AccountActionLink | null): boolean {
+export function canOpenAuthenticatedAccount(options: AuthOptions | null, user: { emailVerified?: boolean } | null, action: AccountActionLink | null): boolean {
   return !!options && !!user && !action && (!options.requireVerifiedEmail || user.emailVerified === true);
+}
+export function canOpenPrivateWorkspace(options: AuthOptions | null, user: { id?: string; emailVerified?: boolean } | null, action: AccountActionLink | null, consent: StudentConsentStatus | null = null): boolean {
+  return canOpenAuthenticatedAccount(options, user, action) && isCurrentStudentConsent(options, user?.id, consent);
+}
+export function studentAccountEntryStep(options: AuthOptions | null, user: { id?: string; emailVerified?: boolean } | null, action: AccountActionLink | null, consent: StudentConsentStatus | null): 'account-action' | 'auth' | 'email-verification' | 'consent' | 'welcome' {
+  if (action && (action.kind !== 'verify-email' || user)) return 'account-action';
+  if (!user) return 'auth';
+  if (!canOpenAuthenticatedAccount(options, user, action)) return 'email-verification';
+  return canOpenPrivateWorkspace(options, user, action, consent) ? 'welcome' : 'consent';
 }
 
 export function passwordResetValidation(password: string, confirmation: string): string | null {

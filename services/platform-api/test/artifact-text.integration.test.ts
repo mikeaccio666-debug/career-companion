@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +18,7 @@ import { ApiError } from '../src/errors.ts';
 import { ARTIFACT_TEXT_SOURCE_BYTES, parseArtifactTextInput } from '../src/artifact-text.ts';
 import { LocalBlobStorage, type BlobReadOptions, type BlobReadResult } from '../src/storage.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig(), schema = `artifact_text_${randomUUID().replaceAll('-', '')}`;
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `artifact_text_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl); url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
 type Actor = { id: string; cookie: string };
@@ -66,7 +67,7 @@ function exchange(route: string, actor?: Actor, options: { method?: string; body
   });
 }
 async function register(): Promise<Actor> {
-  const result = await exchange('/auth/register', undefined, { method: 'POST', body: { name: 'Fictional text reader', email: `${randomUUID()}@example.invalid`, password: 'Fictional-password-123' } });
+  const result = await exchange('/auth/register', undefined, { method: 'POST', body: await fictionalRegistration(db,{ name: 'Fictional text reader', email: `${randomUUID()}@example.invalid`, password: 'Fictional-password-123' }) });
   assert.equal(result.status, 201, result.body); return { id: JSON.parse(result.body).user.id, cookie: result.headers['set-cookie']![0]!.split(';')[0]! };
 }
 async function saved(user: Actor, content: string | Buffer = expectedCode, mime = 'text/plain', kind = 'cli', metadata = {}): Promise<Saved> {
@@ -80,8 +81,8 @@ async function saved(user: Actor, content: string | Buffer = expectedCode, mime 
 async function read(source: Saved, query = '', user = alice) { return exchange(`/artifacts/${source.artifactId}/text${query}`, user); }
 async function until(condition: () => boolean) { const end = Date.now() + 3000; while (!condition()) { if (Date.now() > end) assert.fail('Expected artifact read cleanup did not settle.'); await new Promise(resolve => setTimeout(resolve, 5)); } }
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'artifact-text-fixture-')); storage = new Storage(directory);
-  system = await buildApp({ db, storage, config: { ...base, databaseUrl: url.toString(), storageDir: directory }, runtime, enableQueue: false });
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'artifact-text-fixture-')); storage = new Storage(directory);
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage, config: { ...base, databaseUrl: url.toString(), storageDir: directory }, runtime, enableQueue: false });
   await system.app.listen({ host: '127.0.0.1', port: 0 }); port = (system.app.server.address() as import('node:net').AddressInfo).port;
   alice = await register(); bob = await register();
 });
@@ -169,14 +170,14 @@ test('actual Responses adapter lists a private CLI result and receives its saved
   agentSource = await saved(alice); agentMode = 'chain'; agentTurn = 0;
   const count = (await db.query('SELECT count(*) AS count FROM platform_jobs')).rows[0].count;
   const conv = await exchange('/conversations', alice, { method: 'POST', body: { mode: 'agent' } }); const conversationId = JSON.parse(conv.body).conversation.id;
-  const result = await exchange(`/conversations/${conversationId}/messages`, alice, { method: 'POST', body: { mode: 'agent', provider: 'openai', content: 'Read the fictional code I saved and discuss it; do not execute anything.' } });
+  const result = await exchange(`/conversations/${conversationId}/messages`, alice, { method: 'POST', body: { mode: 'agent', content: 'Read the fictional code I saved and discuss it; do not execute anything.' } });
   assert.equal(result.status, 200, result.body); assert.match(result.body, /event: done/); assert.match(result.body, /actual saved text/); assert.equal(agentTurn, 3); assert.equal(storage.getCalls, 0); assert.equal((await db.query('SELECT count(*) AS count FROM platform_jobs')).rows[0].count, count);
 });
 
 test('actual Agent tool returns safe owner errors as data so it can make a subsequent tool call', async () => {
   agentSource = await saved(bob); recoveredSource = await saved(alice); agentMode = 'recover'; agentTurn = 0;
   const conv = await exchange('/conversations', alice, { method: 'POST', body: { mode: 'agent' } }); const conversationId = JSON.parse(conv.body).conversation.id;
-  const result = await exchange(`/conversations/${conversationId}/messages`, alice, { method: 'POST', body: { mode: 'agent', provider: 'openai', content: 'Fictional invalid private-artifact lookup, no permission to execute.' } });
+  const result = await exchange(`/conversations/${conversationId}/messages`, alice, { method: 'POST', body: { mode: 'agent', content: 'Fictional invalid private-artifact lookup, no permission to execute.' } });
   assert.equal(result.status, 200); assert.equal(agentTurn, 4); assert.match(result.body, /NOT_FOUND/); assert.match(result.body, /INVALID_INPUT/); assert.match(result.body, /event: done/); assert.equal(result.body.includes(directory), false);
 });
 

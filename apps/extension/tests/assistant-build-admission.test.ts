@@ -48,7 +48,7 @@ describe('assistant profile editing build admission', () => {
     const config = (await import('../wxt.config')).default;
     expect(config.outDir).toBe('.output-assistant');
     expect((config.vite as any)({command:'build'}).define).toMatchObject({__VIBE_EXECUTION_RUNTIME_BUNDLE_ENABLED__:'false',__VIBE_LIVE_HOST_WRITES__:'false'});
-    expect(config.manifest).toMatchObject({ name: 'ArgoLand.AI Staging Preview', version: '0.0.5' });
+    expect(config.manifest).toMatchObject({ name: 'Career Companion Staging Preview', version: '0.0.5' });
     environment({ VIBE_ASSISTANT_PROFILE_EDIT_ENABLED: '1', VIBE_DIST: 'store' });
     await expect(import('../wxt.config')).rejects.toThrow('NEW_PRODUCT_STORE_RELEASE_UNCONFIGURED');
   });

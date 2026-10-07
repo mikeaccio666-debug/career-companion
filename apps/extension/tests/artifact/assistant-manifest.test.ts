@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEVELOPMENT_EXTENSION_ID, DEVELOPMENT_EXTENSION_PUBLIC_KEY } from '../../lib/developmentIdentity';
+import { ACCOUNT_ACCESS_INTENT_KIND, ACCOUNT_VAULT_MANAGEMENT_KIND } from '../../lib/accountAccessIntent';
 const root = resolve(__dirname, '../../.output-assistant/chrome-mv3');
 const runtimeEnabled = process.env.VIBE_EXECUTION_RUNTIME_BUNDLE_ENABLED === '1';
 const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
@@ -258,7 +259,7 @@ describe('complete assistant staging artifact', () => {
   });
   it('uses the Portal-configured development identity and limits credentials to staging', () => {
     const id = createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest('hex').slice(0, 32).replace(/[0-9a-f]/g, n => String.fromCharCode(97 + parseInt(n, 16)));
-    expect(manifest.name).toBe('ArgoLand.AI Staging Preview');
+    expect(manifest.name).toBe('Career Companion Staging Preview');
     expect(manifest.version).toBe('0.0.5');
     expect(manifest.minimum_chrome_version).toBe('130');
     expect(id).toBe(DEVELOPMENT_EXTENSION_ID);
@@ -271,6 +272,7 @@ describe('complete assistant staging artifact', () => {
   });
   it('ships a runtime-injected host and inert executor and a UI with no fixture or credential client', () => {
     const names = files(root).map(p => p.slice(root.length + 1));
+    expect(names.filter(name => /(?:alice|charlie|darren|xena).*\.webp$/iu.test(name))).toEqual([]);
     expect(names).toContain('assistant.html'); expect(names).toContain('intake-recorder.html'); expect(names.some(n => /pcm-worklet.*\.js$/.test(n))).toBe(true); expect(names.filter(n => n.startsWith('content-scripts/'))).toEqual(['content-scripts/apply.js', 'content-scripts/assistant-host.js']);
     const renderer = names.filter(n => (n.startsWith('chunks/') || n.startsWith('content-scripts/')) && n.endsWith('.js')).map(n => readFileSync(join(root, n), 'utf8')).join('\n');
     for (const marker of ['fictional.pdf', '测试用户 A', 'Mia Chen', 'refreshToken', 'Bearer ', '/auth/refresh', 'getAccessToken', 'createPreviewPorts']) expect(renderer).not.toContain(marker);
@@ -283,6 +285,55 @@ describe('complete assistant staging artifact', () => {
     expect(worker).toContain('SAVE_UNCERTAIN');
     expect(worker).toContain('/profile-intake/');
     expect(renderer).toContain('assistant/voice-control-v1');
+  });
+  it('omits legacy account RPCs while wiring the compiled auth replacement to the retained vault fence', () => {
+    const worker = readFileSync(join(root, 'background.js'), 'utf8');
+    const ast = ts.createSourceFile('background.js', worker, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const properties = (node: ts.ObjectLiteralExpression) => node.properties.filter(ts.isPropertyAssignment);
+    const authOptions: ts.ObjectLiteralExpression[] = [];
+    const assignments: ts.BinaryExpression[] = [];
+    const declarations: ts.VariableDeclaration[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isObjectLiteralExpression(node) && ['beforeReplaceSession', 'onSessionInvalidated']
+        .every(name => properties(node).some(property => property.name.getText(ast) === name))) authOptions.push(node);
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isPropertyAccessExpression(node.right) && node.right.name.text === 'beforeReplaceSession') assignments.push(node);
+      if (ts.isVariableDeclaration(node)) declarations.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+    expect(authOptions).toHaveLength(1);
+    const hook = properties(authOptions[0]).find(property => property.name.getText(ast) === 'beforeReplaceSession')!.initializer;
+    expect(ts.isArrowFunction(hook)).toBe(true);
+    const call = ts.isArrowFunction(hook) && ts.isCallExpression(hook.body) ? hook.body : undefined;
+    expect(call && ts.isIdentifier(call.expression)).toBe(true);
+    // Bind the emitted callback to an actual lifecycle instance, rather than a
+    // constant allow/deny callback that would hide foreign ciphertext or block first login.
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0].left.getText(ast)).toBe(call!.expression.getText(ast));
+    const lifecycleName = (assignments[0].right as ts.PropertyAccessExpression).expression.getText(ast);
+    // Minification can reuse a binding name in unrelated functions. Resolve
+    // this reference through its enclosing scopes instead of the first match
+    // anywhere in the worker (runtime-on also contains an unrelated constant).
+    let lifecycle: ts.Expression | undefined;
+    for (let scope: ts.Node | undefined = assignments[0].parent; scope; scope = scope.parent) {
+      if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) continue;
+      const matches = declarations.filter(declaration => declaration.name.getText(ast) === lifecycleName &&
+        declaration.parent.parent.parent === scope);
+      if (matches.length === 0) continue;
+      expect(matches).toHaveLength(1);
+      lifecycle = matches[0].initializer;
+      break;
+    }
+    expect(lifecycle && ts.isCallExpression(lifecycle)).toBe(true);
+    const options = lifecycle && ts.isCallExpression(lifecycle) ? lifecycle.arguments[0] : undefined;
+    expect(options && ts.isObjectLiteralExpression(options)).toBe(true);
+    if (!options || !ts.isObjectLiteralExpression(options)) throw new Error('Missing compiled vault lifecycle.');
+    for (const name of ['auth', 'vault', 'area', 'invalidateOperations', 'broadcastInvalidated', 'showSwitch']) {
+      expect(properties(options).some(property => property.name.getText(ast) === name)).toBe(true);
+    }
+    for (const marker of [ACCOUNT_ACCESS_INTENT_KIND, ACCOUNT_VAULT_MANAGEMENT_KIND,
+      'account-vault/transition', 'dock/vault-transition', 'dock/open-vault']) expect(worker.includes(marker), marker).toBe(false);
   });
 });
 

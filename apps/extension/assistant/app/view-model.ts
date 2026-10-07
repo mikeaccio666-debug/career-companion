@@ -20,11 +20,12 @@ export function createAssistantView(ctx: ViewContext) {
       : { title: ctx.t("每一个新的开始，\n都有 ArgoLand.AI 陪你。"), sub: ctx.t("连接你的 ArgoLand 账号，\n让求职从这一刻变得轻一点。"), primaryAct: 'login', primaryLabel: S.session === 'expired' ? ctx.t("重新连接 ArgoLand") : ctx.t("登录 ArgoLand"), secondaryAct: 'signup', secondaryLabel: ctx.t("还没有账号？从这里开始"), foot: S.session === 'expired' ? ctx.t("连接已过期 · 重新登录后继续") : ctx.t("登录将前往 ArgoLand Portal"), footDot: S.session === 'expired' ? C.coral : '#C9D2DF', connecting, notConnecting: !connecting };
     const hh = ui.heroH, w = d.w;
     const k = Math.min(1, hh / 320); const compactHero = hh < 230;
-    const mentors = [
-      { src: F.mentors[0].src, left: 26, top: hh - Math.round(108 * k), size: Math.round(68 * (0.8 + 0.2 * k)), z: 12, rot: -6, opacity: 1, blur: 0, radius: 20, innerRadius: 16, shadowY: 20, shadowBlur: 30 },
-      { src: F.mentors[1].src, left: w - 96, top: hh - Math.round(98 * k), size: Math.round(60 * (0.8 + 0.2 * k)), z: 12, rot: 5, opacity: 1, blur: 0, radius: 18, innerRadius: 14, shadowY: 18, shadowBlur: 28 },
-      { src: F.mentors[2].src, left: 58, top: Math.round(22 * k), size: 44, z: 5, rot: 4, opacity: compactHero ? 0 : .78, blur: .6, radius: 14, innerRadius: 11, shadowY: 10, shadowBlur: 18 },
-      { src: F.mentors[3].src, left: w - 118, top: Math.round(14 * k), size: 50, z: 5, rot: -5, opacity: compactHero ? 0 : .85, blur: .4, radius: 16, innerRadius: 12, shadowY: 12, shadowBlur: 20 }];
+    const mentorPositions = [
+      { left: 26, top: hh - Math.round(108 * k), size: Math.round(68 * (0.8 + 0.2 * k)), z: 12, rot: -6, opacity: 1, blur: 0, radius: 20, innerRadius: 16, shadowY: 20, shadowBlur: 30 },
+      { left: w - 96, top: hh - Math.round(98 * k), size: Math.round(60 * (0.8 + 0.2 * k)), z: 12, rot: 5, opacity: 1, blur: 0, radius: 18, innerRadius: 14, shadowY: 18, shadowBlur: 28 },
+      { left: 58, top: Math.round(22 * k), size: 44, z: 5, rot: 4, opacity: compactHero ? 0 : .78, blur: .6, radius: 14, innerRadius: 11, shadowY: 10, shadowBlur: 18 },
+      { left: w - 118, top: Math.round(14 * k), size: 50, z: 5, rot: -5, opacity: compactHero ? 0 : .85, blur: .4, radius: 16, innerRadius: 12, shadowY: 12, shadowBlur: 20 }];
+    const mentors = F.mentors.slice(0, mentorPositions.length).map((mentor, index) => ({ src: mentor.src, ...mentorPositions[index] }));
     // Home
     const stages = F.phases.map((ph, i) => { const done = S.confirmed[ph.id] || (i === 2 && S.privacy !== 'unset'); return { title: ph.short, mark: done ? '✓' : (i + 1), bar: done ? C.green : i === 2 ? '#DDE3EC' : '#DDE3EC', color: done ? C.green : C.faint }; });
     const allDone = S.profileDone || (S.confirmed[0] && S.confirmed[1] && (S.confirmed[2] || S.privacy !== 'unset'));

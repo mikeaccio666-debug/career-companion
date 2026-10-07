@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { AUTH_SESSION_ENDPOINTS, parseUuid } from '@edaix/contracts';
 
-import { AUTH_CLIENT_DIAG_CODES, createAuthClient, parseJwtExpiry, type AuthKeyValueStore } from '../lib/authClient';
+import { AUTH_CLIENT_DIAG_CODES, createAuthClient, parseJwtExpiry, type AuthKeyValueStore, type AuthClientDeps } from '../lib/authClient';
 
 /**
  * 刀八特征测试（审计修复批后）：登录态生命周期——存储分层（access 只在
@@ -84,6 +84,7 @@ function harness(options: {
   store?: AuthKeyValueStore;
   onSessionInvalidated?: () => void;
   onBeforeLogout?: (accessToken: string | null) => Promise<void>;
+  beforeReplaceSession?: AuthClientDeps['beforeReplaceSession'];
 } = {}) {
   const clock = options.clock ?? { t: NOW };
   const calls: Array<{
@@ -150,6 +151,7 @@ function harness(options: {
     now: () => clock.t,
     onDiagnostic: (code) => diags.push(code),
     onBeforeLogout: options.onBeforeLogout,
+    beforeReplaceSession: options.beforeReplaceSession,
     onSessionInvalidated: options.onSessionInvalidated,
     scheduleRotation: (whenUnixSeconds) => rotations.push(whenUnixSeconds),
   });
@@ -1443,4 +1445,113 @@ it('clears credentials even when the invalidation observer throws', async () => 
   expect(await h.client.getAccessToken()).toBeNull();
   expect(h.store.data.has('authSession')).toBe(false);
   expect(h.diags).toContain('AUTH_INVALIDATION_OBSERVER_FAILED');
+});
+
+
+describe('vault context uses actual auth session generations', () => {
+  it('keeps retained-owner export available while verified handoff waits; strict actions stop', async () => {
+    let release!: (ok: boolean) => void;
+    let waiting!: () => void;
+    const ready = new Promise<void>((resolve) => { waiting = resolve; });
+    const h = harness({ beforeReplaceSession: async (change) => {
+      if (change.previousOwnerId === null) return true;
+      waiting(); return new Promise<boolean>((resolve) => { release = resolve; });
+    } });
+    await h.client.redeemHandoff(HANDOFF);
+    const old = await h.client.readVaultAuthContext();
+    const next = h.client.redeemHandoff({ ...HANDOFF, code: 'again' });
+    await ready;
+    expect(await h.client.readVaultAuthContext()).toBeNull();
+    expect(await h.client.readVaultAuthContext({ readOnly: true })).toEqual({ userId: USER_1_ID, epoch: old!.epoch + 1 });
+    release(false); expect(await next).toBe(false);
+    expect((await h.client.readVaultAuthContext())?.userId).toBe(USER_1_ID);
+  });
+  it('runs the lifecycle gate only for a parsed server pair, before storing next identity', async () => {
+    let called = 0;
+    const h = harness({ routes: (path) => path === '/auth/extension-handoffs/redeem'
+      ? { status: 201, body: { ...tokenPair(NOW + 900), user: { id: 'bad' } } }
+      : null, beforeReplaceSession: async () => { called++; return true; } });
+    expect(await h.client.redeemHandoff(HANDOFF)).toBe(false);
+    expect(called).toBe(0); expect(h.store.data.has('authSession')).toBe(false);
+  });
+  it('revokes a canceled new pair and preserves the old persisted owner', async () => {
+    let pair = tokenPair(NOW + 900);
+    const h = harness({ routes: (path) => {
+      if (path === '/auth/extension-handoffs/redeem') return { status: 201, body: pair };
+      if (path === LINK_INSTALL_PATH) return { status: 202, body: { ok: true } };
+      if (path === '/auth/logout') return { status: 201, body: { ok: true } };
+      return null;
+    }, beforeReplaceSession: async ({ previousOwnerId }) => previousOwnerId === null });
+    await h.client.redeemHandoff(HANDOFF);
+    pair = tokenPair(NOW + 900, 'next-secret', USER_2_ID);
+    expect(await h.client.redeemHandoff(HANDOFF)).toBe(false);
+    expect(h.store.data.get('authSession')).toEqual({ userId: USER_1_ID, refreshToken: 'refresh_1' });
+    expect(h.calls.filter((c) => c.path === '/auth/logout').at(-1)?.body).toEqual({ refreshToken: 'next-secret' });
+  });
+  it('same-owner reauthentication still invalidates all earlier operation epochs', async () => {
+    const h = harness({ beforeReplaceSession: async () => true });
+    await h.client.redeemHandoff(HANDOFF);
+    const old = (await h.client.readVaultAuthContext())!;
+    await h.client.redeemHandoff(HANDOFF);
+    const current = (await h.client.readVaultAuthContext())!;
+    expect(current.userId).toBe(old.userId); expect(current.epoch).toBeGreaterThan(old.epoch);
+    const count = h.calls.length;
+    await expect(h.client.logout(old)).rejects.toThrow('AUTH_CONTEXT_CHANGED');
+    expect(h.calls).toHaveLength(count); expect(h.store.data.has('authSession')).toBe(true);
+  });
+  it('rejects an owner-only match when session changes during an awaited store read', async () => {
+    const store = memoryStore();
+    const h = harness({ store }); await h.client.redeemHandoff(HANDOFF);
+    const get = store.get.bind(store);
+    let release!: () => void, started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    let blockOnce = true;
+    store.get = async (key) => {
+      const value = await get(key);
+      if (key === 'authSession' && blockOnce) { blockOnce = false; started(); await new Promise<void>((resolve) => { release = resolve; }); }
+      return value;
+    };
+    const read = h.client.readVaultAuthContext(); await ready;
+    const handoff = h.client.redeemHandoff(HANDOFF);
+    release(); expect(await read).toBeNull();
+    store.get = get;
+    await handoff;
+  });
+  it('a definitive refresh rejection locks the vault without a valid owner context', async () => {
+    const h = harness({ routes: (path) => {
+      if (path === '/auth/extension-handoffs/redeem') return { status: 201, body: tokenPair(NOW + 900) };
+      if (path === LINK_INSTALL_PATH) return { status: 202, body: { ok: true } };
+      if (path === '/auth/refresh') return { status: 401, body: {} };
+      return null;
+    } });
+    await h.client.redeemHandoff(HANDOFF);
+    const old = h.client.vaultAuthEpoch();
+    expect(await h.client.forceRefresh()).toBeNull();
+    expect(h.client.vaultAuthEpoch()).toBeGreaterThan(old);
+    expect(await h.client.readVaultAuthContext({ readOnly: true })).toBeNull();
+  });
+  it('confirmed current context logout invalidates immediately and finishes local auth cleanup', async () => {
+    const h = harness(); await h.client.redeemHandoff(HANDOFF);
+    const context = (await h.client.readVaultAuthContext())!;
+    await h.client.logout(context);
+    expect(h.client.vaultAuthEpoch()).toBeGreaterThan(context.epoch);
+    expect(await h.client.readVaultAuthContext({ readOnly: true })).toBeNull();
+    expect(h.store.data.has('authSession')).toBe(false);
+  });
+  it('malformed persisted owner cannot unlock local credentials without verified access', async () => {
+    const store = memoryStore(); store.data.set('authSession', { userId: USER_1_ID, refreshToken: 'fake', injected: true });
+    const h = harness({ store });
+    expect(await h.client.readVaultAuthContext({ readOnly: true })).toBeNull(); expect(h.calls).toEqual([]);
+  });
+  it('confirmed logout reports a durable auth deletion failure instead of authorizing vault clear', async () => {
+    const store = memoryStore(); let broken = false;
+    const adapter: AuthKeyValueStore = { get: store.get,
+      set: async (key, value) => { if (broken && key === 'authRotationInFlight') throw new Error('fixture storage'); await store.set(key, value); },
+      remove: async (key) => { if (broken && key === 'authSession') throw new Error('fixture storage'); await store.remove(key); } };
+    const h = harness({ store: adapter }); await h.client.redeemHandoff(HANDOFF);
+    const context = (await h.client.readVaultAuthContext())!; broken = true;
+    await expect(h.client.logout(context)).rejects.toThrow('AUTH_STORAGE_UNAVAILABLE');
+    expect(store.data.has('authSession')).toBe(true);
+  });
+
 });

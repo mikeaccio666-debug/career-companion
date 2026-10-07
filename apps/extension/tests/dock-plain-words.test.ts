@@ -55,17 +55,17 @@ describe('主界面', () => {
     }
   });
 
-  it('没连接：一句话说清楚这是什么，主按钮是「登录 ArgoLand」', () => {
+  it('没连接：一句话说清楚这是什么，主按钮是「登录 Career Companion」', () => {
     const root = home({ kind: 'UNAVAILABLE', reason: 'PORTAL_UNLINKED' }, { onOpenPortal: () => {} }).sceneRoot();
-    expect(visibleText(root)).toContain('连接 ArgoLand，一键填好申请表');
-    expect(root?.querySelector('[data-action="login"]')?.textContent).toBe('登录 ArgoLand');
+    expect(visibleText(root)).toContain('连接 Career Companion，一键填好申请表');
+    expect(root?.querySelector('[data-action="login"]')?.textContent).toBe('登录 Career Companion');
   });
 
   it('每一张脸：面上没有码，也不再有页头的状态行与场景名', () => {
     for (const affordance of FACES) {
       const text = visibleText(home(affordance).sceneRoot());
       expect(text, JSON.stringify(affordance)).not.toMatch(CODE);
-      expect(text, JSON.stringify(affordance)).not.toMatch(/THIS PAGE|已连接 ArgoLand|未连接 ArgoLand/);
+      expect(text, JSON.stringify(affordance)).not.toMatch(/THIS PAGE|已连接 Career Companion|未连接 Career Companion/);
     }
   });
 
@@ -376,13 +376,13 @@ describe('没能开始', () => {
     expect(visibleText(root)).not.toMatch(CODE);
   });
 
-  it('连不上 ArgoLand：说连不上，不说「原因未知」', () => {
+  it('连不上 Career Companion：说连不上，不说「原因未知」', () => {
     const doc = document.implementation.createHTMLDocument();
     const handle = mountAutofillDock({ kind: 'READY' }, handlers, doc);
     handle.openPanel();
     handle.beginPreparing();
     handle.reportBlocked('AUTHORITY_UNAVAILABLE');
-    expect(handle.sceneRoot()?.querySelector('.failed .face-title')?.textContent).toBe('暂时连不上 ArgoLand');
+    expect(handle.sceneRoot()?.querySelector('.failed .face-title')?.textContent).toBe('暂时连不上 Career Companion');
   });
 
   it('填过一些再停下（超时）：总结写「填写已停止」', () => {

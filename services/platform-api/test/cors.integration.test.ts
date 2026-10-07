@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +18,7 @@ import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 // These are real HTTP/session/PG protocol tests. A Node client explicitly replays
 // cookies; it cannot prove that a browser will send Secure/SameSite cookies.
 const prefix = '/api/platform', origin = 'https://app.cors-fixture.invalid', secondOrigin = 'https://studio.cors-fixture.invalid';
-const schema = `cors_${randomUUID().replaceAll('-', '')}`, base = readConfig(), admin = new Database(base.databaseUrl);
+const schema = `cors_${randomUUID().replaceAll('-', '')}`, base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'cors-fixture', PLATFORM_AGENT_PROVIDER: 'cors-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), admin = new Database(base.databaseUrl);
 const databaseUrl = new URL(base.databaseUrl); databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString());
 type Actor = { id: string; cookie: string };
@@ -84,7 +85,7 @@ function cors(headers: IncomingHttpHeaders, expected = origin) {
 function noCors(headers: IncomingHttpHeaders) { assert.equal(headers['access-control-allow-origin'], undefined); }
 function result(response: Response) { assert.match(String(response.headers['content-type']), /application\/json/); return JSON.parse(response.bytes.toString('utf8')); }
 async function register(name: string): Promise<Actor> {
-  const response = await jsonRequest('/auth/register', undefined, { name, email: `${randomUUID()}@example.invalid`, password: 'Fictional-cors-password-123' });
+  const response = await jsonRequest('/auth/register', undefined, await fictionalRegistration(db,{ name, email: `${randomUUID()}@example.invalid`, password: 'Fictional-cors-password-123' }));
   assert.equal(response.status, 201, response.bytes.toString()); cors(response.headers);
   const cookie = response.headers['set-cookie']![0]!;
   assert.match(cookie, /HttpOnly/); assert.match(cookie, /SameSite=Lax/); assert.match(cookie, /Secure/);
@@ -108,9 +109,9 @@ async function bounded<T>(promise: Promise<T>): Promise<T> {
 }
 
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-cors-http-'));
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-cors-http-'));
   storage = new TrackingStorage(directory);
-  system = await buildApp({ db, storage, runtime, enableQueue: false,
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage, runtime, enableQueue: false,
     config: { ...base, databaseUrl: databaseUrl.toString(), storageDir: directory, allowedOrigins: new Set([origin, secondOrigin]), secureCookies: true } });
   await system.app.listen({ host: '127.0.0.1', port: 0 }); port = (system.app.server.address() as AddressInfo).port;
   alice = await register('Fictional CORS owner'); bob = await register('Fictional CORS other owner');
@@ -231,7 +232,7 @@ test('hijacked SSE sends credentialed CORS before completion and persists the sy
   streamGate = new Promise<void>(resolve => { releaseStream = resolve; });
   let first!: (headers: IncomingHttpHeaders) => void, sawDelta = false;
   const firstDelta = new Promise<IncomingHttpHeaders>(resolve => { first = resolve; });
-  const pending = exchange(`/conversations/${id}/messages`, alice, { method: 'POST', headers: { origin: secondOrigin, 'content-type': 'application/json' }, body: JSON.stringify({ content: 'fixture-held-stream', provider: 'cors-fixture', mode: 'chat' }),
+  const pending = exchange(`/conversations/${id}/messages`, alice, { method: 'POST', headers: { origin: secondOrigin, 'content-type': 'application/json' }, body: JSON.stringify({ content: 'fixture-held-stream', mode: 'chat' }),
     onData(bytes, headers) { if (!sawDelta && bytes.toString().includes('event: delta')) { sawDelta = true; first(headers); } } });
   void pending.catch(() => {});
   try {
@@ -247,12 +248,12 @@ test('hijacked SSE sends credentialed CORS before completion and persists the sy
 
 test('SSE errors retain raw CORS headers and client disconnect still cancels the synthetic runtime and lease', async () => {
   const errorId = await conversation('Fictional CORS stream failure');
-  const failed = await jsonRequest(`/conversations/${errorId}/messages`, alice, { content: 'fixture-error', provider: 'cors-fixture', mode: 'chat' });
+  const failed = await jsonRequest(`/conversations/${errorId}/messages`, alice, { content: 'fixture-error', mode: 'chat' });
   assert.equal(failed.status, 200); cors(failed.headers); assert.match(failed.bytes.toString(), /event: error/); assert.match(failed.bytes.toString(), /PROVIDER_UNAVAILABLE/); assert.doesNotMatch(failed.bytes.toString(), /event: done/);
   assert.equal((await db.query("SELECT status FROM platform_messages WHERE conversation_id=$1 AND role='assistant'", [errorId])).rows[0].status, 'failed');
   const id = await conversation('Fictional CORS stream cancellation'); cancelled = false;
   await new Promise<void>((resolve, reject) => {
-    const body = JSON.stringify({ content: 'fixture-cancel', provider: 'cors-fixture', mode: 'chat' });
+    const body = JSON.stringify({ content: 'fixture-cancel', mode: 'chat' });
     const request = http.request({ host: '127.0.0.1', port, path: `${prefix}/conversations/${id}/messages`, method: 'POST', agent: false,
       headers: { origin, cookie: alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.id, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, response => {
       cors(response.headers); let text = '';

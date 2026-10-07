@@ -1,7 +1,7 @@
 import type { ChatInput, ChatContext, CreateJobInput, JobExecutionContext, JobExecutionResult, PlatformProviderRuntime, VoiceSessionInput, ProviderAttachment, ComfyUITemplateSnapshot, SpeechInput, TranscriptionContext, Capability } from '@companion/platform-contracts';
 import { HttpClient, type Fetch, type ResolveHost } from './http.ts';
 import { providerStatuses, requireProvider } from './config.ts';
-import { streamOpenAI, streamCompatible } from './chat.ts';
+import { streamOpenAI, streamCompatible, streamModelStep, snapshotBackgroundChat, streamBackgroundChat } from './chat.ts';
 import { generateOpenAIImage, generateArkVideo, generateFal, generateComfyUI, realtimeOpenAI, transcribeOpenAI, speechOpenAI } from './media.ts';
 import { ProviderError, invalid } from './errors.ts';
 import { executeBrowser, executeCli } from './executors.ts';
@@ -48,9 +48,32 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
       checkComfyUIServer(checked,env);
     },
     streamChat(input:ChatInput,context:ChatContext={}){
+      if ('background' in context) {
+        const saved = snapshotBackgroundChat(input,context);
+        if (saved.input.provider !== 'openai') throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','No verified structured output adapter is available for this provider.',503);
+        requireProvider(env,saved.input.provider,'chat');
+        const configured = providerStatuses(env).find(provider => provider.id === 'openai')?.modelsByPurpose?.companion_generation;
+        if (!configured || configured.length !== 1) throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','Configure an explicit server companion generation model.',503);
+        if (saved.input.model !== configured[0]) invalid('Background generation must use the configured server model.');
+        return streamBackgroundChat(http,env,saved.input,saved.context);
+      }
       requireProvider(env,input.provider,input.mode==='agent'?'agent':'chat');
       if(!input.messages.length||input.messages.length>200)invalid('A conversation must contain between 1 and 200 context messages.');
       return input.provider==='openai'?streamOpenAI(http,env,input,context):streamCompatible(http,env,input,context);
+    },
+    streamModelStep(input,context){
+      const safety = context.purpose === 'safety_classify';
+      if ((safety || context.responseFormat !== undefined) && input.provider !== 'openai') throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','No verified structured output adapter is available for this provider.',503);
+      requireProvider(env,input.provider,context.tools.length?'agent':'chat');
+      const status=providerStatuses(env).find(provider=>provider.id===input.provider);
+      const configured=safety?status?.modelsByPurpose?.safety_classify:status?.modelsByCapability?.chat;
+      if(safety&&(!configured||configured.length!==1))throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','Configure an explicit server safety classification model.',503);
+      if(!configured||configured.length!==1||input.model!==configured[0])invalid('The model step must use the configured server model.');
+      if(safety&&(!context.responseFormat||context.tools.length||context.toolChoice!=='none'||context.limits.maxOutputTokens>100||context.timeoutMs>1000||context.continuation!==undefined||context.toolResults!==undefined))invalid('Safety classification requires one bounded structured step without tools or continuation.');
+      if(!input.messages.length||input.messages.length>200)invalid('A conversation must contain between 1 and 200 context messages.');
+      if(safety||context.responseFormat!==undefined)return streamModelStep(http,env,{...input,messages:input.messages.map(message=>({...message}))},
+        {...context,tools:[...context.tools],limits:{...context.limits},...(context.allowedToolNames?{allowedToolNames:[...context.allowedToolNames]}:{})});
+      return streamModelStep(http,env,input,context);
     },
     async executeJob(input:CreateJobInput,context:JobExecutionContext):Promise<JobExecutionResult>{
       if(input.executionTemplate&&input.provider!=='comfyui')invalid('Only ComfyUI generation tasks use a server template version.');
@@ -68,19 +91,21 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
       if(input.kind==='image'||input.kind==='video')validateMediaJobInput(input);
       if(input.provider==='browser'&&input.kind==='browser')return executeBrowser(input,context,env);
       if(input.provider==='cli'&&input.kind==='cli')return executeCli(input,context,env);
-      if(input.provider==='openai'&&input.kind==='image')return generateOpenAIImage(http,env,input,context);
+      if(input.provider==='openai'&&input.kind==='image')return generateOpenAIImage(http.withAdmission(context.requestAdmission),env,input,context);
       if(input.kind==='speech'){
-        return {artifacts:[await runtime.speech({provider:input.provider,text:input.prompt,model:input.model,...speechJobOptions(input.options)},{signal:context.signal})]};
+        return {artifacts:[await runtime.speech({provider:input.provider,text:input.prompt,model:input.model,...speechJobOptions(input.options)},{signal:context.signal,requestAdmission:context.requestAdmission})]};
       }
-      if(input.provider==='ark'&&input.kind==='video')return generateArkVideo(http,env,input,context);
-      if(input.provider==='fal'&&['image','video'].includes(input.kind))return generateFal(http,env,input,context);
-      if(input.provider==='comfyui')return generateComfyUI(http,env,input,context);
+      if(input.provider==='ark'&&input.kind==='video')return generateArkVideo(http.withAdmission(context.requestAdmission),env,input,context);
+      if(input.provider==='fal'&&['image','video'].includes(input.kind))return generateFal(http.withAdmission(context.requestAdmission),env,input,context);
+      if(input.provider==='comfyui')return generateComfyUI(http.withAdmission(context.requestAdmission),env,input,context);
       throw new ProviderError('PROVIDER_UNSUPPORTED','No executor is available for this task.',400);
     },
-    async createVoiceSession(input:VoiceSessionInput={},context={}){requireVoiceProvider(env,input.provider,'realtime');return realtimeOpenAI(http,env,input,context.signal);},
-    async transcribe(input:ProviderAttachment,context:TranscriptionContext={}){const provider=requireVoiceProvider(env,context.provider,'transcription');return provider==='faster-whisper'?transcribeLocal(http,env,input,context):transcribeOpenAI(http,env,input,context.signal);},
+    async createVoiceSession(input:VoiceSessionInput={},context={}){requireVoiceProvider(env,input.provider,'realtime');return realtimeOpenAI(http.withAdmission(context.requestAdmission),env,input,context.signal);},
+    async transcribe(input:ProviderAttachment,context:TranscriptionContext={}){const provider=requireVoiceProvider(env,context.provider,'transcription');return provider==='faster-whisper'?transcribeLocal(http.withAdmission(context.requestAdmission),env,input,context):transcribeOpenAI(http.withAdmission(context.requestAdmission),env,input,context.signal);},
     async speech(input:SpeechInput,context={}){const provider=requireVoiceProvider(env,input.provider,'speech');
-      if(provider==='elevenlabs')return speechElevenLabs(http,env,input,context.signal);
-      return provider==='kokoro'?speechKokoro(http,env,input,context.signal):speechOpenAI(http,env,input,context.signal);},
+      if(provider==='elevenlabs')return speechElevenLabs(http.withAdmission(context.requestAdmission),env,input,context.signal);
+      return provider==='kokoro'?speechKokoro(http.withAdmission(context.requestAdmission),env,input,context.signal):speechOpenAI(http.withAdmission(context.requestAdmission),env,input,context.signal);},
   };return runtime;
 }
+
+export { ProviderAdapter, runAgentLoop } from './agent-loop.ts';

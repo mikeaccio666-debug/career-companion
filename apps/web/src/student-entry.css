@@ -1,0 +1,12 @@
+.student-entry-card h1 { font-size: 1.7rem; margin: 0 0 12px; }
+.student-data-notice { white-space: pre-wrap; line-height: 1.7; font-size: .9rem; padding: 14px; background: var(--light-green); border-radius: 10px; }
+.auth-form-card .student-consent-check { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; font-size: .9rem; line-height: 1.6; }
+.auth-form-card .student-consent-check input { width: 18px; height: 18px; flex: 0 0 18px; margin: 4px 0 0; padding: 0; accent-color: var(--green); }
+.student-consent-check a, .legal-document a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.legal-document { width: min(800px, calc(100% - 40px)); margin: 40px auto 80px; }
+.legal-document nav { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 36px; font-size: .9rem; }
+.legal-document h1 { font-size: 2rem; }
+.legal-version { color: var(--muted); font-size: .9rem; }
+.legal-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
+.student-welcome { max-width: 580px; }
+@media (max-width: 600px) { .legal-document { margin-top: 24px; } .student-entry-card h1 { font-size: 1.45rem; } }

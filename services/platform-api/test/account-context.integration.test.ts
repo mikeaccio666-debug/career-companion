@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER, PLATFORM_ACCOUNT_QUERY, type PlatformProviderRuntime } from '@companion/platform-contracts';
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
@@ -16,7 +17,7 @@ import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 // Node explicitly replays cookies; this does not reproduce a browser's cookie jar.
 const prefix = '/api/platform', origin = 'http://localhost:4321';
 const password = 'Fictional-account-context-password-2026';
-const base = readConfig(), schema = `account_context_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'account-context-fixture', PLATFORM_AGENT_PROVIDER: 'account-context-fixture', PLATFORM_REALTIME_PROVIDER: 'account-context-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'account-context-fixture', PLATFORM_SPEECH_PROVIDER: 'account-context-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `account_context_${randomUUID().replaceAll('-', '')}`;
 const databaseUrl = new URL(base.databaseUrl);
 assert(['127.0.0.1', 'localhost', '[::1]'].includes(databaseUrl.hostname), 'This fixture must use a loopback PostgreSQL instance.');
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
@@ -44,7 +45,7 @@ class TrackingStorage extends LocalBlobStorage {
 }
 const runtime: PlatformProviderRuntime = {
   capabilities: () => [{ id: 'account-context-fixture', name: 'Fictional account transport', enabled: true, keyConfigured: true,
-    capabilities: ['chat', 'image', 'speech', 'transcription', 'realtime'], models: ['synthetic'], envVariables: [] }],
+    capabilities: ['chat', 'image', 'speech', 'transcription', 'realtime'], models: ['synthetic'], voiceOptions: { speech: { voices: ['fictional-fixed-voice'], defaultVoice: 'fictional-fixed-voice' }, realtime: { voices: ['fictional-fixed-voice'], defaultVoice: 'fictional-fixed-voice', turnTaking: true } }, envVariables: [] }],
   async *streamChat() { ++calls.chat; yield { type: 'delta', text: 'Fictional account-bound response.' }; },
   async executeJob() { ++calls.jobs; throw new Error('The account-context fixture does not execute queued jobs.'); },
   async transcribe() { ++calls.transcription; return { text: 'Fictional account-bound transcript.' }; },
@@ -91,7 +92,7 @@ function multipart(provider = false) {
 }
 async function register(name: string): Promise<Actor> {
   const email = `context-${randomUUID()}@example.invalid`;
-  const response = await exchange('/auth/register', { method: 'POST', payload: { name, email, password } });
+  const response = await exchange('/auth/register', { method: 'POST', payload: await fictionalRegistration(db,{ name, email, password }) });
   assert.equal(response.status, 201, response.bytes.toString());
   assert.match(response.headers['set-cookie']![0]!, /Path=\//); assert.match(response.headers['set-cookie']![0]!, /HttpOnly/);
   return { id: json(response).user.id, email, cookie: response.headers['set-cookie']![0]!.split(';')[0]! };
@@ -115,9 +116,9 @@ async function state() {
 }
 function sideEffects() { return { ...calls, puts: storage.puts, stats: storage.stats, opens: storage.opens }; }
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); createdSchema = true; await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); createdSchema = true; await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-account-context-')); storage = new TrackingStorage(directory);
-  system = await buildApp({ db, storage, runtime, enableQueue: false,
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage, runtime, enableQueue: false,
     config: { ...base, databaseUrl: databaseUrl.toString(), storageDir: directory, s3: undefined, webStaticDir: undefined,
       accountEmail: undefined, requireVerifiedEmail: false, allowedOrigins: new Set([origin]) } });
   await system.app.listen({ host: '127.0.0.1', port: 0 }); port = (system.app.server.address() as AddressInfo).port;
@@ -169,13 +170,13 @@ test('malformed, repeated and misplaced assertions fail before private reads, co
 });
 
 test('account drift blocks reads, writes, SSE, uploads and all voice controls before any domain effects', async () => {
-  const session = await inject('/voice/session', { method: 'POST', cookie: bob.cookie, expected: bob.id, payload: { provider: 'account-context-fixture' } });
+  const session = await inject('/voice/session', { method: 'POST', cookie: bob.cookie, expected: bob.id, payload: {} });
   assert.equal(session.status, 200, session.bytes.toString()); const sessionId = json(session).sessionId;
   const saved = await state(), effects = sideEffects(), fakeId = randomUUID();
   const routes: Array<[Options['method'], string, Record<string, unknown> | undefined]> = [
     ['GET', '/conversations', undefined], ['GET', `/conversations/${bobConversation}`, undefined],
     ['POST', '/conversations', { title: 'Fictional stale-window draft' }], ['DELETE', `/conversations/${bobConversation}`, undefined],
-    ['POST', `/conversations/${bobConversation}/messages`, { provider: 'account-context-fixture', content: 'Fictional stale-window prompt', mode: 'chat' }],
+    ['POST', `/conversations/${bobConversation}/messages`, { content: 'Fictional stale-window prompt', mode: 'chat' }],
     ['GET', `/conversations/${bobConversation}/voice-records`, undefined],
     ['POST', `/conversations/${bobConversation}/voice-records`, { clientRecordId: fakeId, source: 'transcription_excerpt', role: 'user', text: 'Fictional stale excerpt' }],
     ['GET', '/usage', undefined], ['GET', '/workflow-templates', undefined], ['POST', '/workflow-templates', {}],
@@ -188,8 +189,8 @@ test('account drift blocks reads, writes, SSE, uploads and all voice controls be
     ['GET', '/knowledge-sources', undefined], ['GET', `/knowledge-sources/${fakeId}`, undefined],
     ['POST', '/knowledge-sources', {}], ['PUT', `/knowledge-sources/${fakeId}`, {}], ['DELETE', `/knowledge-sources/${fakeId}`, {}],
     ['POST', '/knowledge-search', { query: 'Fictional query' }], ['GET', `/artifacts/${artifactId}/reference-attachment`, undefined], ['GET', `/artifacts/${artifactId}/text`, undefined],
-    ['POST', '/voice/session', { provider: 'account-context-fixture' }], ['POST', '/voice/session/release', { sessionId }],
-    ['POST', '/voice/speech', { provider: 'account-context-fixture', text: 'Fictional stale-window narration' }],
+    ['POST', '/voice/session', {}], ['POST', '/voice/session/release', { sessionId }],
+    ['POST', '/voice/speech', { text: 'Fictional stale-window narration' }],
     ['POST', '/auth/logout', {}], ['POST', '/auth/email-verification/request', {}], ['POST', '/auth/email-verification/complete', { token: 'fictional-invalid-token' }],
   ];
   for (const [method, route, payload] of routes) {
@@ -200,7 +201,7 @@ test('account drift blocks reads, writes, SSE, uploads and all voice controls be
   }
   // The real SSE endpoint returns JSON before entering or writing a stream.
   expectError(await exchange(`/conversations/${bobConversation}/messages`, { method: 'POST', cookie: bob.cookie, expected: alice.id,
-    payload: { provider: 'account-context-fixture', content: 'Fictional blocked SSE prompt' } }), 409, 'ACCOUNT_CONTEXT_CHANGED');
+    payload: { content: 'Fictional blocked SSE prompt' } }), 409, 'ACCOUNT_CONTEXT_CHANGED');
   assert.deepEqual(await state(), saved); assert.deepEqual(sideEffects(), effects);
   assert.equal((await db.query('SELECT released_at FROM platform_voice_sessions WHERE id=$1', [sessionId])).rows[0].released_at, null);
   const release = await inject('/voice/session/release', { method: 'POST', cookie: bob.cookie, expected: bob.id, payload: { sessionId } });
@@ -264,11 +265,11 @@ test('an auth/me result cannot authorize a later request after the shared cookie
   const afterRace = await state(); assert.equal(afterRace.memories, saved.memories + 1); assert.equal(afterRace.user_requests, saved.user_requests + 1);
   assert.deepEqual(sideEffects(), effects);
   const chat = await exchange(`/conversations/${bobConversation}/messages`, { method: 'POST', cookie: sharedCookie, expected: bob.id,
-    payload: { provider: 'account-context-fixture', content: 'Fictional correctly bound chat', mode: 'chat' } });
+    payload: { content: 'Fictional correctly bound chat', mode: 'chat' } });
   assert.equal(chat.status, 200, chat.bytes.toString()); assert.match(String(chat.headers['content-type']), /^text\/event-stream/); assert.match(chat.bytes.toString(), /event: done/);
-  const transcript = await exchange('/voice/transcribe', { method: 'POST', cookie: sharedCookie, expected: bob.id, ...multipart(true) });
+  const transcript = await exchange('/voice/transcribe', { method: 'POST', cookie: sharedCookie, expected: bob.id, ...multipart() });
   assert.equal(transcript.status, 200, transcript.bytes.toString()); assert.equal(json(transcript).text, 'Fictional account-bound transcript.');
-  const speech = await inject('/voice/speech', { method: 'POST', cookie: sharedCookie, expected: bob.id, payload: { provider: 'account-context-fixture', text: 'Fictional correctly bound speech' } });
+  const speech = await inject('/voice/speech', { method: 'POST', cookie: sharedCookie, expected: bob.id, payload: { text: 'Fictional correctly bound speech' } });
   assert.equal(speech.status, 201, speech.bytes.toString());
   assert.equal(calls.chat, effects.chat + 1); assert.equal(calls.transcription, effects.transcription + 1); assert.equal(calls.speech, effects.speech + 1);
   const logout = await exchange('/auth/logout', { method: 'POST', cookie: sharedCookie, expected: bob.id, payload: {} });

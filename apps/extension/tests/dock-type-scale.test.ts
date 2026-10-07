@@ -148,7 +148,7 @@ describe('每一幕里 20px 的字最多一处', () => {
     failed.beginPreparing();
     failed.reportBlocked('NO_FORM_FOUND');
     expect(titlesOnScreen(failed.sceneRoot())).toEqual(['这一轮没有完成']);
-    expect(titlesOnScreen(mount({}, { kind: 'UNAVAILABLE', reason: 'PORTAL_UNLINKED' }).sceneRoot())).toEqual(['连接 ArgoLand，一键填好申请表']);
+    expect(titlesOnScreen(mount({}, { kind: 'UNAVAILABLE', reason: 'PORTAL_UNLINKED' }).sceneRoot())).toEqual(['连接 Career Companion，一键填好申请表']);
     const profile = mount();
     profile.openProfile();
     expect(titlesOnScreen(profile.sceneRoot())).toEqual(['我的资料']);

@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,15 +14,15 @@ import { parseJob } from '../src/jobs.ts';
 import { parseWorkflowTemplate, WORKFLOW_TEMPLATE_BYTES } from '../src/workflow-templates.ts';
 
 const prefix='/api/platform',origin='http://localhost:4321',schema=`workflow_templates_test_${randomUUID().replaceAll('-','')}`;
-const base=readConfig(),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string,system:Awaited<ReturnType<typeof buildApp>>,actors=0;
 const unused=async()=>{throw new Error('No model calls are permitted in template fixtures.');};
 const runtime:PlatformProviderRuntime={capabilities:()=>[{id:'workflow',name:'Local workflow engine',enabled:true,keyConfigured:true,capabilities:['workflow'],models:[],envVariables:[]},{id:'local-fixture',name:'Synthetic text model',enabled:true,keyConfigured:true,capabilities:['chat'],models:['synthetic-text'],envVariables:[]}],streamChat:async function*(){throw new Error('Unused');},executeJob:unused,createVoiceSession:unused,transcribe:unused,speech:unused};
-before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'workflow-template-fixtures-'));system=await buildApp({db,config:{...base,databaseUrl:url.toString(),storageDir:directory},runtime,enableQueue:false});});
+before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'workflow-template-fixtures-'));system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,config:{...base,databaseUrl:url.toString(),storageDir:directory},runtime,enableQueue:false});});
 after(async()=>{await system?.app.close();await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 interface Actor{user:{id:string};cookie:string;ip:string;}
 async function actor():Promise<Actor>{
-  const ip=`127.0.2.${++actors}`;const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:ip,headers:{origin},payload:{name:'Fictional workflow designer',email:`workflow-${randomUUID()}@example.invalid`,password:'Fictional-password-123'}});assert.equal(response.statusCode,201,response.body);return {user:response.json().user,cookie:(response.headers['set-cookie'] as string).split(';')[0],ip};
+  const ip=`127.0.2.${++actors}`;const response=await system.app.inject({method:'POST',url:prefix+'/auth/register',remoteAddress:ip,headers:{origin},payload:await fictionalRegistration(db,{name:'Fictional workflow designer',email:`workflow-${randomUUID()}@example.invalid`,password:'Fictional-password-123'})});assert.equal(response.statusCode,201,response.body);return {user:response.json().user,cookie:(response.headers['set-cookie'] as string).split(';')[0],ip};
 }
 async function request(user:Actor,method:'GET'|'POST'|'PUT'|'DELETE',route:string,payload?:Record<string,unknown>){return system.app.inject({method,url:prefix+route,remoteAddress:user.ip,headers:{origin,cookie:user.cookie, [PLATFORM_ACCOUNT_HEADER]: user.user.id},payload});}
 function draft(overrides:Record<string,unknown>={}){return {name:'Fictional article workflow',description:'A saved plan, not an execution.',steps:[{kind:'chat',provider:'not-configured-yet',prompt:'Draft an article: {{input}}'},{kind:'speech',provider:'openai',prompt:'{{previous}}',options:{voice:'marin'}}],...overrides};}

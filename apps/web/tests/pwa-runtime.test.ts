@@ -48,7 +48,7 @@ test('prompt registration is once per runtime and readiness never invokes the ac
   assert.strictEqual(fixture.runtime.getSnapshot(), state); assert.equal(notifications, notificationsBefore);
   assert.equal(state.offlineReady, true); assert.equal(state.updateReady, true); assert.equal(fixture.activationCalls, 0);
   const copy = pwaNotices(state).map((notice) => notice.text).join(' ');
-  assert.match(copy, /保存或复制需要保留的内容/); assert.match(copy, /结束录音或对话/); assert.match(copy, /所有工作台窗口/);
+  assert.match(copy, /保存或复制需要保留的内容/); assert.match(copy, /结束录音或对话/); assert.match(copy, /所有页面窗口/);
   assert.equal(pwaNotices(state).some((notice) => notice.id === 'ready'), false);
   unsubscribe(); fixture.runtime.dispose(); assert.equal(fixture.timers.size, 0);
 });
@@ -97,27 +97,27 @@ test('failed background checks keep the current page and can retry after another
 
 test('offline/connected-with-unreachable-service public entry is distinct from an authenticated or model-ready workspace', () => {
   assert.match(publicConnectionCopy(false, false).title, /无法联网/);
-  assert.match(publicConnectionCopy(true, false).title, /无法连接工作台/);
+  assert.match(publicConnectionCopy(true, false).title, /无法连接账号服务/);
   assert.match(publicConnectionCopy(true, false).text, /无法确认登录状态/);
-  assert.match(publicConnectionCopy(true, true).text, /确认账号服务和当前会话/);
+  assert.match(publicConnectionCopy(true, true).text, /确认账号服务和当前登录状态/);
   const notices = pwaNotices({ online: false, registration: 'registered', offlineReady: true, updateReady: true });
   assert.deepEqual(notices.map((notice) => notice.id), ['offline', 'update']); assert.equal(notices[0].dismissible, false);
   assert.match(pwaNotices({ online: true, registration: 'registered', offlineReady: true, updateReady: false })[0].text, /登录、会话、资料和模型仍需联网/);
 });
 
-const options = { emailActionsEnabled: false, requireVerifiedEmail: false };
+const options = { emailActionsEnabled: false, requireVerifiedEmail: false, requireInvite: true, legal: { status: 'unavailable' as const } };
 const fixtureUser = { id: '11111111-1111-4111-8111-111111111111', email: 'fictional@example.invalid', emailVerified: false };
 const anonymous = (failure: unknown) => !!failure && typeof failure === 'object' && (failure as { status?: number }).status === 401;
 function timing() { let run: (() => void) | null = null; let delay = 0; return { setTimer(value: () => void, ms: number) { run = value; delay = ms; return 1; }, clearTimer() { run = null; }, fire() { run?.(); }, get pending() { return !!run; }, get delay() { return delay; } }; }
 
 test('each explicit bootstrap retry rechecks actual me/options and only uses four read-only routes', async () => {
   const paths: string[] = []; let turn = 0;
-  const read = async (path: string) => { paths.push(path); if (path === '/auth/options') return options; if (path === '/auth/me') { if (!turn) throw Object.assign(new Error('Fictional anonymous.'), { status: 401 }); return { user: fixtureUser }; } return path === '/capabilities' ? { providers: [] } : { status: 'ok' }; };
+  const read = async (path: string) => { paths.push(path); if (path === '/auth/options') return options; if (path === '/auth/me') { if (!turn) throw Object.assign(new Error('Fictional anonymous.'), { status: 401 }); return { user: fixtureUser }; } return path === '/capabilities' ? { capabilities: { chat: false } } : path === '/features' ? { version: 1, workbench: false, providerDetails: false } : { status: 'ok' }; };
   const clock = timing(); const first = await readWorkspaceBootstrap(read, new AbortController().signal, parseAuthOptions, anonymous, clock);
   assert.equal(first.account, null); assert.deepEqual(first.options, options); assert.equal(clock.pending, false);
   ++turn; const second = await readWorkspaceBootstrap(read, new AbortController().signal, parseAuthOptions, anonymous, clock);
   assert.deepEqual(second.account, { user: fixtureUser }); assert.equal(clock.pending, false);
-  assert.deepEqual(paths, ['/auth/options', '/auth/me', '/ready', '/capabilities', '/auth/options', '/auth/me', '/ready', '/capabilities']);
+  assert.deepEqual(paths, ['/auth/options', '/auth/me', '/ready', '/capabilities', '/features', '/auth/options', '/auth/me', '/ready', '/capabilities', '/features']);
 });
 
 test('network failure while browser says online remains a public bootstrap failure, never an anonymous success', async () => {
@@ -133,7 +133,7 @@ test('bootstrap timeout/cancel is bounded and ignores late transport completion 
     assert.equal(clock.delay, WORKSPACE_CONNECTION_TIMEOUT_MS);
     if (mode === 'timeout') clock.fire(); else external.abort();
     await assert.rejects(operation, { name: 'AbortError' }); assert.equal(clock.pending, false);
-    assert.equal(signals.length, 4); assert.ok(signals.every((signal) => signal.aborted));
+    assert.equal(signals.length, 5); assert.ok(signals.every((signal) => signal.aborted));
     pending.resolve(options); await flush();
   }
   let calls = 0; const cancelled = new AbortController(); cancelled.abort();

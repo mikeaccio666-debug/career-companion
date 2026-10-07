@@ -1,3 +1,6 @@
+import type { PoolClient } from 'pg';
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,14 +18,14 @@ import { JobService, parseJob, processJob, recoverInterrupted } from '../src/job
 import { LocalBlobStorage } from '../src/storage.ts';
 import { GoalPlans } from '../src/goal-plans.ts';
 
-const schema=`execution_templates_test_${randomUUID().replaceAll('-','')}`,base=readConfig(),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const schema=`execution_templates_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString()),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 let directory:string,templatePath:string,storage:LocalBlobStorage;
 const graph=(marker:string)=>({'1':{class_type:'SyntheticPromptEncoder',inputs:{text:'Synthetic template default'}},'2':{class_type:'SyntheticOutput',inputs:{privateTemplateMarker:marker}}});
 const code=(expected:string)=>(cause:unknown)=>cause instanceof ApiError&&cause.code===expected;
-before(async()=>{assert(['localhost','127.0.0.1','[::1]'].includes(url.hostname),'Fixtures require a local PostgreSQL database.');await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'execution-template-fixtures-'));templatePath=path.join(directory,'private-server-template.json');storage=new LocalBlobStorage(path.join(directory,'blobs'));});
+before(async()=>{assert(['localhost','127.0.0.1','[::1]'].includes(url.hostname),'Fixtures require a local PostgreSQL database.');await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'execution-template-fixtures-'));templatePath=path.join(directory,'private-server-template.json');storage=new LocalBlobStorage(path.join(directory,'blobs'));});
 after(async()=>{await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
-async function user(){const id=randomUUID();await db.query("INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,'Fictional template reviewer','not-a-login-password')",[id,`templates-${id}@example.invalid`]);return id;}
+async function user(){const id=randomUUID();await db.query("INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,'Fictional template reviewer','not-a-login-password')",[id,`templates-${id}@example.invalid`]); await seedFictionalConsent(db,id);return id;}
 const direct=(prompt='Fictional image'):CreateJobInput=>({kind:'image',provider:'comfyui',prompt,options:{}});
 const workflow=(prompt='Fictional workflow'):CreateJobInput=>({kind:'workflow',provider:'workflow',prompt,options:{steps:[{kind:'image',provider:'comfyui',prompt:'Draw {{input}}',options:{}}]}});
 async function fixture(marker:string,endpoint='http://127.0.0.1:8188',outputKind:'image'|'video'='image'){
@@ -39,7 +42,7 @@ async function fixture(marker:string,endpoint='http://127.0.0.1:8188',outputKind
     throw new Error('Unexpected local template fixture route.');
   }) as typeof fetch;
   const runtime=createProviderRuntime({env:{COMFYUI_BASE_URL:endpoint,COMFYUI_WORKFLOW_TEMPLATE:templatePath,COMFYUI_PROMPT_NODE:'1',COMFYUI_OUTPUT_KIND:outputKind,PLATFORM_POLL_ATTEMPTS:'1',PLATFORM_POLL_INTERVAL_MS:'50'},fetch:transport});
-  const jobs=new JobService(db,{...base,storageDir:directory,maxActiveJobs:20},runtime,storage);
+  const jobs=new JobService(db,{...base,storageDir:directory,maxActiveJobs:20},runtime,storage,undefined,undefined,FICTIONAL_LEGAL);
   return {runtime,jobs,requests,setMode:(value:typeof mode)=>{mode=value;},posts:()=>requests.filter(request=>request.method==='POST')};
 }
 async function approve(jobs:JobService,uid:string,jobId:string,generation=1){const approval=(await db.query('SELECT id FROM platform_approvals WHERE job_id=$1 AND generation=$2',[jobId,generation])).rows[0];assert(approval);await jobs.decide(uid,approval.id,'approved');}
@@ -60,9 +63,9 @@ test('creation privately freezes the full graph; file replacement and runtime re
 });
 
 test('HTTP and strict parsers reject stale or forged bindings, graphs, paths, and bindings on non-ComfyUI tasks',async()=>{
-  const old=await fixture('synthetic-old'),stale=old.runtime.capabilities().find(provider=>provider.id==='comfyui')!.executionTemplate!,current=await fixture('synthetic-current'),system=await buildApp({db,storage,runtime:current.runtime,config:{...base,storageDir:directory,maxActiveJobs:20},enableQueue:false});
+  const old=await fixture('synthetic-old'),stale=old.runtime.capabilities().find(provider=>provider.id==='comfyui')!.executionTemplate!,current=await fixture('synthetic-current'),system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,storage,runtime:current.runtime,config:{...base,storageDir:directory,maxActiveJobs:20},enableQueue:false});
   try{
-    const registration=await system.app.inject({method:'POST',url:'/api/platform/auth/register',headers:{origin:'http://localhost:4321'},payload:{email:`templates-${randomUUID()}@example.invalid`,name:'Fictional template client',password:'Fictional-password-123'}});assert.equal(registration.statusCode,201);const cookie=(registration.headers['set-cookie'] as string).split(';')[0],headers={origin:'http://localhost:4321',cookie,[PLATFORM_ACCOUNT_HEADER]:registration.json().user.id};
+    const registration=await system.app.inject({method:'POST',url:'/api/platform/auth/register',headers:{origin:'http://localhost:4321'},payload:await fictionalRegistration(db,{email:`templates-${randomUUID()}@example.invalid`,name:'Fictional template client',password:'Fictional-password-123'})});assert.equal(registration.statusCode,201);const cookie=(registration.headers['set-cookie'] as string).split(';')[0],headers={origin:'http://localhost:4321',cookie,[PLATFORM_ACCOUNT_HEADER]:registration.json().user.id};
     for(const executionTemplate of [stale,{version:1,hash:'0'.repeat(64)}]){const response=await system.app.inject({method:'POST',url:'/api/platform/jobs',headers,payload:{...direct(),executionTemplate}});assert.equal(response.statusCode,409,response.body);assert.equal(response.json().error.code,'COMFYUI_TEMPLATE_CHANGED');}
     for(const payload of [{...direct(),graph:graph('must-not-run')},{...direct(),options:{workflow:graph('must-not-run')}},{...direct(),executionTemplate:{version:1,hash:stale.hash,graph:graph('must-not-run')}},{...direct(),options:{templatePath:'/synthetic/path'}},{...direct(),model:'client-selected-model'}, {...workflow(),executionTemplate:stale},{...workflow(),options:{steps:[{kind:'image',provider:'comfyui',prompt:'Fictional step',model:'client-selected-model'}]}}]){const response=await system.app.inject({method:'POST',url:'/api/platform/jobs',headers,payload});assert.equal(response.statusCode,400,response.body);}
     const accepted=await system.app.inject({method:'POST',url:'/api/platform/jobs',headers,payload:{...direct(),executionTemplate:current.runtime.capabilities().find(provider=>provider.id==='comfyui')!.executionTemplate}});assert.equal(accepted.statusCode,201,accepted.body);noPrivateSnapshot(accepted.json());
@@ -192,14 +195,24 @@ test('real ComfyUI adapter rejects PNG bytes declared as video without publishin
 
 test('a lost ComfyUI queue acknowledgement is uncertain and cannot be retried as a new submission',async()=>{
   const item=await fixture('synthetic-unknown'),uid=await user();for(const mode of ['unknown','malformed','missing_id','rejected_http'] as const){const created=await item.jobs.create(uid,direct());item.setMode(mode);await processJob(item.jobs,created.job.id,1);const job=await item.jobs.get(uid,created.job.id);assert.equal(job.status,'uncertain');assert.equal(job.error?.code,'COMFYUI_SUBMISSION_UNCERTAIN');assert.equal(job.providerTaskId,undefined);await assert.rejects(item.jobs.retry(uid,created.job.id),code('COMFYUI_REVIEW_REQUIRED'));}assert.equal(item.posts().length,4);
-  item.setMode('completed');const created=await item.jobs.create(uid,direct('Fictional persisted queue handle'));let transactions=0;
-  const lostAck={query:db.query.bind(db),transaction:async(run:any)=>{const result=await db.transaction(run);if(++transactions===2)throw new Error('Synthetic lost handle COMMIT acknowledgement');return result;}} as unknown as Database;
-  const service=new JobService(lostAck,{...base,storageDir:directory},item.runtime,storage);await processJob(service,created.job.id,1);const held=await service.get(uid,created.job.id);assert.equal(held.status,'uncertain');assert.equal(held.error?.code,'COMFYUI_SUBMISSION_UNCERTAIN');assert.equal(held.providerTaskId,'synthetic-owned-task');assert.equal(item.posts().length,5);
+  item.setMode('completed');const created=await item.jobs.create(uid,direct('Fictional persisted queue handle'));let acknowledgementLost=false;
+  const lostAck=new Proxy(db,{get(target,key){
+    if(key==='transaction')return async<T>(run:(client:PoolClient)=>Promise<T>):Promise<T>=>{
+      let persistedHandle=false;
+      const result=await target.transaction(client=>run(new Proxy(client,{get(connection,field){
+        if(field==='query')return (...args:unknown[])=>{if(typeof args[0]==='string'&&args[0].startsWith('UPDATE platform_jobs SET provider_task_id='))persistedHandle=true;return Reflect.apply(connection.query,connection,args);};
+        const value=Reflect.get(connection,field,connection);return typeof value==='function'?value.bind(connection):value;
+      }})));
+      if(persistedHandle&&!acknowledgementLost){acknowledgementLost=true;throw new Error('Synthetic lost handle COMMIT acknowledgement');}return result;
+    };
+    const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+  }});
+  const service=new JobService(lostAck,{...base,storageDir:directory},item.runtime,storage,undefined,undefined,FICTIONAL_LEGAL);await processJob(service,created.job.id,1);const held=await service.get(uid,created.job.id);assert.equal(held.status,'uncertain');assert.equal(held.error?.code,'COMFYUI_SUBMISSION_UNCERTAIN');assert.equal(held.providerTaskId,'synthetic-owned-task');assert.equal(item.posts().length,5);
   await service.retry(uid,created.job.id);await approve(service,uid,created.job.id,2);await processJob(service,created.job.id,2);assert.equal((await service.get(uid,created.job.id)).status,'succeeded');assert.equal(item.posts().length,5,'A persisted handle must only be polled after acknowledgement loss.');
 });
 
 test('final publication rejects a private-policy mutation after generation and keeps no unconfirmed artifact',async()=>{
   const item=await fixture('synthetic-publication'),uid=await user(),created=await item.jobs.create(uid,direct()),realExecute=item.runtime.executeJob;
   const wrapped:PlatformProviderRuntime={...item.runtime,executeJob:async(input,context)=>{const result=await realExecute(input,context);const policy=await savedPolicy(created.job.id);policy.comfyui.job.graph['2'].inputs.privateTemplateMarker='synthetic-after-generation-change';await db.query('UPDATE platform_jobs SET execution_policy=$2 WHERE id=$1',[created.job.id,JSON.stringify(policy)]);return result;}};
-  const service=new JobService(db,{...base,storageDir:directory},wrapped,storage);await processJob(service,created.job.id,1);const failed=await service.get(uid,created.job.id);assert.equal(failed.status,'failed');assert.equal(failed.error?.code,'COMFYUI_TEMPLATE_INVALID');assert.equal(failed.artifacts.length,0);assert.equal((await db.query('SELECT id FROM platform_uploads WHERE user_id=$1',[uid])).rowCount,0);assert.equal(item.posts().length,1);
+  const service=new JobService(db,{...base,storageDir:directory},wrapped,storage,undefined,undefined,FICTIONAL_LEGAL);await processJob(service,created.job.id,1);const failed=await service.get(uid,created.job.id);assert.equal(failed.status,'failed');assert.equal(failed.error?.code,'COMFYUI_TEMPLATE_INVALID');assert.equal(failed.artifacts.length,0);assert.equal((await db.query('SELECT id FROM platform_uploads WHERE user_id=$1',[uid])).rowCount,0);assert.equal(item.posts().length,1);
 });

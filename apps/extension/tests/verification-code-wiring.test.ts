@@ -53,7 +53,7 @@ describe('内容脚本的接线', () => {
 
   it('浮层拿到「填进网站」；挂上之后才开始看，拆了一并收掉、提交控制器的挂钩一并摘掉', () => {
     expect(content).toContain('...(codePage === null ? {} : { verificationCode: codePage.handlers }),');
-    expect(content).toContain('onDismissed: () => { fillToReviewNow?.end(); account?.dispose(); codePage?.dispose(); submitCodeHook.read = () => null; },');
+    expect(content).toContain('onDismissed: () => { fillToReviewNow?.end(); gestureStop?.abort(); account?.dispose(); codePage?.dispose(); submitCodeHook.read = () => null; },');
     expect(content.indexOf('codePage?.start();')).toBeGreaterThan(content.indexOf('dockHandle = mountAutofillDock(dock, {'));
   });
 

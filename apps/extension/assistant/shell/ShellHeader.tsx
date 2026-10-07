@@ -10,7 +10,7 @@ export function ShellHeader({ view, events }: SceneProps) {
       </div>
       <div style={{ "minWidth": "0" }}>
         <div style={{ "fontWeight": "600", "fontSize": "15px", "letterSpacing": "-.1px" }}>
-          {"ArgoLand.AI"}
+          {"Career Companion"}
         </div>
         <div style={{ "fontSize": "12px", "color": "var(--argo-muted)", "display": "flex", "alignItems": "center", "gap": "6px", "marginTop": "2px" }}>
           <span style={{ "width": "6px", "height": "6px", "borderRadius": "50%", "background": ui.statusDot }}>

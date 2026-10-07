@@ -4,6 +4,7 @@ export * from './conversation-tasks.ts';
 export * from './audio-transcriptions.ts';
 import type { ChatAttachmentSupport, ReviewedAudioTranscript } from './audio-transcriptions.ts';
 import type { McpTaskSummary } from './mcp.ts';
+import type { ModelStepContext, ModelStepEvent, ModelStepResult, ToolEffect } from './agent-loop.ts';
 export const CHAT_MODES = ['chat', 'companion', 'agent'] as const;
 export type ChatMode = typeof CHAT_MODES[number];
 export const JOB_KINDS = ['image', 'video', 'speech', 'browser', 'cli', 'workflow', 'mcp'] as const;
@@ -27,6 +28,8 @@ export interface ProviderStatus {
   capabilities: Capability[];
   models: string[];
   modelsByCapability?: Partial<Record<Capability,string[]>>;
+  /** Explicit server purpose binding; never mixed into ordinary chat model candidates. */
+  modelsByPurpose?: Partial<Record<'safety_classify' | 'companion_generation',string[]>>;
   /** Supported server chat inputs and explicit local audio preprocessing; no quality claim. */
   chatAttachments?: ChatAttachmentSupport;
   /** Declared speech languages (BCP 47); absence makes no language claim. */
@@ -191,6 +194,8 @@ export type ChatStreamEvent =
 
 export interface ToolDefinition {
   name: string; description: string; parameters: Record<string, unknown>;
+  /** Required by the shared agent loop; optional only for existing legacy tools. */
+  effect?: ToolEffect; progressPhrase?: string; endsTurn?: boolean;
 }
 export interface ProviderChatMessage { role: 'user' | 'assistant' | 'system'; content: string; attachments?:ProviderAttachment[]; }
 export interface ChatInput {
@@ -198,17 +203,29 @@ export interface ChatInput {
   persona?: string; memories?: string[]; attachments?: ProviderAttachment[];
 }
 export interface ProviderAttachment { name: string; mime: string; bytes: Uint8Array; }
-export interface ChatContext {
+/** Server-only request admission. A launch must synchronously start the request with the supplied signal. */
+export type ProviderRequestAdmission = <T>(launch: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal) => Promise<T>;
+export interface ProviderRequestContext { signal?: AbortSignal; requestAdmission?: ProviderRequestAdmission; }
+export interface ChatContext extends ProviderRequestContext {
   signal?: AbortSignal;
   tools?: ToolDefinition[];
   executeTool?: (name: string, input: Record<string, unknown>) => Promise<unknown>;
   /** Server-owned accounting hook. Contains identifiers and counts only, never conversation text. */
   onModelCall?: (event: ModelCallEvent) => Promise<void> | void;
+  /** Server-only single-call generation. Never deserialize this context from a client request. */
+  background?: {
+    purpose: 'companion_generation';
+    responseFormat: { name: string; schema: Record<string, unknown> };
+    limits: { maxOutputTokens: number };
+    timeoutMs: number;
+  };
 }
 export type ModelCallUsage = { status: 'reported'; inputTokens: number; outputTokens: number } | { status: 'missing' | 'invalid' };
 export type ModelCallEvent =
-  | { type: 'started'; callId: string; index: number; provider: string; model: string }
-  | { type: 'finished'; callId: string; status: 'complete' | 'failed' | 'cancelled' | 'interrupted'; usage: ModelCallUsage };
+  | { type: 'started'; callId: string; index: number; provider: string; model: string; purpose?: string }
+  | { type: 'finished'; callId: string; status: 'complete' | 'failed' | 'cancelled' | 'interrupted'; usage: ModelCallUsage;
+      /** Server adapter evidence: normal terminal completion, but JSON/schema validation failed. Never a successful reply or execution grant. */
+      structuredOutcome?: 'invalid_format' };
 export interface AccountUsage {
   period: { from: string; to: string; timeZone: 'UTC' };
   chat: {
@@ -226,6 +243,7 @@ export interface ModelRelayRequest {
 }
 export interface JobExecutionContext {
   jobId: string; userId: string; signal?: AbortSignal;
+  requestAdmission?: ProviderRequestAdmission;
   workspaceDirectory: string;
   previousProviderTaskId?: string;
   readAttachment?: (id: string) => Promise<ProviderAttachment>;
@@ -245,7 +263,7 @@ export interface JobExecutionResult { artifacts: GeneratedArtifact[]; text?: str
 /** Omitted provider preserves the OpenAI default; an explicit provider must never fall back. */
 export interface VoiceSessionInput { provider?: string; model?: string; persona?: string; voice?: string; turnTaking?: 'patient' | 'balanced' | 'quick'; }
 export interface SpeechInput { provider?: string; text: string; voice?: string; model?: string; instructions?: string; }
-export interface TranscriptionContext { provider?: string; signal?: AbortSignal; }
+export interface TranscriptionContext extends ProviderRequestContext { provider?: string; }
 export interface VoiceSessionResult { clientSecret: string; model: string; endpoint: string; expiresAt?: number; inputTranscriptionEnabled?: boolean; }
 
 export interface PlatformProviderRuntime {
@@ -253,12 +271,20 @@ export interface PlatformProviderRuntime {
   captureComfyUITemplate?(): ComfyUITemplateSnapshot;
   validateComfyUITemplate?(snapshot: ComfyUITemplateSnapshot, binding: ExecutionTemplateBinding): void;
   streamChat(input: ChatInput, context?: ChatContext): AsyncIterable<ChatStreamEvent>;
+  /** One actual provider request. Optional only for trusted legacy runtime fixtures. */
+  streamModelStep?(input: ChatInput, context: ModelStepContext): AsyncGenerator<ModelStepEvent, ModelStepResult>;
   executeJob(input: CreateJobInput, context: JobExecutionContext): Promise<JobExecutionResult>;
-  createVoiceSession(input?: VoiceSessionInput, context?: { signal?: AbortSignal }): Promise<VoiceSessionResult>;
+  createVoiceSession(input?: VoiceSessionInput, context?: ProviderRequestContext): Promise<VoiceSessionResult>;
   transcribe(input: ProviderAttachment, context?: TranscriptionContext): Promise<{ text: string }>;
-  speech(input: SpeechInput, context?: {signal?:AbortSignal}): Promise<GeneratedArtifact>;
+  speech(input: SpeechInput, context?: ProviderRequestContext): Promise<GeneratedArtifact>;
 }
 export * from './plans.ts';
 export * from './goal-proposals.ts';
 export * from './job-outcome-reviews.ts';
 export * from './voice-context.ts';
+export * from './student-api.ts';
+
+export * from './agent-loop.ts';
+export * from './staff.ts';
+export * from './student-entry.ts';
+export * from './onboarding.ts';

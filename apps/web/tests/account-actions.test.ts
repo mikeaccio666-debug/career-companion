@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AccountActionInbox, accountActionFailure, canOpenPrivateWorkspace, parseAuthOptions, passwordResetAcceptedText, passwordResetValidation, takeAccountActionLink } from '../src/account-actions.ts';
+import { AccountActionInbox, accountActionFailure, canOpenAuthenticatedAccount, canOpenPrivateWorkspace, parseAuthOptions, passwordResetAcceptedText, passwordResetValidation, takeAccountActionLink } from '../src/account-actions.ts';
 
 const token = 'A'.repeat(43);
 function location(hash: string) {
@@ -49,22 +49,24 @@ test('StrictMode can read the one-time memory inbox twice and clearing it retain
 });
 
 test('private workspace fails closed for missing configuration, unverified production accounts and every pending account action', () => {
-  const production = { emailActionsEnabled: true, requireVerifiedEmail: true }, development = { emailActionsEnabled: false, requireVerifiedEmail: false };
-  assert.equal(canOpenPrivateWorkspace(null, { emailVerified: true }, null), false);
-  assert.equal(canOpenPrivateWorkspace(production, null, null), false);
-  assert.equal(canOpenPrivateWorkspace(production, {}, null), false);
-  assert.equal(canOpenPrivateWorkspace(production, { emailVerified: false }, null), false);
-  assert.equal(canOpenPrivateWorkspace(production, { emailVerified: true }, null), true);
-  assert.equal(canOpenPrivateWorkspace(development, {}, null), true);
+  const production = parseAuthOptions({ emailActionsEnabled: true, requireVerifiedEmail: true }), development = parseAuthOptions({ emailActionsEnabled: false, requireVerifiedEmail: false });
+  assert.equal(canOpenAuthenticatedAccount(null, { emailVerified: true }, null), false);
+  assert.equal(canOpenAuthenticatedAccount(production, null, null), false);
+  assert.equal(canOpenAuthenticatedAccount(production, {}, null), false);
+  assert.equal(canOpenAuthenticatedAccount(production, { emailVerified: false }, null), false);
+  assert.equal(canOpenAuthenticatedAccount(production, { emailVerified: true }, null), true);
+  assert.equal(canOpenAuthenticatedAccount(development, {}, null), true);
+  assert.equal(canOpenPrivateWorkspace(production, { emailVerified: true }, null), false);
+  assert.equal(canOpenPrivateWorkspace(development, {}, null), false);
   for (const action of [{ kind: 'password-reset', token }, { kind: 'verify-email', token }, { kind: 'invalid' }] as const) {
-    assert.equal(canOpenPrivateWorkspace(production, { emailVerified: true }, action), false);
-    assert.equal(canOpenPrivateWorkspace(development, { emailVerified: false }, action), false);
+    assert.equal(canOpenAuthenticatedAccount(production, { emailVerified: true }, action), false);
+    assert.equal(canOpenAuthenticatedAccount(development, { emailVerified: false }, action), false);
   }
 });
 
 test('malformed auth metadata cannot silently grant development access', () => {
   for (const value of [null, {}, { emailActionsEnabled: true }, { emailActionsEnabled: 'true', requireVerifiedEmail: true }, { emailActionsEnabled: false, requireVerifiedEmail: 0 }]) assert.throws(() => parseAuthOptions(value));
-  assert.deepEqual(parseAuthOptions({ emailActionsEnabled: false, requireVerifiedEmail: true, unrelated: 'ignored' }), { emailActionsEnabled: false, requireVerifiedEmail: true });
+  assert.deepEqual(parseAuthOptions({ emailActionsEnabled: false, requireVerifiedEmail: true, unrelated: 'ignored' }), { emailActionsEnabled: false, requireVerifiedEmail: true, requireInvite: true, legal: { status: 'unavailable' } });
 });
 
 test('password reset bounds and confirmation are applied before a completion request', () => {

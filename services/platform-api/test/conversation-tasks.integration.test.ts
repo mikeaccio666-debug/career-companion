@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import type { ChatContext, PlatformProviderRuntime } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
@@ -15,7 +16,7 @@ import { recoverStaleStreams } from '../src/runtime-leases.ts';
 import { mcpSchemaHash } from '../src/mcp-config.ts';
 import type { McpTransport } from '../src/mcp-transport-port.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig();
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema = `conversation_tasks_test_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), databaseUrl = new URL(base.databaseUrl);
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString());
@@ -53,7 +54,7 @@ const transport: McpTransport = {
   async call() { ++remoteCalls; throw new Error('Preparation must not execute MCP tools.'); },
 };
 async function startSystem() {
-  system = await buildApp({ db, runtime, mcp: transport, enableQueue: false,
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, runtime, mcp: transport, enableQueue: false,
     config: { ...base, databaseUrl: databaseUrl.toString(), storageDir: directory, accountEmail: undefined, requireVerifiedEmail: false, maxActiveJobs: 100,
       mcp: { entries: [{ id: 'fictional-catalog', name: 'Fictional reviewed connection', url: 'https://mcp-fixture.example.invalid/mcp', tools: [{ name: 'fictional_search', schemaHash: mcpSchemaHash(inputSchema) }] }], fixtureOrigins: [] } },
     requestLimits: { policies: { api: { max: 2000, windowSeconds: 60 }, chat: { max: 2000, windowSeconds: 60 }, control: { max: 2000, windowSeconds: 60 }, 'auth-register': { max: 1000, windowSeconds: 60 } } },
@@ -62,7 +63,7 @@ async function startSystem() {
 }
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'Only a loopback test database is allowed.');
-  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-conversation-tasks-')); await startSystem();
+  await admin.query(`CREATE SCHEMA ${schema}`); await db.migrate(); await seedFictionalActiveLegal(db); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-conversation-tasks-')); await startSystem();
 });
 after(async () => { await system?.app.close(); await db.close(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.close(); if (directory) await fs.rm(directory, { recursive: true, force: true }); });
 
@@ -72,7 +73,7 @@ async function request(actor: Actor | undefined, method: 'GET' | 'POST' | 'DELET
   return system.app.inject({ method, url: prefix + route, headers: values, payload });
 }
 async function actor(): Promise<Actor> {
-  const response = await request(undefined, 'POST', '/auth/register', { name: 'Fictional conversation tester', email: `${randomUUID()}@example.invalid`, password: 'Fictional-password-123' });
+  const response = await request(undefined, 'POST', '/auth/register', await fictionalRegistration(db,{ name: 'Fictional conversation tester', email: `${randomUUID()}@example.invalid`, password: 'Fictional-password-123' }));
   assert.equal(response.statusCode, 201, response.body); return { id: response.json().user.id, cookie: (response.headers['set-cookie'] as string).split(';')[0] };
 }
 async function conversation(user: Actor) {
@@ -87,7 +88,7 @@ async function mcp(user: Actor): Promise<ToolRequest> {
 }
 function registerPlan(plan: Plan) { const key = `fictional-plan-${randomUUID()}`; plans.set(key, plan); return key; }
 async function respond(user: Actor, conversationId: string, plan: Plan) {
-  const response = await fetch(httpOrigin + prefix + `/conversations/${conversationId}/messages`, { method: 'POST', headers: { ...headers(user), 'content-type': 'application/json' }, body: JSON.stringify({ content: registerPlan(plan), provider: 'synthetic', mode: 'agent' }) });
+  const response = await fetch(httpOrigin + prefix + `/conversations/${conversationId}/messages`, { method: 'POST', headers: { ...headers(user), 'content-type': 'application/json' }, body: JSON.stringify({ content: registerPlan(plan), mode: 'agent' }) });
   assert.equal(response.status, 200); return response.text();
 }
 function event(body: string, name: string) { const match = body.match(new RegExp(`event: ${name}\\ndata: ([^\\n]+)`)); assert(match, `Missing synthetic ${name} event.`); return JSON.parse(match[1]); }
@@ -116,7 +117,7 @@ function interceptTransactions(intercept: (text: string, values: any, run: () =>
 }
 async function liveTurn(user: Actor, conversationId: string, requests: ToolRequest[] = []) {
   const controller = new AbortController(), plan: Plan = { requests, hold: true };
-  const response = await fetch(httpOrigin + prefix + `/conversations/${conversationId}/messages`, { method: 'POST', headers: { ...headers(user), 'content-type': 'application/json' }, body: JSON.stringify({ content: registerPlan(plan), provider: 'synthetic', mode: 'agent' }), signal: controller.signal });
+  const response = await fetch(httpOrigin + prefix + `/conversations/${conversationId}/messages`, { method: 'POST', headers: { ...headers(user), 'content-type': 'application/json' }, body: JSON.stringify({ content: registerPlan(plan), mode: 'agent' }), signal: controller.signal });
   assert.equal(response.status, 200); const reader = response.body!.getReader(); let body = '';
   while (!body.includes('event: delta')) { const chunk = await reader.read(); assert.equal(chunk.done, false); body += new TextDecoder().decode(chunk.value); }
   const messageId = event(body, 'start').messageId;
@@ -263,7 +264,7 @@ test('chat conversation lock remains compatible with a task creator holding the 
   let chatting: ReturnType<typeof request> | undefined;
   try {
     await bounded(userHeld.promise);
-    chatting = request(user, 'POST', `/conversations/${conv.id}/messages`, { content: registerPlan({}), provider: 'synthetic', mode: 'agent' });
+    chatting = request(user, 'POST', `/conversations/${conv.id}/messages`, { content: registerPlan({}), mode: 'agent' });
     await bounded(conversationHeld.promise); releaseOrigin.resolve();
     const created = await bounded(creating); assert.equal(created.job.status, 'queued');
     releaseChat.resolve(); assert.equal((await bounded(chatting)).statusCode, 409);

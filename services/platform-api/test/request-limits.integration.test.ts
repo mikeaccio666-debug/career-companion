@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +17,7 @@ import { Database } from '../src/database.ts';
 // Real HTTP, authentication and database fixtures. Every actor connects from the
 // same loopback address; only verified sessions distinguish account limits.
 const prefix = '/api/platform', origin = 'https://limits-fixture.invalid';
-const base = readConfig(), schema = `request_limits_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'limits-fixture', PLATFORM_AGENT_PROVIDER: 'limits-fixture', PLATFORM_REALTIME_PROVIDER: 'limits-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'limits-fixture', PLATFORM_SPEECH_PROVIDER: 'limits-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `request_limits_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const databases = [new Database(url.toString()), new Database(url.toString())];
@@ -43,7 +44,7 @@ function wav() {
 }
 const runtime: PlatformProviderRuntime = {
   capabilities: () => [{ id: 'limits-fixture', name: 'Synthetic request limit transport', enabled: true, keyConfigured: true,
-    capabilities: ['chat', 'speech', 'transcription', 'realtime'], models: ['synthetic-model'], envVariables: [] }],
+    capabilities: ['chat', 'speech', 'transcription', 'realtime'], models: ['synthetic-model'], voiceOptions: { speech: { voices: ['fictional-fixed-voice'], defaultVoice: 'fictional-fixed-voice' }, realtime: { voices: ['fictional-fixed-voice'], defaultVoice: 'fictional-fixed-voice', turnTaking: true } }, envVariables: [] }],
   async *streamChat() { calls.chat++; yield { type: 'delta', text: 'Fictional limiter response' }; },
   async executeJob() { calls.job++; throw new Error('This fixture does not execute jobs.'); },
   async speech() { calls.speech++; return { name: 'fictional-limiter.wav', mime: 'audio/wav', bytes: wav() }; },
@@ -82,7 +83,7 @@ function cookie(response: Response) {
 }
 async function register(instance = 0): Promise<Actor> {
   const email = `limits-${randomUUID()}@example.invalid`;
-  const response = await post(instance, '/auth/register', undefined, { name: 'Fictional limiter tester', email, password: 'Fictional-limiter-password-2026' });
+  const response = await post(instance, '/auth/register', undefined, await fictionalRegistration(databases[0]!,{ name: 'Fictional limiter tester', email, password: 'Fictional-limiter-password-2026' }));
   assert.equal(response.status, 201, response.bytes.toString()); return { id: json(response).user.id, email, cookie: cookie(response) };
 }
 async function login(actor: Actor, instance = 1): Promise<Actor> {
@@ -106,7 +107,7 @@ function limited(response: Response, windowSeconds = 60) {
 async function transcription(instance: number, actor: Actor) {
   const boundary = `fictional-limits-${randomUUID()}`;
   const body = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="fictional-limiter.wav"\r\nContent-Type: audio/wav\r\n\r\n`), wav(),
-    Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="provider"\r\n\r\nlimits-fixture\r\n--${boundary}--\r\n`)]);
+    Buffer.from(`\r\n--${boundary}--\r\n`)]);
   return exchange(instance, '/voice/transcribe', actor, { method: 'POST', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body });
 }
 async function insertConversation(actor: Actor) {
@@ -122,7 +123,7 @@ async function exhaustApi(actor: Actor) {
 }
 
 async function start(instance: number, limits = requestLimits) {
-  systems[instance] = await buildApp({ db: databases[instance], runtime, enableQueue: false, requestLimits: limits,
+  systems[instance] = await buildApp({legalBundle:FICTIONAL_LEGAL, db: databases[instance], runtime, enableQueue: false, requestLimits: limits,
     config: { ...base, databaseUrl: url.toString(), storageDir: directory, s3: undefined, webStaticDir: undefined,
       allowedOrigins: new Set([origin]), secureCookies: true } });
   await systems[instance]!.app.listen({ host: '127.0.0.1', port: 0 });
@@ -130,7 +131,7 @@ async function start(instance: number, limits = requestLimits) {
 }
 before(async () => {
   assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'Only a local test database is allowed.');
-  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await databases[0]!.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await databases[0]!.migrate(); await seedFictionalActiveLegal(databases[0]!);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-request-limits-'));
   await start(0); await start(1);
 });
@@ -208,10 +209,10 @@ test('missing, forged and expired cookies retain 401 instead of acquiring or exh
 test('speech and transcription have independent shared generation scopes without consuming the account API allowance', async () => {
   const actor = await register(), before = { ...calls };
   for (const instance of [0, 1]) {
-    const response = await post(instance, '/voice/speech', actor, { provider: 'limits-fixture', text: 'Fictional speech limit script' });
+    const response = await post(instance, '/voice/speech', actor, { text: 'Fictional speech limit script' });
     assert.equal(response.status, 201, response.bytes.toString());
   }
-  limited(await post(0, '/voice/speech', actor, { provider: 'limits-fixture', text: 'Fictional rejected script' }));
+  limited(await post(0, '/voice/speech', actor, { text: 'Fictional rejected script' }));
   for (const instance of [1, 0]) {
     const response = await transcription(instance, actor); assert.equal(response.status, 200, response.bytes.toString());
     assert.equal(json(response).text, 'Fictional limiter transcript');
@@ -224,11 +225,11 @@ test('speech and transcription have independent shared generation scopes without
 test('chat uses a shared dedicated scope and exhausted generation limits leave private reads available', async () => {
   const actor = await register(), id = await insertConversation(actor), before = calls.chat;
   for (const instance of [0, 1]) {
-    const response = await post(instance, `/conversations/${id}/messages`, actor, { provider: 'limits-fixture', content: 'Fictional request limit prompt', mode: 'chat' });
+    const response = await post(instance, `/conversations/${id}/messages`, actor, { content: 'Fictional request limit prompt', mode: 'chat' });
     assert.equal(response.status, 200, response.bytes.toString()); assert.match(String(response.headers['content-type']), /^text\/event-stream/);
     assert.match(response.bytes.toString(), /event: done/);
   }
-  limited(await post(1, `/conversations/${id}/messages`, actor, { provider: 'limits-fixture', content: 'Fictional rejected prompt', mode: 'chat' }));
+  limited(await post(1, `/conversations/${id}/messages`, actor, { content: 'Fictional rejected prompt', mode: 'chat' }));
   assert.equal(calls.chat - before, 2);
   const messages = await databases[0]!.query('SELECT count(*)::integer AS n FROM platform_messages WHERE conversation_id=$1', [id]);
   assert.equal(messages.rows[0].n, 4, 'Rejected generation must not persist a user or assistant message.');
@@ -239,17 +240,17 @@ test('chat uses a shared dedicated scope and exhausted generation limits leave p
 test('exhausted generation and API scopes retain owned cancellation, voice release and logout with Origin and ownership guards', async () => {
   const owner = await register(), other = await register(1);
   for (const instance of [0, 1]) {
-    const response = await post(instance, '/voice/speech', owner, { provider: 'limits-fixture', text: 'Fictional cleanup fixture' });
+    const response = await post(instance, '/voice/speech', owner, { text: 'Fictional cleanup fixture' });
     assert.equal(response.status, 201, response.bytes.toString());
   }
-  limited(await post(0, '/voice/speech', owner, { provider: 'limits-fixture', text: 'Fictional exhausted script' }));
+  limited(await post(0, '/voice/speech', owner, { text: 'Fictional exhausted script' }));
   await exhaustApi(owner);
-  const first = await post(0, '/voice/session', owner, { provider: 'limits-fixture' }); assert.equal(first.status, 200, first.bytes.toString());
+  const first = await post(0, '/voice/session', owner, {}); assert.equal(first.status, 200, first.bytes.toString());
   const firstSession = json(first).sessionId;
   assert.equal((await post(1, '/voice/session/release', owner, { sessionId: firstSession })).status, 200);
-  const second = await post(1, '/voice/session', owner, { provider: 'limits-fixture' }); assert.equal(second.status, 200, second.bytes.toString());
+  const second = await post(1, '/voice/session', owner, {}); assert.equal(second.status, 200, second.bytes.toString());
   const sessionId = json(second).sessionId;
-  limited(await post(0, '/voice/session', owner, { provider: 'limits-fixture' }));
+  limited(await post(0, '/voice/session', owner, {}));
   const jobId = randomUUID();
   await databases[0]!.query("INSERT INTO platform_jobs(id,user_id,kind,provider,prompt,status) VALUES($1,$2,'image','limits-fixture','Fictional queued task','queued')", [jobId, owner.id]);
   const leaseCount = async () => (await databases[0]!.query("SELECT count(*)::integer AS n FROM platform_runtime_leases WHERE user_id=$1 AND kind='voice'", [owner.id])).rows[0].n;
@@ -288,10 +289,10 @@ test('an unavailable shared limiter returns safe 503 before providers, leases, p
   await databases[0]!.query('ALTER TABLE platform_request_limits RENAME TO platform_request_limits_unavailable');
   try {
     const responses = [
-      await post(0, '/voice/speech', actor, { provider: 'limits-fixture', text: 'Fictional blocked script' }),
+      await post(0, '/voice/speech', actor, { text: 'Fictional blocked script' }),
       await transcription(1, actor),
-      await post(0, '/voice/session', actor, { provider: 'limits-fixture' }),
-      await post(1, `/conversations/${conversationId}/messages`, actor, { provider: 'limits-fixture', content: 'Fictional blocked prompt', mode: 'chat' }),
+      await post(0, '/voice/session', actor, {}),
+      await post(1, `/conversations/${conversationId}/messages`, actor, { content: 'Fictional blocked prompt', mode: 'chat' }),
     ];
     for (const response of responses) {
       assert.equal(response.status, 503, response.bytes.toString()); assert.equal(json(response).error.code, 'REQUEST_LIMIT_UNAVAILABLE');
@@ -301,13 +302,13 @@ test('an unavailable shared limiter returns safe 503 before providers, leases, p
     }
     assert.deepEqual(calls, before); assert.deepEqual(await state(), saved);
   } finally { await databases[0]!.query('ALTER TABLE platform_request_limits_unavailable RENAME TO platform_request_limits'); }
-  const recovered = await post(1, '/voice/speech', actor, { provider: 'limits-fixture', text: 'Fictional recovered script' });
+  const recovered = await post(1, '/voice/speech', actor, { text: 'Fictional recovered script' });
   assert.equal(recovered.status, 201, recovered.bytes.toString()); assert.equal(calls.speech - before.speech, 1);
 });
 
 test('a locked PostgreSQL counter times out safely before the provider and recovers after the independent lock is released', async () => {
   const actor = await register();
-  const first = await post(0, '/voice/speech', actor, { provider: 'limits-fixture', text: 'Fictional lock fixture' });
+  const first = await post(0, '/voice/speech', actor, { text: 'Fictional lock fixture' });
   assert.equal(first.status, 201, first.bytes.toString());
   await systems[1]!.app.close(); await start(1, { ...requestLimits, counterTimeoutMs: 100 });
   const before = { ...calls }, client = await databases[0]!.pool.connect();
@@ -315,7 +316,7 @@ test('a locked PostgreSQL counter times out safely before the provider and recov
     await client.query('BEGIN');
     const locked = await client.query("SELECT request_count FROM platform_request_limits WHERE subject_type='user' AND subject_key=$1 AND scope='speech' FOR UPDATE", [actor.id]);
     assert.equal(locked.rows[0].request_count, 1);
-    const response = await post(1, '/voice/speech', actor, { provider: 'limits-fixture', text: 'Fictional blocked lock request' });
+    const response = await post(1, '/voice/speech', actor, { text: 'Fictional blocked lock request' });
     assert.equal(response.status, 503, response.bytes.toString()); assert.equal(json(response).error.code, 'REQUEST_LIMIT_UNAVAILABLE');
     assert(!response.bytes.toString().includes('statement timeout')); assert(!response.bytes.toString().includes('platform_request_limits'));
     assert.deepEqual(calls, before);
@@ -325,9 +326,9 @@ test('a locked PostgreSQL counter times out safely before the provider and recov
       (SELECT count(*)::integer FROM platform_runtime_leases WHERE user_id=$2) AS leases`, [actor.id, actor.id]);
     assert.deepEqual(saved.rows, [{ requests: 1, uploads: 1, leases: 0 }], 'A timed-out counter must roll back without granting execution.');
   } finally { await client.query('ROLLBACK'); client.release(); }
-  const recovered = await post(1, '/voice/speech', actor, { provider: 'limits-fixture', text: 'Fictional recovered lock request' });
+  const recovered = await post(1, '/voice/speech', actor, { text: 'Fictional recovered lock request' });
   assert.equal(recovered.status, 201, recovered.bytes.toString()); assert.equal(calls.speech - before.speech, 1);
-  limited(await post(0, '/voice/speech', actor, { provider: 'limits-fixture', text: 'Fictional exhausted recovered window' }));
+  limited(await post(0, '/voice/speech', actor, { text: 'Fictional exhausted recovered window' }));
   await systems[1]!.app.close(); await start(1);
 });
 
@@ -346,7 +347,7 @@ test('anonymous public, login and registration quotas share the socket identity 
     forwarded: `for=203.0.113.${index + 10}`, cookie: `companion_session=fictional-forwarded-cookie-${index}` });
   for (const instance of [0, 1]) {
     const response = await exchange(instance, '/capabilities', undefined, { headers: spoof(instance) });
-    assert.equal(response.status, 200, response.bytes.toString()); assert.equal(json(response).providers[0].id, 'limits-fixture');
+    assert.equal(response.status, 200, response.bytes.toString()); assert.equal(json(response).capabilities.chat, true); assert.equal(Object.hasOwn(json(response), 'providers'), false);
   }
   limited(await exchange(0, '/capabilities', actor, { headers: spoof(2) }));
 
@@ -358,12 +359,12 @@ test('anonymous public, login and registration quotas share the socket identity 
   limited(await post(1, '/auth/login', actor, { email: actor.email, password: 'Fictional-limiter-password-2026' }, spoof(5)));
 
   for (const instance of [0, 1]) {
-    const response = await post(instance, '/auth/register', undefined, { name: 'Fictional forwarded registration',
-      email: `limits-forwarded-${randomUUID()}@example.invalid`, password: 'Fictional-limiter-password-2026' }, spoof(instance + 6));
+    const response = await post(instance, '/auth/register', undefined, await fictionalRegistration(databases[0]!,{ name: 'Fictional forwarded registration',
+      email: `limits-forwarded-${randomUUID()}@example.invalid`, password: 'Fictional-limiter-password-2026' }), spoof(instance + 6));
     assert.equal(response.status, 201, response.bytes.toString()); cookie(response);
   }
-  limited(await post(0, '/auth/register', undefined, { name: 'Fictional rejected registration',
-    email: `limits-forwarded-${randomUUID()}@example.invalid`, password: 'Fictional-limiter-password-2026' }, spoof(8)));
+  limited(await post(0, '/auth/register', undefined, await fictionalRegistration(databases[0]!,{ name: 'Fictional rejected registration',
+    email: `limits-forwarded-${randomUUID()}@example.invalid`, password: 'Fictional-limiter-password-2026' }), spoof(8)));
   assert.equal((await databases[0]!.query('SELECT count(*)::integer AS n FROM platform_users')).rows[0].n, users + 2);
   const windows = await databases[0]!.query("SELECT subject_key,scope,request_count FROM platform_request_limits WHERE subject_type='ip' ORDER BY scope");
   assert.deepEqual(windows.rows.map(row => ({ scope: row.scope, request_count: row.request_count })), [

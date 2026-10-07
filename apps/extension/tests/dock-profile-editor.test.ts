@@ -122,7 +122,7 @@ describe('我的资料：在浮层里改、存到门户', () => {
     click(root.querySelector('[data-action="profile-save"]'));
     await settle();
     await settle();
-    expect(toastNode?.textContent).toBe('ArgoLand 这次回得太慢，不确定存上没有。你的修改还在，稍后再点一次保存。');
+    expect(toastNode?.textContent).toBe('Career Companion 这次回得太慢，不确定存上没有。你的修改还在，稍后再点一次保存。');
     expect(root.querySelector('.pf-status')?.textContent, '改的东西还在').toBe('1 项修改未保存');
     expect(directory.profileV2, '没有整份重读').toHaveBeenCalledTimes(1);
   });

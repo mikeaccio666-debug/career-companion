@@ -1,16 +1,24 @@
-# AI 网页工作台
+# Career Companion
 
-先搭建可组合的通用 AI 工作台，再设计具体产品方向。网页包含文字、陪伴练习、Agent、语音、图片、视频、可审阅的浏览器操作、终端 harness 和多步工作流。求职伙伴仍是重点产品方向；原浏览器插件是未来可接入的执行端。
+面向在美中国留学生中的 STEM 硕士，重点服务正在寻找 new grad 全职岗位的学生。目标体验是每位用户有一位专属主理人：性格由系统生成、名字由用户起；一支按需入场的 AI 专家小组共享关于用户的记忆，陪用户练习、准备与推进求职。主理人和专家都是 AI；「导师」专指蔓藤真人导师。
+
+首版是手机优先的 Web，手机端的 Discord 私信按渠道分期接入；不用 Discord 也必须能完整使用。产品决定以 [docs/product/ 产品规格入口](docs/product/README.md) 为准，定位、分期、渠道与实施分别见 [01](docs/product/01-vision-and-users.md)、[07](docs/product/07-first-cohort-mvp.md)、[10](docs/product/10-channels-discord-and-mobile.md) 和 [09](docs/product/09-implementation-roadmap.md)。产品不做个人签证或工作资格判断，相关问题交给学校 DSO 或雇主核实。
+
+目前仍在把现有底座收拢为学生产品。网页已接入 O0 邀请注册与当前协议确认，完成后停在 `/welcome`；初见、第一封信与学生导航尚未开放。主理人、专家协作、共享记忆和 Discord 尚未完整接入；下面记录保留底座的能力与历史验证范围，不表示当前网页开放了这些工具、第 0 步或学生上线已完成。
+
+## 底座能力（内部）
+
+现有文字、陪伴练习、Agent、语音、图片、视频、浏览器操作、终端 harness 和多步工作流保留为内部底座，可以复用于专家能力；通用工作台不再作为产品方向扩展，首版学生界面按实施路线收拢。原浏览器插件作为投递官的电脑端执行器继续接入。
 
 2026-10-06：开发 API、worker、网页、数据库及 CPU 模型服务已迁到 edaix-dev 的独立环境。Mac 的 http://localhost:4321 通过 SSH 预览，原本地数据保留并停写；当前 Codex 会话仍在 Mac，编辑与远端代码同步需明确执行。连接、验证、重启边界和回退见 [远端开发说明](docs/platform/remote-development.md)。本次是开发环境迁移，没有生产云部署。项目固定 Node 24.21.0、pnpm 11.13.1。
 
-声音方向已确认：先专业训练本人的声音，目标是尽量逼近真人；短样本只用于筛选设备与风格。已准备 [本人声线录制手册](docs/platform/personal-voice-recording.md)，包含中英文试读、专业语料计划和独立验收句。ElevenLabs 已有语音合成接入代码，可通过服务端配置选择已有声线，并用于直接朗读、任务与工作流；协议测试和类型检查通过。尚未录音、购买套餐、上传、创建或训练声线，也未调用真实商业接口或验证其音质。远端仍使用 Kokoro 验证开发链路，ElevenLabs 未配置、付费调用关闭；配置与限制见 [语音接入说明](packages/ai-core/README.md)。
+产品声线按 [12 §6.2](docs/product/12-voice.md#62-不克隆真人)：不克隆真人，本人声音训练不用作主理人或学生个性化产品声线。[本人声线录制手册](docs/platform/personal-voice-recording.md) 仅保留早期个人实验的中英文试读、语料计划和验收句。ElevenLabs 已有语音合成接入代码，可通过服务端配置选择已有声线，并用于直接朗读、任务与工作流；协议测试和类型检查通过。尚未录音、购买套餐、上传、创建或训练声线，也未调用真实商业接口或验证其音质。远端仍使用 Kokoro 验证开发链路，ElevenLabs 未配置、付费调用关闭；配置与限制见 [语音接入说明](packages/ai-core/README.md)。
 
-当前已实现独立网页、真实账户和数据保存、任务审批与 worker，以及多个供应商的接入代码。本地模型 Ollama／Qwen 已真实返回文字回复并调用部分 Agent 工具，独立 Kokoro CPU 服务已真实生成英文 WAV；Faster Whisper CPU 服务已真实转写虚构中英文音频，静音返回空文字。独立 GPU 验证已通过真实 SDXL 图片生成、音频审阅后聊天及简单像素理解；完整 Agent 的工具选择仍未全面通过，不能作为默认生产模型。商业模型调用仍关闭；实时通话、真实视频生成和本人声音训练尚未验收。协议测试使用虚构资料和本地测试服务。公开上线还需要计费配额、账户邮件送达验收、部署与运维工作。Openfield 是临时界面名称，项目名称和公开许可证待定。已建立 [public GitHub 仓库](https://github.com/mikeaccio666-debug/career-companion)，经过检查的活跃源码已发布；历史参考、私人环境和运行数据保留在本地，没有生产部署。
+当前已实现独立网页、真实账户和数据保存、任务审批与 worker，以及多个供应商的接入代码。本地模型 Ollama／Qwen 已真实返回文字回复并调用部分 Agent 工具，独立 Kokoro CPU 服务已真实生成英文 WAV；Faster Whisper CPU 服务已真实转写虚构中英文音频，静音返回空文字。独立 GPU 验证已通过真实 SDXL 图片生成、音频审阅后聊天及简单像素理解；完整 Agent 的工具选择仍未全面通过，不能作为默认生产模型。商业模型调用仍关闭；实时通话、真实视频生成和历史个人声音实验尚未验收。协议测试使用虚构资料和本地测试服务。公开上线还需要计费配额、账户邮件送达验收、部署与运维工作。Openfield 是既有界面的历史工作名；Career Companion 是当前产品工作名，正式名称和公开许可证待定。已建立 [public GitHub 仓库](https://github.com/mikeaccio666-debug/career-companion)，经过检查的活跃源码已发布；历史参考、私人环境和运行数据保留在本地，没有生产部署。
 
 “我的资料库”支持按账号保存纯文本或 Markdown，编辑、删除、按正文关键词检索，并把选定段落的版本引用带入 Agent 草稿。Agent 通过只读工具重新读取私有原文；来源网址只作记录，不会自动抓取。真实数据库／HTTP与网页检查已经通过，独立 16K 上下文的 CPU Qwen 也完成一次实际工具读取与回答；默认 4K 模型曾失败，模型稳定性和响应速度仍待改善，具体验证范围见 [验证记录](docs/platform/verification.md#私有知识来源与-agent-引用)。蔓藤资料批量整理、组织知识共享和语义检索属于后续工作。
 
-完整14工具的早期真实CPU Qwen规划验收，修复前后均为0／3：错误参数现在可得到受限反馈并续轮，空答案也会明确失败，但该模型尚未保存合格草稿。它目前仅作开发测试模型；真实生产模型质量、视频生成与本人声线仍需独立验收。该轮结果见[真实模型规划记录](docs/platform/verification.md#已安装开源模型的真实规划与错误恢复)，后续9B GPU与SDXL验证见[本地模型验收](docs/platform/local-model-qualification.md)。
+完整14工具的早期真实CPU Qwen规划验收，修复前后均为0／3：错误参数现在可得到受限反馈并续轮，空答案也会明确失败，但该模型尚未保存合格草稿。它目前仅作开发测试模型；真实生产模型质量和视频生成仍需独立验收，本人声线属于未验收的历史个人实验。该轮结果见[真实模型规划记录](docs/platform/verification.md#已安装开源模型的真实规划与错误恢复)，后续9B GPU与SDXL验证见[本地模型验收](docs/platform/local-model-qualification.md)。
 
 新增 [MCP 外部工具接入](docs/platform/mcp.md)：服务器审阅目录、真实工具发现、账号授权、明确审批、worker 租约与私有结果读取。默认目录为空；没有连接 Gmail、蔓藤或真实外部工具，也没有执行生产迁移。用户先准备并审阅调用，结果可带回 Agent 草稿；已开始的未知调用不自动重放。
 
@@ -34,7 +42,7 @@ Agent 准备的任务现在 [持久关联原对话](docs/platform/conversation-t
 
 语音页提供温柔陪练、轻松职业搭子和清晰面试官三种交流角色；服务实际支持时可选声线、朗读表达与实时接话节奏。Kokoro 固定声线，不支持角色情绪指令；界面明确标注服务默认表达。回答保留发送时的角色，切换选择不会改写旧回答。选项随临时草稿保留，刷新不恢复；商业声音自然度与实时交互仍需试听验收。
 
-## 启动通用工作台
+## 启动内部底座
 
 需要 Node 24.21.0、pnpm 11.13.1 和 Docker。数据库只使用新的独立本地容器，不读取 Argoland 的环境配置。
 
@@ -46,7 +54,13 @@ pnpm infra:up
 pnpm dev:platform
 ```
 
-打开 [本地工作台](http://localhost:4321/)。首次创建本地账号；会话、明确保存的记忆、审批和任务属于该账号。API 监听 localhost4320，独立 worker 从队列取任务，PostgreSQL 和 Redis 分别监听 localhost5442、6388。停止开发进程用 Ctrl C；`pnpm infra:stop` 停止本项目容器并保留数据卷。
+打开 [本地账号入口](http://localhost:4321/)。API 监听 localhost4320，独立 worker 从队列取任务，PostgreSQL 和 Redis 分别监听 localhost5442、6388。停止开发进程用 Ctrl C；`pnpm infra:stop` 停止本项目容器并保留数据卷。
+
+当前网页实现 O0 注册与协议确认：一次性邮箱绑定邀请码、不预勾的协议确认，以及登录前可读的 `/terms` 和 `/privacy`。未配置正式协议正文，或正文与数据库当前政策不匹配时，显示“尚未开放”，不能注册或调用模型。协议须由负责的法务与产品人员提供，通过服务端文件和数据库政策显式配置；迁移和启动不会生成协议、邀请码或用户同意。邀请码默认必需；开发环境可显式设置 `PLATFORM_REQUIRE_INVITE=0`，生产拒绝关闭。详细接口和配置见 [Platform API](services/platform-api/README.md#student-registration-and-model-consent)。
+
+所有网页登录账户目前在邮箱验证、当前协议确认后停留于 `/welcome`，如实说明初见尚未开放；不会从旧账号记录推断主理人初见已经完成。O1 之后的初见、第一封信和学生导航仍需后续实现，员工工作台的网页身份入口也尚未接通。历史工具组件保留在底座中。
+
+新的浏览器、CLI、工作流、图片、视频及 MCP 工作台任务默认关闭，创建、重试和首次批准返回 `403 WORKBENCH_DISABLED`。已有任务的读取、取消、拒绝审批及已接受任务的恢复继续使用原有授权。保留的聊天、语音和后台模型请求还必须通过当前协议同意检查；任务准备或旧审批不能代替同意。内部开发底座任务可在忽略的服务端配置中显式设置 `PLATFORM_ENABLE_WORKBENCH=1` 并重启，但该开关不授予员工身份、网页工作台访问、工具授权或商业调用权限。员工组织元数据与角色读取已实现，员工工作台权限尚未接入，production 仍拒绝开启工作台。模型与供应商由服务端路由选择。
 
 模型配置只放在后端。首次配置且 `.env.platform` 尚不存在时，将根目录 `.env.example` 复制为忽略的 `.env.platform`；已有该文件时只补充需要的配置，保留本地模型设置。填写自己的供应商配置后重启。商业请求还受 `PLATFORM_ALLOW_PROVIDER_CALLS` 控制，默认关闭。[ChatGPT 订阅与开发者 API 分别计费](https://help.openai.com/en/articles/9039756-managing-billing-settings-on-chatgpt-web-and-platform)，接入前确认对应账户有模型权限和预算；不要在聊天、浏览器存储或源码中放密钥。
 
@@ -107,16 +121,17 @@ pnpm build:web
 
 手机布局已提供抽屉导航；PWA 使用 Vite PWA／Workbox 生成、完整性校验公开资源及提示后自然更新，离线新页提供公共连接入口。两版真实生产构建的离线／更新／失败保留旧版已通过本地 Chrome 验收，详见 [手机网页与 PWA](docs/platform/mobile-web.md)。对话、资料、语音和生成仍需联网；真机 HTTPS、安装、麦克风、键盘与 WebRTC 仍待设备测试。
 
-## 求职产品与迁移背景
+## 产品规格与历史迁移背景
 
-- [求职 Agent 基础架构](docs/career/architecture.md)：七个 skill、共享成长证据、知识库与执行端分工，以及从网页开始的实施顺序。
-- [产品与学习研究](docs/career/product-research.md)、[知识与岗位接入](docs/career/data-integrations.md)、[旧模块复用审计](docs/career/reuse-audit.md)：官方来源、job-radar PR 和学习系统提取边界。
+- [产品规格入口](docs/product/README.md)：当前定位、主理人、专家小组、蔓藤资产、旅程、商业、分期、设计、实施、渠道与声线的权威文档。
+- [早期求职 Agent 架构](docs/career/architecture.md)：历史领域方案，保留七个 skill、成长证据、知识库与执行端分工的讨论；当前产品与实施决定以 `docs/product/` 为准。
+- [早期产品与学习研究](docs/career/product-research.md)、[知识与岗位接入研究](docs/career/data-integrations.md)、[旧模块复用审计](docs/career/reuse-audit.md)：历史调研与源码观察，保留官方来源、job-radar PR 和学习系统提取边界。
 - [生产部署建议](docs/platform/deployment-plan.md)：Vercel／Render 的服务分工、独立 worker、数据与备份要求；建议尚未部署。
 - [云部署决策与成本模型](docs/platform/cloud-decision.md)、[实际产品案例](docs/platform/public-platform-stacks.md)：托管／大云／VM区别，Higgsfield等公开资料，按真实使用估算费用与后续调整路径。
 - [生产容器与部署配置](infra/platform/production/README.md)：独立 Web／API、worker 与迁移角色，可本地审阅；应用云端配置前仍需目标环境验收。
 - [career-core](packages/career-core/README.md)：独立领域基础与11项测试；尚未接入求职 API、真实私库或完整运行层。
-- [本人声音录音准备工具](services/voice-dataset/README.md)：离线检查私人 WAV、审阅并导出训练候选索引；不上传或启动训练。
-- [当前产品假设](docs/product-brief.md)：F1 学生的“我不知道怎么开始”入口，以及代办与学习的关系。
+- [个人声音实验工具](services/voice-dataset/README.md)：历史个人实验用的离线 WAV 检查与候选索引导出；不上传或启动训练，不作为产品声线方案。
+- [早期产品假设](docs/product-brief.md)：创始人 F1、business／digital media 背景的需求记录，以及代办与学习的讨论；不作为当前首批用户或体验决策。
 - [架构与迁移报告](docs/architecture-migration.md)：目录职责、已完成的改造、接口漂移、UI 调整难度与尚缺的后端。
 - [自动化执行方式](docs/automation-options-research.md)：插件、云浏览器、官方 API 与 Muse/Dots 的实际边界。
 - [原审阅队列方案评估](docs/review-queue-assessment.md)：手机审阅、电脑执行，以及批量提交仍需新增的部分。

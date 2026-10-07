@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER, type ChatInput, type PlatformProviderRuntime } from '@companion/platform-contracts';
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
@@ -14,7 +15,7 @@ import { Database } from '../src/database.ts';
 import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 
 const prefix = '/api/platform', origin = 'http://localhost:4321';
-const base = readConfig(), schema = `audio_receipts_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'audio-chat-fixture', PLATFORM_AGENT_PROVIDER: 'audio-chat-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `audio_receipts_${randomUUID().replaceAll('-', '')}`;
 const databaseUrl = new URL(base.databaseUrl);
 assert(['localhost', '127.0.0.1', '[::1]'].includes(databaseUrl.hostname), 'Audio receipt fixtures require a loopback PostgreSQL instance.');
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
@@ -84,8 +85,8 @@ function exchange(route: string, actor?: Actor, options: { method?: string; body
 }
 function json(result: Exchange) { return JSON.parse(result.body); }
 async function register(): Promise<Actor> {
-  const result = await exchange('/auth/register', undefined, { method: 'POST', body: { name: 'Fictional audio reviewer',
-    email: `${randomUUID()}@example.invalid`, password: 'Fictional-audio-review-password-2026' } });
+  const result = await exchange('/auth/register', undefined, { method: 'POST', body: await fictionalRegistration(db,{ name: 'Fictional audio reviewer',
+    email: `${randomUUID()}@example.invalid`, password: 'Fictional-audio-review-password-2026' }) });
   assert.equal(result.status, 201, result.body); return { id: json(result).user.id, cookie: result.headers['set-cookie']![0]!.split(';')[0]! };
 }
 function wav(sample = 0) {
@@ -113,7 +114,7 @@ async function conversation(actor = alice) {
 }
 function message(id: string, source: Source, receipt: Receipt, actor = alice, extra = {}) {
   return exchange(`/conversations/${id}/messages`, actor, { method: 'POST', body: { content: 'Discuss this fictional recording.', mode: 'chat',
-    provider: 'audio-chat-fixture', attachmentIds: [source.id], audioTranscripts: [{ receiptId: receipt.id, reviewedText: receipt.text }], ...extra } });
+    attachmentIds: [source.id], audioTranscripts: [{ receiptId: receipt.id, reviewedText: receipt.text }], ...extra } });
 }
 async function receiptCount(source: Source) { return (await db.query('SELECT count(*)::integer AS n FROM platform_audio_transcriptions WHERE source_upload_id=$1', [source.id])).rows[0].n as number; }
 async function effects() {
@@ -132,9 +133,9 @@ function begin(source: Source, clientRequestId: string, actor: Actor, controller
     () => ({ status: 0, body: '', aborted: true }));
 }
 before(async () => {
-  await admin.query(`CREATE SCHEMA ${schema}`); createdSchema = true; await db.migrate();
+  await admin.query(`CREATE SCHEMA ${schema}`); createdSchema = true; await db.migrate(); await seedFictionalActiveLegal(db);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-audio-receipts-')); storage = new TrackingStorage(directory);
-  system = await buildApp({ db, storage, runtime, enableQueue: false,
+  system = await buildApp({legalBundle:FICTIONAL_LEGAL, db, storage, runtime, enableQueue: false,
     requestLimits: { policies: { api: { max: 1000, windowSeconds: 60 }, chat: { max: 1000, windowSeconds: 60 }, transcription: { max: 1000, windowSeconds: 60 } } },
     config: { ...base, databaseUrl: databaseUrl.toString(), storageDir: directory, s3: undefined, webStaticDir: undefined,
       accountEmail: undefined, requireVerifiedEmail: false, allowedOrigins: new Set([origin]) } });
@@ -303,17 +304,18 @@ test('existing receipts remain readable and sendable when local ASR is disabled,
 
 test('the receipt route preserves direct image, text and OpenAI PDF input, including existing empty text artifacts',async()=>{
   const original=runtime.capabilities;
+  const originalRoute=system.jobs.config.modelRoutes.chat;system.jobs.config.modelRoutes.chat={provider:'openai'};
   runtime.capabilities=()=>[...original(),{id:'openai',name:'Fictional Responses chat',enabled:true,keyConfigured:true,capabilities:['chat'],models:['synthetic-chat'],envVariables:[]}];
   try{
     const id=await conversation(),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
     const image=await upload(alice,png,'fictional.png','image/png'),pdf=await upload(alice,Buffer.from('%PDF-1.7\nFictional bounded PDF fixture.\n'),'fictional.pdf','application/pdf');
     const emptyId=randomUUID(),key=randomUUID();await storage.put(key,new Uint8Array());
     await db.query('INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,$3,$4,0,$5)',[emptyId,alice.id,'empty-result.txt','text/plain',key]);
-    const asr=calls.transcription,sent=await exchange(`/conversations/${id}/messages`,alice,{method:'POST',body:{content:'Read these fictional direct attachments.',provider:'openai',attachmentIds:[image.id,pdf.id,emptyId]}});
+    const asr=calls.transcription,sent=await exchange(`/conversations/${id}/messages`,alice,{method:'POST',body:{content:'Read these fictional direct attachments.',attachmentIds:[image.id,pdf.id,emptyId]}});
     assert.equal(sent.status,200,sent.body);assert.match(sent.body,/event: done/);
     assert.deepEqual(lastChat!.messages.at(-1)!.attachments?.map(file=>file.mime),['image/png','application/pdf','text/plain']);
     assert.equal(lastChat!.messages.at(-1)!.attachments?.at(-1)!.bytes.byteLength,0);assert.equal(calls.transcription,asr);
-  }finally{runtime.capabilities=original;}
+  }finally{runtime.capabilities=original;system.jobs.config.modelRoutes.chat=originalRoute;}
 });
 
 test('reviewed audio text reaches chat with untrusted provenance and retains its source while history reload performs no ASR', async () => {
@@ -330,7 +332,7 @@ test('reviewed audio text reaches chat with untrusted provenance and retains its
   assert.deepEqual(user.audioTranscripts, [{ receiptId: receipt.id, sourceAttachmentId: source.id, sourceName: source.name, sourceMime: source.mime,
     sourceSha256: receipt.sourceSha256, provider: 'faster-whisper', model: 'whisper-tiny', text: reviewedText, textModified: true, provenance: 'untrusted_audio_transcript' }]);
   assert.equal((await db.query('SELECT content FROM platform_audio_transcriptions WHERE id=$1', [receipt.id])).rows[0].content, transcript);
-  const followup = await exchange(`/conversations/${id}/messages`, alice, { method: 'POST', body: { content: 'Continue the fictional practice discussion.', provider: 'audio-chat-fixture', mode: 'chat' } });
+  const followup = await exchange(`/conversations/${id}/messages`, alice, { method: 'POST', body: { content: 'Continue the fictional practice discussion.', mode: 'chat' } });
   assert.equal(followup.status, 200, followup.body); assert.match(lastChat!.messages[0]!.content, /untrusted_audio_transcript/);
   assert(lastChat!.messages[0]!.content.includes(reviewedText)); assert(lastChat!.messages.every(item => !(item.attachments ?? []).some(file => file.mime.startsWith('audio/'))));
   assert.equal(calls.transcription, asr); assert.equal(storage.gets, gets);
@@ -356,7 +358,7 @@ test('receipt/source, account and conversation mismatches reject before saving m
   const missing = await message(id, source, receipt, alice, { audioTranscripts: undefined }); assert.equal(json(missing).error.code, 'AUDIO_TRANSCRIPT_REQUIRED');
   assert.equal((await message(foreignConversation, source, receipt)).status, 404);
   const switched = await exchange(`/conversations/${id}/messages`, bob, { method: 'POST', headers: { [PLATFORM_ACCOUNT_HEADER]: alice.id },
-    body: { content: 'Fictional stale-window message.', provider: 'audio-chat-fixture', attachmentIds: [source.id], audioTranscripts: [{ receiptId: receipt.id, reviewedText: receipt.text }] } });
+    body: { content: 'Fictional stale-window message.', attachmentIds: [source.id], audioTranscripts: [{ receiptId: receipt.id, reviewedText: receipt.text }] } });
   assert.equal(switched.status, 409, switched.body); assert.equal(json(switched).error.code, 'ACCOUNT_CONTEXT_CHANGED');
   const staleASR = await exchange(`/uploads/${source.id}/transcriptions`, bob, { method: 'POST', headers: { [PLATFORM_ACCOUNT_HEADER]: alice.id }, body: { clientRequestId: randomUUID() } });
   assert.equal(staleASR.status, 409, staleASR.body); assert.equal(json(staleASR).error.code, 'ACCOUNT_CONTEXT_CHANGED');

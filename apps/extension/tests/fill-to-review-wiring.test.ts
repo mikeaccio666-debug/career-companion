@@ -90,11 +90,15 @@ describe('连填的接线', () => {
   it('「停止」、自己翻页、浮层被拆（换脸、让给助手、让给顶层帧）：连填那一轮一并作废', () => {
     expect(content).toContain('onStop: () => { fillToReviewNow?.end(); gestureStop?.abort(); }');
     // 账号墙那一套（2026-09-28）同生同死：等着他回来接着登录的那一下也一并收掉。
-    expect(content).toContain('onDismissed: () => { fillToReviewNow?.end(); account?.dispose(); codePage?.dispose(); submitCodeHook.read = () => null; },');
+    expect(content).toContain('onDismissed: () => { fillToReviewNow?.end(); gestureStop?.abort(); account?.dispose(); codePage?.dispose(); submitCodeHook.read = () => null; },');
     const arm = gestureFill.indexOf('wizardAdvance.arm({');
     expect(gestureFill.slice(arm, arm + 500)).toContain('chainDriver.end();');
-    // 四处拆浮层（换脸、让给助手、让给顶层帧、顶层让给嵌着申请表的 iframe）都经 dismiss()：浮层自己的 onDismissed 收掉那一轮。
+    // 原有四处仍保持相邻 disarm；登录态失效额外先清用户资料，再由同步 dismiss 收掉那一轮。
     expect(content.match(/wizardAdvance\.disarm\(\);\s*submitter\.disarm\(\);\s*dockHandle\?\.dismiss\(\);/gu)?.length).toBe(4);
+    const invalidation = between('if (!isDockSessionChanged(raw)', '// 资料或代填授权在插件里');
+    expect(invalidation).toContain('gestureStop?.abort();');
+    expect(invalidation).toContain('wizardAdvance.disarm(); submitter.disarm();');
+    expect(invalidation.indexOf('dockHandle?.dismiss();')).toBeLessThan(invalidation.indexOf('void hello();'));
     const dock = readFileSync(resolve(__dirname, '..', 'lib', 'dock', 'dock.ts'), 'utf8');
     const dismiss = dock.slice(dock.indexOf('const dismiss = (): void => {'));
     expect(dismiss.slice(0, 400)).toContain('handlers.onDismissed?.();');

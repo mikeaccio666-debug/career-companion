@@ -1,12 +1,12 @@
-import type { AudioTranscriptionReceipt, ChatAttachmentSupport } from '@companion/platform-contracts';
+import type { ChatAttachmentSupport, PublicChatAttachmentSupport } from '@companion/platform-contracts';
 import { ApiError, errorText } from './api.ts';
-import type { AudioSource, AudioTranscriptionClient } from './audio-transcriptions-api.ts';
+import type { AudioSource, AudioTranscriptionClient, AudioReceipt } from './audio-transcriptions-api.ts';
 
 export interface AudioReviewEntry {
   source: AudioSource;
   phase: 'idle' | 'transcribing' | 'uncertain' | 'recovering' | 'complete';
   clientRequestId?: string;
-  receipt?: AudioTranscriptionReceipt;
+  receipt?: AudioReceipt;
   reviewedText: string;
   reviewed: boolean;
   error: string;
@@ -80,11 +80,11 @@ export class AudioTranscriptionController {
     const entry = this.state.entries[id]; if (!this.current() || !entry?.receipt || entry.phase !== 'complete') return;
     this.update(id, { ...entry, reviewed: reviewed && reviewedAudioTextValid(entry.reviewedText, maxCharacters) });
   };
-  transcribe = async (id: string, support?: ChatAttachmentSupport['audioTranscripts']) => {
+  transcribe = async (id: string, support?: ChatAttachmentSupport['audioTranscripts'] | PublicChatAttachmentSupport['audioTranscripts']) => {
     const entry = this.state.entries[id];
     if (!this.current() || !entry || entry.clientRequestId || pending(entry)) return;
-    if (!this.environment.isOnline() || !support?.available || support.provider !== 'faster-whisper' || support.model !== 'whisper-tiny' || !support.mimeTypes.includes(entry.source.mime) || entry.source.size > support.maxAudioBytes) {
-      this.update(id, { ...entry, error: !this.environment.isOnline() ? '当前离线，没有发起转写。' : '本地音频转写尚不可用，或文件不符合声明的格式与大小限制。' }); return;
+    if (!this.environment.isOnline() || !support?.available || ('provider' in support && (support.provider !== 'faster-whisper' || support.model !== 'whisper-tiny')) || !support.mimeTypes.includes(entry.source.mime) || entry.source.size > support.maxAudioBytes) {
+      this.update(id, { ...entry, error: !this.environment.isOnline() ? '当前离线，没有发起转写。' : '音频转写尚不可用，或文件不符合声明的格式与大小限制。' }); return;
     }
     const clientRequestId = this.environment.requestId?.() ?? crypto.randomUUID();
     this.update(id, { ...entry, clientRequestId, phase: 'transcribing', reviewed: false, error: '' });

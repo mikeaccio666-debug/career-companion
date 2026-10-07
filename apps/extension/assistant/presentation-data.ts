@@ -1,20 +1,13 @@
 import type { AssistantData, Profile, Mentor, ResumeOption, ProfilePhase, ProfileField, FieldMeta, Job, AtsReport, Entitlement, RunRow, Extraction, ExtractHit, TextSegment } from './state/types';
-import charlie from './assets/mentors/charlie.webp';
-import alice from './assets/mentors/alice.webp';
-import darren from './assets/mentors/darren.webp';
-import xena from './assets/mentors/xena.webp';
 
 import { createTranslator, type AssistantLocale } from './i18n';
 
 /** Application-owned labels and demo instructions, separate from user/backend content. */
 export function createPresentationData(locale: AssistantLocale) {
 const t = createTranslator(locale);
-const mentors: Mentor[] = [
-  { id: 'charlie', src: charlie, name: 'Charlie' },
-  { id: 'alice', src: alice, name: 'Alice' },
-  { id: 'darren', src: darren, name: 'Darren' },
-  { id: 'xena', src: xena, name: 'Xena' }
-];
+// Historical Portal portraits are not product assets. The welcome hero keeps
+// its existing procedural artwork without suggesting a real mentor is present.
+const mentors: Mentor[] = [];
 const phases: ProfilePhase[] = [
   { id: 0, title: t("基本资料与履历"), short: t("基本资料"), intro: t("我已经从 Portal 同步了你的简历：产品设计与研究经历、教育背景和 6 项技能都在了，不用再重复讲。\n再告诉我你希望的称呼、现在所在的城市，以及方便联系的方式，基本资料就齐了。"),
     introNoResume: t("简历里的经历我已经整理成候选。现在只差几项基本信息：你希望的称呼、所在城市，以及方便联系的方式。"),

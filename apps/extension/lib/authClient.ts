@@ -88,6 +88,17 @@ export interface AuthClientDeps {
    * stay fenced for the full logout promise.
    */
   readonly onBeforeLogout?: (accessToken: string | null) => Promise<void>;
+  /** Local vault lifecycle gate, after a verified pair and before replacing persisted identity. */
+  readonly beforeReplaceSession?: (change: Readonly<{
+    previousOwnerId: string | null;
+    nextOwnerId: string;
+    epoch: number;
+  }>) => Promise<boolean>;
+}
+
+export interface VaultAuthContext {
+  readonly userId: string;
+  readonly epoch: number;
 }
 
 export interface AuthClient {
@@ -97,6 +108,10 @@ export interface AuthClient {
   forceRefresh(): Promise<string | null>;
   /** 当前登录用户 id（验签 sub 必查的期望值）；无会话 → null。 */
   getUserId(): Promise<string | null>;
+  /** Fresh local owner/generation snapshot. Read-only permits exporting the retained old vault during handoff. */
+  readVaultAuthContext(options?: Readonly<{ readOnly?: boolean }>): Promise<VaultAuthContext | null>;
+  /** Value-free generation, including invalidations that leave no readable session. */
+  vaultAuthEpoch(): number;
   /** 本安装稳定 UUID（首次调用生成并持久化；存储坏时进程内恒定）。 */
   getInstallId(): Promise<string>;
   /** 显式补登记入口；不得在 worker startup 无 owner fence 自动调用。 */
@@ -116,7 +131,7 @@ export interface AuthClient {
   /** §2.3 兑换交接码；只有登录态与 install 登记都成功才返回 true。 */
   redeemHandoff(input: { code: string; state: string; extensionId: string }): Promise<boolean>;
   /** 清空本地会话（并尽力通知后端作废 refresh token）。 */
-  logout(): Promise<void>;
+  logout(expectedContext?: VaultAuthContext): Promise<void>;
 }
 
 const SESSION_KEY = 'authSession'; // 持久层：{ refreshToken, userId }
@@ -415,6 +430,9 @@ export function createAuthClient(deps: AuthClientDeps): AuthClient {
   let memoryAccess: MemoryAccess | null = null;
   // 会话纪元：logout 递增；跨纪元的在途刷新结果一律丢弃（审计 [1]）。
   let epoch = 0;
+  let vaultEpoch = 0;
+  let handoffInProgressEpoch: number | null = null;
+  let vaultSessionClearing = false;
   // Set synchronously when logout is invoked. New credential/readiness calls
   // fail closed while local credential removal proceeds; diagnostics cleanup
   // runs outside the transition queue so it cannot deadlock on token access.
@@ -536,20 +554,45 @@ export function createAuthClient(deps: AuthClientDeps): AuthClient {
   }
 
   function notifySessionInvalidated(): void {
+    vaultEpoch += 1;
     try { deps.onSessionInvalidated?.(); }
     catch { diag('AUTH_INVALIDATION_OBSERVER_FAILED'); }
   }
 
   async function clearSession(): Promise<boolean> {
-    notifySessionInvalidated();
-    memoryAccess = null;
-    // Tombstone first. If credential deletion fails, journal MUST survive so a
-    // later worker cannot replay the still-persisted one-time refresh token.
-    const tombstonePersisted = await persistRotationTombstone();
-    const credentialRemoved = await storeRemove(SESSION_KEY);
-    if (credentialRemoved) await storeRemove(ROTATION_JOURNAL_KEY);
-    await storeRemove(INSTALL_LINKED_KEY);
-    return credentialRemoved || tombstonePersisted;
+    vaultSessionClearing = true;
+    try {
+      notifySessionInvalidated();
+      memoryAccess = null;
+      // Tombstone first. If credential deletion fails, journal MUST survive so a
+      // later worker cannot replay the still-persisted one-time refresh token.
+      const tombstonePersisted = await persistRotationTombstone();
+      const credentialRemoved = await storeRemove(SESSION_KEY);
+      if (credentialRemoved) await storeRemove(ROTATION_JOURNAL_KEY);
+      await storeRemove(INSTALL_LINKED_KEY);
+      return credentialRemoved || tombstonePersisted;
+    } finally {
+      vaultSessionClearing = false;
+    }
+  }
+
+  async function readVaultAuthContext(options: Readonly<{ readOnly?: boolean }> = {}): Promise<VaultAuthContext | null> {
+    const requestedEpoch = vaultEpoch;
+    const unavailable = (): boolean => vaultSessionClearing || logoutInProgressEpoch !== null ||
+      (!options.readOnly && handoffInProgressEpoch !== null);
+    if (unavailable()) return null;
+    // Do not enqueue behind the handoff mutex: retained-owner export must finish while confirmation is pending.
+    const authority = await readSessionAuthority();
+    if (authority.state !== 'AVAILABLE' || requestedEpoch !== vaultEpoch || unavailable()) return null;
+    const session = authority.session;
+    const accessValid = (): boolean => memoryAccess !== null && memoryAccess.userId === session.userId && memoryAccess.expiresAt > now();
+    if (!accessValid()) {
+      // Retained-owner reads must never queue behind the handoff that is waiting for this page.
+      if (handoffInProgressEpoch !== null) return null;
+      await refreshSingleFlight(epoch);
+    }
+    if (requestedEpoch !== vaultEpoch || unavailable() || !accessValid()) return null;
+    return Object.freeze({ userId: session.userId, epoch: requestedEpoch });
   }
 
   function withSessionTransition<T>(operation: () => Promise<T>): Promise<T> {
@@ -949,6 +992,8 @@ export function createAuthClient(deps: AuthClientDeps): AuthClient {
       if (logoutInProgressEpoch !== null) return null;
       return (await readSession())?.userId ?? null;
     },
+    readVaultAuthContext,
+    vaultAuthEpoch: () => vaultEpoch,
     async getInstallId() {
       return getInstallIdInner();
     },
@@ -982,72 +1027,101 @@ export function createAuthClient(deps: AuthClientDeps): AuthClient {
     },
     async redeemHandoff({ code, state, extensionId }) {
       const transitionEpoch = ++epoch;
+      handoffInProgressEpoch = transitionEpoch;
       notifySessionInvalidated();
-      return withSessionTransition(async () => {
-        if (epoch !== transitionEpoch) return false;
-        const previous = await readSession();
-        const previousBearer = memoryAccess?.accessToken;
-        const request: RedeemExtensionHandoffRequest = { code, extensionId, state };
-        const response = await postJson(
-          '/auth/extension-handoffs/redeem',
-          request,
-          undefined,
-          true,
-        );
-        if (!response || !response.ok) {
-          diag('AUTH_REDEEM_FAILED');
-          return false;
-        }
-        if (response.status !== 201) {
-          diag('AUTH_RESPONSE_MALFORMED');
-          return false;
-        }
-        const pair = tokenPairOf(response.body);
-        if (pair === null) {
-          diag('AUTH_RESPONSE_MALFORMED');
-          return false;
-        }
-        if (epoch !== transitionEpoch) {
-          await revokePairBestEffort(pair);
-          return false;
-        }
-        const persisted = await persistSession({
-          refreshToken: pair.refreshToken,
-          userId: pair.user.id,
-        } satisfies PersistedSession);
-        if (!persisted) {
-          await revokePairBestEffort(pair);
-          return false;
-        }
-        if (epoch !== transitionEpoch) {
-          await revokePairBestEffort(pair);
-          await clearSession();
-          return false;
-        }
-        await storeRemove(ROTATION_JOURNAL_KEY); // 新会话，旧日志位不再相干
-        applyAccessToken(pair.accessToken, pair.user.id);
-        if (previous && previous.refreshToken !== pair.refreshToken) {
-          if (
-            previousBearer === undefined ||
-            !(await notifyLogout(previous.refreshToken, previousBearer))
-          ) {
-            diag('AUTH_LOGOUT_NOTIFY_FAILED');
+      const expectedVaultEpoch = vaultEpoch;
+      try {
+        return await withSessionTransition(async () => {
+          if (epoch !== transitionEpoch) return false;
+          const previous = await readSession();
+          const previousBearer = memoryAccess?.accessToken;
+          const request: RedeemExtensionHandoffRequest = { code, extensionId, state };
+          const response = await postJson(
+            '/auth/extension-handoffs/redeem',
+            request,
+            undefined,
+            true,
+          );
+          if (!response || !response.ok) {
+            diag('AUTH_REDEEM_FAILED');
+            return false;
           }
-        }
-        const installLinked = await linkInstall(
-          pair.accessToken,
-          pair.user.id,
-          transitionEpoch,
-        );
-        if (epoch !== transitionEpoch) {
-          await revokePairBestEffort(pair);
-          await clearSession();
-          return false;
-        }
-        return installLinked;
-      });
+          if (response.status !== 201) {
+            diag('AUTH_RESPONSE_MALFORMED');
+            return false;
+          }
+          const pair = tokenPairOf(response.body);
+          if (pair === null) {
+            diag('AUTH_RESPONSE_MALFORMED');
+            return false;
+          }
+          if (epoch !== transitionEpoch) {
+            await revokePairBestEffort(pair);
+            return false;
+          }
+          if (deps.beforeReplaceSession) {
+            let allowed = false;
+            try {
+              allowed = await deps.beforeReplaceSession({
+                previousOwnerId: previous?.userId ?? null,
+                nextOwnerId: pair.user.id,
+                epoch: expectedVaultEpoch,
+              });
+            } catch {
+              allowed = false;
+            }
+            if (!allowed || epoch !== transitionEpoch || vaultEpoch !== expectedVaultEpoch) {
+              await revokePairBestEffort(pair);
+              return false;
+            }
+          }
+          const persisted = await persistSession({
+            refreshToken: pair.refreshToken,
+            userId: pair.user.id,
+          } satisfies PersistedSession);
+          if (!persisted) {
+            await revokePairBestEffort(pair);
+            return false;
+          }
+          if (epoch !== transitionEpoch) {
+            await revokePairBestEffort(pair);
+            await clearSession();
+            return false;
+          }
+          await storeRemove(ROTATION_JOURNAL_KEY); // 新会话，旧日志位不再相干
+          applyAccessToken(pair.accessToken, pair.user.id);
+          if (previous && previous.refreshToken !== pair.refreshToken) {
+            if (
+              previousBearer === undefined ||
+              !(await notifyLogout(previous.refreshToken, previousBearer))
+            ) {
+              diag('AUTH_LOGOUT_NOTIFY_FAILED');
+            }
+          }
+          const installLinked = await linkInstall(
+            pair.accessToken,
+            pair.user.id,
+            transitionEpoch,
+          );
+          if (epoch !== transitionEpoch) {
+            await revokePairBestEffort(pair);
+            await clearSession();
+            return false;
+          }
+          return installLinked;
+        });
+      } finally {
+        if (handoffInProgressEpoch === transitionEpoch) handoffInProgressEpoch = null;
+      }
     },
-    async logout() {
+    async logout(expectedContext) {
+      if (expectedContext !== undefined) {
+        const current = await readVaultAuthContext();
+        if (current === null || current.userId !== expectedContext.userId || current.epoch !== expectedContext.epoch ||
+            vaultEpoch !== expectedContext.epoch || handoffInProgressEpoch !== null || logoutInProgressEpoch !== null) {
+          throw new Error('AUTH_CONTEXT_CHANGED');
+        }
+      }
       const cleanupAccessToken = memoryAccess !== null && memoryAccess.expiresAt > now()
         ? memoryAccess.accessToken
         : null;
@@ -1087,6 +1161,7 @@ export function createAuthClient(deps: AuthClientDeps): AuthClient {
           // If both tombstone and credential removal failed, burning the
           // server token would turn a later recovered local copy into replay.
           diag('AUTH_LOGOUT_NOTIFY_FAILED');
+          if (expectedContext !== undefined) throw new Error('AUTH_STORAGE_UNAVAILABLE');
           return;
         }
         if (session && bearer !== undefined) {

@@ -1,4 +1,16 @@
 export type * from './contracts.ts';
-export { CAREER_SKILLS, careerSkill } from './skills.ts';
+export { ROLE_FAMILIES } from './contracts.ts';
+export { CAREER_SKILLS, careerSkill, careerSkillIndex } from './skills.ts';
+export type * from './capabilities.ts';
+export { CAREER_CAPABILITIES, careerCapability, capabilityPermitted, capabilityVisible } from './capabilities.ts';
 export { prepareCareerRun } from './prepare.ts';
+export { careerSkillCompletion, careerSkillOutputMatchesContract } from './skill-output.ts';
 export { careerProgress } from './progress.ts';
+export * from './companion/onboarding.ts';
+export * from './companion/mapping.ts';
+export * from './companion/questionnaire.ts';
+export * from './companion/safety-response.ts';
+export * from './companion/identity.ts';
+export * from './companion/style.ts';
+export * from './companion/preview.ts';
+export * from './companion/output-check.ts';

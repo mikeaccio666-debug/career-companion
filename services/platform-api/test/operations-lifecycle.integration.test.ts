@@ -1,3 +1,5 @@
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -17,7 +19,7 @@ import { startWorkerHeartbeat } from '../src/worker-heartbeat.ts';
 
 // Real isolated PostgreSQL, Redis and BullMQ connections; only the task runtime is synthetic.
 // Injected clocks accelerate report scheduling/cache expiration, never fake connection facts or DB time.
-const base = readConfig(), schema = `ops_lifecycle_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `ops_lifecycle_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl, { max: 1, connectionTimeoutMillis: 1000 });
 const databaseUrl = new URL(base.databaseUrl); databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString(), { max: 4, connectionTimeoutMillis: 1000 });
@@ -26,7 +28,7 @@ before(async () => {
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.databaseUrl).hostname), 'Only a local fixture database is allowed.');
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(new URL(base.redisUrl).hostname), 'Only local fixture Redis is allowed.');
   assert.equal(new URL(base.redisUrl).protocol, 'redis:', 'This fixture uses a loopback plain TCP Redis proxy.');
-  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate(); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'operations-lifecycle-fixture-'));
+  await admin.query(`CREATE SCHEMA ${schema}`); schemaCreated = true; await db.migrate(); await seedFictionalActiveLegal(db); directory = await fs.mkdtemp(path.join(os.tmpdir(), 'operations-lifecycle-fixture-'));
 });
 after(async () => {
   try { await db.close(); } finally {
@@ -83,8 +85,8 @@ function fixture(workerRedisUrl = base.redisUrl) {
     createVoiceSession: forbidden, transcribe: forbidden, speech: forbidden,
   };
   const config = { ...base, databaseUrl: databaseUrl.toString(), redisUrl: base.redisUrl, queueName, codeVersion, storageDir: directory, accountEmail: undefined, requireVerifiedEmail: false };
-  const storage = new LocalBlobStorage(directory), producerJobs = new JobService(db, config, runtime, storage);
-  const workerJobs = new JobService(db, { ...config, redisUrl: workerRedisUrl }, runtime, storage);
+  const storage = new LocalBlobStorage(directory), producerJobs = new JobService(db, config, runtime, storage,undefined,undefined,FICTIONAL_LEGAL);
+  const workerJobs = new JobService(db, { ...config, redisUrl: workerRedisUrl }, runtime, storage,undefined,undefined,FICTIONAL_LEGAL);
   const queue = new TaskQueue(producerJobs), control = new ProducerQueue(queueName, base.redisUrl), worker = createWorker(workerJobs);
   worker.on('error', () => {});
   const observedDb = { pool: db.pool, withBoundedTransaction<T>(run: (client: PoolClient) => Promise<T>, options?: { readOnly?: boolean; timeoutMs?: number }): Promise<T> { const operation = db.withBoundedTransaction(run, options); heartbeatOperations.push(operation); return operation; } };
@@ -96,7 +98,7 @@ function fixture(workerRedisUrl = base.redisUrl) {
     async report() { return (await db.query('SELECT process_state,redis_ready,worker_running,worker_paused,reported_at::text AS reported_at FROM platform_worker_heartbeats WHERE instance_id=$1', [heartbeat.instanceId])).rows[0]; },
     async inspect() { monotonic += OPERATIONS_CACHE_MS + 1; return probe.diagnostics(); },
     async createApproved() {
-      const owner = randomUUID(); await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)', [owner, `${owner}@example.invalid`, 'Fictional lifecycle owner', 'not-a-real-password-hash']);
+      const owner = randomUUID(); await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)', [owner, `${owner}@example.invalid`, 'Fictional lifecycle owner', 'not-a-real-password-hash']); await seedFictionalConsent(db,owner);
       const prepared = await producerJobs.create(owner, { kind: 'cli', provider: 'fixture', prompt: 'Fictional lifecycle task. Run no actual CLI or model.' });
       assert.equal(prepared.job.status, 'needs_approval'); assert.ok(prepared.approval);
       await producerJobs.decide(owner, prepared.approval.id, 'approved'); return { owner, jobId: prepared.job.id };

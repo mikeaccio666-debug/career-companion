@@ -14,6 +14,8 @@ const production: NodeJS.ProcessEnv = {
   PLATFORM_ALLOW_ACCOUNT_EMAIL: '1', RESEND_API_KEY: 'synthetic-mail-key',
   PLATFORM_ACCOUNT_EMAIL_FROM: 'noreply@example.invalid', PLATFORM_ACCOUNT_WEB_ORIGIN: 'https://app.example.invalid',
   PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY: '11'.repeat(32),
+  // Public, fictional fixture material only; never use this key in a running service.
+  PLATFORM_DATA_KEY: 'd8a07ee729375ce432dc9f199ce30c7f78a01c26f6e9b204da19f412ab8305d1',
 };
 
 test('listener defaults stay on loopback and hosted ports require explicit, valid configuration', () => {
@@ -21,6 +23,7 @@ test('listener defaults stay on loopback and hosted ports require explicit, vali
   assert.equal(local.host, '127.0.0.1'); assert.equal(local.port, 4320);
   assert.equal(local.secureCookies, false); assert.equal(local.s3, undefined); assert.equal(local.webStaticDir, undefined);
   assert.equal(local.accountEmail, undefined); assert.equal(local.requireVerifiedEmail, false);
+  assert.equal(local.dataCrypto, undefined);
   assert.equal(readConfig({ PLATFORM_HOST: '0.0.0.0', PORT: '10000' }).host, '0.0.0.0');
   assert.equal(readConfig({ PORT: '10000' }).port, 10000);
   assert.equal(readConfig({ PLATFORM_PORT: '4319' }).port, 4319);
@@ -33,6 +36,21 @@ test('listener defaults stay on loopback and hosted ports require explicit, vali
   for (const value of ['', '*', '192.0.2.1', '::', 'example.invalid']) assert.throws(() => readConfig({ PLATFORM_HOST: value }), /PLATFORM_HOST/);
   assert.equal(readConfig({ PLATFORM_WEB_STATIC_DIR: 'apps/web/dist' }).webStaticDir, path.join(workspaceRoot, 'apps/web/dist'));
   assert.throws(() => readConfig({ PLATFORM_WEB_STATIC_DIR: '   ' }), /PLATFORM_WEB_STATIC_DIR/);
+});
+
+test('workbench admission defaults closed and only explicit non-production mode can enable it', () => {
+  for (const NODE_ENV of [undefined, 'development', 'test']) {
+    assert.equal(readConfig({ NODE_ENV }).workbenchEnabled, false);
+    assert.equal(readConfig({ NODE_ENV, PLATFORM_ENABLE_WORKBENCH: '0' }).workbenchEnabled, false);
+    assert.equal(readConfig({ NODE_ENV, PLATFORM_ENABLE_WORKBENCH: '1' }).workbenchEnabled, true);
+  }
+  assert.equal(readConfig(production).workbenchEnabled, false);
+  assert.equal(readConfig({ ...production, PLATFORM_ENABLE_WORKBENCH: '0' }).workbenchEnabled, false);
+  assert.throws(() => readConfig({ ...production, PLATFORM_ENABLE_WORKBENCH: '1' }), /staff authorization/);
+  assert.equal(readConfig({ PLATFORM_ALLOW_PROVIDER_CALLS: '1', PLATFORM_ENABLE_BROWSER: '1', PLATFORM_ENABLE_CLI: '1' }).workbenchEnabled, false);
+  for (const value of ['', 'true', 'yes', ' 1', '1 ', '01', '1\n', 'synthetic-secret']) {
+    assert.throws(() => readConfig({ PLATFORM_ENABLE_WORKBENCH: value }), error => error instanceof Error && error.message.includes('PLATFORM_ENABLE_WORKBENCH') && !error.message.includes('synthetic-secret'));
+  }
 });
 
 test('production requires explicit backend connections, exact HTTPS origins and server-owned object credentials', () => {
@@ -63,6 +81,19 @@ test('production requires account email and cannot disable verification; develop
   for (const value of ['', 'true', 'yes', ' 1']) assert.throws(() => readConfig({ PLATFORM_REQUIRE_VERIFIED_EMAIL: value }), /PLATFORM_REQUIRE_VERIFIED_EMAIL/);
   for (const key of ['RESEND_API_KEY', 'PLATFORM_ACCOUNT_EMAIL_FROM', 'PLATFORM_ACCOUNT_WEB_ORIGIN', 'PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY'] as const) {
     assert.throws(() => readConfig({ ...production, [key]: undefined }), Error);
+  }
+});
+
+test('protected data uses a dedicated required production key without a development or email fallback', () => {
+  assert.ok(readConfig(production).dataCrypto);
+  assert.ok(readConfig({ PLATFORM_DATA_KEY: production.PLATFORM_DATA_KEY }).dataCrypto);
+  assert.equal(readConfig({ ...production, NODE_ENV: 'development', PLATFORM_DATA_KEY: undefined }).dataCrypto, undefined);
+  assert.throws(() => readConfig({ ...production, PLATFORM_DATA_KEY: undefined }), /PLATFORM_DATA_KEY/);
+  for (const NODE_ENV of [undefined, 'development', 'test', 'production']) {
+    for (const value of ['', ' ', 'fictional-data-secret', '11'.repeat(31), '11'.repeat(33), 'gg'.repeat(32), `${'11'.repeat(32)}\n`]) {
+      assert.throws(() => readConfig({ ...production, NODE_ENV, PLATFORM_DATA_KEY: value }), error =>
+        error instanceof Error && error.message === 'PLATFORM_DATA_KEY must be explicitly configured as a 32-byte hexadecimal key.' && !Object.hasOwn(error, 'cause'));
+    }
   }
 });
 

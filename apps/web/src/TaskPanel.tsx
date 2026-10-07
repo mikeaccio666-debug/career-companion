@@ -46,7 +46,7 @@ export default function TaskPanel({ providers, jobs, onCreate, onCancel, onRetry
   }
   const filtered = jobs.filter((job) => job.kind === 'cli');
   return <section className="feature-page cli-page">
-    <div className="page-kicker"><TerminalSquare size={15} />TERMINAL HARNESS</div>
+
     <h1>想清楚之后，<span>动手做出来。</span></h1>
     <p className="page-description">为终端执行器定义目标。服务端决定隔离环境、允许的工具和执行权限，你可以跟踪输出与审批。</p>
     <form className="task-composer" onSubmit={submit}>

@@ -22,6 +22,7 @@ export const CARD_SH = '0 0 0 .5px rgba(10,17,40,.06),0 1px 2px rgba(10,17,40,.0
 export const DARK_SH = 'inset 0 1px 0 rgba(255,255,255,.1),0 1px 2px rgba(10,17,40,.2),0 12px 26px -14px rgba(10,17,40,.7)';
 
 export const DOCK_CSS = `
+.acct-sites{display:grid;gap:12px}.acct-site{display:grid;gap:4px;padding:12px 0;border-top:1px solid var(--argo-line)}.acct-site-title{font-size:var(--fs-body);line-height:var(--lh-body);overflow-wrap:anywhere}.acct-sites .acct-sub{font-size:var(--fs-meta);line-height:var(--lh-meta)}
 :host{all:initial}
 .root{position:fixed;inset:0;pointer-events:none;z-index:2147483646;
   --argo-ink:#0A1128;--argo-ink-2:#3B4762;--argo-muted:#6B778C;--argo-faint:#8A94A8;

@@ -18,12 +18,12 @@ import { createLiveFeed, type FeedLine } from './liveFeed';
 import { NEED_KINDS, needKindOf, optionChips, rememberable, type NeedKind } from './needs';
 import { createNeedsView, type NeedAct, type NeedItem } from './needsView';
 import { createDockProfileEditor, type DockProfileEditor } from './profileEditor';
+import { createDockVaultList } from './vaultList';
 import { isNeed, NEED_STATUSES, toDockRow, type DockRow, type RowStatus } from './rows';
 import type {
   AutofillDockEntry,
   AutofillDockFieldRow,
   DockAccountPrompt,
-  DockAccountSettings,
   DockAccountStatus,
   DockAccountWall,
   AutofillDockHandle,
@@ -83,7 +83,7 @@ type Phase = 'idle' | 'preparing' | 'filling' | 'done' | 'advancing' | 'review' 
 type FaceKind = 'ready' | 'unlinked' | 'linking' | 'dormant' | 'noForm' | 'rules' | 'signin' | 'closed';
 type HeroMode = 'button' | 'activity' | 'summary' | 'face' | 'failed' | 'account' | 'updated' | 'code';
 
-const NOOP: AutofillDockHandle = Object.freeze({
+const NOOP: AutofillDockHandle = /* @__PURE__ */ Object.freeze({
   face: () => 'HIDDEN' as const, faceKey: () => 'HIDDEN', autofillEnabled: () => false, autofillButton: () => null, dismiss: () => {},
   sheetState: () => 'ABSENT' as const, summaryText: () => null, toggleSheet: () => {},
   fieldRows: () => [], update: () => {}, beginRun: () => {},
@@ -101,7 +101,7 @@ const NOOP: AutofillDockHandle = Object.freeze({
   codePrompt: () => {},
 });
 
-const NOOP_AUDIT: DockAuditHandle = Object.freeze({ dismiss: () => {}, update: () => {}, shadowRoot: null });
+const NOOP_AUDIT: DockAuditHandle = /* @__PURE__ */ Object.freeze({ dismiss: () => {}, update: () => {}, shadowRoot: null });
 
 /** 脸的完整身份：kind 加上 UNAVAILABLE 的 reason。 */
 export function affordanceFaceKey(affordance: AutofillAffordance): string {
@@ -309,13 +309,8 @@ export function mountDock(
   let codeBusy = false;
   let codeDraft = '';
   let accountDone: string[] = [];
-  /** 账户菜单里「招聘网站账号」那一块：展开没有、读到的样子、正在改哪一样、按了「显示」之后的明文、那一行提示。 */
+  /** 账户菜单只保留隐藏的站点列表；密码在插件设置页查看。 */
   let acctMenuOpen = false;
-  let acctSettings: DockAccountSettings | null | 'LOADING' = 'LOADING';
-  let acctEdit: '' | 'email' | 'password' = '';
-  let acctReveal: string | null = null;
-  let acctNotice: string | null = null;
-  let acctBusy = false;
   /**
    * 这一页和插件断了线（2026-10-03 体检 3e：插件更新、重载或停用之后，开着的页面上旧的内容脚本还在跑）。调用方一发现就说
    * （`extensionUpdated`），从此主卡是一张卡、一颗「刷新页面」。
@@ -438,7 +433,7 @@ export function mountDock(
   // ── 面板 ───────────────────────────────────────────────────────
   const panel = h('section', 'panel');
   panel.setAttribute('role', 'dialog');
-  panel.setAttribute('aria-label', 'ArgoLand.AI');
+  panel.setAttribute('aria-label', COPY.product);
   panel.tabIndex = -1;
   const pbody = h('div', 'pbody');
 
@@ -734,7 +729,7 @@ export function mountDock(
   const ext = h('span', 'pop-ext');
   ext.append(svg('external', 12, { color: '#8A94A8' }));
   openPortalItem.append(ext);
-  const signOutItem = tb('pop-item', () => { menu = ''; paintPops(); handlers.onSignOut?.(); }, COPY.menu.signOut);
+  const signOutItem = tb('pop-item', (event) => { menu = ''; paintPops(); handlers.onSignOut?.(event, shadow); }, COPY.menu.signOut);
   signOutItem.dataset.action = 'sign-out';
   // AI 代答的开关（2026-09-23，缺省开）：关掉之后不再替他起草，网页上也不摆「用 AI 写」。
   const aiSwitchItem = tb('pop-item', () => toggleAiSwitch());
@@ -770,10 +765,11 @@ export function mountDock(
   const languageLabel = h('span', 'pop-lang-label');
   languageLabel.textContent = COPY.menu.language;
   languageItem.append(svg('globe', 15, { color: '#3B4762' }), languageLabel, languageChoices);
-  // 招聘网站账号（2026-09-28）：注册邮箱、共用的那一条密码（看、复制、改）。点开才向 worker 要，收起菜单就不留。
+  // 招聘网站账号：只在明确打开菜单后读取隐藏的站点列表。
   const siteAcctItem = tb('pop-item', () => {
-    if (!acctMenuOpen) { openSiteAccounts(''); return; }
+    if (!acctMenuOpen) { openSiteAccounts(); return; }
     acctMenuOpen = false;
+    vaultList.clear();
     paintSiteAccounts();
   });
   siteAcctItem.dataset.action = 'site-accounts';
@@ -783,12 +779,13 @@ export function mountDock(
   const siteAcctBody = h('div', 'acct-menu');
   siteAcctBody.dataset.account = 'menu';
   siteAcctBody.style.display = 'none';
+  const vaultList = createDockVaultList(doc, shadow, handlers.vaultManagement, COPY.siteAccount.vaultList);
   popAccount.append(popHead, h('div', 'pop-sep'));
   if (handlers.onChangeLocale !== undefined) popAccount.append(languageItem);
   // 没接处理器就没有这一项（不是藏起来）。
   if (handlers.aiAnswers !== undefined && face !== 'unlinked') popAccount.append(aiSwitchItem);
   if (handlers.answerMemory !== undefined && face !== 'unlinked') popAccount.append(memorySwitchItem);
-  if (handlers.accountAccess !== undefined && face !== 'unlinked') popAccount.append(siteAcctItem, siteAcctBody);
+  if (handlers.vaultManagement !== undefined && face !== 'unlinked') popAccount.append(siteAcctItem, siteAcctBody);
   if (handlers.onOpenPortal !== undefined) popAccount.append(openPortalItem);
   // 没连接的那张脸上只有「登录 ArgoLand」，两者永不同框。
   if (handlers.onSignOut !== undefined && face !== 'unlinked') popAccount.append(signOutItem);
@@ -1527,7 +1524,7 @@ export function mountDock(
       go.dataset.action = 'account-consent';
       wrap.append(go);
     } else if (ask.kind === 'NO_EMAIL' && port !== undefined) {
-      const go = tb('btn-primary', () => openSiteAccounts('email'), P.NO_EMAIL.primary);
+      const go = tb('btn-primary', () => { openProfile(); handlers.onOpenEntry('AUTOFILL_INFORMATION'); }, P.NO_EMAIL.primary);
       go.dataset.action = 'account-email';
       wrap.append(go);
     } else if (ACCOUNT_WAITING.has(ask.kind)) {
@@ -2304,134 +2301,21 @@ export function mountDock(
     if (wall !== null) setText(acctNote, COPY.siteAccount.wallNote(wall.site));
   };
 
-  /** 打开账户菜单里「招聘网站账号」那一块（没有注册邮箱那张卡上的按钮直接打开改邮箱）。 */
-  const openSiteAccounts = (edit: '' | 'email'): void => {
-    const port = handlers.accountAccess;
-    if (port === undefined) return;
+  /** 列表只读站点元数据；明文与导出都在插件自己的设置页。 */
+  const openSiteAccounts = (): void => {
+    if (handlers.vaultManagement === undefined) return;
     menu = 'account';
     acctMenuOpen = true;
-    acctEdit = edit;
-    acctNotice = null;
-    acctReveal = null;
-    acctSettings = 'LOADING';
     if (!open) openPanel();
     paintPops();
     paintSiteAccounts();
-    void port.load().catch(() => null).then((settings) => {
-      if (!acctMenuOpen) return;
-      acctSettings = settings;
-      paintSiteAccounts();
-    });
+    vaultList.load();
   };
 
-  /** 存一样（注册邮箱、共用密码）：worker 说不合要求就照实说，存不下也照实说。 */
-  const acctSave = (save: (port: NonNullable<AutofillDockHandlers['accountAccess']>) => Promise<DockAccountSettings | 'INVALID' | 'WEAK' | null>, rejected: string): void => {
-    const port = handlers.accountAccess;
-    if (port === undefined || acctBusy) return;
-    acctBusy = true;
-    acctNotice = null;
-    void save(port).catch(() => null).then((result) => {
-      acctBusy = false;
-      if (result === null) acctNotice = COPY.siteAccount.menu.saveFailed;
-      else if (typeof result === 'string') acctNotice = rejected;
-      else {
-        acctSettings = result;
-        acctEdit = '';
-        acctReveal = null;
-        toast(COPY.siteAccount.menu.saved);
-      }
-      paintSiteAccounts();
-    });
-  };
-
-  /** 共用密码的明文：他按「显示」「复制」时才向 worker 要一次；收起菜单就丢掉。 */
-  const withPassword = (then: (password: string) => void): void => {
-    if (acctReveal !== null) { then(acctReveal); return; }
-    void handlers.accountAccess?.reveal().catch(() => null).then((password) => {
-      if (password === null || password === undefined) {
-        acctNotice = COPY.siteAccount.menu.unavailable;
-        paintSiteAccounts();
-        return;
-      }
-      then(password);
-    });
-  };
-
-  /** 「招聘网站账号」那一块：注册邮箱、共用密码（显示／复制／修改）、说明。只在状态变了时重画（输入框里打的字不丢）。 */
   const paintSiteAccounts = (): void => {
-    const M = COPY.siteAccount.menu;
     siteAcctItem.setAttribute('aria-expanded', String(acctMenuOpen));
     siteAcctBody.style.display = acctMenuOpen ? 'grid' : 'none';
-    const settings = acctSettings;
-    if (!acctMenuOpen || settings === 'LOADING') { siteAcctBody.replaceChildren(); return; }
-    if (settings === null) { siteAcctBody.replaceChildren(h('div', 'acct-sub', M.unavailable)); return; }
-    const link = (label: string, onSelect: () => void, action: string): HTMLButtonElement => {
-      const button = tb('acct-link', onSelect, label);
-      button.dataset.action = action;
-      button.disabled = acctBusy;
-      return button;
-    };
-    const editor = (input: HTMLInputElement, save: () => void, hint: string | null): HTMLElement[] => {
-      const row = h('div', 'acct-row');
-      row.append(link(M.save, save, 'account-save'), link(M.cancel, () => { acctEdit = ''; acctNotice = null; paintSiteAccounts(); }, 'account-cancel'));
-      return hint === null ? [input, row] : [input, h('div', 'acct-sub', hint), row];
-    };
-    const kids: HTMLElement[] = [h('div', 'acct-label', M.email)];
-    if (acctEdit === 'email') {
-      const input = h('input', 'pf-input acct-input');
-      input.type = 'email';
-      input.autocomplete = 'off';
-      input.spellcheck = false;
-      input.value = settings.email ?? settings.defaultEmail ?? '';
-      input.setAttribute('aria-label', M.email);
-      input.dataset.account = 'email';
-      kids.push(...editor(input, () => {
-        const value = input.value.trim();
-        acctSave((port) => port.setEmail(value === '' ? null : value), M.invalidEmail);
-      }, null));
-    } else {
-      kids.push(h('div', 'acct-value', settings.email ?? settings.defaultEmail ?? M.emailMissing));
-      if (settings.email === null && settings.defaultEmail !== null) kids.push(h('div', 'acct-sub', M.emailDefault));
-      const row = h('div', 'acct-row');
-      row.append(link(M.change, () => { acctEdit = 'email'; acctNotice = null; paintSiteAccounts(); }, 'account-edit-email'));
-      if (settings.email !== null) row.append(link(M.useDefault, () => acctSave((port) => port.setEmail(null), M.invalidEmail), 'account-default-email'));
-      kids.push(row);
-    }
-    kids.push(h('div', 'acct-label', M.password));
-    if (acctEdit === 'password') {
-      const input = h('input', 'pf-input acct-input');
-      input.type = 'password';
-      input.autocomplete = 'new-password';
-      input.setAttribute('aria-label', M.password);
-      input.dataset.account = 'password';
-      sealKeys(input);
-      kids.push(...editor(input, () => {
-        const value = input.value;
-        acctSave((port) => port.setPassword(value), M.weak);
-      }, M.rules));
-    } else {
-      const value = h('div', 'acct-value', acctReveal ?? (settings.hasPassword ? '••••••••••••' : M.passwordMissing));
-      if (acctReveal !== null) value.dataset.revealed = 'true';
-      kids.push(value);
-      const row = h('div', 'acct-row');
-      if (settings.hasPassword) {
-        row.append(
-          link(acctReveal === null ? M.show : M.hide, () => {
-            if (acctReveal !== null) { acctReveal = null; paintSiteAccounts(); return; }
-            withPassword((password) => { acctReveal = password; paintSiteAccounts(); });
-          }, 'account-reveal'),
-          link(M.copy, () => withPassword((password) => {
-            void win?.navigator?.clipboard?.writeText?.(password)?.then(() => toast(M.copied), () => toast(M.copyFailed));
-          }), 'account-copy'),
-        );
-      }
-      row.append(link(M.change, () => { acctEdit = 'password'; acctNotice = null; acctReveal = null; paintSiteAccounts(); }, 'account-edit-password'));
-      kids.push(row);
-    }
-    if (acctNotice !== null) kids.push(h('div', 'acct-error', acctNotice));
-    kids.push(h('div', 'acct-sub', M.note));
-    if (settings.sites > 0) kids.push(h('div', 'acct-sub', M.sites(settings.sites)));
-    siteAcctBody.replaceChildren(...kids);
+    siteAcctBody.replaceChildren(...(acctMenuOpen ? [vaultList.element] : []));
   };
 
   /**
@@ -2826,12 +2710,10 @@ export function mountDock(
   };
 
   const paintPops = (): void => {
-    // 菜单收起：看过的密码、改到一半的都不留，下次打开是收着的。
+    // 菜单收起：元数据与改到一半的邮箱都不留，迟到的读取不能重挂。
     if (menu !== 'account' && acctMenuOpen) {
       acctMenuOpen = false;
-      acctReveal = null;
-      acctEdit = '';
-      acctNotice = null;
+      vaultList.clear();
       paintSiteAccounts();
     }
     popAccount.dataset.open = String(menu === 'account');
@@ -3995,6 +3877,7 @@ export function mountDock(
 
   let dismissed = false;
   const dismiss = (): void => {
+    vaultList.clear();
     // 浮层没了：它驱动的那一轮（连填，2026-09-28）一并收场。只说一次。
     if (!dismissed) {
       dismissed = true;
@@ -4100,6 +3983,9 @@ export function mountDock(
     primaryButton: () => (bar.style.display === 'none' ? null : barPrimary),
     refreshAccount: () => { paint(); },
     forgetUser: () => {
+      acctMenuOpen = false;
+      vaultList.clear();
+      paintSiteAccounts();
       // 上一个人的开关状态：下次打开菜单时按新的人重新问。
       aiOn = null;
       memoryOn = null;

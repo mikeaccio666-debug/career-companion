@@ -22,6 +22,8 @@ const H = vi.hoisted(() => ({
   onMessage: [] as Array<(raw: unknown, sender: unknown) => unknown>,
   mounts: [] as Mounted[],
   fills: [] as Record<string, unknown>[],
+  chainEnds: 0,
+  failMount: false,
 }));
 
 vi.mock('wxt/utils/define-content-script', () => ({ defineContentScript: <T>(config: T): T => config }));
@@ -52,11 +54,18 @@ vi.mock('../lib/autofillDock', async (importOriginal) => {
   return {
     ...actual,
     mountAutofillDock: (face: { kind: string; reason?: string }, handlers: Record<string, any>) => {
+      if (H.failMount) { H.failMount = false; throw new Error('fictional rendering failure'); }
       const base: Record<string, unknown> = {
         face: () => face.kind,
         faceKey: () => actual.affordanceFaceKey(face as never),
         isOpen: () => handlers.autoOpen === true,
       };
+      let dismissed = false;
+      base.dismiss = vi.fn(() => {
+        if (dismissed) return;
+        dismissed = true;
+        handlers.onDismissed?.();
+      });
       const handle = new Proxy(base, { get: (target, key: string) => (target[key] ??= vi.fn()) }) as Handle;
       H.mounts.push({ face, handlers, handle });
       return handle;
@@ -89,7 +98,7 @@ vi.mock('../lib/gestureFill', () => ({
 vi.mock('../lib/fillToReview', () => ({
   createFillToReview: () => ({
     begin: (input: { root: unknown }) => ({ kind: 'SINGLE', proof: input.root }),
-    end: () => {},
+    end: () => { H.chainEnds++; },
     pageOf: () => null,
     afterPage: () => Promise.resolve(false),
     noForm: () => null,
@@ -164,6 +173,8 @@ beforeEach(() => {
   H.onMessage.length = 0;
   H.mounts.length = 0;
   H.fills.length = 0;
+  H.chainEnds = 0;
+  H.failMount = false;
   face = { kind: 'READY' };
   profileReply = () => ({ kind: 'PROFILE', profile: { firstName: 'Taylor' } });
   H.worker = (message) => {
@@ -293,7 +304,8 @@ describe('换了账号绝不填上一个人的资料', () => {
     user = 'B';
     broadcast({ kind: 'dock/session-changed' });
     await flush();
-    mounted.handlers.onAutofill(click(), SHADOW);
+    expect(mounted.handle.dismiss).toHaveBeenCalledTimes(1);
+    latest().handlers.onAutofill(click(), SHADOW);
     await flush();
     expect(filledName()).toBe('Bob');
   });
@@ -316,11 +328,15 @@ describe('换了账号绝不填上一个人的资料', () => {
     expect(mounted.handlers.account()?.name).toBe('Alice');
     user = 'B';
     broadcast({ kind: 'dock/session-changed' });
+    expect(mounted.handle.dismiss, '报到之前先拆掉 A 的浮层').toHaveBeenCalledTimes(1);
+    expect(mounted.handle.forgetUser, '立即清掉 A 的编辑器和资料').toHaveBeenCalledTimes(1);
     await flush();
-    expect(H.mounts, '脸没变：同一个浮层').toHaveLength(1);
-    expect(mounted.handle.forgetUser, '编辑器里 A 的那一份（连同没存的修改）丢掉').toHaveBeenCalledTimes(1);
-    expect(mounted.handlers.account()?.name, '名字换成了 B').toBe('Bob');
-    expect(mounted.handle.refreshAccount).toHaveBeenCalled();
+    expect(H.mounts, '按新会话重建浮层').toHaveLength(2);
+    const current = latest();
+    current.handlers.onPanelOpen();
+    await flush();
+    expect(current.handlers.account()?.name, '新浮层只显示 B').toBe('Bob');
+    expect(current.handle.refreshAccount).toHaveBeenCalled();
   });
 
   it('存资料（写）时带上这一页认的那个人：worker 此刻登录的不是他就一个字都不写；读不带', async () => {
@@ -364,13 +380,118 @@ describe('换了账号绝不填上一个人的资料', () => {
     expect(H.fills).toHaveLength(0);
   });
 
-  it('同一个人重新登录（代号没变）：什么都不丢', async () => {
+  it('同一个人的登录态失效广播也立即清掉 UI，再从 worker 重读资料', async () => {
     asUser();
     const mounted = await boot();
     broadcast({ kind: 'dock/session-changed' });
+    expect(mounted.handle.forgetUser).toHaveBeenCalledTimes(1);
+    expect(mounted.handle.dismiss).toHaveBeenCalledTimes(1);
     await flush();
-    expect(mounted.handle.forgetUser).not.toHaveBeenCalled();
-    expect(asked('PROFILE'), '预取的那一份照用').toBe(1);
+    expect(H.mounts).toHaveLength(2);
+    expect(asked('PROFILE'), '旧预取作废，重读同一个人的资料').toBe(2);
+    latest().handlers.onAutofill(click(), SHADOW);
+    await flush();
+    expect(filledName()).toBe('Alice');
+  });
+
+  it('新报到迟迟未返回：广播当场结束旧填写链，迟到的旧授权不交给填写', async () => {
+    asUser();
+    const mounted = await boot();
+    let releaseAuthority!: (reply: unknown) => void;
+    let releaseHello!: (reply: unknown) => void;
+    const authority = new Promise(resolve => { releaseAuthority = resolve; });
+    const hello = new Promise(resolve => { releaseHello = resolve; });
+    const base = H.worker;
+    H.worker = message => message.kind === 'bridge/hello' ? hello
+      : message.kind === 'dock/apply-materials-intent' && message.want === 'DISCOVERY_AUTHORITY' ? authority : base(message);
+    mounted.handlers.onAutofill(click(), SHADOW);
+    await flush();
+    const ends = H.chainEnds;
+    user = 'B';
+    broadcast({ kind: 'dock/session-changed' });
+    expect(mounted.handle.dismiss).toHaveBeenCalledTimes(1);
+    expect(mounted.handle.forgetUser).toHaveBeenCalledTimes(1);
+    expect(H.chainEnds).toBeGreaterThan(ends);
+    expect(H.mounts).toHaveLength(1);
+    releaseAuthority({ kind: 'DISCOVERY_AUTHORITY', authorization: { purpose: 'DISCOVERY' }, session: stamp('A') });
+    await flush();
+    expect(H.fills).toHaveLength(0);
+    expect(mounted.handle.reportBlocked).not.toHaveBeenCalled();
+    releaseHello({ dock: face, session: stamp('B') });
+    await flush();
+    expect(H.mounts).toHaveLength(2);
+    latest().handlers.onPanelOpen();
+    await flush();
+    expect(latest().handlers.account()?.name).toBe('Bob');
+  });
+
+  it.each(['reply', 'error'] as const)('旧 A 报到在 B 重建之后才结束（%s）：不能复活旧浮层或重试', async result => {
+    asUser();
+    const base = H.worker;
+    let release!: (reply: unknown) => void;
+    let reject!: (error: Error) => void;
+    const oldHello = new Promise((resolve, fail) => { release = resolve; reject = fail; });
+    let hellos = 0;
+    H.worker = message => message.kind === 'bridge/hello' && ++hellos === 1 ? oldHello : base(message);
+    const { default: entry } = await import('../entrypoints/apply.content');
+    (entry as unknown as { main: () => void }).main();
+    await flush();
+    expect(H.mounts).toHaveLength(0);
+    user = 'B';
+    broadcast({ kind: 'dock/session-changed' });
+    await flush();
+    const current = latest();
+    current.handlers.onPanelOpen();
+    await flush();
+    expect(current.handlers.account()?.name).toBe('Bob');
+    const reads = asked('PROFILE');
+    if (result === 'reply') release({ dock: { kind: 'UNPAIRED' }, session: stamp('A') });
+    else reject(new Error('fictional late transport failure'));
+    await flush();
+    expect(H.mounts).toHaveLength(1);
+    expect(current.handle.dismiss).not.toHaveBeenCalled();
+    expect(current.handle.forgetUser).not.toHaveBeenCalled();
+    expect(current.handlers.account()?.name).toBe('Bob');
+    expect(asked('PROFILE')).toBe(reads);
+    expect(H.fills).toHaveLength(0);
+  });
+
+  it('同 owner 的旧头像读取迟到，也不能覆盖失效后重新读取的资料', async () => {
+    asUser();
+    const base = H.worker;
+    let release!: (reply: unknown) => void;
+    const oldProfile = new Promise(resolve => { release = resolve; });
+    let profiles = 0;
+    H.worker = message => message.kind === 'dock/apply-materials-intent' && message.want === 'PROFILE'
+      ? ++profiles === 1 ? oldProfile : { kind: 'PROFILE', profile: { firstName: 'Alice updated' }, session: stamp('A') }
+      : base(message);
+    const old = await boot();
+    old.handlers.onPanelOpen();
+    await flush();
+    broadcast({ kind: 'dock/session-changed' });
+    await flush();
+    const current = latest();
+    current.handlers.onPanelOpen();
+    await flush();
+    expect(current.handlers.account()?.name).toBe('Alice updated');
+    const refreshes = current.handle.refreshAccount.mock.calls.length;
+    release({ kind: 'PROFILE', profile: { firstName: 'Alice old' }, session: stamp('A') });
+    await flush();
+    expect(current.handlers.account()?.name).toBe('Alice updated');
+    expect(current.handle.refreshAccount).toHaveBeenCalledTimes(refreshes);
+    expect(H.mounts).toHaveLength(2);
+  });
+
+  it('当前 B 报到确实成功但新浮层渲染失败：保留本地错误诊断', async () => {
+    vi.useFakeTimers();
+    asUser();
+    await boot();
+    user = 'B';
+    H.failMount = true;
+    broadcast({ kind: 'dock/session-changed' });
+    await flush();
+    expect(H.sent.some(message => message.code === 'APPLY_HELLO_THREW')).toBe(true);
+    expect(H.fills).toHaveLength(0);
   });
 });
 

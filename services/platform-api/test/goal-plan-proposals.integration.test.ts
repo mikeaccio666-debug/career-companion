@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +16,7 @@ import type { AssistantTurnOrigin } from '../src/assistant-turn-origin.ts';
 import { ApiError } from '../src/errors.ts';
 import { authorizeGoalPlanToolFeedback, goalPlanToolResult } from '../src/goal-plan-tool-feedback.ts';
 
-const base=readConfig(),prefix='/api/platform',origin='http://localhost:4321',schema=`goal_proposals_${randomUUID().replaceAll('-','')}`;
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'}),prefix='/api/platform',origin='http://localhost:4321',schema=`goal_proposals_${randomUUID().replaceAll('-','')}`;
 const admin=new Database(base.databaseUrl),databaseUrl=new URL(base.databaseUrl);databaseUrl.searchParams.set('options',`-c search_path=${schema}`);const db=new Database(databaseUrl.toString());
 let system:Awaited<ReturnType<typeof buildApp>>,directory:string,httpOrigin:string,executedJobs=0;
 interface Actor {id:string;cookie:string}
@@ -34,12 +35,12 @@ const runtime:PlatformProviderRuntime={
   },
   async executeJob(){++executedJobs;return {text:'Fictional independently approved output',artifacts:[]};},createVoiceSession:forbidden,transcribe:forbidden,speech:forbidden,
 };
-async function start(override=runtime){system=await buildApp({db,runtime:override,enableQueue:false,config:{...base,databaseUrl:databaseUrl.toString(),storageDir:directory,requireVerifiedEmail:false,accountEmail:undefined,maxActiveJobs:100,mcp:{entries:[],fixtureOrigins:[]}},requestLimits:{policies:{api:{max:2000,windowSeconds:60},chat:{max:2000,windowSeconds:60},control:{max:2000,windowSeconds:60},'auth-register':{max:1000,windowSeconds:60}}}});httpOrigin=await system.app.listen({host:'127.0.0.1',port:0});}
-before(async()=>{assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only an explicitly provided loopback QA database is allowed.');await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-goal-proposals-'));await start();});
+async function start(override=runtime,providerId='synthetic'){system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,runtime:override,enableQueue:false,config:{...base,modelRoutes:{chat:{provider:providerId},agent:{provider:providerId}},databaseUrl:databaseUrl.toString(),storageDir:directory,requireVerifiedEmail:false,accountEmail:undefined,maxActiveJobs:100,mcp:{entries:[],fixtureOrigins:[]}},requestLimits:{policies:{api:{max:2000,windowSeconds:60},chat:{max:2000,windowSeconds:60},control:{max:2000,windowSeconds:60},'auth-register':{max:1000,windowSeconds:60}}}});httpOrigin=await system.app.listen({host:'127.0.0.1',port:0});}
+before(async()=>{assert(['localhost','127.0.0.1','[::1]'].includes(new URL(base.databaseUrl).hostname),'Only an explicitly provided loopback QA database is allowed.');await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'companion-goal-proposals-'));await start();});
 after(async()=>{await system?.app.close();await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 const headers=(user?:Actor):Record<string,string>=>({origin,...(user?{cookie:user.cookie,[PLATFORM_ACCOUNT_HEADER]:user.id}:{})});
 async function request(user:Actor|undefined,method:'GET'|'POST'|'PUT'|'DELETE',route:string,payload?:any,override:Record<string,string|undefined>={}){const h=headers(user);for(const [key,value]of Object.entries(override)){if(value===undefined)delete h[key];else h[key]=value;}return system.app.inject({method,url:prefix+route,headers:h,payload});}
-async function actor():Promise<Actor>{const r=await request(undefined,'POST','/auth/register',{name:'Fictional proposal actor',email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'});assert.equal(r.statusCode,201,r.body);return {id:r.json().user.id,cookie:(r.headers['set-cookie'] as string).split(';')[0]};}
+async function actor():Promise<Actor>{const r=await request(undefined,'POST','/auth/register',await fictionalRegistration(db,{name:'Fictional proposal actor',email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'}));assert.equal(r.statusCode,201,r.body);return {id:r.json().user.id,cookie:(r.headers['set-cookie'] as string).split(';')[0]};}
 async function conversation(user:Actor){const r=await request(user,'POST','/conversations',{title:'Fictional proposal conversation',mode:'agent'});assert.equal(r.statusCode,201,r.body);return r.json().conversation.id as string;}
 const simple=():GoalPlanInput=>({title:'Fictional editable plan',goal:'Compare fictional directions',steps:[{kind:'task',title:'Fictional speech',task:{kind:'speech',provider:'synthetic',prompt:'Fictional task goal'}}]});
 async function live(user:Actor,conversationId:string):Promise<AssistantTurnOrigin>{const messageId=randomUUID();await db.query("INSERT INTO platform_messages(id,conversation_id,role,content,status,lease_until) VALUES($1,$2,'assistant','','streaming',clock_timestamp()+interval '120 seconds')",[messageId,conversationId]);await db.query("INSERT INTO platform_runtime_leases(id,user_id,kind,expires_at) VALUES($1,$2,'chat',clock_timestamp()+interval '120 seconds')",[messageId,user.id]);return {conversationId,messageId};}
@@ -49,7 +50,7 @@ async function counts(user:Actor){return (await db.query(`SELECT (SELECT count(*
   (SELECT count(*)::int FROM platform_goal_plan_proposals WHERE user_id=$1) AS proposals,(SELECT count(*)::int FROM platform_jobs WHERE user_id=$1) AS jobs,
   (SELECT count(*)::int FROM platform_approvals WHERE user_id=$1) AS approvals,(SELECT count(*)::int FROM platform_job_outbox o JOIN platform_jobs j ON j.id=o.job_id WHERE j.user_id=$1) AS outbox`,[user.id])).rows[0];}
 function register(fixture:Fixture){const key='fictional-proposal-'+randomUUID();fixtures.set(key,fixture);return key;}
-async function response(user:Actor,conversationId:string,fixture:Fixture,mode='agent'){const r=await fetch(httpOrigin+prefix+`/conversations/${conversationId}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:register(fixture),provider:'synthetic',mode})});assert.equal(r.status,200);return r.text();}
+async function response(user:Actor,conversationId:string,fixture:Fixture,mode='agent'){const r=await fetch(httpOrigin+prefix+`/conversations/${conversationId}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:register(fixture),mode})});assert.equal(r.status,200);return r.text();}
 
 test('normal Agent proposal saves all task kinds and typed bindings as an owned editable draft without execution',async()=>{
   const user=await actor(),conv=await conversation(user),steps:any[]=JOB_KINDS.map(kind=>({kind:'task',title:`Fictional ${kind}`,task:{kind,provider:kind==='mcp'?'mcp':'unconfigured',prompt:'Fictional requested outcome',options:kind==='mcp'?{connectionId:randomUUID(),grantVersion:1,toolName:'fictional_lookup',schemaHash:'a'.repeat(64),arguments:{query:'Fictional'}}:kind==='workflow'?{steps:[{kind:'speech',provider:'unconfigured',prompt:'Fictional substep'}]}:kind==='browser'?{url:'https://fictional.example.invalid'}:{}}}));
@@ -113,14 +114,14 @@ test('actual HTTP disconnect before tool acquisition cannot save a late proposal
   system.goalPlanProposals.propose=async function(...args){reached();await gate;return original.apply(this,args);};
   const fixture:Fixture={actions:[{name:'propose_goal_plan',args:simple() as any}]},abort=new AbortController();
   try{
-    const r=await fetch(httpOrigin+prefix+`/conversations/${conv}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:register(fixture),provider:'synthetic',mode:'agent'}),signal:abort.signal});const reading=r.text().catch(()=>undefined);await ready;
+    const r=await fetch(httpOrigin+prefix+`/conversations/${conv}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:register(fixture),mode:'agent'}),signal:abort.signal});const reading=r.text().catch(()=>undefined);await ready;
     const cancelled=new Promise<void>(resolve=>{if(fixture.context?.signal?.aborted)resolve();else fixture.context?.signal?.addEventListener('abort',()=>resolve(),{once:true});});abort.abort();await cancelled;release();await reading;
     for(let i=0;i<50;i++){if(fixture.errors?.length)break;await new Promise<void>(resolve=>setTimeout(resolve,10));}assert.equal(fixture.errors?.length,1);assert.equal((await counts(user)).plans,0);
   }finally{abort.abort();release();system.goalPlanProposals.propose=original;}
 });
 test('a committed proposal survives lost SSE, failed or cancelled source and API restart without model recovery',{timeout:10_000},async()=>{
   const user=await actor(),conv=await conversation(user);let committed!:()=>void;const saved=new Promise<void>(resolve=>{committed=resolve;}),fixture:Fixture={actions:[{name:'propose_goal_plan',args:simple() as any}],onProposed:committed,holdAfter:true},abort=new AbortController();
-  const r=await fetch(httpOrigin+prefix+`/conversations/${conv}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:register(fixture),provider:'synthetic',mode:'agent'}),signal:abort.signal});const reading=r.text().catch(()=>undefined);await saved;const id=fixture.results![0].proposal.planId;abort.abort();await reading;
+  const r=await fetch(httpOrigin+prefix+`/conversations/${conv}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:register(fixture),mode:'agent'}),signal:abort.signal});const reading=r.text().catch(()=>undefined);await saved;const id=fixture.results![0].proposal.planId;abort.abort();await reading;
   for(let i=0;i<50;i++){const state=(await db.query('SELECT status FROM platform_messages WHERE id=$1',[fixture.results![0].proposal.messageId])).rows[0]?.status;if(state==='cancelled')break;await new Promise<void>(resolve=>setTimeout(resolve,10));}
   await system.app.close();await start();const page=await list(user,conv);assert.equal(page.proposals.length,1);assert.equal(page.proposals[0].planId,id);assert.equal(page.proposals[0].status,'draft');assert.equal((await counts(user)).jobs,0);
   const failedUser=await actor(),failedConv=await conversation(failedUser),failed:Fixture={actions:[{name:'propose_goal_plan',args:simple() as any}],failAfter:true};
@@ -166,9 +167,9 @@ test('actual ai-core Responses protocol discovers capabilities and persists one 
     const address=new URL(String(url));assert.equal(address.hostname,'api.openai.com');assert.equal(address.pathname,'/v1/responses');assert(transportCalls<2,'The protocol fixture must never perform an unplanned call.');const body=JSON.parse(String(init?.body));bodies.push(body);
     return transportCalls++===0?frames([{type:'response.completed',response:{output:[{type:'function_call',call_id:'fictional-caps',name:'get_execution_capabilities',arguments:'{}'},{type:'function_call',call_id:'fictional-proposal',name:'propose_goal_plan',arguments:JSON.stringify(draft)}]}}]):frames([{type:'response.output_text.delta',delta:'Fictional editable draft is ready for review.'},{type:'response.completed',response:{output:[]}}]);
   }});
-  await system.app.close();await start(protocol);
+  await system.app.close();await start(protocol,'openai');
   try{
-    const r=await fetch(httpOrigin+prefix+`/conversations/${conv}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:'Propose the fictional requested plan',provider:'openai',mode:'agent'})});assert.equal(r.status,200);const body=await r.text();assert.match(body,/event: done/);assert.doesNotMatch(body,/event: approval/);assert.equal(transportCalls,2);
+    const r=await fetch(httpOrigin+prefix+`/conversations/${conv}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:'Propose the fictional requested plan',mode:'agent'})});assert.equal(r.status,200);const body=await r.text();assert.match(body,/event: done/);assert.doesNotMatch(body,/event: approval/);assert.equal(transportCalls,2);
     assert.equal(bodies[0].store,false);const schema=bodies[0].tools.find((tool:any)=>tool.name==='propose_goal_plan').parameters;assert.equal(schema.additionalProperties,false);assert.equal(schema.properties.messageId,undefined);
     for(const item of bodies[1].input)if(item.type==='function_call_output')outputs.push(JSON.parse(item.output));
     const capability=outputs.find(item=>item.source==='server_configuration'),proposal=outputs.find(item=>item.proposal)?.proposal;assert(capability);assert.equal(capability.accountAuthorizationVerified,false);assert(!JSON.stringify(capability).includes('envVariables'));assert(proposal);assert.equal(proposal.status,'draft');assert.equal(proposal.steps,undefined);
@@ -192,9 +193,9 @@ test('actual Responses repairs missing steps and explains a different second pro
     assert.equal(calls,4,'The fixture permits only the planned correction and final explanation.');const error=returned.at(-1).error;assert.equal(error.code,'GOAL_PLAN_PROPOSAL_EXISTS');assert.match(error.message,/Edit its saved draft|new proposal in another response/);
     return frames([{type:'response.output_text.delta',delta:'The first fictional draft remains saved. You can edit it, or ask for another proposal in a new response. Nothing was confirmed or executed.'},{type:'response.completed',response:{output:[]}}]);
   }});
-  await system.app.close();await start(protocol);
+  await system.app.close();await start(protocol,'openai');
   try{
-    const answer=await fetch(httpOrigin+prefix+`/conversations/${conv}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:'Propose a fictional editable plan',provider:'openai',mode:'agent'})});assert.equal(answer.status,200);const body=await answer.text();assert.match(body,/event: done/);assert.doesNotMatch(body,/event: error|event: approval/);assert.match(body,/first fictional draft remains saved/);assert.equal(calls,4);
+    const answer=await fetch(httpOrigin+prefix+`/conversations/${conv}/messages`,{method:'POST',headers:{...headers(user),'content-type':'application/json'},body:JSON.stringify({content:'Propose a fictional editable plan',mode:'agent'})});assert.equal(answer.status,200);const body=await answer.text();assert.match(body,/event: done/);assert.doesNotMatch(body,/event: error|event: approval/);assert.match(body,/first fictional draft remains saved/);assert.equal(calls,4);
     assert(outputs.some(item=>item.error?.code==='GOAL_PLAN_PROPOSAL_EXISTS'));assert.deepEqual(await counts(user),{plans:1,proposals:1,jobs:0,approvals:0,outbox:0});
     assert.deepEqual((await list(user,conv)).proposals,[saved]);const stored=(await request(user,'GET',`/goal-plans/${saved.planId}`)).json().plan;assert.equal(stored.title,draft.title);assert.equal(stored.revision,1);assert.equal(stored.status,'draft');assert.equal(stored.steps[0].input.task.prompt,(draft.steps[0] as any).task.prompt);assert.equal(executedJobs,executedBefore);
     const messages=(await request(user,'GET',`/conversations/${conv}`)).json().messages;assert.deepEqual(messages.map((message:any)=>message.status),['complete','complete']);
@@ -232,7 +233,7 @@ test('malformed feedback and a retained-draft conflict cannot mask wrong-owner, 
 });
 
 test('account and ownership rejection, oversized input and database failure remain hard failures without a draft',async()=>{
-  const user=await actor(),other=await actor(),conv=await conversation(user),fixture:Fixture={actions:[{name:'propose_goal_plan',args:simple() as any}]},payload={content:register(fixture),provider:'synthetic',mode:'agent'};
+  const user=await actor(),other=await actor(),conv=await conversation(user),fixture:Fixture={actions:[{name:'propose_goal_plan',args:simple() as any}]},payload={content:register(fixture),mode:'agent'};
   const missing=await request(user,'POST',`/conversations/${conv}/messages`,payload,{[PLATFORM_ACCOUNT_HEADER]:undefined});assert.equal(missing.statusCode,409);assert.equal(missing.json().error.code,'ACCOUNT_CONTEXT_REQUIRED');
   const stale=await request(user,'POST',`/conversations/${conv}/messages`,payload,{[PLATFORM_ACCOUNT_HEADER]:other.id});assert.equal(stale.statusCode,409);assert.equal(stale.json().error.code,'ACCOUNT_CONTEXT_CHANGED');
   assert.equal((await request(other,'POST',`/conversations/${conv}/messages`,payload)).statusCode,404);assert.equal(fixture.context,undefined);assert.equal((await counts(user)).plans,0);

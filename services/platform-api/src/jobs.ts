@@ -1,3 +1,5 @@
+import { ModelConsent, requireModelConsent } from './model-routing.ts';
+import type { LegalBundle } from './legal-documents.ts';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -24,7 +26,11 @@ import { authorizeConversationTaskOrigin, conversationTaskRows, parseConversatio
 import { authorizeGoalPlanTask, bindGoalPlanTask, recordGoalPlanTaskReceipt, type GoalPlanTaskOrigin } from './goal-plan-bindings.ts';
 import { assertGoalPlanImageBytes, readGoalPlanFile, readGoalPlanImage, readGoalPlanSourceFile, resolveGoalPlanInputs, verifyGoalPlanInputSources } from './goal-plan-inputs.ts';
 import { speechJobOptions, validateSpeechInput } from '../../../packages/ai-core/src/voice-input.ts';
+import { assertWorkbenchAdmission } from './workbench-policy.ts';
 export { connectionFromUrl } from './queue-connection.ts';
+
+/** Trusted channel admission; never populated from job input or worker delivery. */
+export type JobAdmission = () => void;
 
 export function parseJob(value: unknown): CreateJobInput {
   const data = object(value);
@@ -142,7 +148,9 @@ export async function verifyAttachments(client: PoolClient | Database, userId: s
 
 export class JobService {
   readonly mcp: McpConnections;
-  constructor(readonly db: Database, readonly config: PlatformConfig, readonly runtime: PlatformProviderRuntime, readonly storage: BlobStorage, readonly relayOptions?:ModelRelayOptions, mcpTransport?:McpTransport) {
+  readonly modelConsent:ModelConsent;
+  constructor(readonly db: Database, readonly config: PlatformConfig, readonly runtime: PlatformProviderRuntime, readonly storage: BlobStorage, readonly relayOptions?:ModelRelayOptions, mcpTransport?:McpTransport, legalBundle:LegalBundle|null=null) {
+    this.runtime=requireModelConsent(runtime);this.modelConsent=new ModelConsent(db,legalBundle);
     this.mcp=new McpConnections(db,config.mcp,mcpTransport,storage);
   }
   private async preparedInput(userId: string, input: CreateJobInput, db:Pick<Database,'query'>=this.db, pendingReferenceCount=0) {
@@ -165,9 +173,10 @@ export class JobService {
     if(input.kind==='speech'&&!input.model){const provider=this.runtime.capabilities().find(item=>item.id===input.provider),model=provider?.modelsByCapability?.speech?.[0]??provider?.models[0];if(model)input={...input,model};}
     return (await this.preparedInput(userId,input,client,pendingReferenceCount)).input;
   }
-  async create(userId: string, input: CreateJobInput, originValue?: ConversationTaskCreationOrigin, signal?: AbortSignal, planOrigin?: GoalPlanTaskOrigin): Promise<{ job: Job; approval?: any }> {
+  async create(userId: string, input: CreateJobInput, originValue?: ConversationTaskCreationOrigin, signal?: AbortSignal, planOrigin?: GoalPlanTaskOrigin, admission?: JobAdmission): Promise<{ job: Job; approval?: any }> {
     signal?.throwIfAborted();
     if(originValue && planOrigin)throw invalid('A task must have one server origin.');
+    if(!planOrigin){admission?.();assertWorkbenchAdmission(this.config,input.kind);}
     const origin = originValue === undefined ? undefined : parseConversationTaskOrigin(originValue);
     if(origin&&(origin.tool==='prepare_browser_task'&&input.kind!=='browser'||origin.tool==='prepare_mcp_task'&&input.kind!=='mcp'))throw invalid('The server origin tool does not match the prepared task kind.');
     let prepared = planOrigin?undefined:await this.preparedInput(userId,input);
@@ -185,6 +194,8 @@ export class JobService {
           const review=(await client.query("SELECT * FROM platform_approvals WHERE job_id=$1 AND user_id=$2 AND generation=$3 AND status='pending' AND $4='needs_approval' ORDER BY created_at DESC LIMIT 1",[existing.id,userId,existing.generation,existing.status])).rows[0];
           return {job:mapJob(existing),...(review?{approval:mapApproval(review)}:{})};
         }
+        admission?.();
+        assertWorkbenchAdmission(this.config,authorization.step!.input.task.kind);
         const resolved=await resolveGoalPlanInputs(client,this.storage,userId,authorization.step.input,authorization.rows!,signal);
         prepared=await this.preparedInput(userId,resolved.input,client);
         if(prepared.input.kind==='speech'){
@@ -262,13 +273,15 @@ export class JobService {
     });
     return this.get(userId,id);
   }
-  async retry(userId: string, id: string): Promise<Job> {
+  async retry(userId: string, id: string, admission?: JobAdmission): Promise<Job> {
     await this.db.transaction(async client => {
       await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[userId]);
       const result = await client.query('SELECT * FROM platform_jobs WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,userId]);
       if (!result.rowCount) throw notFound();
       const row = result.rows[0];
       if (!['failed','cancelled','uncertain'].includes(row.status)) throw new ApiError(409,'JOB_NOT_RETRYABLE','Only failed or cancelled tasks can be retried.');
+      admission?.();
+      assertWorkbenchAdmission(this.config,row.kind);
       if(row.kind==='mcp'){
         if(await this.mcp.started(client,id))throw new ApiError(409,'MCP_REVIEW_REQUIRED','This MCP call already started and cannot be replayed by retry.');
         await this.mcp.validateBinding(client,row);
@@ -292,7 +305,7 @@ export class JobService {
     });
     return this.get(userId,id);
   }
-  async decide(userId: string, id: string, decision: 'approved'|'rejected') {
+  async decide(userId: string, id: string, decision: 'approved'|'rejected', admission?: JobAdmission) {
     return this.db.transaction(async client => {
       const reference = await client.query('SELECT job_id FROM platform_approvals WHERE id=$1 AND user_id=$2',[id,userId]);
       if(!reference.rowCount)throw notFound();
@@ -310,6 +323,8 @@ export class JobService {
       if (!approval.job_id) throw new ApiError(409,'APPROVAL_NOT_EXECUTABLE','This action is not executable as a job.');
       if (!job.rowCount || job.rows[0].status!=='needs_approval') throw new ApiError(409,'JOB_NOT_AWAITING_APPROVAL','This task no longer awaits approval.');
       if(decision==='approved'){
+        admission?.();
+        assertWorkbenchAdmission(this.config,job.rows[0].kind);
         const input=jobInput(job.rows[0]);if(input.kind==='mcp')await this.mcp.validateBinding(client,job.rows[0]);
         const workflowCheckpoint=await workflowTemplateCheckpoint(client,job.rows[0]);
         validateExecutionTemplates(input,job.rows[0].execution_policy,undefined,completedWorkflowStepIndexes(workflowCheckpoint?.steps));
@@ -416,9 +431,16 @@ export class TaskQueue {
 export async function processJob(jobs: JobService, id: string, generation: number, expectedDefinitionHash?:string) {
   const token = randomUUID();
   const row = await jobs.db.transaction(async client => {
+    const selected=(await client.query('SELECT user_id,kind FROM platform_jobs WHERE id=$1',[id])).rows[0];
+    if(!selected)return undefined;
+    const owner=selected.user_id;
+    // MCP executes only its existing tool-grant/receipt path. It never invokes this
+    // model runtime, so preserve its original claim/FK-compatible lock sequence.
+    const account=selected.kind==='mcp'?undefined:(await client.query('SELECT auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[owner])).rows[0];
+    if(selected.kind!=='mcp'&&!account)return undefined;
     const result=await client.query('SELECT * FROM platform_jobs WHERE id=$1 FOR UPDATE',[id]);
     const current=result.rows[0];
-    if (!current || current.generation!==generation || current.status!=='queued') return undefined;
+    if (!current || current.user_id!==owner || current.kind!==selected.kind || current.generation!==generation || current.status!=='queued') return undefined;
     try {
       const definitionHash=await deliveryPreflight(client,current,false,jobs.mcp);
       if(expectedDefinitionHash!==undefined&&expectedDefinitionHash!==definitionHash)throw new ApiError(409,'JOB_DEFINITION_CHANGED','The execution notification does not match the current frozen task.');
@@ -426,10 +448,11 @@ export async function processJob(jobs: JobService, id: string, generation: numbe
     const update=await client.query("UPDATE platform_jobs SET status='running',attempt_count=attempt_count+1,lease_token=$2,lease_until=now()+interval '60 seconds',updated_at=now() WHERE id=$1 RETURNING *",[id,token]);
     const claimed=update.rows[0];
     await client.query("INSERT INTO platform_job_attempts(id,job_id,generation,attempt,status,provider_task_id) VALUES($1,$2,$3,$4,'running',$5)",[randomUUID(),id,generation,claimed.attempt_count,claimed.provider_task_id]);
-    return claimed;
+    return {...claimed,claimedAuthVersion:account?String(account.auth_version):undefined};
   });
   if(!row)return;
   const abort=new AbortController();
+  const requestAdmission=row.kind==='mcp'?undefined:jobs.modelConsent.forJob({userId:row.user_id,jobId:id,generation,leaseToken:token,authVersion:row.claimedAuthVersion,signal:abort.signal});
   const heartbeat=setInterval(()=>void jobs.db.query("UPDATE platform_jobs SET lease_until=now()+interval '60 seconds' WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_until>now() RETURNING id",[id,token]).then(result=>{if(!result.rowCount)abort.abort();}).catch(()=>abort.abort()),10_000);
   heartbeat.unref();
   const workspaceDirectory=path.join(jobs.config.storageDir,'workspaces',row.user_id,id);
@@ -448,11 +471,11 @@ export async function processJob(jobs: JobService, id: string, generation: numbe
     const browserCheckpoint=browserBinding?await loadBrowserCheckpoint(jobs.db,browserBinding):undefined;
     const mcpResult=mcpBinding?await jobs.mcp.execute(mcpBinding):undefined;
     mcpToolError=mcpResult?.mcpToolError===true;
-    const result=mcpResult??await jobs.runtime.executeJob(input,{jobId:id,userId:row.user_id,signal:abort.signal,workspaceDirectory,previousProviderTaskId:row.provider_task_id ?? undefined,
+    const result=mcpResult??await jobs.runtime.executeJob(input,{jobId:id,userId:row.user_id,signal:abort.signal,requestAdmission,workspaceDirectory,previousProviderTaskId:row.provider_task_id ?? undefined,
       ...(templatePolicy?.job?{comfyuiTemplate:templatePolicy.job}:{}),...(templatePolicy?.steps?{workflowComfyUITemplates:templatePolicy.steps}:{}),
       ...(workflowBinding?{workflowCheckpoint,onWorkflowCheckpoint:event=>applyWorkflowCheckpoint(jobs.db,jobs.storage,workflowBinding,event),readWorkflowArtifact:attachmentId=>readWorkflowArtifact(jobs.db,jobs.storage,workflowBinding,attachmentId)}:{}),
       ...(browserBinding?{browserCheckpoint,onBrowserCheckpoint:event=>applyBrowserCheckpoint(jobs.db,jobs.storage,browserBinding,event),assertBrowserAuthorized:async()=>{providerAvailable(jobs.runtime,row.provider,'browser');if(browserCheckpoint&&!jobs.runtime.capabilities().find(provider=>provider.id===row.provider)?.browserActionsEnabled)throw new ApiError(503,'BROWSER_ACTIONS_DISABLED','Browser actions are disabled on this server.');await assertBrowserAuthorized(jobs.db,browserBinding);}}:{}),
-      requestModel:row.kind==='cli'?createJobModelRelay(jobs.db,{jobId:id,userId:row.user_id,generation,leaseToken:token,signal:abort.signal},jobs.relayOptions):undefined,
+      requestModel:row.kind==='cli'?createJobModelRelay(jobs.db,{jobId:id,userId:row.user_id,generation,leaseToken:token,signal:abort.signal,requestAdmission},jobs.relayOptions):undefined,
       readAttachment:attachmentId=>jobs.readAttachment(row.user_id,attachmentId,row.execution_policy?.goalPlanInput,abort.signal),
       onProgress:async progress=>{await jobs.db.query("UPDATE platform_jobs SET progress=$3,updated_at=now() WHERE id=$1 AND lease_token=$2 AND status='running'",[id,token,Math.max(0,Math.min(99,Math.round(progress)))]);},
       onProviderTask:async taskId=>{await jobs.db.transaction(async client=>{

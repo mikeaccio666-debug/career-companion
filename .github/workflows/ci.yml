@@ -23,7 +23,7 @@ jobs:
           POSTGRES_DB: companion
           POSTGRES_USER: companion
           POSTGRES_PASSWORD: local-companion-dev-only
-        ports: ["5442:5432"]
+        ports: ["5549:5432"]
         options: >-
           --health-cmd "pg_isready -U companion -d companion"
           --health-interval 5s --health-timeout 3s --health-retries 10
@@ -50,6 +50,8 @@ jobs:
       - run: pnpm check
       - run: pnpm test
         env:
+          # Dedicated verification port; local development keeps port 5442.
+          PLATFORM_DATABASE_URL: postgresql://companion:local-companion-dev-only@127.0.0.1:5549/companion
           # Synthetic Responses only; Docker remains disconnected and provider calls stay off.
           NODE_OPTIONS: --test-reporter=tap
           PLATFORM_TEST_REAL_HARNESS: "1"

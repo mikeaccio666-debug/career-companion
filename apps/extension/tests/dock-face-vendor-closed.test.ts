@@ -161,7 +161,7 @@ describe('浮层上的样子', () => {
     handle.reportBlocked(code);
     const all = text(handle.sceneRoot());
     expect(text(handle.sceneRoot()?.querySelector('.face-title'))).toBe(title);
-    expect(all).not.toContain('暂时连不上 ArgoLand');
+    expect(all).not.toContain('暂时连不上 Career Companion');
     expect(all).not.toContain('这一轮没有完成');
   });
 });

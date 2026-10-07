@@ -25,6 +25,7 @@ function loadManifest(): Record<string, unknown> {
 describe('default extension artifact excludes Field Lab', () => {
   it('keeps the established background/content-script identity', () => {
     const manifest = loadManifest();
+    expect(manifest.name).toBe('Career Companion (Local)');
     expect(manifest.permissions).toEqual(['storage', 'alarms']);
     expect((manifest.background as { service_worker?: unknown }).service_worker).toBe(
       'background.js',
@@ -47,6 +48,7 @@ describe('default extension artifact excludes Field Lab', () => {
     const files = artifactFiles();
     expect(files).toContain('chrome-mv3/background.js');
     expect(files).toContain('chrome-mv3/content-scripts/apply.js');
+    expect(files.filter((file) => /(?:alice|charlie|darren|xena).*\.webp$/iu.test(file))).toEqual([]);
     expect(files.filter((file) => /sidepanel|field-lab/iu.test(file))).toEqual([]);
 
     const text = files

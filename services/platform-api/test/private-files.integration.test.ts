@@ -1,3 +1,4 @@
+import { FICTIONAL_LEGAL, fictionalRegistration, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import { Database } from '../src/database.ts';
 import { ApiError } from '../src/errors.ts';
 import { LocalBlobStorage, type BlobReadOptions, type BlobReadResult, type BlobStat } from '../src/storage.ts';
 
-const prefix='/api/platform',origin='http://localhost:4321',schema=`private_files_${randomUUID().replaceAll('-','')}`,base=readConfig(),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const prefix='/api/platform',origin='http://localhost:4321',schema=`private_files_${randomUUID().replaceAll('-','')}`,base=readConfig({...process.env,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string,system:Awaited<ReturnType<typeof buildApp>>,port:number,alice:Actor,bob:Actor,video:Saved,audio:Saved,large:Saved;
 type Actor={id:string;cookie:string};type Saved={uploadId:string;artifactId:string;jobId:string;key:string;bytes:Buffer};
 type Opened={stream:Readable;signal?:AbortSignal;closed:boolean};
@@ -42,7 +43,7 @@ function exchange(route:string,actor?:Actor,options:{method?:string;headers?:Rec
     });req.on('error',reject);req.setTimeout(10_000,()=>req.destroy(new Error('Private HTTP fixture timed out.')));if(body)req.write(body);req.end();
   });
 }
-async function register(name:string):Promise<Actor>{const result=await exchange('/auth/register',undefined,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({name,email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'})});assert.equal(result.status,201,result.bytes.toString());return {id:JSON.parse(result.bytes.toString()).user.id,cookie:result.headers['set-cookie']![0]!.split(';')[0]!};}
+async function register(name:string):Promise<Actor>{const result=await exchange('/auth/register',undefined,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify(await fictionalRegistration(db,{name,email:`${randomUUID()}@example.invalid`,password:'Fictional-password-123'}))});assert.equal(result.status,201,result.bytes.toString());return {id:JSON.parse(result.bytes.toString()).user.id,cookie:result.headers['set-cookie']![0]!.split(';')[0]!};}
 async function saved(user:Actor,bytes:Buffer,mime='video/mp4',empty=false):Promise<Saved>{
   let uploadId:string,key:string;
   if(empty){uploadId=randomUUID();key=randomUUID();await storage.put(key,bytes);await db.query('INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,\'fictional-empty.bin\',$3,$4,$5)',[uploadId,user.id,mime,bytes.length,key]);}
@@ -56,8 +57,8 @@ async function saved(user:Actor,bytes:Buffer,mime='video/mp4',empty=false):Promi
 }
 async function until(condition:()=>boolean){const end=Date.now()+3000;while(!condition()){if(Date.now()>end)assert.fail('Expected private stream cleanup did not finish.');await new Promise(resolve=>setTimeout(resolve,5));}}
 before(async()=>{
-  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'private-file-http-'));storage=new TrackingStorage(directory);
-  system=await buildApp({db,storage,config:{...base,databaseUrl:url.toString(),storageDir:directory},runtime,enableQueue:false});
+  await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'private-file-http-'));storage=new TrackingStorage(directory);
+  system=await buildApp({legalBundle:FICTIONAL_LEGAL,db,storage,config:{...base,databaseUrl:url.toString(),storageDir:directory},runtime,enableQueue:false});
   system.app.server.on('request',(request,response)=>{if(request.url?.startsWith(prefix+'/uploads/')||request.url?.startsWith(prefix+'/artifacts/'))lifecycle.push({request,response});});
   await system.app.listen({host:'127.0.0.1',port:0});port=(system.app.server.address() as import('node:net').AddressInfo).port;
   alice=await register('Fictional media owner');bob=await register('Fictional second account');

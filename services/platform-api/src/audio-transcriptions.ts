@@ -1,3 +1,4 @@
+import { requireModelConsent } from './model-routing.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { platformAccountId, type AudioTranscriptionReceipt, type AudioTranscriptReference, type ChatAttachmentSupport, type PlatformProviderRuntime, type ProviderAttachment, type ProviderStatus, type ReviewedAudioTranscript } from '@companion/platform-contracts';
@@ -68,7 +69,7 @@ function reviewed(row: any, reference: AudioTranscriptReference): ReviewedAudioT
 
 /** Server-created immutable ASR results. A user review selects text; it authenticates no speaker or achievement. */
 export class AudioTranscriptions {
-  constructor(readonly db: Database, readonly storage: BlobStorage, readonly runtime: PlatformProviderRuntime) {}
+  constructor(readonly db: Database, readonly storage: BlobStorage, readonly runtime: PlatformProviderRuntime) { this.runtime=requireModelConsent(runtime); }
   private async source(userId: string, uploadId: string, client: Pick<PoolClient,'query'> | Database = this.db) {
     const result = await client.query('SELECT * FROM platform_uploads WHERE id=$1 AND user_id=$2',[uploadId,userId]);
     if (!result.rowCount) throw notFound();
@@ -112,7 +113,7 @@ export class AudioTranscriptions {
     if (!found.rowCount) throw notFound();
     await this.assertSource(userId,found.rows[0],signal);signal?.throwIfAborted();return receipt(found.rows[0]);
   }
-  async create(userId: string, uploadId: string, value: unknown, outerSignal: AbortSignal | undefined, authorize: AudioTranscriptionAuthorization): Promise<{receipt:AudioTranscriptionReceipt;created:boolean}> {
+  async create(userId: string, uploadId: string, value: unknown, outerSignal: AbortSignal | undefined, authorize: AudioTranscriptionAuthorization, requestAdmission?: import('@companion/platform-contracts').ProviderRequestAdmission): Promise<{receipt:AudioTranscriptionReceipt;created:boolean}> {
     const controller = new AbortController(),signal = outerSignal ? AbortSignal.any([outerSignal,controller.signal]) : controller.signal;
     signal.throwIfAborted();
     const input = object(value);
@@ -139,7 +140,7 @@ export class AudioTranscriptions {
     try {
       const loaded = await this.load(source,signal);validateUpload(source.filename,source.mime,loaded.attachment.bytes);
       await this.db.transaction(async client=>{await authorize(client,signal);await this.assertLease(userId,leaseId,signal,client);});
-      const result = await this.runtime.transcribe(loaded.attachment,{provider:AUDIO_TRANSCRIPTION_PROVIDER,signal});
+      const result = await this.runtime.transcribe(loaded.attachment,{provider:AUDIO_TRANSCRIPTION_PROVIDER,signal,requestAdmission});
       signal.throwIfAborted();
       if (!result || typeof result.text !== 'string' || !textSafe(result.text) || Buffer.byteLength(result.text,'utf8') > 64 * 1024)
         throw new ApiError(502,'INVALID_TRANSCRIPTION_RESULT','The local service did not return valid bounded transcription text.');

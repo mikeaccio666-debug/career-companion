@@ -1,3 +1,5 @@
+import { seedFictionalConsent } from './fixtures/student-entry.ts';
+import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +15,7 @@ import { JobService, processJob, recoverInterrupted } from '../src/jobs.ts';
 import { LocalBlobStorage } from '../src/storage.ts';
 import { applyWorkflowCheckpoint, loadWorkflowCheckpoint, readWorkflowArtifact, type WorkflowBinding } from '../src/workflow-checkpoints.ts';
 
-const schema=`workflow_checkpoints_test_${randomUUID().replaceAll('-','')}`,config=readConfig(),admin=new Database(config.databaseUrl),url=new URL(config.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const schema=`workflow_checkpoints_test_${randomUUID().replaceAll('-','')}`,config=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(config.databaseUrl),url=new URL(config.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string,storage:LocalBlobStorage,jobs:JobService;
 let execute:(input:CreateJobInput,context:JobExecutionContext)=>Promise<JobExecutionResult>=async()=>({artifacts:[]});
 const unused=async()=>{throw new Error('No commercial model calls are permitted in checkpoint fixtures.');};
@@ -23,10 +25,10 @@ const runtime:PlatformProviderRuntime={capabilities:()=>[
   {id:'ark',name:'Synthetic async video',enabled:true,keyConfigured:true,capabilities:['chat','video'],models:['synthetic-chat','synthetic-video'],modelsByCapability:{chat:['synthetic-chat'],video:['synthetic-video']},envVariables:[]},
   {id:'comfyui',name:'Synthetic configured workflow',enabled:true,keyConfigured:true,capabilities:['image'],models:[],envVariables:[]},
 ],streamChat:async function*(){throw new Error('Unused');},executeJob:(input,context)=>execute(input,context),createVoiceSession:unused,transcribe:unused,speech:unused};
-before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();directory=await fs.mkdtemp(path.join(os.tmpdir(),'workflow-checkpoint-fixtures-'));const template=path.join(directory,'synthetic-template.json');await fs.writeFile(template,JSON.stringify({'1':{class_type:'SyntheticText',inputs:{text:'Synthetic template text'}}}));const comfy=createProviderRuntime({env:{COMFYUI_BASE_URL:'http://127.0.0.1:8188',COMFYUI_WORKFLOW_TEMPLATE:template,COMFYUI_PROMPT_NODE:'1',COMFYUI_OUTPUT_KIND:'image'},fetch:unused});runtime.captureComfyUITemplate=comfy.captureComfyUITemplate;runtime.validateComfyUITemplate=comfy.validateComfyUITemplate;storage=new LocalBlobStorage(directory);jobs=new JobService(db,{...config,storageDir:directory},runtime,storage);});
+before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'workflow-checkpoint-fixtures-'));const template=path.join(directory,'synthetic-template.json');await fs.writeFile(template,JSON.stringify({'1':{class_type:'SyntheticText',inputs:{text:'Synthetic template text'}}}));const comfy=createProviderRuntime({env:{COMFYUI_BASE_URL:'http://127.0.0.1:8188',COMFYUI_WORKFLOW_TEMPLATE:template,COMFYUI_PROMPT_NODE:'1',COMFYUI_OUTPUT_KIND:'image'},fetch:unused});runtime.captureComfyUITemplate=comfy.captureComfyUITemplate;runtime.validateComfyUITemplate=comfy.validateComfyUITemplate;storage=new LocalBlobStorage(directory);jobs=new JobService(db,{...config,storageDir:directory},runtime,storage,undefined,undefined,FICTIONAL_LEGAL);});
 after(async()=>{await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();if(directory)await fs.rm(directory,{recursive:true,force:true});});
 const code=(expected:string)=>(cause:unknown)=>cause instanceof ApiError&&cause.code===expected;
-async function user(){const id=randomUUID();await db.query("INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,'Synthetic workflow tester','fictional-not-used')",[id,`workflow-${id}@example.invalid`]);return id;}
+async function user(){const id=randomUUID();await db.query("INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,'Synthetic workflow tester','fictional-not-used')",[id,`workflow-${id}@example.invalid`]); await seedFictionalConsent(db,id);return id;}
 function input(steps:unknown[]=[{kind:'chat',provider:'synthetic',prompt:'Draft {{input}}'},{kind:'image',provider:'synthetic',prompt:'Draw {{previous}}'}]):CreateJobInput{return {kind:'workflow',provider:'workflow',prompt:'Fictional input only',options:{steps}};}
 async function created(uid?:string,definition=input()){const userId=uid??await user(),result=await jobs.create(userId,definition);await jobs.decide(userId,result.approval.id,'approved');return {userId,...result};}
 async function claim(item:Awaited<ReturnType<typeof created>>,generation=1):Promise<WorkflowBinding>{const leaseToken=randomUUID();await db.query("UPDATE platform_jobs SET status='running',lease_token=$2,lease_until=now()+interval '60 seconds' WHERE id=$1",[item.job.id,leaseToken]);return {jobId:item.job.id,userId:item.userId,generation,leaseToken,definitionHash:workflowDefinitionHash(item.job),signal:new AbortController().signal};}
@@ -38,7 +40,7 @@ test('creation freezes capability-specific models, definitions and approval and 
   const speech=await jobs.create(uid,input([{kind:'speech',provider:'synthetic',prompt:'Synthetic spoken draft',options:{voice:'marin'}}]));assert.equal((speech.job.options!.steps as WorkflowStep[])[0].model,'synthetic-speech');assert.deepEqual((speech.job.options!.steps as WorkflowStep[])[0].options,{voice:'marin'});
   await assert.rejects(jobs.create(uid,input([{kind:'chat',provider:'synthetic',prompt:'Synthetic input',options:{apiKey:'fictional-key'}}])),code('INVALID_INPUT'));
   await assert.rejects(jobs.create(uid,input([{kind:'image',provider:'synthetic',prompt:'Synthetic input',referenceImages:[{fromStep:0}]}])),code('INVALID_INPUT'));
-  const unavailable=new JobService(db,{...config,storageDir:directory},{...runtime,capabilities:()=>runtime.capabilities().map(provider=>provider.id==='ark'?{...provider,modelsByCapability:{chat:['synthetic-chat'],video:[]},models:['synthetic-chat']}:provider)},storage);
+  const unavailable=new JobService(db,{...config,storageDir:directory},{...runtime,capabilities:()=>runtime.capabilities().map(provider=>provider.id==='ark'?{...provider,modelsByCapability:{chat:['synthetic-chat'],video:[]},models:['synthetic-chat']}:provider)},storage,undefined,undefined,FICTIONAL_LEGAL);
   await assert.rejects(unavailable.create(uid,input([{kind:'video',provider:'ark',prompt:'Synthetic video'}])),code('INVALID_INPUT'));
 });
 
@@ -139,7 +141,7 @@ test('real provider runtime and PostgreSQL checkpoints resume polling without re
     throw new Error('Unexpected synthetic provider route');
   }) as typeof fetch;
   const provider=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-key',OPENAI_CHAT_MODEL:'synthetic-chat',ARK_API_KEY:'fictional-key',ARK_VIDEO_MODEL:'synthetic-video',PLATFORM_POLL_ATTEMPTS:'1',PLATFORM_POLL_INTERVAL_MS:'50'},fetch:transport,resolveHost:async()=>[{address:'93.184.216.34',family:4}]});
-  const service=new JobService(db,{...config,storageDir:directory},provider,storage),uid=await user();const created=await service.create(uid,input([{kind:'chat',provider:'openai',prompt:'Write {{input}}'},{kind:'video',provider:'ark',prompt:'Animate {{previous}}'}]));await service.decide(uid,created.approval.id,'approved');await processJob(service,created.job.id,1);
+  const service=new JobService(db,{...config,storageDir:directory},provider,storage,undefined,undefined,FICTIONAL_LEGAL),uid=await user();const created=await service.create(uid,input([{kind:'chat',provider:'openai',prompt:'Write {{input}}'},{kind:'video',provider:'ark',prompt:'Animate {{previous}}'}]));await service.decide(uid,created.approval.id,'approved');await processJob(service,created.job.id,1);
   const pending=await service.get(uid,created.job.id);assert.equal(pending.workflowSteps![0].state,'completed');assert.equal(pending.workflowSteps![1].state,'provider_task');assert.equal(pending.artifacts.length,1);assert.equal(textCalls,1);assert.equal(videoCreates,1);
   const originalCapabilities=provider.capabilities;provider.capabilities=()=>originalCapabilities().map(value=>value.id==='openai'?{...value,enabled:false}:value);
   await service.retry(uid,created.job.id);const approval=(await db.query('SELECT id FROM platform_approvals WHERE job_id=$1 AND generation=2',[created.job.id])).rows[0];await service.decide(uid,approval.id,'approved');await processJob(service,created.job.id,2);
@@ -163,7 +165,7 @@ test('actual image output is privately checkpointed and bound to the next Ark re
     throw new Error('Unexpected synthetic reference route');
   }) as typeof fetch;
   const provider=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-key',OPENAI_IMAGE_MODEL:'synthetic-image',ARK_API_KEY:'fictional-key',ARK_VIDEO_MODEL:'synthetic-video',PLATFORM_POLL_ATTEMPTS:'1'},fetch:transport,resolveHost:async()=>[{address:'93.184.216.34',family:4}]});
-  const service=new JobService(db,{...config,storageDir:directory},provider,storage),created=await service.create(uid,input([{kind:'image',provider:'openai',prompt:'Draw {{input}}'},{kind:'video',provider:'ark',prompt:'Animate {{input}}',referenceImages:[{fromStep:0}],options:{referenceMode:'first_frame'}}]));createdId=created.job.id;
+  const service=new JobService(db,{...config,storageDir:directory},provider,storage,undefined,undefined,FICTIONAL_LEGAL),created=await service.create(uid,input([{kind:'image',provider:'openai',prompt:'Draw {{input}}'},{kind:'video',provider:'ark',prompt:'Animate {{input}}',referenceImages:[{fromStep:0}],options:{referenceMode:'first_frame'}}]));createdId=created.job.id;
   await service.decide(uid,created.approval.id,'approved');await processJob(service,createdId,1);const final=await service.get(uid,createdId);assert.equal(final.status,'succeeded',JSON.stringify(final.error));assert.equal(final.artifacts.length,2);assert.equal(imageCalls,1);assert.equal(videoCreates,1);
 });
 
