@@ -83,7 +83,7 @@ type Phase = 'idle' | 'preparing' | 'filling' | 'done' | 'advancing' | 'review' 
 type FaceKind = 'ready' | 'unlinked' | 'linking' | 'dormant' | 'noForm' | 'rules' | 'signin' | 'closed';
 type HeroMode = 'button' | 'activity' | 'summary' | 'face' | 'failed' | 'account' | 'updated' | 'code';
 
-const NOOP: AutofillDockHandle = Object.freeze({
+const NOOP: AutofillDockHandle = /* @__PURE__ */ Object.freeze({
   face: () => 'HIDDEN' as const, faceKey: () => 'HIDDEN', autofillEnabled: () => false, autofillButton: () => null, dismiss: () => {},
   sheetState: () => 'ABSENT' as const, summaryText: () => null, toggleSheet: () => {},
   fieldRows: () => [], update: () => {}, beginRun: () => {},
@@ -101,7 +101,7 @@ const NOOP: AutofillDockHandle = Object.freeze({
   codePrompt: () => {},
 });
 
-const NOOP_AUDIT: DockAuditHandle = Object.freeze({ dismiss: () => {}, update: () => {}, shadowRoot: null });
+const NOOP_AUDIT: DockAuditHandle = /* @__PURE__ */ Object.freeze({ dismiss: () => {}, update: () => {}, shadowRoot: null });
 
 /** 脸的完整身份：kind 加上 UNAVAILABLE 的 reason。 */
 export function affordanceFaceKey(affordance: AutofillAffordance): string {

@@ -37,7 +37,8 @@ describe('保险箱只在 worker 里', () => {
   it('真实 auth 交给确认生命周期：不绕过导出确认，换人落盘等待清理屏障', () => {
     const wiring = section(background, 'const vaultLifecycle = createAccountVaultLifecycle({', 'const vaultMessages = createAccountVaultMessageRouter({');
     expect(wiring).toContain('auth: () => authClient, vault: accountVault, area: vaultArea,');
-    expect(wiring).toContain('invalidateOperations: () => accountOperations.invalidate(),');
+    expect(wiring).toContain('invalidateOperations: () => invalidateAccountOperations(),');
+    expect(wiring).toContain('invalidateAccountOperations = () => accountOperations.invalidate();');
     expect(wiring).toContain('beforeVaultSessionReplace = vaultLifecycle.beforeReplaceSession;');
     expect(wiring).toContain('vaultAuthInvalidated = vaultLifecycle.onAuthInvalidated;');
     expect(background).toContain('beforeReplaceSession: (change) => beforeVaultSessionReplace(change),');

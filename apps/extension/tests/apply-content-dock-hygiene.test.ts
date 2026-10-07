@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APPLICATION_SIGNING_CONSENT_PURPOSE, APPLICATION_SIGNING_CONSENT_VERSION } from '@edaix/contracts';
 
 import { parseDockRunOutcome } from '../lib/runOutcome';
+import { KERNEL_BRIDGE_PORT_NAME, type BridgePortLike } from '../lib/bridgeProtocol';
+import { EXECUTION_RUNTIME_BUNDLE_STORAGE_KEY } from '../lib/executionRuntimeBundleStore';
+import { readAssistantExecutorState } from '../assistant/features/autofill/executor-installation';
 
 /**
  * 真内容脚本（entrypoints/apply.content.ts 的 main()）跑在 happy-dom 里，四周换成桩：worker 的答复、浮层（只记下交给它的
@@ -22,6 +25,10 @@ const H = vi.hoisted(() => ({
   worker: (_message: Record<string, unknown>): unknown => undefined,
   sent: [] as Record<string, unknown>[],
   onMessage: [] as Array<(raw: unknown, sender: unknown) => unknown>,
+  onConnect: [] as Array<(port: BridgePortLike & { name: string }) => void>,
+  onStorageChanged: [] as Array<(changes: Record<string, unknown>, areaName: string) => void>,
+  earlySubmissionCaptures: 0,
+  retainedScanInvalidations: 0,
   mounts: [] as Mounted[],
   fills: [] as Record<string, unknown>[],
   fill: (_input: Record<string, unknown>): Promise<unknown> => Promise.resolve({ ok: true, outcomes: [] }),
@@ -53,14 +60,14 @@ vi.mock('wxt/browser', () => {
         },
         connect: () => dead(),
         onMessage: { addListener: (listener: (raw: unknown, sender: unknown) => unknown) => { H.onMessage.push(listener); } },
-        onConnect: { addListener: () => {} },
+        onConnect: { addListener: (listener: (port: BridgePortLike & { name: string }) => void) => { H.onConnect.push(listener); } },
       },
       storage: {
         local: {
           get: () => (H.runtimeId === undefined ? dead() : Promise.resolve({})),
           set: () => (H.runtimeId === undefined ? dead() : Promise.resolve()),
         },
-        onChanged: { addListener: () => {} },
+        onChanged: { addListener: (listener: (changes: Record<string, unknown>, areaName: string) => void) => { H.onStorageChanged.push(listener); } },
       },
     },
   };
@@ -149,11 +156,24 @@ vi.mock('../lib/accountAccessPage', () => ({
 vi.mock('../lib/samePagePathChange', () => ({ onSamePagePathChange: () => () => {} }));
 // 整轮之后的复查（2、5、10、20 秒）各有测试；这里不让它在测试之后接着跑。
 vi.mock('../lib/lateRecheck', () => ({ startLateRecheck: () => () => {} }));
+vi.mock('../lib/contentBridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/contentBridge')>();
+  return {
+    ...actual,
+    invalidateRetainedContentScanState: () => {
+      H.retainedScanInvalidations += 1;
+      actual.invalidateRetainedContentScanState();
+    },
+  };
+});
 vi.mock('../lib/submissionGestureGate', () => ({
   addExactReviewInvalidationListener: () => () => {},
   captureExactFormValueSeal: () => null,
   createSubmissionGestureGate: () => null,
-  installEarlySubmissionCaptureBroker: () => ({ addActivationListener: () => () => {}, addSubmitListener: () => () => {}, dispose: () => {} }),
+  installEarlySubmissionCaptureBroker: () => {
+    H.earlySubmissionCaptures += 1;
+    return { addActivationListener: () => () => {}, addSubmitListener: () => () => {}, dispose: () => {} };
+  },
   resolveFinalSubmissionTarget: () => null,
 }));
 
@@ -193,10 +213,16 @@ const consentText = (granted: boolean): string => JSON.stringify({
 });
 
 beforeEach(() => {
+  vi.stubGlobal('__VIBE_ASSISTANT_READ_ENABLED__', false);
+  vi.stubGlobal('__edaixAssistantExecutorV1', undefined);
   (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://boards.greenhouse.io/acme/jobs/123');
   H.runtimeId = 'argoland-test-extension';
   H.sent.length = 0;
   H.onMessage.length = 0;
+  H.onConnect.length = 0;
+  H.onStorageChanged.length = 0;
+  H.earlySubmissionCaptures = 0;
+  H.retainedScanInvalidations = 0;
   H.mounts.length = 0;
   H.fills.length = 0;
   H.fill = () => Promise.resolve({ ok: true, outcomes: [] });
@@ -229,6 +255,70 @@ beforeEach(() => {
     if (message.kind === 'profile-directory/run') return { ok: false, code: 'UNAVAILABLE' };
     return undefined;
   };
+});
+
+afterEach(() => { vi.unstubAllGlobals(); });
+
+describe('Assistant executor 与默认浮层的通知边界', () => {
+  it('默认浮层仍接收本插件 worker 的进度，拒绝其他发送者', async () => {
+    const mounted = await boot();
+    expect(H.onMessage).toHaveLength(6);
+    broadcast({ kind: 'dock/run-progress', step: 'SCANNING' });
+    expect(mounted.handle.setStep).toHaveBeenCalledExactlyOnceWith('SCANNING');
+    for (const listener of H.onMessage) {
+      listener({ kind: 'dock/run-progress', step: 'FILLING' }, { id: 'other-extension' });
+      listener({ kind: 'dock/run-progress', step: 'FILLING' }, { id: H.runtimeId, tab: { id: 7 } });
+    }
+    expect(mounted.handle.setStep).toHaveBeenCalledTimes(1);
+  });
+
+  it('Assistant 不注册三条旧通知，但保留内核端口、包失效与提前提交保护', async () => {
+    vi.stubGlobal('__VIBE_ASSISTANT_READ_ENABLED__', true);
+    const { default: entry } = await import('../entrypoints/apply.content');
+    (entry as unknown as { main: () => void }).main();
+    await flush();
+    expect(readAssistantExecutorState()).toBe('READY');
+    expect(H.onMessage).toHaveLength(3);
+    expect(H.mounts).toHaveLength(0);
+    expect(H.sent.filter((message) => message.kind === 'bridge/hello')).toHaveLength(0);
+    expect(H.earlySubmissionCaptures).toBe(1);
+    expect(H.onStorageChanged).toHaveLength(1);
+
+    const changed = H.onStorageChanged[0];
+    changed({ [EXECUTION_RUNTIME_BUNDLE_STORAGE_KEY]: { newValue: null } }, 'sync');
+    expect(H.retainedScanInvalidations).toBe(0);
+    changed({ [EXECUTION_RUNTIME_BUNDLE_STORAGE_KEY]: { newValue: null } }, 'local');
+    expect(H.retainedScanInvalidations).toBe(1);
+
+    expect(H.onConnect).toHaveLength(1);
+    const messages: unknown[] = [];
+    const received: Array<(message: unknown) => void> = [];
+    const disconnected: Array<() => void> = [];
+    const port: BridgePortLike & { name: string } = {
+      name: 'other-port',
+      postMessage: (message) => { messages.push(message); },
+      onMessage: { addListener: (listener) => { received.push(listener); } },
+      onDisconnect: { addListener: (listener) => { disconnected.push(listener); } },
+      disconnect: () => {},
+    };
+    H.onConnect[0](port);
+    expect(received).toHaveLength(0);
+    port.name = KERNEL_BRIDGE_PORT_NAME;
+    H.onConnect[0](port);
+    expect(received).toHaveLength(1);
+    expect(disconnected).toHaveLength(1);
+    // The real bridge cannot scan without a runtime authorization.
+    received[0]({ kind: 'bridge/scan', requestId: 'fictional-unauthorized-scan' });
+    await flush();
+    expect(messages).toEqual([{ kind: 'bridge/scan-result', requestId: 'fictional-unauthorized-scan', scan: null }]);
+
+    broadcast({ kind: 'dock/run-progress', step: 'SCANNING' });
+    broadcast({ kind: 'dock/session-changed' });
+    broadcast({ kind: 'dock/profile-changed' });
+    await flush();
+    expect(H.mounts).toHaveLength(0);
+    expect(H.sent.filter((message) => message.kind === 'bridge/hello')).toHaveLength(0);
+  });
 });
 
 describe('换脸重挂与焦点（2026-10-03 体检 P0-2）', () => {

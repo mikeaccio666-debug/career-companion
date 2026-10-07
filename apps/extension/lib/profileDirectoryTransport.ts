@@ -129,7 +129,7 @@ export interface ProfileDirectoryTransportInput {
  * table at runtime instead would cost this worker 22KB of definitions for
  * endpoints it never calls, against a budget with about 4KB to spare.
  */
-const ROUTES: Readonly<Record<ProfileDirectoryOperation, readonly [string, string]>> = Object.freeze({
+const ROUTES: Readonly<Record<ProfileDirectoryOperation, readonly [string, string]>> = /* @__PURE__ */ Object.freeze({
   PERSONAL_READ: ['GET', '/users/me/profile-directory/personal'],
   PERSONAL_SAVE: ['PATCH', '/users/me/profile-directory/personal'],
   WORK_AUTHORIZATION_READ: ['GET', '/users/me/profile-directory/work-authorization'],
