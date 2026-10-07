@@ -28,6 +28,8 @@
 
 生产也要求启用账户邮件：`PLATFORM_ALLOW_ACCOUNT_EMAIL=1`、`RESEND_API_KEY`、已验证发信域下的 `PLATFORM_ACCOUNT_EMAIL_FROM`、与允许 origin 一致的 `PLATFORM_ACCOUNT_WEB_ORIGIN`，以及专用32字节AES-GCM密钥的64位十六进制 `PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY`。API与worker须共享相同配置和密钥。生产不能关闭邮箱验证；未验证账号只能读取自己账号、申请/完成验证及退出，不能访问工作台数据或调用模型。迁移不会把旧账号自动标成已验证。开发默认不发邮件、不强制邮箱验证。
 
+生产还必须在服务端私下配置独立的 `PLATFORM_DATA_KEY`（32字节、64位十六进制），供初见草稿与操作输入的AES-256-GCM加密使用。API与worker必须配置同一个值；Render示例的两个 `sync:false` 项需要手动保持一致，不能各自生成不同密钥。不得复用账户邮件密钥、放入 `VITE_*`、源码或日志。开发未设置时初见存储拒绝读写；显式空值或非法值拒绝启动。当前密文格式为版本1，尚无密钥轮换或旧版本迁移流程；更换密钥会使已有记录无法解密。配置与迁移不开放学生初见入口，安全分级、主理人生成与第一封信仍需接线验收。
+
 账户邮件由独立的数据库outbox发送，不进入模型任务队列。原始邮件正文与短期链接仅存于加密payload，成功提交供应商或过期/撤销后删除密文；供应商已接受不等于已送达。15分钟内的重试固定payload和幂等标识；创建邮件、确认发信域、实际投递与垃圾邮件表现仍须在真实供应商账户验证。配置错误会拒绝启动，不回退到日志输出或向网页返回找回秘密。详见 [账户流程](../../../services/platform-api/README.md)。
 
 `PLATFORM_HOST` 默认loopback；托管入口显式设 `0.0.0.0`。接受宿主提供的 `PORT`，如果同时设置 `PLATFORM_PORT` 必须相同。只有需要同源React时设置 `PLATFORM_WEB_STATIC_DIR=/app/apps/web/dist`；独立API可以省略。静态服务只读构建产物，API／缺失asset不回落HTML。示例healthCheckPath使用 `/api/platform/ready`，只按数据库／迁移的就绪决定HTTP状态；执行服务降级不让整个API退出服务。另用 `/api/platform/execution-ready` 检查执行服务的连接及近期worker报告，不用它证明任务成功或供应商质量。私有运维可执行 `/app/infra/platform/production/entrypoint.sh operations`；不向普通用户提供全局诊断。详见 [运行检查](../../../docs/platform/operations-readiness.md)。

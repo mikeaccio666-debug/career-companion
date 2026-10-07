@@ -1,0 +1,141 @@
+import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
+import type { OnboardingCommand, OnboardingDraft, OnboardingSaveResult } from '@companion/platform-contracts';
+import { createOnboardingDraft, parseOnboardingCommand, parseOnboardingDraft, transitionOnboardingDraft } from '@companion/career-core';
+import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
+import type { PlatformConfig } from './config.ts';
+import type { Database } from './database.ts';
+import { DataCryptoError, type DataCrypto } from './data-crypto.ts';
+import { ApiError } from './errors.ts';
+import { assertActiveLegal, type LegalBundle } from './legal-documents.ts';
+
+interface DraftRow {
+  id: string; user_id: string; revision: number; payload_ciphertext: Buffer; updated_at: Date;
+}
+interface OperationRow {
+  operation_id: string; draft_id: string; applied_revision: number; request_ciphertext: Buffer;
+}
+const unavailable = () => new ApiError(503, 'DATA_STORAGE_UNAVAILABLE', 'Private intake data could not be saved or read.');
+const changed = () => new ApiError(409, 'ONBOARDING_REVISION_CHANGED', 'Read the current intake progress before making another change.');
+
+/** Unreleased preparation service. It grants no room, companion, memory, tool or first-letter completion. */
+export class OnboardingDrafts {
+  private readonly crypto: DataCrypto | undefined;
+  private readonly requireVerifiedEmail: boolean;
+  constructor(readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, readonly bundle: LegalBundle | null) {
+    this.crypto = config.dataCrypto;
+    this.requireVerifiedEmail = config.requireVerifiedEmail;
+  }
+  private fixed(context: FixedSessionContext): FixedSessionContext {
+    return Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
+  }
+  private async authorize(client: PoolClient, context: FixedSessionContext, signal?: AbortSignal): Promise<void> {
+    await authorizeFixedSession(client, context, signal);
+    const user = await client.query('SELECT account_kind,email_verified_at FROM platform_users WHERE id=$1', [context.userId]);
+    if (user.rows[0]?.account_kind !== 'student') throw new ApiError(403, 'STUDENT_ACCOUNT_REQUIRED', 'Use a student account for intake.');
+    if (this.requireVerifiedEmail && !user.rows[0].email_verified_at) throw new ApiError(403, 'EMAIL_VERIFICATION_REQUIRED', 'Verify your email before continuing.');
+    const policy = await assertActiveLegal(client, this.bundle, signal);
+    const consent = await client.query(`SELECT user_id FROM platform_terms_consents
+      WHERE user_id=$1 AND terms_version=$2 AND content_digest=$3 FOR SHARE`, [context.userId, policy.version, policy.digest]);
+    signal?.throwIfAborted();
+    if (!consent.rowCount) throw new ApiError(403, 'TERMS_CONFIRMATION_REQUIRED', 'Read and confirm the current legal documents before continuing.');
+    await authorizeFixedSession(client, context, signal);
+    if (!this.crypto) throw unavailable();
+  }
+  private async row(client: PoolClient, userId: string): Promise<DraftRow | undefined> {
+    const found = await client.query<DraftRow>(`SELECT id,user_id,revision,payload_ciphertext,updated_at
+      FROM platform_onboarding_drafts WHERE user_id=$1 FOR UPDATE`, [userId]);
+    return found.rows[0];
+  }
+  private decode(row: DraftRow): OnboardingDraft {
+    try {
+      const value = this.crypto!.openUtf8(row.payload_ciphertext, {
+        table: 'platform_onboarding_drafts', column: 'payload_ciphertext', rowId: row.id, ownerId: row.user_id, revision: row.revision,
+      });
+      const draft = parseOnboardingDraft(JSON.parse(value));
+      if (draft.id !== row.id || draft.userId !== row.user_id || draft.revision !== row.revision
+        || draft.updatedAt !== row.updated_at.toISOString()) throw unavailable();
+      return draft;
+    } catch { throw unavailable(); }
+  }
+  private async at(client: PoolClient): Promise<string> {
+    return (await client.query<{ at: Date }>('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
+  }
+  async read(context: FixedSessionContext, signal?: AbortSignal): Promise<OnboardingDraft | null> {
+    const fixed = this.fixed(context);
+    return this.db.withBoundedTransaction(async client => {
+      await this.authorize(client, fixed, signal);
+      const row = await this.row(client, fixed.userId);
+      const draft = row ? this.decode(row) : null;
+      await authorizeFixedSession(client, fixed, signal);
+      return draft;
+    });
+  }
+  async save(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<OnboardingSaveResult> {
+    const fixed = this.fixed(context);
+    let command: OnboardingCommand;
+    try { command = parseOnboardingCommand(value); }
+    catch { throw new ApiError(400, 'INVALID_INPUT', 'Use a valid intake operation.'); }
+    // Snapshot only the closed, normalized command. Later mutation of the caller's input cannot change this save.
+    const canonical = JSON.stringify(command);
+    command = JSON.parse(canonical) as OnboardingCommand;
+    try {
+      return await this.db.withBoundedTransaction(async client => {
+        await this.authorize(client, fixed, signal);
+        const row = await this.row(client, fixed.userId);
+        const previous = row ? this.decode(row) : null;
+        const found = await client.query<OperationRow>(`SELECT operation_id,draft_id,applied_revision,request_ciphertext
+          FROM platform_onboarding_operations WHERE user_id=$1 AND operation_id=$2 FOR UPDATE`, [fixed.userId, command.operationId]);
+        const operation = found.rows[0];
+        if (operation) {
+          if (!previous || operation.draft_id !== previous.id || operation.applied_revision > previous.revision) throw unavailable();
+          let old: OnboardingCommand;
+          try {
+            old = parseOnboardingCommand(JSON.parse(this.crypto!.openUtf8(operation.request_ciphertext, {
+              table: 'platform_onboarding_operations', column: 'request_ciphertext', rowId: operation.operation_id,
+              ownerId: fixed.userId, revision: operation.applied_revision,
+            })));
+          } catch { throw unavailable(); }
+          if (old.operationId !== operation.operation_id || old.expectedRevision + 1 !== operation.applied_revision) throw unavailable();
+          if (JSON.stringify(old) !== canonical) throw new ApiError(409, 'ONBOARDING_OPERATION_CONFLICT', 'Use a new operation identifier for a different intake change.');
+          await authorizeFixedSession(client, fixed, signal);
+          return { draft: previous, operation: { id: operation.operation_id, appliedRevision: operation.applied_revision, replayed: true } };
+        }
+        if (command.expectedRevision !== (previous?.revision ?? 0)) throw changed();
+        const at = await this.at(client);
+        const initial = previous ?? createOnboardingDraft({ id: randomUUID(), userId: fixed.userId, at });
+        let draft: OnboardingDraft;
+        try { draft = transitionOnboardingDraft(initial, command, { at, textId: command.operationId }); }
+        catch { throw new ApiError(409, 'ONBOARDING_STATE_CHANGED', 'Read the current intake question before continuing.'); }
+        // Legal/draft waits may consume the remaining session time. Recheck before any write.
+        await authorizeFixedSession(client, fixed, signal);
+        const ciphertext = this.crypto!.sealUtf8(JSON.stringify(draft), {
+          table: 'platform_onboarding_drafts', column: 'payload_ciphertext', rowId: draft.id,
+          ownerId: fixed.userId, revision: draft.revision,
+        });
+        if (previous) {
+          const saved = await client.query(`UPDATE platform_onboarding_drafts SET revision=$3,payload_ciphertext=$4,updated_at=$5
+            WHERE id=$1 AND user_id=$2 AND revision=$6 RETURNING id`, [previous.id, fixed.userId, draft.revision, ciphertext, at, previous.revision]);
+          if (!saved.rowCount) throw changed();
+        } else {
+          await client.query(`INSERT INTO platform_onboarding_drafts(id,user_id,revision,payload_ciphertext,created_at,updated_at)
+            VALUES($1,$2,$3,$4,$5,$5)`, [draft.id, fixed.userId, draft.revision, ciphertext, at]);
+        }
+        const requestCiphertext = this.crypto!.sealUtf8(canonical, {
+          table: 'platform_onboarding_operations', column: 'request_ciphertext', rowId: command.operationId,
+          ownerId: fixed.userId, revision: draft.revision,
+        });
+        await client.query(`INSERT INTO platform_onboarding_operations(user_id,operation_id,draft_id,applied_revision,request_ciphertext)
+          VALUES($1,$2,$3,$4,$5)`, [fixed.userId, command.operationId, draft.id, draft.revision, requestCiphertext]);
+        // Admission is checked after the writes. The transaction helper confirms COMMIT
+        // before returning; expiry/cancellation after this check does not undo an accepted write.
+        await authorizeFixedSession(client, fixed, signal);
+        signal?.throwIfAborted();
+        return { draft, operation: { id: command.operationId, appliedRevision: draft.revision, replayed: false } };
+      });
+    } catch (error) {
+      if (error instanceof DataCryptoError) throw unavailable();
+      throw error;
+    }
+  }
+}

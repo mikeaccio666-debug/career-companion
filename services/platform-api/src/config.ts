@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAccountEmailConfig, type AccountEmailConfig } from './account-mail.ts';
 import { readMcpConfig, type McpCatalogConfig } from './mcp-config.ts';
+import { readDataCrypto, type DataCrypto } from './data-crypto.ts';
 import type { ModelRoutePurpose } from './model-routing.ts';
 
 export const workspaceRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
@@ -14,6 +15,7 @@ export interface PlatformConfig {
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
   requireInvite: boolean; legalBundlePath?: string;
+  dataCrypto?: DataCrypto;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
   exposeProviderDetails: boolean;
@@ -82,6 +84,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   if (env.PLATFORM_REQUIRE_INVITE !== undefined && !['0','1'].includes(env.PLATFORM_REQUIRE_INVITE)) throw new Error('PLATFORM_REQUIRE_INVITE must be 0 or 1');
   if (production && env.PLATFORM_REQUIRE_INVITE === '0') throw new Error('Production requires invitations');
   const requireInvite = production || env.PLATFORM_REQUIRE_INVITE !== '0';
+  const dataCrypto = readDataCrypto(env);
   if (env.PLATFORM_LEGAL_BUNDLE_FILE !== undefined && (!env.PLATFORM_LEGAL_BUNDLE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_LEGAL_BUNDLE_FILE))) throw new Error('PLATFORM_LEGAL_BUNDLE_FILE must name a server-controlled file');
   const legalBundlePath = env.PLATFORM_LEGAL_BUNDLE_FILE === undefined ? undefined : path.resolve(workspaceRoot,env.PLATFORM_LEGAL_BUNDLE_FILE);
   if (env.PLATFORM_ENABLE_WORKBENCH !== undefined && !['0', '1'].includes(env.PLATFORM_ENABLE_WORKBENCH)) {
@@ -146,7 +149,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
     sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, workbenchEnabled,
-    modelRoutes: configuredModelRoutes, exposeProviderDetails,
+    modelRoutes: configuredModelRoutes, exposeProviderDetails, dataCrypto,
     queueName, s3, mcp: readMcpConfig(env),
   };
 }

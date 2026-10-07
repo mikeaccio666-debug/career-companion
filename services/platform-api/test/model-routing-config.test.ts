@@ -11,6 +11,7 @@ const production: NodeJS.ProcessEnv = {
   PLATFORM_S3_ACCESS_KEY_ID: 'synthetic-access-key', PLATFORM_S3_SECRET_ACCESS_KEY: 'synthetic-storage-secret',
   PLATFORM_ALLOW_ACCOUNT_EMAIL: '1', RESEND_API_KEY: 'synthetic-mail-key', PLATFORM_ACCOUNT_EMAIL_FROM: 'noreply@example.invalid',
   PLATFORM_ACCOUNT_WEB_ORIGIN: 'https://app.example.invalid', PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY: '22'.repeat(32),
+  PLATFORM_DATA_KEY: '33'.repeat(32),
 };
 const variables = {
   chat: 'PLATFORM_CHAT_PROVIDER', agent: 'PLATFORM_AGENT_PROVIDER', realtime: 'PLATFORM_REALTIME_PROVIDER',
