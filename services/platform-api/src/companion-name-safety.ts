@@ -10,6 +10,7 @@ import type { LegalBundle } from './legal-documents.ts';
 import { OnboardingStorage } from './onboarding-storage.ts';
 import { CompanionIdentityDrafts, CompanionIdentityNameRejected } from './companion-identity-drafts.ts';
 import { ApiError } from './errors.ts';
+import { enqueueNameSafetyResponse } from './companion-name-safety-response-outbox.ts';
 import { parseCompanionNameApplication, parseCompanionNameSafetyClaim, parseCompanionNameSafetyDecision, parseCompanionNameSubmissionRequest,
   parseCompanionNameSubmissionClaimRequest, parseCompanionNameTask, type CompanionNameSafetyClaim, type CompanionNameSafetyDecision,
   type CompanionNameSubmissionClaimRequest, type CompanionNameSubmissionRequest } from './companion-name-safety-protocol.ts';
@@ -348,6 +349,8 @@ export class CompanionNameSafety {
         WHERE id=$1 AND status='running' AND generation=$5 AND lease_token=$6 AND execution_token=$7 AND lease_until>clock_timestamp() RETURNING id`,
         [claim.submissionId, ciphertext, decision.level, decision.mode, claim.generation, claim.leaseToken, input.executionToken]);
       if (!saved.rowCount) throw companionNameSafetyClaimChanged();
+      await enqueueNameSafetyResponse(client, { ...owned.row, status: 'detected', result_ciphertext: ciphertext,
+        level: decision.level, detector_mode: decision.mode, failure: null }, decision);
       await authorizeFixedSession(client, owned.fixed, signal);
       const current = await client.query('SELECT id FROM platform_companion_name_submissions WHERE id=$1 AND lease_until>clock_timestamp()', [claim.submissionId]);
       signal?.throwIfAborted(); if (!current.rowCount) throw companionNameSafetyClaimChanged();

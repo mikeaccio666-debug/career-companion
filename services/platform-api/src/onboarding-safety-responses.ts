@@ -9,6 +9,8 @@ import type { LegalBundle } from './legal-documents.ts';
 import { OnboardingStorage, type SafetySubmissionRow } from './onboarding-storage.ts';
 import { assertSafetyResponseSource, responseStorageUnavailable, safetyResponseUnavailable, type SafetyResponseRow } from './onboarding-safety-response-outbox.ts';
 import { parseSafetyResponseBundle, readSafetyResponseBundle, type SafetyResponseBundle } from './safety-response-bundle.ts';
+import { optionalSafetyUserName as optionalName, publicSafetyResponse } from './safety-response-view.ts';
+export { publicSafetyResponse } from './safety-response-view.ts';
 
 const coordinates = ['id','user_id','submission_id','operation_id','draft_id','question_id','submitted_revision',
   'source_generation','detector_revision','level','detector_mode','bundle_revision','content_digest','review_digest','locale'] as const;
@@ -16,12 +18,6 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function submissionId(value: string): string {
   if (typeof value !== 'string' || uuid.exec(value)?.[0] !== value) throw new ApiError(400, 'INVALID_INPUT', 'Use an actual submission identifier.');
   return value;
-}
-/** Account entry allows a wider name alphabet. Unsafe optional personalization cannot block a fixed response. */
-function optionalName(value: unknown): string {
-  if (typeof value !== 'string' || Array.from(value).length>100 || Buffer.from(value,'utf8').toString('utf8')!==value
-    || /[<>{}\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value)) return '';
-  return value.trim()?value:'';
 }
 function capture(row: SafetyResponseRow, response: SafetyResponseRenderResult) {
   return { schemaVersion: 1, ...Object.fromEntries(coordinates.map(key => [key, row[key]])),
@@ -41,12 +37,6 @@ function decode(storage: OnboardingStorage, row: SafetyResponseRow): SafetyRespo
     if ((row.level==='L2') !== Object.hasOwn(response,'question') || response.resourceCard.contacts.length !== (row.level==='L2'?3:1)) throw responseStorageUnavailable();
     return response;
   } catch { throw responseStorageUnavailable(); }
-}
-export function publicSafetyResponse(response: SafetyResponseRenderResult) {
-  // Reviewer references and policy provenance are internal, never a student-visible resource field.
-  return Object.freeze({ text:response.text, ...(response.question===undefined?{}:{question:response.question}),
-    resourceCard:Object.freeze({ ...response.resourceCard,
-      contacts:Object.freeze(response.resourceCard.contacts.map(({ reviewRef: _privateReview, ...contact })=>Object.freeze(contact))) }) });
 }
 
 /** Shared, transaction-local authentication of the complete captured response history.
