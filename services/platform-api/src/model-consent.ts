@@ -85,7 +85,13 @@ export function requireModelConsent(runtime:PlatformProviderRuntime):PlatformPro
     capabilities:()=>runtime.capabilities(),
     ...(runtime.captureComfyUITemplate?{captureComfyUITemplate:()=>runtime.captureComfyUITemplate!()}:{}),
     ...(runtime.validateComfyUITemplate?{validateComfyUITemplate:(...args)=>runtime.validateComfyUITemplate!(...args)}:{}),
-    async *streamChat(input,context){await check(context); yield* runtime.streamChat(input,context);},
+    async *streamChat(input,context){
+      // Background generation prepares its actual call receipt before admission.
+      // The strict adapter and service both require the real launch callback;
+      // a no-op preflight cannot stand in for that actual request admission.
+      if(context?.background) requireRequestAdmission(context); else await check(context);
+      yield* runtime.streamChat(input,context);
+    },
     ...(runtime.streamModelStep?{async *streamModelStep(input,context){await check(context);return yield* runtime.streamModelStep!(input,context);}}:{}),
     async executeJob(input,context){await check(context);return runtime.executeJob(input,context);},
     async createVoiceSession(input,context){await check(context);return runtime.createVoiceSession(input,context);},

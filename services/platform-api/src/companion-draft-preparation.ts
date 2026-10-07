@@ -64,7 +64,7 @@ export class CompanionDraftPreparation {
       const authVersion = await this.storage.authorizeSession(client, fixed, signal);
       // Existing server route availability is only a configuration check. A model
       // still needs its own real background admission; no fixed reply substitutes.
-      const route = resolveModelRoute(this.configuration, this.runtime, 'chat');
+      const route = resolveModelRoute(this.configuration, this.runtime, 'companion_generation');
       const sourceRow = await this.storage.row(client, fixed.userId);
       if (!sourceRow || sourceRow.id !== prepared.draftId || sourceRow.revision !== prepared.draftRevision) throw intakeUnavailable();
       const source = this.storage.decode(sourceRow);
@@ -96,6 +96,9 @@ export class CompanionDraftPreparation {
       if (previous) {
         if (previous.source_draft_id !== source.id || previous.source_revision !== source.revision
           || String(previous.auth_version) !== authVersion) throw changed();
+        if (previous.status === 'completed' || previous.companion_status === 'awaiting_name') {
+          throw new ApiError(409, 'COMPANION_EXISTS', 'A companion preview already exists.');
+        }
         if (previous.status !== 'pending' || previous.companion_status !== 'drafting' || previous.current_revision !== 0
           || previous.draft_rerolls !== 0 || previous.questionnaire_revision !== 1 || previous.rules_revision !== 1
           || previous.generator_version !== 1 || previous.purpose !== 'companion_preview' || previous.fingerprint !== fingerprint) throw intakeUnavailable();

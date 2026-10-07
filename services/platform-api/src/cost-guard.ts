@@ -93,7 +93,7 @@ interface ReservationRow {
   id: string; user_id: string | null; source_kind: string; source_id: string; capability: string; purpose: string;
   provider: string; model: string; max_input_tokens: number; max_output_tokens: number; estimate_micros: string;
   input_micros_per_unit: string; output_micros_per_unit: string; status: string; expires_at: Date;
-  input_price_id: string; output_price_id: string; ttl_seconds: number; admitted_at: Date | null; created_at: Date;
+  input_price_id: string; output_price_id: string; ttl_seconds: number; admitted_at: Date | null; dispatch_intent_at: Date | null; created_at: Date;
 }
 function matches(row: ReservationRow | undefined, binding: CostReservationBinding): row is ReservationRow {
   return !!row && row.id === binding.id && row.user_id === binding.userId && row.source_kind === binding.sourceKind
@@ -117,7 +117,18 @@ export class CostGuard {
   }
   private async recover(client: PoolClient) {
     await client.query(`UPDATE platform_cost_reservations SET status='released',finished_at=clock_timestamp()
-      WHERE status='reserved' AND expires_at<=clock_timestamp()`);
+      WHERE status='reserved' AND dispatch_intent_at IS NULL AND expires_at<=clock_timestamp()`);
+    // A launch inside the subsequent authorization transaction may have escaped
+    // before its COMMIT failed. The prior committed intent cannot expire free.
+    await client.query(`INSERT INTO platform_cost_ledger(reservation_id,user_id,capability,source_kind,source_id,provider,model,
+      units,cost_micros,estimated,usage_status,purpose,created_at)
+      SELECT id,user_id,capability,source_kind,source_id,provider,model,
+        jsonb_build_object('maxInputTokens',max_input_tokens,'maxOutputTokens',max_output_tokens),estimate_micros,true,'dispatch_uncertain',purpose,dispatch_intent_at
+      FROM platform_cost_reservations WHERE status='reserved' AND dispatch_intent_at IS NOT NULL AND expires_at<=clock_timestamp()
+      ON CONFLICT(reservation_id) DO NOTHING`);
+    await client.query(`UPDATE platform_cost_reservations SET status='committed',admitted_at=dispatch_intent_at,finished_at=clock_timestamp()
+      WHERE status='reserved' AND dispatch_intent_at IS NOT NULL AND expires_at<=clock_timestamp()
+        AND EXISTS(SELECT 1 FROM platform_cost_ledger l WHERE l.reservation_id=platform_cost_reservations.id)`);
     // A dispatched request may still have spent money. It can never expire into an uncharged release.
     await client.query(`INSERT INTO platform_cost_ledger(reservation_id,user_id,capability,source_kind,source_id,provider,model,
       units,cost_micros,estimated,usage_status,purpose,created_at)
@@ -197,6 +208,15 @@ export class CostGuard {
     const input = parseReserve(value);
     return this.db.withBoundedTransaction(client => this.reserveParsed(client, input, signal));
   }
+  /** Commit this accounting-only marker before the independently authorized launch transaction. */
+  async markDispatchRiskInTransaction(client: PoolClient, value: CostReservationBinding, signal?: AbortSignal): Promise<void> {
+    const binding = parseBinding(value); await this.lock(client, signal); await this.recover(client);
+    const row = (await client.query<ReservationRow>('SELECT * FROM platform_cost_reservations WHERE id=$1 FOR UPDATE', [binding.id])).rows[0];
+    if (!matches(row,binding) || row.status !== 'reserved' || row.admitted_at) throw unavailable();
+    const changed = await client.query(`UPDATE platform_cost_reservations SET dispatch_intent_at=COALESCE(dispatch_intent_at,clock_timestamp())
+      WHERE id=$1 AND status='reserved' AND admitted_at IS NULL AND expires_at>clock_timestamp()`,[binding.id]);
+    signal?.throwIfAborted(); if (changed.rowCount !== 1) throw unavailable();
+  }
   async admitInTransaction(client: PoolClient, value: CostReservationBinding, signal?: AbortSignal): Promise<void> {
     const binding = parseBinding(value); await this.lock(client, signal); await this.recover(client);
     const row = (await client.query<ReservationRow>('SELECT * FROM platform_cost_reservations WHERE id=$1 FOR UPDATE', [binding.id])).rows[0];
@@ -241,6 +261,9 @@ export class CostGuard {
     await this.lock(client, signal);
     const row = (await client.query<ReservationRow>('SELECT * FROM platform_cost_reservations WHERE id=$1 FOR UPDATE', [binding.id])).rows[0];
     if (!matches(row, binding) || !['admitted', 'committed'].includes(row.status) || !row.admitted_at) throw unavailable();
+    return this.settleRow(client,row,binding,usage,signal);
+  }
+  private async settleRow(client: PoolClient, row: ReservationRow, binding: Readonly<CostReservationBinding>, usage: CostActualUsage, signal?: AbortSignal): Promise<CostSettlement> {
     const estimated = usage.status !== 'reported', units = usage.status === 'reported'
       ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
       : { maxInputTokens: row.max_input_tokens, maxOutputTokens: row.max_output_tokens };
@@ -253,20 +276,40 @@ export class CostGuard {
       if (ledger.usage_status === usage.status && ledger.cost_micros === costMicros && JSON.stringify(ledger.units) === JSON.stringify(units)) {
         signal?.throwIfAborted(); return Object.freeze({ costMicros, estimated });
       }
-      if (!ledger.estimated || usage.status !== 'reported' && ledger.usage_status !== 'expired') throw unavailable();
+      if (!ledger.estimated || usage.status !== 'reported' && !['expired','dispatch_uncertain'].includes(ledger.usage_status)) throw unavailable();
       await client.query(`UPDATE platform_cost_ledger SET units=$2::jsonb,cost_micros=$3,estimated=$4,usage_status=$5,settled_at=clock_timestamp()
         WHERE reservation_id=$1 AND estimated=true`, [binding.id, JSON.stringify(units), costMicros, estimated, usage.status]);
     } else {
       await client.query(`INSERT INTO platform_cost_ledger(reservation_id,user_id,capability,source_kind,source_id,provider,model,units,cost_micros,estimated,usage_status,purpose,created_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13)`,
-      [binding.id, binding.userId, binding.capability, binding.sourceKind, binding.sourceId, binding.provider, binding.model, JSON.stringify(units), costMicros, estimated, usage.status, binding.purpose, row.admitted_at]);
+      [binding.id, binding.userId, binding.capability, binding.sourceKind, binding.sourceId, binding.provider, binding.model, JSON.stringify(units), costMicros, estimated, usage.status, binding.purpose, row.admitted_at ?? row.dispatch_intent_at]);
     }
-    await client.query(`UPDATE platform_cost_reservations SET status='committed',finished_at=clock_timestamp() WHERE id=$1 AND status='admitted'`, [binding.id]);
+    // The reserved-risk path becomes committed directly. Its timestamp only
+    // places expenditure in the accounting period; no admitted execution row is published.
+    await client.query(`UPDATE platform_cost_reservations SET status='committed',admitted_at=COALESCE(admitted_at,dispatch_intent_at),finished_at=clock_timestamp()
+      WHERE id=$1 AND status IN ('reserved','admitted') AND (admitted_at IS NOT NULL OR dispatch_intent_at IS NOT NULL)`, [binding.id]);
     signal?.throwIfAborted(); return Object.freeze({ costMicros, estimated });
   }
   async commit(value: CostReservationBinding, actual: CostActualUsage, signal?: AbortSignal): Promise<CostSettlement> {
     const binding = parseBinding(value), usage = parseUsage(actual);
     return this.db.withBoundedTransaction(client => this.commitParsed(client, binding, usage, signal));
+  }
+  /** Preserve actual or conservatively estimated spending after uncertain dispatch COMMIT; never grants execution. */
+  async settleDispatchRiskInTransaction(client: PoolClient, value: CostReservationBinding, actual: CostActualUsage, signal?: AbortSignal): Promise<CostSettlement> {
+    const binding = parseBinding(value), usage = parseUsage(actual); await this.lock(client,signal);
+    const row = (await client.query<ReservationRow>('SELECT * FROM platform_cost_reservations WHERE id=$1 FOR UPDATE',[binding.id])).rows[0];
+    if (!matches(row,binding) || !row.dispatch_intent_at || !['reserved','admitted','committed'].includes(row.status)
+      || row.status !== 'reserved' && !row.admitted_at) throw unavailable();
+    return this.settleRow(client,row,binding,usage,signal);
+  }
+  /** Only a server caller with positive no-launch evidence may clear reserved risk. Not valid after admission. */
+  async releaseRiskInTransaction(client: PoolClient, value: CostReservationBinding, signal?: AbortSignal): Promise<void> {
+    const binding = parseBinding(value); await this.lock(client,signal);
+    const row = (await client.query<ReservationRow>('SELECT * FROM platform_cost_reservations WHERE id=$1 FOR UPDATE',[binding.id])).rows[0];
+    if (!matches(row,binding) || row.status !== 'reserved' || !row.dispatch_intent_at || row.admitted_at) throw unavailable();
+    const changed = await client.query(`UPDATE platform_cost_reservations SET status='released',dispatch_intent_at=NULL,finished_at=clock_timestamp()
+      WHERE id=$1 AND status='reserved' AND dispatch_intent_at IS NOT NULL AND admitted_at IS NULL`,[binding.id]);
+    signal?.throwIfAborted(); if (changed.rowCount !== 1) throw unavailable();
   }
   async releaseInTransaction(client: PoolClient, value: CostReservationBinding, signal?: AbortSignal): Promise<void> {
     const binding = parseBinding(value); return this.releaseParsed(client, binding, signal);
@@ -274,7 +317,7 @@ export class CostGuard {
   private async releaseParsed(client: PoolClient, binding: Readonly<CostReservationBinding>, signal?: AbortSignal): Promise<void> {
     await this.lock(client, signal);
     const row = (await client.query<ReservationRow>('SELECT * FROM platform_cost_reservations WHERE id=$1 FOR UPDATE', [binding.id])).rows[0];
-    if (!matches(row, binding) || !['reserved', 'released'].includes(row.status) || row.admitted_at) throw unavailable();
+    if (!matches(row, binding) || !['reserved', 'released'].includes(row.status) || row.admitted_at || row.dispatch_intent_at) throw unavailable();
     await client.query(`UPDATE platform_cost_reservations SET status='released',finished_at=clock_timestamp() WHERE id=$1 AND status='reserved'`, [binding.id]);
     signal?.throwIfAborted();
   }

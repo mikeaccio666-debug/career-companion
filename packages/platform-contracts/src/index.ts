@@ -29,7 +29,7 @@ export interface ProviderStatus {
   models: string[];
   modelsByCapability?: Partial<Record<Capability,string[]>>;
   /** Explicit server purpose binding; never mixed into ordinary chat model candidates. */
-  modelsByPurpose?: Partial<Record<'safety_classify',string[]>>;
+  modelsByPurpose?: Partial<Record<'safety_classify' | 'companion_generation',string[]>>;
   /** Supported server chat inputs and explicit local audio preprocessing; no quality claim. */
   chatAttachments?: ChatAttachmentSupport;
   /** Declared speech languages (BCP 47); absence makes no language claim. */
@@ -212,6 +212,13 @@ export interface ChatContext extends ProviderRequestContext {
   executeTool?: (name: string, input: Record<string, unknown>) => Promise<unknown>;
   /** Server-owned accounting hook. Contains identifiers and counts only, never conversation text. */
   onModelCall?: (event: ModelCallEvent) => Promise<void> | void;
+  /** Server-only single-call generation. Never deserialize this context from a client request. */
+  background?: {
+    purpose: 'companion_generation';
+    responseFormat: { name: string; schema: Record<string, unknown> };
+    limits: { maxOutputTokens: number };
+    timeoutMs: number;
+  };
 }
 export type ModelCallUsage = { status: 'reported'; inputTokens: number; outputTokens: number } | { status: 'missing' | 'invalid' };
 export type ModelCallEvent =

@@ -145,3 +145,17 @@ test('routing returns independent values without modifying runtime metadata or c
   modelRouteAvailability(config, selected);
   assert.equal(JSON.stringify({ config, status }), before);
 });
+
+test('companion generation needs its own explicit internal model and stays outside student availability', () => {
+  const internal = readConfig({ PLATFORM_COMPANION_GENERATION_PROVIDER: 'openai' });
+  const status = provider({ id: 'openai', capabilities: ['chat'], modelsByPurpose: { companion_generation: ['fictional-preview'] } });
+  assert.deepEqual(resolveModelRoute(internal, runtime([status]), 'companion_generation'),
+    { purpose: 'companion_generation', provider: 'openai', model: 'fictional-preview' });
+  assert.deepEqual(modelRouteAvailability(internal, runtime([status])),
+    { chat: false, agent: false, realtime: false, transcription: false, speech: false });
+  for (const modelsByPurpose of [undefined, {}, { safety_classify: ['fictional-safety'] }, { companion_generation: [] },
+    { companion_generation: ['one', 'two'] }, { companion_generation: [' fictional-preview'] }]) {
+    unavailable(() => resolveModelRoute(internal, runtime([provider({ id: 'openai', capabilities: ['chat'], modelsByPurpose,
+      models: ['fictional-flat'], modelsByCapability: { chat: ['fictional-chat'] } })]), 'companion_generation'));
+  }
+});

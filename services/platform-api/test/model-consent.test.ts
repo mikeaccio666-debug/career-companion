@@ -67,3 +67,23 @@ test('a late transport that ignores abort cannot return a response after capture
   const db=new FictionalDatabase(),parent=new AbortController(),gate=new ModelConsent(db,FICTIONAL_LEGAL).forSession(session(),parent.signal);let finish!:(value:Response)=>void,cancelled=false;
   const pending=gate(()=>new Promise<Response>(resolve=>{finish=resolve;}));await new Promise(resolve=>setImmediate(resolve));parent.abort();finish(new Response(new ReadableStream({cancel(){cancelled=true;}})));await assert.rejects(pending);await new Promise(resolve=>setImmediate(resolve));assert.equal(cancelled,true);await db.close();
 });
+
+test('background wrapper requires admission but leaves actual launch after the adapter prepares its receipt',async()=>{
+  // Narrow sequencing port only; actual SDK/HTTP/PG coverage lives in the
+  // background-generation integration fixture.
+  const order:string[]=[];
+  const runtime={capabilities:()=>[],async *streamChat(_input:unknown,context:any){
+    order.push('prepared');await context.onModelCall({type:'started'});
+    await context.requestAdmission(async()=>{order.push('launched');});
+    yield {type:'delta',text:'fictional'};
+  }} as unknown as PlatformProviderRuntime;
+  const wrapped=requireModelConsent(runtime),input={provider:'fictional',mode:'chat' as const,messages:[]};
+  const background={purpose:'companion_generation' as const,responseFormat:{name:'fictional',schema:{}},limits:{maxOutputTokens:1},timeoutMs:1};
+  const drain=async(value:AsyncIterable<unknown>)=>{for await(const _ of value){}};
+  await assert.rejects(drain(wrapped.streamChat(input,{background})),isCode('TERMS_CONFIRMATION_REQUIRED'));
+  assert.equal(order.length,0);
+  await drain(wrapped.streamChat(input,{background,onModelCall:()=>{order.push('recorded');},requestAdmission:async launch=>{
+    order.push('admission');return launch(new AbortController().signal);
+  }}));
+  assert.deepEqual(order,['prepared','recorded','admission','launched']);
+});

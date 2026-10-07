@@ -20,14 +20,14 @@ assert(['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname), 'Use only iso
 url.searchParams.set('options', '-c search_path=' + schema);
 const admin = new Database(base.databaseUrl), db = new Database(url.toString());
 const crypto = readDataCrypto({ PLATFORM_DATA_KEY: 'b2'.repeat(32) })!;
-const config = { dataCrypto: crypto, requireVerifiedEmail: true, modelRoutes: { chat: { provider: 'openai' } } };
+const config = { dataCrypto: crypto, requireVerifiedEmail: true, modelRoutes: { companion_generation: { provider: 'openai' } } };
 const store = new OnboardingDrafts(db, config, FICTIONAL_LEGAL);
 let modelCalls = 0, created = false;
 function runtime(model = 'fictional-draft-model', enabled = true) {
   return {
     capabilities(): ProviderStatus[] {
       return [{ id: 'openai', name: 'Synthetic catalogue only', enabled, keyConfigured: true,
-        capabilities: ['chat'], models: ['fictional-flat-never-selected'], modelsByCapability: { chat: [model] }, envVariables: [] }];
+        capabilities: ['chat'], models: ['fictional-flat-never-selected'], modelsByPurpose: { companion_generation: [model] }, envVariables: [] }];
     },
     async *streamChat() { modelCalls++; throw new Error('A preparation must never invoke a provider.'); },
   };
@@ -183,7 +183,7 @@ test('completed source atomically prepares only a drafting entity, encrypted ans
   assert.equal(seed.authVersion, '0'); assert.equal(seed.questionnaireRevision, 1); assert.equal(seed.rulesRevision, 1); assert.equal(seed.generatorVersion, 1);
   assert.equal(seed.purpose, 'companion_preview'); assert.equal(typeof seed.styleCard, 'string');
   for (const key of ['summary', 'samples', 'generatedBy', 'preview', 'name', 'sealChar']) assert.equal(Object.hasOwn(seed, key), false);
-  assert.equal((await db.query("SELECT to_regclass('platform_companion_revisions') AS relation")).rows[0].relation, null);
+  assert.equal((await db.query('SELECT count(*)::int AS count FROM platform_companion_revisions WHERE user_id=$1', [who.userId])).rows[0].count, 0);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM platform_model_prices')).rows[0].count, 0);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM platform_cost_global_policy')).rows[0].count, 0);
 });
