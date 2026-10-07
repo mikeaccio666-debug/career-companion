@@ -11,6 +11,8 @@ import { ApiError } from './errors.ts';
 import { CompanionIntakePreparation } from './companion-intake-preparation.ts';
 import { OnboardingStorage, intakeUnavailable } from './onboarding-storage.ts';
 import { resolveModelRoute } from './model-routing.ts';
+import { captureCompanionSourcePrefixInTransaction, saveCompanionSourcePrefixInTransaction,
+  verifyCompanionSourcePrefixInTransaction, type CompanionSourcePrefixBinding } from './companion-source-prefix.ts';
 
 export interface CompanionDraftTaskPreparation {
   readonly companionId: string;
@@ -25,6 +27,7 @@ interface TaskRow {
   purpose: string; status: string; seed_ciphertext: Buffer;
   answers_ciphertext: Buffer; fingerprint: string; companion_status: string;
   current_revision: number; draft_rerolls: number; quirk_draw: number;
+  source_receipt_version: number | null;
 }
 type Configuration = Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail' | 'modelRoutes'>;
 const changed = () => new ApiError(409, 'COMPANION_DRAFT_SOURCE_CHANGED', 'The prepared companion draft belongs to a different intake or account version.');
@@ -105,10 +108,13 @@ export class CompanionDraftPreparation {
       inkToken: compiled.inkToken, styleCard: compiled.styleCard };
     const answers = { schemaVersion: 1, id: answersId, userId: fixed.userId, sourceDraftId: source.id,
       sourceRevision: source.revision, fastTrack: source.fastTrack, answersPartial: source.answersPartial };
-    const seed = { schemaVersion: 1, taskId, userId: fixed.userId, companionId, answersId,
+    const baseSeed = { schemaVersion: 1, taskId, userId: fixed.userId, companionId, answersId,
       sourceDraftId: source.id, sourceRevision: source.revision, authVersion, questionnaireRevision: 1,
       rulesRevision: 1, generatorVersion: 1, purpose: 'companion_preview',
       provider: route.provider, model: route.model, ...ruleStyle, ...(quirkDraw === 1 ? { quirkDraw: 1 } : {}) };
+    const sourceBinding: CompanionSourcePrefixBinding = {taskId,userId:fixed.userId,companionId,answersId,
+      sourceDraftId:source.id,sourceRevision:source.revision,authVersion,questionnaireRevision:1,rulesRevision:1,
+      generatorVersion:1,purpose:'companion_preview',canonicalAnswersDigest:digest(answers),canonicalSeedDigest:digest(baseSeed)};
     const answersBinding = { table: 'platform_companion_answers', column: 'payload_ciphertext', rowId: answersId,
       ownerId: fixed.userId, revision: source.revision };
     const seedBinding = { table: 'platform_companion_generation_tasks', column: 'seed_ciphertext', rowId: taskId,
@@ -123,15 +129,27 @@ export class CompanionDraftPreparation {
         || previous.draft_rerolls !== 0 || previous.questionnaire_revision !== 1 || previous.rules_revision !== 1
         || previous.generator_version !== 1 || previous.purpose !== 'companion_preview' || previous.fingerprint !== fingerprint) throw intakeUnavailable();
       try {
+        const savedSeedText=this.storage.crypto!.openUtf8(previous.seed_ciphertext,seedBinding);
+        let expectedSeed: Record<string,unknown>=baseSeed;
+        if (previous.source_receipt_version===1) {
+          const saved=JSON.parse(savedSeedText);
+          if (saved?.sourceReceiptVersion!==1||typeof saved.sourceReceiptDigest!=='string'
+            ||/^[0-9a-f]{64}$/.exec(saved.sourceReceiptDigest)?.[0]!==saved.sourceReceiptDigest) throw intakeUnavailable();
+          await verifyCompanionSourcePrefixInTransaction(client,this.storage,sourceBinding,saved.sourceReceiptDigest);
+          expectedSeed={...baseSeed,sourceReceiptVersion:1,sourceReceiptDigest:saved.sourceReceiptDigest};
+        } else if (previous.source_receipt_version!==null) throw intakeUnavailable();
         // Exact canonical snapshots reject swapped owner/row/source ciphertext,
-        // changed route and damaged private state. No best-effort partial replay.
+        // changed route and damaged private state. NULL legacy replay preserves
+        // original bytes and never gains a newly fabricated source manifest.
         if (this.storage.crypto!.openUtf8(previous.answers_ciphertext, answersBinding) !== JSON.stringify(answers)
-          || this.storage.crypto!.openUtf8(previous.seed_ciphertext, seedBinding) !== JSON.stringify(seed)) throw intakeUnavailable();
+          || savedSeedText !== JSON.stringify(expectedSeed)) throw intakeUnavailable();
       } catch { throw intakeUnavailable(); }
     } else {
       if ((await client.query('SELECT id FROM platform_companions WHERE user_id=$1 FOR UPDATE', [fixed.userId])).rowCount) {
         throw new ApiError(409, 'COMPANION_EXISTS', 'A companion draft already exists.');
       }
+      const captured=await captureCompanionSourcePrefixInTransaction(client,this.storage,sourceBinding,source);
+      const seed={...baseSeed,sourceReceiptVersion:1,sourceReceiptDigest:captured.digest};
       const answersCiphertext = this.storage.crypto!.sealUtf8(JSON.stringify(answers), answersBinding);
       const seedCiphertext = this.storage.crypto!.sealUtf8(JSON.stringify(seed), seedBinding);
       await client.query(`INSERT INTO platform_companions(id,user_id,status,fingerprint) VALUES($1,$2,'drafting',$3)`,
@@ -139,9 +157,10 @@ export class CompanionDraftPreparation {
       await client.query(`INSERT INTO platform_companion_answers(id,user_id,source_draft_id,source_revision,payload_ciphertext)
         VALUES($1,$2,$3,$4,$5)`, [answersId, fixed.userId, source.id, source.revision, answersCiphertext]);
       await client.query(`INSERT INTO platform_companion_generation_tasks(id,user_id,companion_id,answers_id,source_draft_id,
-        source_revision,auth_version,questionnaire_revision,rules_revision,generator_version,purpose,status,seed_ciphertext,quirk_draw)
-        VALUES($1,$2,$3,$4,$5,$6,$7,1,1,1,'companion_preview','pending',$8,$9)`,
+        source_revision,auth_version,questionnaire_revision,rules_revision,generator_version,purpose,status,seed_ciphertext,quirk_draw,source_receipt_version)
+        VALUES($1,$2,$3,$4,$5,$6,$7,1,1,1,'companion_preview','pending',$8,$9,1)`,
         [taskId, fixed.userId, companionId, answersId, source.id, source.revision, authVersion, seedCiphertext, quirkDraw]);
+      await saveCompanionSourcePrefixInTransaction(client,this.storage,captured);
     }
     await authorizeFixedSession(client, fixed, signal);
     signal?.throwIfAborted();

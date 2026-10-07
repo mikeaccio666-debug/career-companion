@@ -70,6 +70,15 @@ export class CompanionNameSafety {
     if (!verified) throw new ApiError(409, 'COMPANION_PREVIEW_REQUIRED', 'Wait for the actual completed preview before submitting a name.');
     return { version, verified };
   }
+  /** Existing raw operations keep their actual original preview. This proof is
+   * only for observation or classification of already committed name sources;
+   * fresh submissions and applications still require the current source gate. */
+  private async savedSource(client: PoolClient, fixed: FixedSessionContext, taskId: string, signal?: AbortSignal) {
+    const version = await this.storage.authorizeSession(client, fixed, signal);
+    const proof = await this.background.readSavedCompletedInTransaction(client, fixed, { taskId }, signal);
+    if (!proof) throw new ApiError(409, 'COMPANION_PREVIEW_REQUIRED', 'Wait for the actual completed preview before reading a saved name.');
+    return { version, verified: proof.envelope };
+  }
   private async entry(client: PoolClient, fixed: FixedSessionContext, taskId: string) {
     return (await client.query<EntryRow>('SELECT * FROM platform_companion_name_entries WHERE user_id=$1 AND task_id=$2 FOR UPDATE', [fixed.userId, taskId])).rows[0];
   }
@@ -177,7 +186,7 @@ export class CompanionNameSafety {
   async read(context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
     const fixed = captureFixed(context), taskId = parseCompanionNameTask(value);
     return this.db.withBoundedTransaction(async client => {
-      const { verified } = await this.source(client, fixed, taskId, signal), entry = await this.entry(client, fixed, taskId);
+      const { verified } = await this.savedSource(client, fixed, taskId, signal), entry = await this.entry(client, fixed, taskId);
       const result = entry ? this.view(entry, await this.history(client, entry, verified, fixed)) : null;
       await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return result;
     });
@@ -231,7 +240,7 @@ export class CompanionNameSafety {
   private async claimSavedSource(fixed: FixedSessionContext, options: Readonly<{ taskId: string; detectorRevision: number; leaseMs: number }>,
     submissionId: string | undefined, signal?: AbortSignal): Promise<Readonly<CompanionNameSafetyClaim> | null> {
     return this.db.withBoundedTransaction(async client => {
-      const { verified, version } = await this.source(client, fixed, options.taskId, signal), entry = await this.entry(client, fixed, options.taskId);
+      const { verified, version } = await this.savedSource(client, fixed, options.taskId, signal), entry = await this.entry(client, fixed, options.taskId);
       if (!entry) {
         if (submissionId !== undefined) throw companionNameSafetyUnavailable();
         await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null;
@@ -265,7 +274,7 @@ export class CompanionNameSafety {
     let tokenHash: string;
     try { tokenHash = sessionHash(JSON.parse(this.storage.crypto!.openUtf8(raw.claim_ciphertext, { table: 'platform_companion_name_submissions', column: 'claim_ciphertext', rowId: raw.id, ownerId: raw.user_id, revision: raw.generation })).sessionTokenHash); }
     catch { throw companionNameSafetyUnavailable(); }
-    const fixed = captureFixed({ userId: claim.userId, tokenHash }), { version, verified } = await this.source(client, fixed, claim.taskId, signal);
+    const fixed = captureFixed({ userId: claim.userId, tokenHash }), { version, verified } = await this.savedSource(client, fixed, claim.taskId, signal);
     if (version !== claim.authVersion) throw companionNameSafetyClaimChanged();
     const entry = await this.entry(client, fixed, claim.taskId); if (!entry || entry.id !== claim.entryId) throw companionNameSafetyClaimChanged();
     const rows = await this.history(client, entry, verified, fixed), row = rows.find(item => item.id === claim.submissionId);

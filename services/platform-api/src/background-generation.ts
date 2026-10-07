@@ -16,6 +16,8 @@ import { resolveModelRoute } from './model-routing.ts';
 import { acquireRuntimeLease } from './runtime-leases.ts';
 import { CostGuard, tokenCostMicros } from './cost-guard.ts';
 import type { CostReservationBinding, CostReserveInput } from './cost-guard.ts';
+import { parseCapturedCompanionAnswers } from './companion-captured-answers.ts';
+import { verifyCompanionSourcePrefixInTransaction } from './companion-source-prefix.ts';
 
 type Configuration = Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail' | 'modelRoutes'>;
 interface TaskRow {
@@ -25,7 +27,8 @@ interface TaskRow {
   current_revision: number; draft_rerolls: number; generation: number; lease_token: string | null;
   runtime_lease_id: string | null; lease_until: Date | null;
   quirk_draw: number;
-  error_code: string | null;
+  error_code: string | null; finished_at: Date | null;
+  source_receipt_version: number | null;
 }
 interface Seed {
   readonly dimensions: Readonly<CompanionDimensions>; readonly quirks: CompanionQuirks;
@@ -48,6 +51,16 @@ export interface VerifiedCompanionPreviewEnvelope {
     questionnaireRevision: number; rulesRevision: number; generatorVersion: number;
   }>;
 }
+/** Original completed evidence only. The marker is outside the unchanged saved
+ * envelope; this proof cannot authorize a new generation, name or selection. */
+export interface HistoricalCompletedCompanionPreviewProof {
+  readonly kind: 'historical_completed_preview';
+  readonly envelope: Readonly<VerifiedCompanionPreviewEnvelope>;
+}
+export type SavedCompletedCompanionPreviewProof = HistoricalCompletedCompanionPreviewProof | Readonly<{
+  kind: 'current_completed_preview';
+  envelope: Readonly<VerifiedCompanionPreviewEnvelope>;
+}>;
 export interface CompanionGenerationTaskStatus {
   readonly taskId: string; readonly companionId: string;
   readonly status: 'pending' | 'running' | 'failed' | 'uncertain' | 'interrupted' | 'completed';
@@ -148,6 +161,18 @@ export class BackgroundGeneration {
     if (rows.length !== 1) throw new ApiError(404, 'NOT_FOUND', 'The companion task was not found.');
     return rows[0];
   }
+  private sourceReceipt(row: TaskRow, data: any): Readonly<{ sourceReceiptVersion?: 1; sourceReceiptDigest?: string }> {
+    if (row.source_receipt_version === null) return Object.freeze({});
+    if (row.source_receipt_version !== 1 || data?.sourceReceiptVersion !== 1
+      || typeof data?.sourceReceiptDigest !== 'string' || /^[0-9a-f]{64}$/.exec(data.sourceReceiptDigest)?.[0] !== data.sourceReceiptDigest) throw intakeUnavailable();
+    return Object.freeze({ sourceReceiptVersion: 1 as const, sourceReceiptDigest: data.sourceReceiptDigest });
+  }
+  private prefixBinding(row: TaskRow, fixed: FixedSessionContext, canonicalAnswers: string, canonicalSeed: unknown) {
+    return { taskId: row.id, userId: fixed.userId, companionId: row.companion_id, answersId: row.answers_id,
+      sourceDraftId: row.source_draft_id, sourceRevision: row.source_revision, authVersion: String(row.auth_version),
+      questionnaireRevision: 1 as const, rulesRevision: 1 as const, generatorVersion: 1 as const, purpose: 'companion_preview' as const,
+      canonicalAnswersDigest: createHash('sha256').update(canonicalAnswers).digest('hex'), canonicalSeedDigest: hash(canonicalSeed) };
+  }
   private async seed(client: PoolClient, fixed: FixedSessionContext, row: TaskRow, signal?: AbortSignal): Promise<Seed> {
     const prepared = await this.intake.prepareInTransaction(client, fixed, { expectedRevision: row.source_revision }, signal);
     const sourceRow = await this.storage.row(client, fixed.userId);
@@ -163,17 +188,71 @@ export class BackgroundGeneration {
     try { data = JSON.parse(this.storage.crypto!.openUtf8(row.seed_ciphertext,
       { table: 'platform_companion_generation_tasks', column: 'seed_ciphertext', rowId: row.id, ownerId: fixed.userId, revision: source.revision })); }
     catch { throw intakeUnavailable(); }
-    const expected = { schemaVersion: 1, taskId: row.id, userId: fixed.userId, companionId: row.companion_id, answersId: row.answers_id,
+    const baseSeed = { schemaVersion: 1, taskId: row.id, userId: fixed.userId, companionId: row.companion_id, answersId: row.answers_id,
       sourceDraftId: source.id, sourceRevision: source.revision, authVersion: String(row.auth_version), questionnaireRevision: 1,
       rulesRevision: 1, generatorVersion: 1, purpose: 'companion_preview', provider: data?.provider, model: data?.model, ...ruleStyle,
       ...(row.quirk_draw === 1 ? { quirkDraw: 1 } : {}) };
+    const receipt = this.sourceReceipt(row, data), expected = { ...baseSeed, ...receipt };
     try {
       if (row.fingerprint !== hash({ dimensions: ruleStyle.dimensions, quirks: ruleStyle.quirks, inkToken: ruleStyle.inkToken })
         || this.storage.crypto!.openUtf8(row.answers_ciphertext, { table: 'platform_companion_answers', column: 'payload_ciphertext', rowId: row.answers_id,
           ownerId: fixed.userId, revision: source.revision }) !== JSON.stringify(answers)
         || JSON.stringify(data) !== JSON.stringify(expected) || data.provider !== 'openai' || typeof data.model !== 'string' || !data.model.trim()) throw intakeUnavailable();
     } catch { throw intakeUnavailable(); }
+    if (row.source_receipt_version === 1) await verifyCompanionSourcePrefixInTransaction(client, this.storage,
+      this.prefixBinding(row, fixed, JSON.stringify(answers), baseSeed), receipt.sourceReceiptDigest!);
     return Object.freeze({ ...ruleStyle, dimensions: Object.freeze(ruleStyle.dimensions), quirks: Object.freeze(ruleStyle.quirks), provider: data.provider, model: data.model });
+  }
+  private async historicalSeed(client: PoolClient, fixed: FixedSessionContext, row: TaskRow): Promise<Seed> {
+    if (row.questionnaire_revision !== 1 || row.rules_revision !== 1 || row.generator_version !== 1
+      || row.purpose !== 'companion_preview' || ![0, 1].includes(row.quirk_draw) || Object.is(row.quirk_draw, -0)) throw intakeUnavailable();
+    try {
+      const answerText = this.storage.crypto!.openUtf8(row.answers_ciphertext, { table: 'platform_companion_answers',
+        column: 'payload_ciphertext', rowId: row.answers_id, ownerId: fixed.userId, revision: row.source_revision });
+      const capture = parseCapturedCompanionAnswers(JSON.parse(answerText));
+      if (capture.id !== row.answers_id || capture.userId !== fixed.userId || capture.sourceDraftId !== row.source_draft_id
+        || capture.sourceRevision !== row.source_revision || answerText !== JSON.stringify(capture)) throw intakeUnavailable();
+      const text = this.storage.crypto!.openUtf8(row.seed_ciphertext, { table: 'platform_companion_generation_tasks',
+        column: 'seed_ciphertext', rowId: row.id, ownerId: fixed.userId, revision: row.source_revision });
+      const data = JSON.parse(text), receipt = this.sourceReceipt(row, data);
+      if (row.source_receipt_version !== 1) throw intakeUnavailable();
+      const { sourceReceiptVersion: _receiptVersion, sourceReceiptDigest: _receiptDigest, ...capturedSeed } = data;
+      const prefix = await verifyCompanionSourcePrefixInTransaction(client, this.storage,
+        this.prefixBinding(row, fixed, answerText, capturedSeed), receipt.sourceReceiptDigest!, capture);
+      const dimensions = prefix.dimensions;
+      const compiled = compileFallbackCompanionStyle({ companionId: row.companion_id, dimensions: { ...dimensions }, quirkDraw: row.quirk_draw as 0 | 1 });
+      const ruleStyle = { dimensions: { ...dimensions }, quirks: { ...compiled.quirks }, inkToken: compiled.inkToken, styleCard: compiled.styleCard };
+      const expected = { schemaVersion: 1, taskId: row.id, userId: fixed.userId, companionId: row.companion_id, answersId: row.answers_id,
+        sourceDraftId: row.source_draft_id, sourceRevision: row.source_revision, authVersion: String(row.auth_version),
+        questionnaireRevision: 1, rulesRevision: 1, generatorVersion: 1, purpose: 'companion_preview',
+        provider: data?.provider, model: data?.model, ...ruleStyle, ...(row.quirk_draw === 1 ? { quirkDraw: 1 } : {}), ...receipt };
+      if (text !== JSON.stringify(expected) || data.provider !== 'openai' || typeof data.model !== 'string' || !data.model.trim()) throw intakeUnavailable();
+      return Object.freeze({ ...ruleStyle, dimensions: Object.freeze(ruleStyle.dimensions), quirks: Object.freeze(ruleStyle.quirks),
+        provider: data.provider, model: data.model });
+    } catch { throw intakeUnavailable(); }
+  }
+  /** Authenticate a public accepted receipt only where one actually exists.
+   * Its original session/auth version are captured facts, never current admission.
+   * Direct internal preparations legitimately have no such public receipt. */
+  private async historicalAcceptedRequest(client: PoolClient, fixed: FixedSessionContext, row: TaskRow): Promise<void> {
+    const requests = (await client.query('SELECT * FROM platform_companion_generation_requests WHERE task_id=$1 FOR SHARE', [row.id])).rows;
+    if (!requests.length) return;
+    if (requests.length !== 1) throw intakeUnavailable();
+    try {
+      const saved = requests[0], text = this.storage.crypto!.openUtf8(saved.payload_ciphertext, {
+        table: 'platform_companion_generation_requests', column: 'payload_ciphertext', rowId: saved.id,
+        ownerId: fixed.userId, revision: row.source_revision });
+      const data = JSON.parse(text), expected = { schemaVersion: 1, operationId: saved.id, userId: fixed.userId,
+        tokenHash: data?.tokenHash, authVersion: String(row.auth_version), taskId: row.id, companionId: row.companion_id,
+        sourceDraftId: row.source_draft_id, sourceRevision: row.source_revision, initialGeneration: 0,
+        command: { operationId: saved.id, expectedRevision: row.source_revision } };
+      if (saved.user_id !== fixed.userId || saved.companion_id !== row.companion_id || saved.source_draft_id !== row.source_draft_id
+        || saved.source_revision !== row.source_revision || String(saved.auth_version) !== String(row.auth_version)
+        || saved.initial_generation !== 0 || typeof data?.tokenHash !== 'string' || /^[0-9a-f]{64}$/.exec(data.tokenHash)?.[0] !== data.tokenHash
+        || text !== JSON.stringify(expected) || createHash('sha256').update(text).digest('hex') !== saved.payload_digest
+        || (await client.query('SELECT request_id FROM platform_companion_generation_outbox WHERE request_id=$1 AND user_id=$2 AND task_id=$3 FOR SHARE',
+          [saved.id, fixed.userId, row.id])).rowCount !== 1) throw intakeUnavailable();
+    } catch { throw intakeUnavailable(); }
   }
   private async current(client: PoolClient, fixed: FixedSessionContext, claim: Claim, signal?: AbortSignal): Promise<void> {
     const version = await this.storage.authorizeSession(client, fixed, signal);
@@ -286,7 +365,7 @@ export class BackgroundGeneration {
       costReceipts: calls.map(item => item.receipt) };
     if (JSON.stringify(row.call_ids) !== JSON.stringify(callIds) || JSON.stringify(payload) !== JSON.stringify(expected)
       || row.payload_digest !== hash(expected) || !outputRules(preview, claim).every(check => check.status === 'passed_rules')) throw unavailable();
-    await this.provenance(client, claim, 'model', callIds); return preview;
+    this.provenance(claim, 'model', callIds, calls); return preview;
   }
   private async recoveryState(client: PoolClient, fixed: FixedSessionContext, claim: Claim): Promise<RecoveryState> {
     const calls = await this.authenticatedCalls(client, claim), checkpoint = await this.checkpoint(client, fixed, claim, calls);
@@ -361,8 +440,9 @@ export class BackgroundGeneration {
     const claim: Claim = { row, seed, generation: row.generation, leaseToken: '', runtimeLeaseId: '' };
     const expected = this.payload(fixed, claim, preview, revision.generated_by, payload?.callIds);
     if (JSON.stringify(payload) !== JSON.stringify(expected) || !outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw intakeUnavailable();
-    await this.provenance(client, claim, revision.generated_by, payload.callIds);
-    const calls = await this.authenticatedCalls(client, claim), checkpoint = await this.checkpoint(client, fixed, claim, calls);
+    const calls = await this.authenticatedCalls(client, claim);
+    this.provenance(claim, revision.generated_by, payload.callIds, calls);
+    const checkpoint = await this.checkpoint(client, fixed, claim, calls);
     if (checkpoint && (revision.generated_by !== 'model' || JSON.stringify(checkpoint) !== JSON.stringify(preview))) throw intakeUnavailable();
     await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
     return Object.freeze({ preview: this.preview(claim, preview, revision.generated_by), dimensions: seed.dimensions,
@@ -370,6 +450,74 @@ export class BackgroundGeneration {
         generation: row.generation, sourceDraftId: row.source_draft_id, sourceRevision: row.source_revision,
         answersId: row.answers_id, questionnaireRevision: row.questionnaire_revision,
         rulesRevision: row.rules_revision, generatorVersion: row.generator_version }) });
+  }
+  /** Same-transaction original evidence for already saved sources. Current real
+   * student/session/email/legal access remains required, but current intake text,
+   * companion cursor, old generation session and model availability are not proof
+   * of the historical preview. No repair, model call or execution grant occurs. */
+  async readHistoricalCompletedInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown,
+    signal?: AbortSignal): Promise<Readonly<HistoricalCompletedCompanionPreviewProof> | null> {
+    const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
+    const row = await this.task(client, fixed, taskId, signal);
+    return this.readHistoricalCompletedRowInTransaction(client, fixed, row, signal);
+  }
+  /** Only the actual task() row from this same uninterrupted read is accepted.
+   * Public readers obtain fresh account/session/source locks before entering;
+   * no task row or proof is retained across reads, callbacks or transactions. */
+  private async readHistoricalCompletedRowInTransaction(client: PoolClient, fixed: FixedSessionContext, row: TaskRow,
+    signal?: AbortSignal): Promise<Readonly<HistoricalCompletedCompanionPreviewProof> | null> {
+    signal?.throwIfAborted();
+    if (row.user_id !== fixed.userId) throw intakeUnavailable();
+    const taskId = row.id;
+    if (row.status !== 'completed') { await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null; }
+    if (row.source_receipt_version !== 1) throw intakeUnavailable();
+    if (!Number.isSafeInteger(row.generation) || row.generation < 1 || row.generation > 2147483647
+      || !row.finished_at || row.lease_token !== null || row.lease_until !== null || row.runtime_lease_id !== null || row.error_code !== null) throw intakeUnavailable();
+    const seed = await this.historicalSeed(client, fixed, row);
+    await this.historicalAcceptedRequest(client, fixed, row);
+    const revisions = (await client.query('SELECT * FROM platform_companion_revisions WHERE task_id=$1 FOR UPDATE', [taskId])).rows;
+    const revision = revisions[0];
+    if (revisions.length !== 1 || revision.user_id !== fixed.userId || revision.companion_id !== row.companion_id
+      || revision.revision !== 1 || revision.generation !== row.generation) throw intakeUnavailable();
+    let payload: any, modelPreview: CompanionModelPreview, envelope: Readonly<VerifiedCompanionPreviewEnvelope>;
+    try {
+      const text = this.storage.crypto!.openUtf8(revision.payload_ciphertext, { table: 'platform_companion_revisions',
+        column: 'payload_ciphertext', rowId: row.companion_id, ownerId: fixed.userId, revision: 1 });
+      payload = JSON.parse(text); modelPreview = parseCompanionModelPreview({ summary: payload?.summary, samples: payload?.samples });
+      const claim: Claim = { row, seed, generation: row.generation, leaseToken: '', runtimeLeaseId: '' };
+      if (text !== JSON.stringify(this.payload(fixed, claim, modelPreview, revision.generated_by, payload?.callIds))
+        || !outputRules(modelPreview, claim).every(item => item.status === 'passed_rules')) throw intakeUnavailable();
+      const calls = await this.authenticatedCalls(client, claim);
+      this.provenance(claim, revision.generated_by, payload.callIds, calls);
+      const checkpoint = await this.checkpoint(client, fixed, claim, calls);
+      if (revision.generated_by === 'model') {
+        if (!checkpoint || JSON.stringify(checkpoint) !== JSON.stringify(modelPreview)) throw intakeUnavailable();
+      } else if (revision.generated_by === 'fallback') {
+        const fallback = compileFallbackCompanionStyle({ companionId: row.companion_id, dimensions: { ...seed.dimensions }, quirkDraw: row.quirk_draw as 0 | 1 });
+        if (checkpoint || JSON.stringify(modelPreview) !== JSON.stringify({ summary: fallback.summary, samples: [...fallback.samples] })) throw intakeUnavailable();
+      } else throw intakeUnavailable();
+      const generated = this.preview(claim, modelPreview, revision.generated_by);
+      envelope = Object.freeze({ preview: Object.freeze({ ...generated, samples: Object.freeze([...generated.samples] as [string, string, string]) }),
+        dimensions: seed.dimensions, source: Object.freeze({ taskId: row.id, companionId: row.companion_id, previewRevision: 1 as const,
+          generation: row.generation, sourceDraftId: row.source_draft_id, sourceRevision: row.source_revision, answersId: row.answers_id,
+          questionnaireRevision: row.questionnaire_revision, rulesRevision: row.rules_revision, generatorVersion: row.generator_version }) });
+    } catch { if (signal?.aborted) signal.throwIfAborted(); throw intakeUnavailable(); }
+    await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
+    return Object.freeze({ kind: 'historical_completed_preview' as const, envelope });
+  }
+  /** Saved-source composition, never permission to write. Older tasks without a
+   * preparation manifest must actually pass the current source gate. They are
+   * explicitly marked current proofs and acquire no invented historical receipt. */
+  async readSavedCompletedInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown,
+    signal?: AbortSignal): Promise<Readonly<SavedCompletedCompanionPreviewProof> | null> {
+    const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
+    const row = await this.task(client, fixed, taskId, signal);
+    if (row.source_receipt_version === null) {
+      const envelope = await this.readInTransaction(client, fixed, { taskId }, signal);
+      return envelope ? Object.freeze({ kind: 'current_completed_preview' as const, envelope }) : null;
+    }
+    if (row.source_receipt_version !== 1) throw intakeUnavailable();
+    return this.readHistoricalCompletedRowInTransaction(client, fixed, row, signal);
   }
   async generate(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionGeneratedPreview>> {
     const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
@@ -697,7 +845,7 @@ export class BackgroundGeneration {
         if (!preview || !outputRules(preview, claim).every(check => check.status === 'passed_rules')) throw unavailable();
         const calls = await this.authenticatedCalls(client, claim), callIds = calls.map(item => item.call.call_id);
         if (callIds.at(-1) !== callId || calls.some(item => !item.receipt)) throw unavailable();
-        await this.provenance(client, claim, 'model', callIds);
+        this.provenance(claim, 'model', callIds, calls);
         const payload = { schemaVersion: 1, preview: this.payload(fixed, claim, preview, 'model', callIds),
           costReceipts: calls.map(item => item.receipt) };
         const ciphertext = this.storage.crypto!.sealUtf8(JSON.stringify(payload), { table: 'platform_companion_generation_checkpoints',
@@ -718,8 +866,10 @@ export class BackgroundGeneration {
       summary: preview.summary, samples: [...preview.samples], dimensions: { ...claim.seed.dimensions }, quirks: { ...claim.seed.quirks },
       inkToken: claim.seed.inkToken, styleCard: claim.seed.styleCard };
   }
-  private async provenance(client: PoolClient, claim: Claim, generatedBy: 'model' | 'fallback', callIds: readonly string[]) {
-    const authenticated = await this.authenticatedCalls(client, claim), rows = authenticated.map(item => item.call);
+  /** Consume only the actual authenticated calls under the caller's retained
+   * transaction locks; checkpoint and provenance inspect the same receipts. */
+  private provenance(claim: Claim, generatedBy: 'model' | 'fallback', callIds: readonly string[], authenticated: readonly AuthenticatedCall[]) {
+    const rows = authenticated.map(item => item.call);
     if (authenticated.some(item => !item.receipt)) throw unavailable();
     if (rows.length !== callIds.length || rows.some((row, i) => row.call_id !== callIds[i] || row.attempt !== i + 1
       || row.companion_id !== claim.row.companion_id || row.provider !== claim.seed.provider || row.model !== claim.seed.model
@@ -739,10 +889,11 @@ export class BackgroundGeneration {
   private async save(fixed: FixedSessionContext, claim: Claim, preview: CompanionModelPreview, generatedBy: 'model' | 'fallback', callIds: readonly string[], signal?: AbortSignal) {
     return this.db.withBoundedTransaction(async client => {
       await this.current(client, fixed, claim, signal);
-      await this.provenance(client, claim, generatedBy, callIds);
+      const calls = await this.authenticatedCalls(client, claim);
+      this.provenance(claim, generatedBy, callIds, calls);
       if (!outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw unavailable();
       if (generatedBy === 'model') {
-        const checkpoint = await this.checkpoint(client, fixed, claim, await this.authenticatedCalls(client, claim));
+        const checkpoint = await this.checkpoint(client, fixed, claim, calls);
         if (!checkpoint || JSON.stringify(checkpoint) !== JSON.stringify(preview)) throw unavailable();
       }
       const ciphertext = this.storage.crypto!.sealUtf8(JSON.stringify(this.payload(fixed, claim, preview, generatedBy, callIds)),

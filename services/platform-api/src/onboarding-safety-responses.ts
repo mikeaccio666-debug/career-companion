@@ -56,6 +56,21 @@ export async function readAuthenticatedSafetyResponses(client: PoolClient, stora
   userId: string, sources: SafetySubmissionRow[]) {
   const rows=(await client.query<SafetyResponseRow>(`SELECT * FROM platform_onboarding_safety_responses
     WHERE user_id=$1 ORDER BY submitted_revision,id FOR UPDATE`,[userId])).rows;
+  return authenticateResponseRows(client,storage,sources,rows);
+}
+/** Historical composition only: the caller must separately prove that sources
+ * is the entire original prefix. Later responses are not part of that evidence.
+ * Current readers continue to authenticate their complete account history. */
+export async function readAuthenticatedSafetyResponsesForSources(client: PoolClient, storage: OnboardingStorage,
+  userId: string, sources: SafetySubmissionRow[]) {
+  if (sources.some(source=>source.user_id!==userId)) throw responseStorageUnavailable();
+  const rows=(await client.query<SafetyResponseRow>(`SELECT * FROM platform_onboarding_safety_responses
+    WHERE user_id=$1 AND submission_id=ANY($2::uuid[]) ORDER BY submitted_revision,id FOR UPDATE`,
+  [userId,sources.map(source=>source.id)])).rows;
+  return authenticateResponseRows(client,storage,sources,rows);
+}
+async function authenticateResponseRows(client: PoolClient, storage: OnboardingStorage,
+  sources: SafetySubmissionRow[], rows: SafetyResponseRow[]) {
   if (rows.length!==sources.filter(source=>source.status==='detected'&&source.level!=='L0').length) throw responseStorageUnavailable();
   const captures: {row: SafetyResponseRow;response: SafetyResponseRenderResult|null}[]=[];
   for (const row of rows) {
