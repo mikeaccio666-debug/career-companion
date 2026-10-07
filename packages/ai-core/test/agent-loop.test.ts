@@ -128,9 +128,20 @@ test('visible output or disallowed errors do not trigger a hidden provider retry
   }
 });
 
-test('the engine enforces a deadline even when the single-step generator never yields and ignores its signal', async () => {
-  let calls = 0; const adapter = new ProviderAdapter({ async *streamModelStep() { calls++; await new Promise(() => {}); return { text: '', calls: [] }; } });
-  await assert.rejects(collect(runAgentLoop(adapter, input, context([], { limits: { maxRounds: 6, maxToolCalls: 12, maxOutputTokens: 10, timeoutMs: 30 } }))), { code: 'AGENT_DEADLINE' }); assert.equal(calls, 1);
+test('non-cooperative model deadlines keep the selected budget even when the wall clock has not advanced', async t => {
+  // A timer may fire before the next absolute millisecond; its selected budget still owns the timeout.
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 });
+  for (const entry of [
+    { timeoutMs: 30, callTimeoutMs: undefined, advanceMs: 0, code: 'AGENT_DEADLINE' },
+    { timeoutMs: 30, callTimeoutMs: 30, advanceMs: 0, code: 'AGENT_DEADLINE' },
+    { timeoutMs: 200, callTimeoutMs: 20, advanceMs: 0, code: 'PROVIDER_INTERRUPTED' },
+    { timeoutMs: 200, callTimeoutMs: 20, advanceMs: 201, code: 'AGENT_DEADLINE' },
+  ]) {
+    let calls = 0; const adapter = new ProviderAdapter({ async *streamModelStep() { calls++; if (entry.advanceMs) t.mock.timers.tick(entry.advanceMs); await new Promise(() => {}); return { text: '', calls: [] }; } });
+    await assert.rejects(collect(runAgentLoop(adapter, input, context([], { callTimeoutMs: entry.callTimeoutMs,
+      limits: { maxRounds: 6, maxToolCalls: 12, maxOutputTokens: 10, timeoutMs: entry.timeoutMs } }))), { code: entry.code });
+    assert.equal(calls, 1);
+  }
 });
 test('background-purpose loop permits only read/draft/none regardless of an over-broad directory mask', async () => {
   const tools = [tool('read'), tool('draft', 'draft'), tool('plan', 'none'), tool('consult', 'consult'), tool('ask', 'ask_user'), tool('background', 'background')];

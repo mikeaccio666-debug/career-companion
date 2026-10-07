@@ -9,3 +9,4 @@ export { careerProgress } from './progress.ts';
 export * from './companion/onboarding.ts';
 export * from './companion/mapping.ts';
 export * from './companion/questionnaire.ts';
+export * from './companion/safety-response.ts';

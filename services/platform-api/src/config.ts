@@ -14,7 +14,7 @@ export interface PlatformConfig {
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
-  requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyDailyModelCallLimit: number;
+  requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyResponseBundlePath?: string; safetyDailyModelCallLimit: number;
   dataCrypto?: DataCrypto;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
@@ -90,6 +90,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   const legalBundlePath = env.PLATFORM_LEGAL_BUNDLE_FILE === undefined ? undefined : path.resolve(workspaceRoot,env.PLATFORM_LEGAL_BUNDLE_FILE);
   if (env.PLATFORM_SAFETY_PROFILE_FILE !== undefined && (!env.PLATFORM_SAFETY_PROFILE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_SAFETY_PROFILE_FILE))) throw new Error('PLATFORM_SAFETY_PROFILE_FILE must name a server-controlled file');
   const safetyDetectorProfilePath = env.PLATFORM_SAFETY_PROFILE_FILE === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_SAFETY_PROFILE_FILE);
+  if (env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE !== undefined && (!env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE))) throw new Error('PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE must name a server-controlled file');
+  const safetyResponseBundlePath = env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE);
   const safetyLimit = env.PLATFORM_SAFETY_DAILY_MODEL_CALL_LIMIT ?? '0';
   if (/^(0|[1-9][0-9]{0,4})$/.exec(safetyLimit)?.[0] !== safetyLimit || Number(safetyLimit) > 10000) throw new Error('PLATFORM_SAFETY_DAILY_MODEL_CALL_LIMIT must be an integer from 0 to 10000');
   const safetyDailyModelCallLimit = Number(safetyLimit);
@@ -154,7 +156,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
-    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, safetyDetectorProfilePath, safetyDailyModelCallLimit, workbenchEnabled,
+    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, safetyDetectorProfilePath, safetyResponseBundlePath, safetyDailyModelCallLimit, workbenchEnabled,
     modelRoutes: configuredModelRoutes, exposeProviderDetails, dataCrypto,
     queueName, s3, mcp: readMcpConfig(env),
   };

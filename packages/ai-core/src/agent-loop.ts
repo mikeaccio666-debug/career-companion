@@ -114,8 +114,10 @@ export async function* runAgentLoop(adapter: ProviderAdapter, initial: ChatInput
     for (let attempt = 0; ; attempt++) {
       await active();
       progress.clear();
-      const timeoutMs = Math.max(1, Math.min(ctx.callTimeoutMs ?? limits.timeoutMs, hookDeadline - Date.now()));
-      const attemptController = new AbortController(), attemptTimer = setTimeout(() => attemptController.abort(new ProviderError(Date.now() >= hookDeadline ? 'AGENT_DEADLINE' : 'PROVIDER_INTERRUPTED', 'The model step deadline was reached.', 504)), timeoutMs);
+      const remainingMs = hookDeadline - Date.now(), callBudgetMs = ctx.callTimeoutMs ?? limits.timeoutMs;
+      const timeoutMs = Math.max(1, Math.min(callBudgetMs, remainingMs)), turnLimited = remainingMs <= callBudgetMs;
+      // Capture the limiting budget: timers can fire before the next absolute clock millisecond.
+      const attemptController = new AbortController(), attemptTimer = setTimeout(() => attemptController.abort(new ProviderError(turnLimited || Date.now() >= hookDeadline ? 'AGENT_DEADLINE' : 'PROVIDER_INTERRUPTED', 'The model step deadline was reached.', 504)), timeoutMs);
       const attemptSignal = ctx.signal ? AbortSignal.any([ctx.signal, attemptController.signal]) : attemptController.signal;
       let stream: AsyncGenerator<ModelStepEvent, ModelStepResult> | undefined;
       try {
