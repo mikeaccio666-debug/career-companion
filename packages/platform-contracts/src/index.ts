@@ -276,3 +276,4 @@ export * from './student-api.ts';
 export * from './agent-loop.ts';
 export * from './staff.ts';
 export * from './student-entry.ts';
+export * from './onboarding.ts';

@@ -6,3 +6,5 @@ export { CAREER_CAPABILITIES, careerCapability, capabilityPermitted, capabilityV
 export { prepareCareerRun } from './prepare.ts';
 export { careerSkillCompletion, careerSkillOutputMatchesContract } from './skill-output.ts';
 export { careerProgress } from './progress.ts';
+export * from './companion/onboarding.ts';
+export * from './companion/mapping.ts';

@@ -65,6 +65,10 @@ services:
         sync: false
       - key: PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY
         sync: false
+      # Set the same dedicated 64-hex key on API and worker; never generate separate keys.
+      # Version 1 only: replacing the key cannot read existing protected data or backups.
+      - key: PLATFORM_DATA_KEY
+        sync: false
       - key: PLATFORM_S3_ENDPOINT
         sync: false
       - key: PLATFORM_S3_BUCKET
@@ -127,6 +131,9 @@ services:
           type: web
           name: career-platform-api
           envVarKey: PLATFORM_ACCOUNT_EMAIL_ENCRYPTION_KEY
+      # Must equal the API PLATFORM_DATA_KEY, supplied privately by the operator.
+      - key: PLATFORM_DATA_KEY
+        sync: false
       - key: PLATFORM_S3_ENDPOINT
         fromService:
           type: web

@@ -379,6 +379,10 @@ keepErrorCodes(['TERMS_CONFIRMATION_REQUIRED', 'TERMS_VERSION_CHANGED'], 'Read a
 keepErrorCodes(['INVITE_REQUIRED', 'INVITE_INVALID'], 'Use a valid invitation for this email.');
 keepErrorCodes(['INVALID_CREDENTIALS'], 'Email or password is incorrect.');
 keepErrorCodes(['EMAIL_VERIFICATION_REQUIRED'], 'Verify your email to continue.');
+keepErrorCodes(['STUDENT_ACCOUNT_REQUIRED'], 'Use a student account to continue.');
+keepErrorCodes(['DATA_STORAGE_UNAVAILABLE'], 'Private intake data could not be saved or read.');
+keepErrorCodes(['ONBOARDING_REVISION_CHANGED', 'ONBOARDING_STATE_CHANGED'], 'Read the current intake progress before continuing.');
+keepErrorCodes(['ONBOARDING_OPERATION_CONFLICT'], 'Use a new operation identifier for a different intake change.');
 keepErrorCodes(['EMAIL_EXISTS'], 'An account already exists for this email.');
 keepErrorCodes(['ACCOUNT_CONTEXT_REQUIRED', 'ACCOUNT_CONTEXT_INVALID', 'ACCOUNT_CONTEXT_CHANGED'], 'Reload the current account before continuing.');
 keepErrorCodes(['ACCOUNT_ACTION_INVALID'], 'This account link is invalid or expired. Request a new email.');
