@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import type { Database } from './database.ts';
 import type { ResolvedModelRoute } from './model-routing.ts';
 import { parseOnboardingSafetyClaim, type OnboardingSafetyClaim } from './onboarding-safety-protocol.ts';
+import { parseCompanionNameSafetyClaim, type CompanionNameSafetyClaim } from './companion-name-safety-protocol.ts';
 import { ApiError } from './errors.ts';
 
 export interface SafetyModelUsage {
@@ -32,16 +33,42 @@ function bounded(value: unknown, maximum: number): string {
     || /[\x00-\x1f\x7f]/.test(value) || Buffer.from(value, 'utf8').toString('utf8') !== value) throw unavailable(); return value;
 }
 interface UsageRow {
-  call_id: string; user_id: string; submission_id: string; operation_id: string; draft_id: string; question_id: string;
+  call_id: string; user_id: string; submission_id: string; operation_id: string; draft_id: string | null; question_id: string | null;
+  source_kind: 'onboarding' | 'companion_name'; entry_id: string | null; task_id: string | null; companion_id: string | null;
+  preview_revision: number | null; expected_identity_revision: number | null; name_execution_token: string | null;
   submitted_revision: number; generation: number; auth_version: string; detector_revision: number; call_index: number;
   provider: string; model: string; purpose: string; status: string; usage_status: string; input_tokens: number | null; output_tokens: number | null;
   admitted_at: Date | null; finished_at: Date | null;
 }
+/** Server-owned execution context emitted by the concrete naming source after its real execution-token COMMIT. */
+export interface CompanionNameSafetyExecution {
+  readonly executionToken: string;
+  readonly assertCurrent: (client: PoolClient, signal?: AbortSignal) => Promise<void>;
+}
+type Binding = Readonly<{ kind: 'onboarding'; claim: Readonly<OnboardingSafetyClaim> }>
+  | Readonly<{ kind: 'companion_name'; claim: Readonly<CompanionNameSafetyClaim>; execution: Readonly<CompanionNameSafetyExecution> }>;
 /** A daily call-count cap plus explicit usage uncertainty. This is not a dollar CostGuard or an approved production budget. */
 export function createSafetyModelUsage(db: Database, value: OnboardingSafetyClaim, route: ResolvedModelRoute, dailyLimit: number): SafetyModelUsage {
-  let claim: Readonly<OnboardingSafetyClaim>, provider: string, model: string;
+  try { return createBoundSafetyModelUsage(db, { kind: 'onboarding', claim: parseOnboardingSafetyClaim(value) }, route, dailyLimit); }
+  catch { throw unavailable(); }
+}
+/** A real name claim uses the same account-wide ledger and cannot reset onboarding quota or unresolved usage. */
+export function createCompanionNameSafetyModelUsage(db: Database, value: CompanionNameSafetyClaim, route: ResolvedModelRoute,
+  dailyLimit: number, execution: CompanionNameSafetyExecution): SafetyModelUsage {
   try {
-    claim = parseOnboardingSafetyClaim(value);
+    const captured = record(execution, ['executionToken', 'assertCurrent']);
+    if (typeof captured.assertCurrent !== 'function') throw unavailable();
+    const fixed = Object.freeze({ executionToken: uuid(captured.executionToken), assertCurrent: captured.assertCurrent as CompanionNameSafetyExecution['assertCurrent'] });
+    return createBoundSafetyModelUsage(db, { kind: 'companion_name', claim: parseCompanionNameSafetyClaim(value), execution: fixed }, route, dailyLimit);
+  } catch { throw new ApiError(503, 'COMPANION_NAME_SAFETY_UNAVAILABLE', 'Name detection is not available.'); }
+}
+function createBoundSafetyModelUsage(db: Database, binding: Binding, route: ResolvedModelRoute, dailyLimit: number): SafetyModelUsage {
+  const claim = binding.claim;
+  const unavailable = () => binding.kind === 'onboarding'
+    ? new ApiError(503, 'ONBOARDING_SAFETY_UNAVAILABLE', 'The safety model call could not be confirmed.')
+    : new ApiError(503, 'COMPANION_NAME_SAFETY_UNAVAILABLE', 'The name safety model call could not be confirmed.');
+  let provider: string, model: string;
+  try {
     const fixed = record(route, ['purpose', 'provider', 'model']);
     if (fixed.purpose !== 'safety_classify') throw unavailable();
     provider = bounded(fixed.provider, 80); model = bounded(fixed.model, 150);
@@ -57,20 +84,41 @@ export function createSafetyModelUsage(db: Database, value: OnboardingSafetyClai
     if (!found.rowCount || checkVersion && String(found.rows[0].auth_version) !== claim.authVersion) throw unavailable();
   }
   async function current(client: PoolClient, signal?: AbortSignal) {
+    if (binding.kind === 'companion_name') {
+      const name = binding.claim;
+      // This closure authenticates the actual generation session and complete encrypted source under the same transaction.
+      await binding.execution.assertCurrent(client, signal);
+      const found = await client.query(`SELECT id FROM platform_companion_name_submissions
+        WHERE id=$1 AND user_id=$2 AND operation_id=$3 AND entry_id=$4 AND task_id=$5 AND companion_id=$6
+          AND preview_revision=$7 AND submitted_revision=$8 AND expected_identity_revision=$9
+          AND generation=$10 AND auth_version=$11 AND lease_token=$12 AND detector_revision=$13 AND execution_token=$14
+          AND status='running' AND lease_until>clock_timestamp() FOR UPDATE`,
+      [name.submissionId, name.userId, name.operationId, name.entryId, name.taskId, name.companionId,
+        name.previewRevision, name.submittedAtRevision, name.expectedIdentityRevision, name.generation,
+        name.authVersion, name.leaseToken, name.detectorRevision, binding.execution.executionToken]);
+      signal?.throwIfAborted(); if (!found.rowCount) throw unavailable();
+      return;
+    }
+    const intake = binding.claim;
     const found = await client.query(`SELECT id FROM platform_onboarding_safety_submissions
       WHERE id=$1 AND user_id=$2 AND operation_id=$3 AND draft_id=$4 AND question_id=$5 AND submitted_revision=$6
         AND generation=$7 AND auth_version=$8 AND lease_token=$9 AND detector_revision=$10
         AND status='running' AND lease_until>clock_timestamp() FOR UPDATE`,
-    [claim.submissionId, claim.userId, claim.operationId, claim.draftId, claim.questionId, claim.submittedAtRevision,
-      claim.generation, claim.authVersion, claim.leaseToken, claim.detectorRevision]);
+    [intake.submissionId, intake.userId, intake.operationId, intake.draftId, intake.questionId, intake.submittedAtRevision,
+      intake.generation, intake.authVersion, intake.leaseToken, intake.detectorRevision]);
     signal?.throwIfAborted(); if (!found.rowCount) throw unavailable();
   }
   function matches(row: UsageRow | undefined, callId: string): row is UsageRow {
-    return !!row && row.call_id === callId && row.user_id === claim.userId && row.submission_id === claim.submissionId
-      && row.operation_id === claim.operationId && row.draft_id === claim.draftId && row.question_id === claim.questionId
-      && row.submitted_revision === claim.submittedAtRevision && row.generation === claim.generation
-      && String(row.auth_version) === claim.authVersion && row.detector_revision === claim.detectorRevision && row.call_index === 1
-      && row.provider === provider && row.model === model && row.purpose === 'safety_classify';
+    if (!row || row.call_id !== callId || row.user_id !== claim.userId || row.submission_id !== claim.submissionId
+      || row.source_kind !== binding.kind || row.operation_id !== claim.operationId || row.submitted_revision !== claim.submittedAtRevision
+      || row.generation !== claim.generation || String(row.auth_version) !== claim.authVersion || row.detector_revision !== claim.detectorRevision
+      || row.call_index !== 1 || row.provider !== provider || row.model !== model || row.purpose !== 'safety_classify') return false;
+    if (binding.kind === 'onboarding') return row.draft_id === binding.claim.draftId && row.question_id === binding.claim.questionId
+      && row.entry_id === null && row.task_id === null && row.companion_id === null && row.preview_revision === null && row.expected_identity_revision === null && row.name_execution_token === null;
+    const name = binding.claim;
+    return row.draft_id === null && row.question_id === null && row.entry_id === name.entryId && row.task_id === name.taskId
+      && row.companion_id === name.companionId && row.preview_revision === name.previewRevision && row.expected_identity_revision === name.expectedIdentityRevision
+      && row.name_execution_token === binding.execution.executionToken;
   }
   function event(input: ModelCallEvent) {
     const base = record(input, ['type', 'callId'], ['index', 'provider', 'model', 'purpose', 'status', 'usage']);
@@ -99,7 +147,7 @@ export function createSafetyModelUsage(db: Database, value: OnboardingSafetyClai
           if (acceptedCallId && acceptedCallId !== snapshot.callId) throw unavailable();
           await db.withBoundedTransaction(async client => {
             await account(client, true); await current(client);
-            const found = await client.query<UsageRow>('SELECT * FROM platform_safety_model_usage WHERE submission_id=$1 AND generation=$2 FOR UPDATE', [claim.submissionId, claim.generation]);
+            const found = await client.query<UsageRow>('SELECT * FROM platform_safety_model_usage WHERE submission_id=$1 AND generation=$2 AND source_kind=$3 FOR UPDATE', [claim.submissionId, claim.generation, binding.kind]);
             if (found.rows[0]) {
               if (!matches(found.rows[0], snapshot.callId) || found.rows[0].status !== 'prepared') throw unavailable();
               await current(client); return;
@@ -113,11 +161,23 @@ export function createSafetyModelUsage(db: Database, value: OnboardingSafetyClai
               FROM platform_safety_model_usage WHERE user_id=$1`, [claim.userId, at]);
             if (coverage.rows[0].unknown || coverage.rows[0].daily >= dailyLimit) throw unavailable();
             await current(client);
-            await client.query(`INSERT INTO platform_safety_model_usage(call_id,user_id,submission_id,operation_id,draft_id,question_id,
-              submitted_revision,generation,auth_version,detector_revision,call_index,provider,model,purpose,created_at)
-              VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,'safety_classify',$13)`,
-            [snapshot.callId, claim.userId, claim.submissionId, claim.operationId, claim.draftId, claim.questionId,
-              claim.submittedAtRevision, claim.generation, claim.authVersion, claim.detectorRevision, provider, model, at]);
+            if (binding.kind === 'onboarding') {
+              const intake = binding.claim;
+              await client.query(`INSERT INTO platform_safety_model_usage(call_id,user_id,submission_id,operation_id,draft_id,question_id,
+                submitted_revision,generation,auth_version,detector_revision,call_index,provider,model,purpose,created_at,source_kind)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,'safety_classify',$13,'onboarding')`,
+              [snapshot.callId, intake.userId, intake.submissionId, intake.operationId, intake.draftId, intake.questionId,
+                intake.submittedAtRevision, intake.generation, intake.authVersion, intake.detectorRevision, provider, model, at]);
+            } else {
+              const name = binding.claim;
+              await client.query(`INSERT INTO platform_safety_model_usage(call_id,user_id,submission_id,operation_id,entry_id,task_id,
+                companion_id,preview_revision,expected_identity_revision,submitted_revision,generation,auth_version,detector_revision,
+                call_index,provider,model,purpose,created_at,source_kind,name_execution_token)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,1,$14,$15,'safety_classify',$16,'companion_name',$17)`,
+              [snapshot.callId, name.userId, name.submissionId, name.operationId, name.entryId, name.taskId, name.companionId,
+                name.previewRevision, name.expectedIdentityRevision, name.submittedAtRevision, name.generation, name.authVersion,
+                name.detectorRevision, provider, model, at, binding.execution.executionToken]);
+            }
             await current(client);
           });
           acceptedCallId = snapshot.callId; return;
