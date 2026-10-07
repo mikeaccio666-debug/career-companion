@@ -1,4 +1,4 @@
-import { OWNER_PROFILE_V2_ENDPOINTS, PROFILE_V2_MAX_REQUEST_BYTES, parseCandidateProfileV2Patch, parseCandidateProfileSnapshotV2,
+import { getOwnerApplicationProfileV2, PROFILE_V2_MAX_REQUEST_BYTES, parseCandidateProfileV2Patch, parseCandidateProfileSnapshotV2,
   type AssistantProfileCode, type CandidateProfileSnapshotV2, type PatchCandidateProfileV2 } from '@edaix/contracts';
 import { boundedJson, exactOrigin } from '../session/owner-reader';
 import { readResult, sameSession, type SessionIdentity } from '../session/read-ports';
@@ -48,7 +48,7 @@ export function createOwnerProfileWriter(input: OwnerProfileWriterInput) {
       if (new TextEncoder().encode(body).byteLength > PROFILE_V2_MAX_REQUEST_BYTES) return fail('VALIDATION_FAILED');
       token = await input.accessToken(); if (!token) return fail('LOGIN_REQUIRED');
       const ready = await check(signal); if (ready) return fail(ready);
-      url = new URL(OWNER_PROFILE_V2_ENDPOINTS.getOwnerApplicationProfileV2.path, origin!).href;
+      url = new URL(getOwnerApplicationProfileV2.path, origin!).href;
       submitted = true;
       const response = await fetchFn(url, { ...options(), signal, method: 'PATCH', body,
         headers: { ...options().headers, 'content-type': 'application/json' } });

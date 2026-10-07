@@ -2642,36 +2642,39 @@ export default defineContentScript({
       // 上一页刚按了提交、整页跳到了这里：网站在这一页上确认了，就替他向任务报「已提交」。
       if (justSubmitted) missionSession.confirmArrival(document);
     };
-    // The worker reports which step a dock-started run is on. Words only, and
-    // only for the page that asked: a step for a run the dock is not showing
-    // changes nothing.
-    browser.runtime.onMessage.addListener((raw, sender) => {
-      const step = parseDockRunStep(raw);
-      if (step === null || sender.id !== browser.runtime.id || sender.tab || (!isTopFrame && !frameOwnsDock)) return;
-      dockHandle?.setStep(step);
-    });
-    // 登录态变了（worker 广播）：重新报到换脸。只认 worker 发来的、不带值的那一条。
-    browser.runtime.onMessage.addListener((raw, sender) => {
-      if (!isDockSessionChanged(raw) || sender.id !== browser.runtime.id || sender.tab) return;
-      if (assistant) return;
-      // Retire actual writers and plaintext immediately, before awaiting hello.
-      gestureRunSerial += 1;
-      gestureStop?.abort();
-      wizardAdvance.disarm(); submitter.disarm();
-      forgetUser();
-      // dismiss synchronously ends the dock's chain and disposes its credential/code pages.
-      // Keep the gesture-only driver dependency inside showFace for Assistant tree shaking.
-      dockHandle?.dismiss(); dockHandle = null;
-      lastHelloAt = 0;
-      void hello();
-    });
-    // 资料或代填授权在插件里（别的标签页、这一页的编辑器）改过了（worker 广播，2026-10-03 体检 P0-1）：预取的档案与简历问询
-    // 作废，下一轮重新取。同样只认 worker 发来的、不带值的那一条。
-    browser.runtime.onMessage.addListener((raw, sender) => {
-      if (!isDockProfileChanged(raw) || sender.id !== browser.runtime.id || sender.tab) return;
-      profileWarm = null;
-      resumeWarm = null;
-    });
+    // These notices belong to the legacy dock. Assistant uses the kernel bridge;
+    // its independent runtime-bundle, scan and submission guards stay installed.
+    if (!assistant) {
+      // The worker reports which step a dock-started run is on. Words only, and
+      // only for the page that asked: a step for a run the dock is not showing
+      // changes nothing.
+      browser.runtime.onMessage.addListener((raw, sender) => {
+        const step = parseDockRunStep(raw);
+        if (step === null || sender.id !== browser.runtime.id || sender.tab || (!isTopFrame && !frameOwnsDock)) return;
+        dockHandle?.setStep(step);
+      });
+      // 登录态变了（worker 广播）：重新报到换脸。只认 worker 发来的、不带值的那一条。
+      browser.runtime.onMessage.addListener((raw, sender) => {
+        if (!isDockSessionChanged(raw) || sender.id !== browser.runtime.id || sender.tab) return;
+        // Retire actual writers and plaintext immediately, before awaiting hello.
+        gestureRunSerial += 1;
+        gestureStop?.abort();
+        wizardAdvance.disarm(); submitter.disarm();
+        forgetUser();
+        // dismiss synchronously ends the dock's chain and disposes its credential/code pages.
+        // Keep the gesture-only driver dependency inside showFace for Assistant tree shaking.
+        dockHandle?.dismiss(); dockHandle = null;
+        lastHelloAt = 0;
+        void hello();
+      });
+      // 资料或代填授权在插件里（别的标签页、这一页的编辑器）改过了（worker 广播，2026-10-03 体检 P0-1）：预取的档案与简历问询
+      // 作废，下一轮重新取。同样只认 worker 发来的、不带值的那一条。
+      browser.runtime.onMessage.addListener((raw, sender) => {
+        if (!isDockProfileChanged(raw) || sender.id !== browser.runtime.id || sender.tab) return;
+        profileWarm = null;
+        resumeWarm = null;
+      });
+    }
     browser.runtime.onMessage.addListener((raw,sender)=>{
       const visibility=parseAssistantDockVisibility(raw);
       if(!visibility||sender.id!==browser.runtime.id||sender.tab||!isTopFrame)return;

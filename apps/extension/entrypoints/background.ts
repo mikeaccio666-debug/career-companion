@@ -1497,13 +1497,14 @@ export default defineBackground(() => {
     keys: createIndexedDbVaultKeyStore(globalThis.indexedDB),
     onDiagnostic: recordDiagnostic,
   });
-  // One registry per worker, never one per RPC. Worker restarts reject old operations.
-  const accountOperations = createAccountAccessOperationStore();
+  // Assistant keeps the real retained-vault auth fence without exposing the
+  // legacy credential or settings protocols. No operations exist in that build.
+  let invalidateAccountOperations: () => void = () => {};
   const vaultManagementUrl = browser.runtime.getURL('/vault.html');
   const vaultManagementAvailable = !(typeof __VIBE_ASSISTANT_READ_ENABLED__ !== 'undefined' && __VIBE_ASSISTANT_READ_ENABLED__);
   const vaultLifecycle = createAccountVaultLifecycle({
     auth: () => authClient, vault: accountVault, area: vaultArea,
-    invalidateOperations: () => accountOperations.invalidate(),
+    invalidateOperations: () => invalidateAccountOperations(),
     broadcastInvalidated: broadcastSessionChanged,
     showSwitch: async (ticket) => {
       if (!vaultManagementAvailable) throw new Error('VAULT_SETTINGS_UNAVAILABLE');
@@ -1514,74 +1515,79 @@ export default defineBackground(() => {
   });
   beforeVaultSessionReplace = vaultLifecycle.beforeReplaceSession;
   vaultAuthInvalidated = vaultLifecycle.onAuthInvalidated;
-  const vaultMessages = createAccountVaultMessageRouter({
-    extensionId: browser.runtime.id, managementUrl: vaultManagementUrl,
-    transitions: vaultLifecycle.transitions,
-    manage: (payload) => createAccountAccessProvider({
-      vault: accountVault, ops: accountOperations,
-      getAuthContext: () => vaultLifecycle.readContext(),
-      getManagementContext: () => vaultLifecycle.readContext(true),
-      consent: async () => false, capability: async () => false,
-      // Export while a handoff waits cannot call the auth queue or guess historical emails.
-      profileEmail: async () => null, onDiagnostic: recordDiagnostic,
-    }).manage(payload),
-    pageAllowed: async (sender, page) => senderTabForPageOrFrame(sender, browser.runtime.id, page, await readFrameForms()) !== null,
-    openTab: async (url) => {
-      if (!vaultManagementAvailable) throw new Error('VAULT_SETTINGS_UNAVAILABLE');
-      await browser.tabs.create({ url });
-    },
-  });
-  browser.runtime.onMessage.addListener((message, sender) => vaultMessages.management(message, sender));
-  browser.runtime.onMessage.addListener((message, sender) => vaultMessages.transition(message, sender));
-  browser.runtime.onMessage.addListener((message, sender) => vaultMessages.open(message, sender));
-  /** 第一把钥匙：这一家此刻的写策略里 `account-access` 开着、这一家的总开关开着。读不到当关。 */
-  const accountCapability = async (vendor: ApplyVendor): Promise<boolean> => {
-    const policy = await executionRuntimeAuthority.fillPolicyForVendor(vendor);
-    return policy !== null && policy.capabilities['account-access'] === true && isApplyPolicyEnabled(policy, vendor, Date.now());
-  };
-  const accountProfileEmail = async (): Promise<string | null> => {
-    const result = await profileProvider.getProfile({
-      fieldKeys: [...APPLICATION_PROFILE_FIELD_KEYS].sort(),
-      fieldSchemaVersion: 1,
-      profileSnapshot: null,
-    });
-    const email = result.ok ? result.draft.email : undefined;
-    return typeof email === 'string' && email.trim() !== '' ? email.trim() : null;
-  };
-  browser.runtime.onMessage.addListener((message, sender) => {
-    const intent = parseDockAccountAccessIntent(message);
-    if (intent === null) return;
-    return readFrameForms().then((frameForms): Promise<DockAccountAccessReply> | DockAccountAccessReply | undefined => {
-      if (senderTabForPageOrFrame(sender, browser.runtime.id, intent, frameForms) === null) return undefined;
-      const refused: DockAccountAccessReply = { kind: 'REFUSED', code: 'DISABLED' };
-      const step = intent.payload.step;
-      // Metadata list remains sender-bound; credential operations also require a declared account wall.
-      const pageBound = step !== 'LIST';
-      let vendor: ApplyVendor | null = null;
-      try {
-        vendor = detectApplyVendor(new URL(intent.origin).hostname);
-      } catch {
-        vendor = null;
-      }
-      if (pageBound && (vendor === null || !declaresAccountSteps(vendor) ||
-          !(isApplyFormPath(vendor, intent.pathname) || isAccountFormPath(vendor, intent.pathname)))) {
-        recordDiagnostic('ACCOUNT_ACCESS_PAGE_OUT_OF_SCOPE');
-        return refused;
-      }
-      const provider = createAccountAccessProvider({
-        vault: accountVault,
-        ops: accountOperations,
+  if (!(typeof __VIBE_ASSISTANT_READ_ENABLED__ !== 'undefined' && __VIBE_ASSISTANT_READ_ENABLED__)) {
+    // One registry per worker, never one per RPC. Worker restarts reject old operations.
+    const accountOperations = createAccountAccessOperationStore();
+    invalidateAccountOperations = () => accountOperations.invalidate();
+    const vaultMessages = createAccountVaultMessageRouter({
+      extensionId: browser.runtime.id, managementUrl: vaultManagementUrl,
+      transitions: vaultLifecycle.transitions,
+      manage: (payload) => createAccountAccessProvider({
+        vault: accountVault, ops: accountOperations,
         getAuthContext: () => vaultLifecycle.readContext(),
         getManagementContext: () => vaultLifecycle.readContext(true),
-        // 第二把钥匙：他同意着的那一版点名了「替你注册、登录招聘网站」（#130 的判定，别处不自己比版本号）。
-        consent: async () => signingConsentCoversAccountRegistration(await signingConsentProvider.read()),
-        capability: () => (vendor === null ? Promise.resolve(false) : accountCapability(vendor)),
-        profileEmail: accountProfileEmail,
-        onDiagnostic: recordDiagnostic,
+        consent: async () => false, capability: async () => false,
+        // Export while a handoff waits cannot call the auth queue or guess historical emails.
+        profileEmail: async () => null, onDiagnostic: recordDiagnostic,
+      }).manage(payload),
+      pageAllowed: async (sender, page) => senderTabForPageOrFrame(sender, browser.runtime.id, page, await readFrameForms()) !== null,
+      openTab: async (url) => {
+        if (!vaultManagementAvailable) throw new Error('VAULT_SETTINGS_UNAVAILABLE');
+        await browser.tabs.create({ url });
+      },
+    });
+    browser.runtime.onMessage.addListener((message, sender) => vaultMessages.management(message, sender));
+    browser.runtime.onMessage.addListener((message, sender) => vaultMessages.transition(message, sender));
+    browser.runtime.onMessage.addListener((message, sender) => vaultMessages.open(message, sender));
+    /** 第一把钥匙：这一家此刻的写策略里 `account-access` 开着、这一家的总开关开着。读不到当关。 */
+    const accountCapability = async (vendor: ApplyVendor): Promise<boolean> => {
+      const policy = await executionRuntimeAuthority.fillPolicyForVendor(vendor);
+      return policy !== null && policy.capabilities['account-access'] === true && isApplyPolicyEnabled(policy, vendor, Date.now());
+    };
+    const accountProfileEmail = async (): Promise<string | null> => {
+      const result = await profileProvider.getProfile({
+        fieldKeys: [...APPLICATION_PROFILE_FIELD_KEYS].sort(),
+        fieldSchemaVersion: 1,
+        profileSnapshot: null,
       });
-      return provider.handle(intent.payload, intent.origin);
-    }).catch((): DockAccountAccessReply => ({ kind: 'REFUSED', code: 'UNAVAILABLE' }));
-  });
+      const email = result.ok ? result.draft.email : undefined;
+      return typeof email === 'string' && email.trim() !== '' ? email.trim() : null;
+    };
+    browser.runtime.onMessage.addListener((message, sender) => {
+      const intent = parseDockAccountAccessIntent(message);
+      if (intent === null) return;
+      return readFrameForms().then((frameForms): Promise<DockAccountAccessReply> | DockAccountAccessReply | undefined => {
+        if (senderTabForPageOrFrame(sender, browser.runtime.id, intent, frameForms) === null) return undefined;
+        const refused: DockAccountAccessReply = { kind: 'REFUSED', code: 'DISABLED' };
+        const step = intent.payload.step;
+        // Metadata list remains sender-bound; credential operations also require a declared account wall.
+        const pageBound = step !== 'LIST';
+        let vendor: ApplyVendor | null = null;
+        try {
+          vendor = detectApplyVendor(new URL(intent.origin).hostname);
+        } catch {
+          vendor = null;
+        }
+        if (pageBound && (vendor === null || !declaresAccountSteps(vendor) ||
+            !(isApplyFormPath(vendor, intent.pathname) || isAccountFormPath(vendor, intent.pathname)))) {
+          recordDiagnostic('ACCOUNT_ACCESS_PAGE_OUT_OF_SCOPE');
+          return refused;
+        }
+        const provider = createAccountAccessProvider({
+          vault: accountVault,
+          ops: accountOperations,
+          getAuthContext: () => vaultLifecycle.readContext(),
+          getManagementContext: () => vaultLifecycle.readContext(true),
+          // 第二把钥匙：他同意着的那一版点名了「替你注册、登录招聘网站」（#130 的判定，别处不自己比版本号）。
+          consent: async () => signingConsentCoversAccountRegistration(await signingConsentProvider.read()),
+          capability: () => (vendor === null ? Promise.resolve(false) : accountCapability(vendor)),
+          profileEmail: accountProfileEmail,
+          onDiagnostic: recordDiagnostic,
+        });
+        return provider.handle(intent.payload, intent.origin);
+      }).catch((): DockAccountAccessReply => ({ kind: 'REFUSED', code: 'UNAVAILABLE' }));
+    });
+  }
   const missionApplicationTargetClient = createMissionApplicationTargetClient({
     apiBase,
     getAccessToken: () => authClient.getAccessToken(),
