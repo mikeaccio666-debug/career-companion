@@ -10,7 +10,7 @@ import { buildApp } from '../src/app.ts';
 import { readConfig } from '../src/config.ts';
 import { Database } from '../src/database.ts';
 
-const prefix='/api/platform',origin='http://localhost:4321',base=readConfig();
+const prefix='/api/platform',origin='http://localhost:4321',base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'voice-fixture', PLATFORM_AGENT_PROVIDER: 'voice-fixture', PLATFORM_REALTIME_PROVIDER: 'voice-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'voice-fixture', PLATFORM_SPEECH_PROVIDER: 'voice-fixture' });
 const schema=`voice_cancel_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);
 url.searchParams.set('options',`-c search_path=${schema}`);
 function deferred<T>() { let resolve!:(value:T)=>void;const promise=new Promise<T>(yes=>{resolve=yes;});return {promise,resolve}; }
@@ -29,7 +29,7 @@ let issuedSignal:AbortSignal|undefined;
 const sessionResult:VoiceSessionResult={clientSecret:'fictional-ephemeral-credential',model:'synthetic-voice-model',endpoint:'https://synthetic-voice.invalid/calls'};
 const forbidden=async():Promise<never>=>{throw new Error('This fixture only exercises voice-session transport.');};
 const runtime:PlatformProviderRuntime={
-  capabilities:()=>[{id:'voice-fixture',name:'Synthetic cancellable voice',enabled:true,keyConfigured:true,capabilities:['realtime'],models:['synthetic-voice-model'],envVariables:[]}],
+  capabilities:()=>[{id:'voice-fixture',name:'Synthetic cancellable voice',enabled:true,keyConfigured:true,capabilities:['realtime'],models: ['synthetic-voice-model'], voiceOptions: { speech: { voices: ['synthetic-voice'], defaultVoice: 'synthetic-voice' }, realtime: { voices: ['synthetic-voice'], defaultVoice: 'synthetic-voice', turnTaking: true } }, envVariables: []}],
   async *streamChat(){throw new Error('No chat model is used.');},executeJob:forbidden,transcribe:forbidden,speech:forbidden,
   async createVoiceSession(_input,context){
     assert(context?.signal,'The issuer receives the actual HTTP cancellation signal.');
@@ -74,7 +74,7 @@ async function until(check:()=>Promise<boolean>){
   while(!await check()){if(Date.now()>deadline)throw new Error('Timed out waiting for actual voice cancellation cleanup.');await new Promise(resolve=>setTimeout(resolve,10));}
 }
 function begin(actor:Actor,controller:AbortController){
-  return fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id,'content-type':'application/json'},body:JSON.stringify({provider:'voice-fixture',voice:'synthetic-voice',turnTaking:'patient'}),signal:controller.signal})
+  return fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.id,'content-type':'application/json'},body:JSON.stringify({}),signal:controller.signal})
     .then(response=>({status:response.status,aborted:false}),()=>({status:0,aborted:true}));
 }
 
@@ -113,7 +113,7 @@ test('disconnect after a real session insert releases both its persisted state a
 
 test('normal HTTP delivery retains its lease until the owner releases it, with idempotence and account isolation',async()=>{
   const owner=await register(),other=await register();
-  const response=await fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:owner.cookie, [PLATFORM_ACCOUNT_HEADER]: owner.id,'content-type':'application/json'},body:JSON.stringify({provider:'voice-fixture'})});
+  const response=await fetch(httpOrigin+prefix+'/voice/session',{method:'POST',headers:{origin,cookie:owner.cookie, [PLATFORM_ACCOUNT_HEADER]: owner.id,'content-type':'application/json'},body:JSON.stringify({})});
   assert.equal(response.status,200);const {sessionId}=await response.json() as {sessionId:string};
   assert.deepEqual(await state(owner),{leases:1,sessions:[{released:false}],attempts:1});
   for(const actor of [other,owner,owner]){

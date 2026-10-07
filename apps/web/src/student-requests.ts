@@ -1,8 +1,8 @@
 import type { AudioTranscriptReference, Capability, PlatformFeatures, PublicAudioTranscriptionReceipt, PublicCapabilities, PublicChatAttachmentSupport } from '@companion/platform-contracts';
-import { MAX_TRANSCRIPTION_AUDIO_BYTES } from './voice-transcription.ts';
+import { MAX_TRANSCRIPTION_AUDIO_BYTES } from './voice-audio-limits.ts';
 
-/** Preparation only: App, bootstrap and the existing HTTP endpoints do not use these helpers yet.
- * The future student channel supplies content and owned record references, never runtime choices.
+/** Active student chat/bootstrap and server-routed voice use these boundaries.
+ * Student input supplies content and owned record references, never runtime choices.
  * Deployment feature flags are not staff authorization or permission to override a model.
  */
 export interface StudentChatRequest {
@@ -11,7 +11,8 @@ export interface StudentChatRequest {
   audioTranscripts?: AudioTranscriptReference[];
 }
 export interface StudentVoiceSessionRequest { conversationId?: string; }
-/** docs/product/12 §5.1: the server reads the owned message; arbitrary speech text is not accepted. */
+/** Future student interview boundary (not mounted or sent by P0 App): docs/product/12 §5.1.
+ * The current internal workbench speech endpoint uses text-only input instead. */
 export interface StudentSpeechRequest { message_id: string; }
 export interface PublicAudioReceiptExpectation { id: string; name: string; mime: string; sha256?: string; receiptId?: string; }
 

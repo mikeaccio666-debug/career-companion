@@ -27,6 +27,9 @@ import { speechJobOptions, validateSpeechInput } from '../../../packages/ai-core
 import { assertWorkbenchAdmission } from './workbench-policy.ts';
 export { connectionFromUrl } from './queue-connection.ts';
 
+/** Trusted channel admission; never populated from job input or worker delivery. */
+export type JobAdmission = () => void;
+
 export function parseJob(value: unknown): CreateJobInput {
   const data = object(value);
   if(Object.keys(data).some(key=>!['kind','provider','prompt','model','options','attachmentIds','executionTemplate'].includes(key)))throw invalid('Unsupported task field.');
@@ -166,10 +169,10 @@ export class JobService {
     if(input.kind==='speech'&&!input.model){const provider=this.runtime.capabilities().find(item=>item.id===input.provider),model=provider?.modelsByCapability?.speech?.[0]??provider?.models[0];if(model)input={...input,model};}
     return (await this.preparedInput(userId,input,client,pendingReferenceCount)).input;
   }
-  async create(userId: string, input: CreateJobInput, originValue?: ConversationTaskCreationOrigin, signal?: AbortSignal, planOrigin?: GoalPlanTaskOrigin): Promise<{ job: Job; approval?: any }> {
+  async create(userId: string, input: CreateJobInput, originValue?: ConversationTaskCreationOrigin, signal?: AbortSignal, planOrigin?: GoalPlanTaskOrigin, admission?: JobAdmission): Promise<{ job: Job; approval?: any }> {
     signal?.throwIfAborted();
     if(originValue && planOrigin)throw invalid('A task must have one server origin.');
-    if(!planOrigin)assertWorkbenchAdmission(this.config,input.kind);
+    if(!planOrigin){admission?.();assertWorkbenchAdmission(this.config,input.kind);}
     const origin = originValue === undefined ? undefined : parseConversationTaskOrigin(originValue);
     if(origin&&(origin.tool==='prepare_browser_task'&&input.kind!=='browser'||origin.tool==='prepare_mcp_task'&&input.kind!=='mcp'))throw invalid('The server origin tool does not match the prepared task kind.');
     let prepared = planOrigin?undefined:await this.preparedInput(userId,input);
@@ -187,6 +190,7 @@ export class JobService {
           const review=(await client.query("SELECT * FROM platform_approvals WHERE job_id=$1 AND user_id=$2 AND generation=$3 AND status='pending' AND $4='needs_approval' ORDER BY created_at DESC LIMIT 1",[existing.id,userId,existing.generation,existing.status])).rows[0];
           return {job:mapJob(existing),...(review?{approval:mapApproval(review)}:{})};
         }
+        admission?.();
         assertWorkbenchAdmission(this.config,authorization.step!.input.task.kind);
         const resolved=await resolveGoalPlanInputs(client,this.storage,userId,authorization.step.input,authorization.rows!,signal);
         prepared=await this.preparedInput(userId,resolved.input,client);
@@ -265,13 +269,14 @@ export class JobService {
     });
     return this.get(userId,id);
   }
-  async retry(userId: string, id: string): Promise<Job> {
+  async retry(userId: string, id: string, admission?: JobAdmission): Promise<Job> {
     await this.db.transaction(async client => {
       await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[userId]);
       const result = await client.query('SELECT * FROM platform_jobs WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,userId]);
       if (!result.rowCount) throw notFound();
       const row = result.rows[0];
       if (!['failed','cancelled','uncertain'].includes(row.status)) throw new ApiError(409,'JOB_NOT_RETRYABLE','Only failed or cancelled tasks can be retried.');
+      admission?.();
       assertWorkbenchAdmission(this.config,row.kind);
       if(row.kind==='mcp'){
         if(await this.mcp.started(client,id))throw new ApiError(409,'MCP_REVIEW_REQUIRED','This MCP call already started and cannot be replayed by retry.');
@@ -296,7 +301,7 @@ export class JobService {
     });
     return this.get(userId,id);
   }
-  async decide(userId: string, id: string, decision: 'approved'|'rejected') {
+  async decide(userId: string, id: string, decision: 'approved'|'rejected', admission?: JobAdmission) {
     return this.db.transaction(async client => {
       const reference = await client.query('SELECT job_id FROM platform_approvals WHERE id=$1 AND user_id=$2',[id,userId]);
       if(!reference.rowCount)throw notFound();
@@ -314,6 +319,7 @@ export class JobService {
       if (!approval.job_id) throw new ApiError(409,'APPROVAL_NOT_EXECUTABLE','This action is not executable as a job.');
       if (!job.rowCount || job.rows[0].status!=='needs_approval') throw new ApiError(409,'JOB_NOT_AWAITING_APPROVAL','This task no longer awaits approval.');
       if(decision==='approved'){
+        admission?.();
         assertWorkbenchAdmission(this.config,job.rows[0].kind);
         const input=jobInput(job.rows[0]);if(input.kind==='mcp')await this.mcp.validateBinding(client,job.rows[0]);
         const workflowCheckpoint=await workflowTemplateCheckpoint(client,job.rows[0]);

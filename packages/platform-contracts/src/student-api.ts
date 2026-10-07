@@ -1,4 +1,9 @@
-import type { Capability, Message, VoiceRecord } from './index.ts';
+import type { Approval, Artifact, Capability, Conversation, Job, Message, VoiceRecord, WorkflowStep } from './index.ts';
+import type { ConversationTaskOrigin } from './conversation-tasks.ts';
+import type { GoalPlanContinuation, GoalPlanInputSnapshot, GoalPlanInputSource, GoalPlanReceipt, GoalPlanStatus, GoalPlanStepState, GoalPlanTaskBindings } from './plans.ts';
+import type { GoalPlanProposalSummary } from './goal-proposals.ts';
+import type { McpTaskSummary } from './mcp.ts';
+import type { JobOutcomeEvidence, JobOutcomeReviewRecord, JobOutcomeReviewPage } from './job-outcome-reviews.ts';
 import type { VoiceContextSnapshot } from './voice-context.ts';
 
 /** Deployment features do not assert a staff role, consent or execution authorization. */
@@ -64,6 +69,120 @@ export interface PublicMessage {
   attachments?: Message['attachments'];
   audioTranscripts?: PublicReviewedAudioTranscript[];
 }
+
+export interface PublicConversation {
+  id: string;
+  title: string;
+  createdAt: Conversation['createdAt'];
+  updatedAt: Conversation['updatedAt'];
+}
+
+/** Read-only execution facts; this DTO cannot reconstruct or authorize a task. */
+export interface PublicJob {
+  id: string;
+  kind: Job['kind'];
+  status: Job['status'];
+  progress: number;
+  attempt: number;
+  generation?: number;
+  artifacts: Artifact[];
+  createdAt: string;
+  updatedAt: string;
+  error?: PublicError;
+  mcp?: McpTaskSummary;
+  workflowSteps?: { index: number; kind: WorkflowStep['kind']; state: NonNullable<Job['workflowSteps']>[number]['state']; errorCode?: string }[];
+  workflowResumeAvailable?: boolean;
+  browserExecution?: NonNullable<Job['browserExecution']>;
+}
+
+/** An approval summary is not the reviewed arguments or a grant to execute. */
+export interface PublicApproval {
+  id: string;
+  jobId: string;
+  toolName?: string;
+  status: Approval['status'];
+  generation?: number;
+  createdAt: string;
+}
+
+/** The human-facing definition omits execution configuration. Its hash remains
+ * the original server definition hash, not a hash of this projection. */
+export interface PublicTaskDefinition {
+  kind: Job['kind'];
+  prompt: string;
+}
+export type PublicGoalPlanStepInput =
+  | { kind: 'task'; title: string; task: PublicTaskDefinition; bindings?: GoalPlanTaskBindings }
+  | { kind: 'agent_turn'; title: string; instruction: string };
+export interface PublicGoalPlanStep {
+  index: number;
+  input: PublicGoalPlanStepInput;
+  state: GoalPlanStepState;
+  ready: boolean;
+  blockReason?: string;
+  job?: PublicJob;
+  generation?: number;
+  approval?: PublicApproval;
+  artifacts: Artifact[];
+  messageId?: string;
+  receipt?: GoalPlanReceipt;
+  resolvedTask?: PublicTaskDefinition;
+  inputSources?: GoalPlanInputSource[];
+}
+export interface PublicGoalPlan {
+  id: string;
+  conversationId: string;
+  title: string;
+  goal: string;
+  revision: number;
+  status: GoalPlanStatus;
+  definitionHash: string;
+  steps: PublicGoalPlanStep[];
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt?: string;
+}
+export interface PublicGoalPlanList { plans: PublicGoalPlan[]; limit: number }
+export interface PublicGoalPlanContinuation extends GoalPlanContinuation {}
+export interface PublicGoalPlanInputSnapshot extends GoalPlanInputSnapshot {}
+export type PublicGoalPlanContinueResult =
+  | { kind: 'task'; plan: PublicGoalPlan; stepIndex: number; job: PublicJob; approval?: PublicApproval }
+  | { kind: 'agent_turn'; plan: PublicGoalPlan; stepIndex: number; continuation: PublicGoalPlanContinuation }
+  | { kind: 'existing'; plan: PublicGoalPlan; stepIndex: number };
+export interface PublicGoalPlanProposalSummary extends GoalPlanProposalSummary {}
+export interface PublicGoalPlanProposalList { proposals: PublicGoalPlanProposalSummary[]; nextBefore: string | null; limit: number }
+export interface PublicGoalPlanProposalResult { proposal: PublicGoalPlanProposalSummary }
+export interface PublicConversationTask { origin: ConversationTaskOrigin; job: PublicJob; generation: number; approval?: PublicApproval }
+export interface PublicConversationTaskPage { tasks: PublicConversationTask[]; nextBefore: string | null }
+
+export interface PublicWorkflowStep {
+  kind: WorkflowStep['kind'];
+  prompt: string;
+  referenceImages?: { fromStep: number; imageIndex?: number }[];
+}
+export interface PublicWorkflowTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  steps: PublicWorkflowStep[];
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Neutral control errors; this never rewrites user content or external results. */
+export interface PublicError { code: string; message: string; status?: number }
+export interface PublicToolProgress { messageId: string; name: string; status: 'started' | 'completed' }
+
+/** Unknown outcomes stay unknown. Provider handles are not disclosed or replaced. */
+export interface PublicJobOutcomeEvidence extends Omit<JobOutcomeEvidence, 'hasProviderTask' | 'reasons' | 'attempts' | 'workflow'> {
+  hasExternalTask: boolean;
+  reasons: (Exclude<JobOutcomeEvidence['reasons'][number], 'comfyui_submission_unknown' | 'model_relay_uncertain'> | 'external_submission_unknown' | 'analysis_result_unknown')[];
+  attempts: { attempt: number; status: JobOutcomeEvidence['attempts'][number]['status']; hasExternalTask: boolean }[];
+  workflow?: { scope: 'task_checkpoint'; revision: number; steps: { index: number; state: NonNullable<JobOutcomeEvidence['workflow']>['steps'][number]['state']; hasExternalTask: boolean }[] };
+}
+export interface PublicJobOutcomeReviewPage extends Omit<JobOutcomeReviewPage, 'evidence'> { evidence: PublicJobOutcomeEvidence | null }
+export interface PublicJobOutcomeReviewSaved { record: JobOutcomeReviewRecord }
 
 export interface PublicVoiceRecord {
   id: string;

@@ -13,7 +13,7 @@ import { accountUsage, chatAccounting } from '../src/chat-usage.ts';
 import { acquireRuntimeLease, recoverStaleStreams } from '../src/runtime-leases.ts';
 
 const prefix = '/api/platform', origin = 'http://localhost:4321';
-const base = readConfig(), schema = `chat_usage_test_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'usage-fixture', PLATFORM_AGENT_PROVIDER: 'usage-fixture' }), schema = `chat_usage_test_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -78,7 +78,7 @@ async function conversation(actor: Actor) {
   assert.equal(result.statusCode, 201, result.body); return result.json().conversation.id as string;
 }
 async function chat(actor: Actor, content: string, mode = 'chat') {
-  const id = await conversation(actor), result = await request(actor, 'POST', `/conversations/${id}/messages`, { content, provider: 'usage-fixture', mode });
+  const id = await conversation(actor), result = await request(actor, 'POST', `/conversations/${id}/messages`, { content, mode });
   assert.equal(result.statusCode, 200, result.body); return { id, result };
 }
 async function summary(actor: Actor) {
@@ -149,7 +149,7 @@ test('real HTTP disconnect cancels a pending call and releases its runtime lease
   const actor = await register(), id = await conversation(actor), abort = new AbortController();
   const begin = new Promise<void>(resolve => { started = resolve; });
   const response = await fetch(httpOrigin + prefix + `/conversations/${id}/messages`, { method: 'POST', headers: { cookie: actor.cookie, [PLATFORM_ACCOUNT_HEADER]: actor.userId, origin, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: 'wait', provider: 'usage-fixture', mode: 'chat' }), signal: abort.signal });
+    body: JSON.stringify({ content: 'wait', mode: 'chat' }), signal: abort.signal });
   assert.equal(response.status, 200); await begin;
   const pending = (await summary(actor)).chat; assert.equal(pending.pendingCalls, 1); assert.equal(pending.inputTokens, null);
   const reader = response.body!.getReader(); await reader.read(); abort.abort(); await reader.cancel().catch(() => {}); reader.releaseLock();

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowRight, AudioLines, Check, CircleStop, Headphones, MessageCircle, Mic, Play, Radio, Save, Upload, Volume2 } from 'lucide-react';
-import type { VoiceRecord, VoiceRecordInput, VoiceSessionRequest } from '@companion/platform-contracts';
+import type { VoiceRecord, VoiceRecordInput, VoiceSessionRequest, Capability } from '@companion/platform-contracts';
 import { entity, errorText, type BoundPlatformClient } from './api';
 import { useRequiredPlatformAccountClient } from './account-client';
 import { ArtifactView, Badge, ProviderSelect } from './ui';
@@ -10,14 +10,14 @@ import { excerptInput, quotedVoiceText, realtimeTurnCanSave, realtimeTurnStatusT
 import { applyRealtimeDraftResult, voiceDepartureNotice, type VoiceDraftHandle, type VoiceDraftEditor } from './voice-draft';
 import { disposeVoiceSession, microphoneErrorText, requestVoiceSession } from './voice-session';
 import { RealtimeContextBridge, RealtimeVoiceBootstrap } from './realtime-context';
-import { voiceCapabilities, voiceControls } from './voice-capabilities';
-import { appendTranscriptionText, transcribeAudio, TRANSCRIPTION_AUDIO_ACCEPT } from './voice-transcription';
+import { voiceControls } from './voice-capabilities';
+import { appendTranscriptionText, transcribeRoutedAudio, TRANSCRIPTION_AUDIO_ACCEPT } from './voice-transcription';
 import { BrowserVoiceRecording, supportedRecordingMimeType } from './voice-recording';
 import { holdPrivateResource } from './private-media';
-import { selectedConversationProvider, voiceAnswerSpeechProblem, voiceConversationFor, voiceConversationModels, voiceConversationProviderReady } from './voice-conversation';
+import { selectedConversationProvider, voiceConversationFor, voiceConversationModels } from './voice-conversation';
 import { VoicePlaybackController } from './voice-playback';
-import { copyVoicePreferences, retainedVoice, voiceAudioConfiguration, voicePersonality, voiceRealtimeBody, voiceSelectionProblem, voiceSpeechBody, type VoicePreferences } from './voice-personality';
-import { VoiceAudioLabel, VoicePersonalityPicker, VoiceSoundPicker, VoiceTurnTakingPicker } from './VoicePersonalityControls';
+import { voicePersonality } from './voice-personality';
+import { VoiceAudioLabel } from './VoicePersonalityControls';
 import './voice-conversation.css';
 import './voice-personality.css';
 interface Recognition { lang: string; continuous: boolean; interimResults: boolean; onresult: ((event: any) => void) | null; onerror: ((event: any) => void) | null; onend: (() => void) | null; start: () => void; stop: () => void }
@@ -25,6 +25,7 @@ type RecognitionConstructor = new () => Recognition;
 interface VoicePanelProps {
   draft: VoiceDraftHandle;
   providers: Provider[];
+  capabilities?: Readonly<Record<Capability, boolean>>;
   conversation?: Conversation;
   records: VoiceRecord[];
   onEnsureConversation: () => Promise<string>;
@@ -34,10 +35,10 @@ interface VoicePanelProps {
   onConversationChanged?: (conversationId: string) => void;
   onError: (error: string) => void;
 }
-export default function VoicePanel({ draft, providers, conversation, records, onEnsureConversation, onSaveRecord, onBringToChat: bringToChat, onOpenConversation: openConversation, onConversationChanged, onError }: VoicePanelProps) {
+export default function VoicePanel({ draft, providers, capabilities: publicCapabilities, conversation, records, onEnsureConversation, onSaveRecord, onBringToChat: bringToChat, onOpenConversation: openConversation, onConversationChanged, onError }: VoicePanelProps) {
   const accountClient = useRequiredPlatformAccountClient();
   const { request, streamMessage } = accountClient;
-  const { providerId, transcriptionProviderId, speechProviderId, chatProviderId, chatModel, voicePreferences, text, hasTranscription, speechSnapshot, turns, inputTranscriptionEnabled, notice, savedClientIds } = useSyncExternalStore(draft.subscribe, draft.getSnapshot);
+  const { providerId, transcriptionProviderId, speechProviderId, chatProviderId, chatModel, text, hasTranscription, speechSnapshot, turns, inputTranscriptionEnabled, notice, savedClientIds } = useSyncExternalStore(draft.subscribe, draft.getSnapshot);
   const voiceConversation = useMemo(() => voiceConversationFor(draft), [draft]);
   const playback = useMemo(() => new VoicePlaybackController(() => accountClient.isCurrent() && draft.isCurrent()), [accountClient, draft]);
   const playingCount = useSyncExternalStore(playback.subscribe, playback.getSnapshot);
@@ -54,7 +55,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   const [status, setStatus] = useState('');
   const recorder = useRef<BrowserVoiceRecording | null>(null);
   const audioInput = useRef<HTMLInputElement | null>(null);
-  const importChoice = useRef<{ origin: VoiceDraftEditor; provider: string } | null>(null);
+  const importChoice = useRef<{ origin: VoiceDraftEditor } | null>(null);
   const transcriptionRequest = useRef<AbortController | null>(null);
   const speechRequest = useRef<AbortController | null>(null);
   const microphone = useRef<MediaStream | null>(null);
@@ -81,21 +82,18 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     : !supportedRecordingMimeType((mime) => MediaRecorder.isTypeSupported(mime)) ? '当前浏览器没有可上传的录音格式。你仍可以导入音频转写。' : '';
   const canRecord = !microphoneProblem;
   const provider = providers.find((entry) => entry.id === providerId);
-  const capabilities = voiceCapabilities(provider);
+  const routeCapability = (capability: 'chat' | 'realtime' | 'transcription' | 'speech') => ({ available: publicCapabilities?.[capability] === true, reason: publicCapabilities?.[capability] === true ? '服务端已开启，实际调用结果以返回为准。' : '服务暂不可用，请刷新能力后再试。' });
+  const capabilities = { realtime: routeCapability('realtime') };
   const transcriptionProvider = providers.find((entry) => entry.id === transcriptionProviderId);
   const speechProvider = providers.find((entry) => entry.id === speechProviderId);
   const chatProvider = providers.find((entry) => entry.id === chatProviderId);
-  const transcriptionCapabilities = voiceCapabilities(transcriptionProvider);
-  const speechCapabilities = voiceCapabilities(speechProvider);
+  const transcriptionCapabilities = { transcription: routeCapability('transcription') };
+  const speechCapabilities = { speech: routeCapability('speech') };
   const turnBusy = voiceConversation.busy();
   const controls = voiceControls({ realtime: capabilities.realtime, transcription: transcriptionCapabilities.transcription, speech: speechCapabilities.speech }, { recording: recording || requestingMicrophone, recognizing, transcribing, speaking: speaking || turnBusy, live: live !== 'idle' }, { canRecord, canRecognize: !!recognitionType }, text);
   const busy = recording || requestingMicrophone || recognizing || transcribing || speaking || live !== 'idle' || turnBusy;
   const chatModels = voiceConversationModels(chatProvider);
-  const speechVoice = retainedVoice(voicePreferences, 'speech', speechProviderId);
-  const realtimeVoice = retainedVoice(voicePreferences, 'realtime', providerId);
-  const speechVoiceProblem = voiceSelectionProblem(speechProvider, 'speech', speechVoice);
-  const realtimeVoiceProblem = voiceSelectionProblem(provider, 'realtime', realtimeVoice);
-  const answerSpeechProblem = speechVoiceProblem || voiceAnswerSpeechProblem(turn.answer, speechProvider);
+  const answerSpeechProblem = !speechCapabilities.speech.available ? '朗读服务暂不可用。' : !turn.answer.trim() || turn.answer.length > 4000 ? '收到 4,000 字以内的完整回答后，可以生成朗读。' : '';
   const allRealtimeInputs = turns.filter(realtimeTurnCanSave).flatMap((turn) => turn.inputs);
   const hasUnsavedTurns = allRealtimeInputs.some((input) => !savedIds.has(input.clientRecordId));
   const currentOrigin = (origin: VoiceDraftEditor) => accountClient.isCurrent() && origin.isCurrent();
@@ -106,7 +104,6 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   function setSpeechProviderId(id: string) { editor.current.update((value) => ({ ...value, speechProviderId: id })); }
   function setChatProviderId(id: string) { editor.current.update((value) => ({ ...value, chatProviderId: id })); }
   function setChatModel(model: string) { editor.current.update((value) => ({ ...value, chatModel: model })); }
-  function setVoicePreferences(change: (preferences: VoicePreferences) => VoicePreferences) { if (!busy && !voiceConversation.busy() && !connectionActive.current && !savingActive.current && !microphonePending.current && !Object.values(activeWork.current).some(Boolean)) editor.current.update((value) => ({ ...value, voicePreferences: change(value.voicePreferences) })); }
   function setText(content: string) { editor.current.update((value) => ({ ...value, text: content, notice: '' })); }
   useEffect(() => {
     // The retained legacy voice choice may have been a speech-only service.
@@ -176,14 +173,14 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   function currentTranscriptInput() {
     return editor.current.transcript();
   }
-  async function transcribe(audio: Blob, source: '录音' | '音频文件', origin: VoiceDraftEditor, chosenProvider: string) {
+  async function transcribe(audio: Blob, source: '录音' | '音频文件', origin: VoiceDraftEditor) {
     if (!currentOrigin(origin) || transcriptionRequest.current || microphonePending.current) return;
-    const capability = voiceCapabilities(providers.find((entry) => entry.id === chosenProvider)).transcription;
+    const capability = routeCapability('transcription');
     if (!capability.available) { onError(capability.reason); return; }
     const controller = new AbortController(); transcriptionRequest.current = controller; pendingRequests.current.add(controller);
-    activeWork.current.transcribing = true; setTranscribing(true); setStatus(`正在将${source}交给所选服务转写；原有文字会保留。`);
+    activeWork.current.transcribing = true; setTranscribing(true); setStatus(`正在将${source}交给服务端固定路线转写；原有文字会保留。`);
     try {
-      const result = await transcribeAudio(audio, chosenProvider, controller.signal, request);
+      const result = await transcribeRoutedAudio(audio, controller.signal, request);
       if (!currentOrigin(origin)) return;
       if (!result) { setStatus('没有检测到清晰的语音；原有文字已保留，没有新增摘录。'); return; }
       if (origin.update((value) => ({ ...value, text: appendTranscriptionText(value.text, result), hasTranscription: true, notice: '' }))) setStatus(`${source}已转成文字；请审阅后保存或带回对话草稿。`);
@@ -196,21 +193,21 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   }
   function chooseAudio() {
     if (controls.importDisabled || microphonePending.current || !currentOrigin(editor.current)) return;
-    importChoice.current = { origin: editor.current, provider: transcriptionProviderId };
+    importChoice.current = { origin: editor.current };
     audioInput.current?.click();
   }
   function importAudio(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0], choice = importChoice.current;
     event.currentTarget.value = ''; importChoice.current = null;
-    if (!file || !choice || !currentOrigin(choice.origin) || controls.importDisabled || microphonePending.current || choice.provider !== transcriptionProviderId) return;
-    void transcribe(file, '音频文件', choice.origin, choice.provider);
+    if (!file || !choice || !currentOrigin(choice.origin) || controls.importDisabled || microphonePending.current) return;
+    void transcribe(file, '音频文件', choice.origin);
   }
   async function startRecording() {
     if (!currentOrigin(editor.current) || microphonePending.current || transcriptionRequest.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
     if (!canRecord) { onError(microphoneProblem); return; }
     if (!transcriptionCapabilities.transcription.available) { onError(transcriptionCapabilities.transcription.reason); return; }
     playback.pauseAll();
-    const origin = editor.current, chosenProvider = transcriptionProviderId;
+    const origin = editor.current;
     microphonePending.current = true; setRequestingMicrophone(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -223,7 +220,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
           if (recorder.current === instance) recorder.current = null;
           activeWork.current.recording = false; setRecording(false);
         },
-        onComplete: (audio) => { void transcribe(audio, '录音', origin, chosenProvider); },
+        onComplete: (audio) => { void transcribe(audio, '录音', origin); },
         onError: (message) => { setStatus('录音未完成，原有文字仍在。'); onError(message); },
       });
       recorder.current = instance;
@@ -256,16 +253,16 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     const spokenText = text.trim();
     if (!spokenText) return;
     if (!speechCapabilities.speech.available) { onError(speechCapabilities.speech.reason); return; }
-    const speechProblem = speechVoiceProblem || voiceAnswerSpeechProblem(spokenText, speechProvider); if (speechProblem) { onError(speechProblem); return; }
+    const speechProblem = spokenText.length > 4000 ? '朗读每次最多 4,000 字。' : ''; if (speechProblem) { onError(speechProblem); return; }
     const origin = editor.current, controller = new AbortController(); pendingRequests.current.add(controller);
-    const roleId = voicePreferences.roleId, body = voiceSpeechBody(speechProvider!, spokenText, roleId, speechVoice), audioConfiguration = voiceAudioConfiguration(speechProvider!, roleId, speechVoice);
+    const body = { text: spokenText };
     speechRequest.current = controller;
     activeWork.current.speaking = true; setSpeaking(true);
     try {
       const result = entity<Artifact>(await request('/voice/speech', { method: 'POST', body: JSON.stringify(body), signal: controller.signal }), 'attachment');
       if (!currentOrigin(origin)) return;
       if (!result.url || !result.id) throw new Error('语音服务没有返回音频记录。');
-      if (origin.update((value) => ({ ...value, speechSnapshot: { audio: result, input: excerptInput('speech_excerpt', spokenText, [result.id]), audioConfiguration }, notice: '' }))) setStatus('语音已生成，可以播放，或明确保存朗读文本与音频');
+      if (origin.update((value) => ({ ...value, speechSnapshot: { audio: result, input: excerptInput('speech_excerpt', spokenText, [result.id]) }, notice: '' }))) setStatus('语音已生成，可以播放，或明确保存朗读文本与音频');
     } catch (error) { if (currentOrigin(origin)) { if (controller.signal.aborted) setStatus('朗读生成已取消，原有文字和音频仍可查看。'); else onError(errorText(error)); } }
     finally { pendingRequests.current.delete(controller); if (speechRequest.current === controller) speechRequest.current = null; if (currentOrigin(origin)) { activeWork.current.speaking = false; setSpeaking(false); } }
   }
@@ -273,14 +270,14 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     if (!currentOrigin(editor.current) || microphonePending.current || Object.values(activeWork.current).some(Boolean) || voiceConversation.busy()) return;
     const origin = editor.current;
     try {
-      await voiceConversation.answer({ text, roleId: voicePreferences.roleId, provider: chatProvider, model: chatModel, conversation, ensureConversation: onEnsureConversation, onConversationChanged }, { request, streamMessage });
+      await voiceConversation.answer({ text, available: publicCapabilities?.chat === true, conversation, ensureConversation: onEnsureConversation, onConversationChanged }, { request, streamMessage });
     } catch (error) { if (currentOrigin(origin)) onError(errorText(error)); }
   }
   async function speakAnswer() {
     if (!currentOrigin(editor.current) || microphonePending.current || Object.values(activeWork.current).some(Boolean) || voiceConversation.busy()) return;
     const origin = editor.current;
     try {
-      await voiceConversation.speak(speechProvider, { request, streamMessage }, speechVoice);
+      await voiceConversation.speak({ request, streamMessage }, speechCapabilities.speech.available);
       const current = voiceConversation.getSnapshot();
       if (currentOrigin(origin) && current.audio && !current.speechError) {
         const input = { ...excerptInput('speech_excerpt', current.answer, [current.audio.id]), role: 'assistant' as const };
@@ -292,16 +289,15 @@ export default function VoicePanel({ draft, providers, conversation, records, on
   async function startLive() {
     if (!currentOrigin(editor.current) || microphonePending.current || voiceConversation.busy() || Object.values(activeWork.current).some(Boolean)) return;
     if (!capabilities.realtime.available) { onError(capabilities.realtime.reason); return; }
-    if (realtimeVoiceProblem) { onError(realtimeVoiceProblem); return; }
     if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') { onError('当前浏览器不支持实时语音所需的麦克风或 WebRTC。'); return; }
     playback.pauseAll();
-    const origin = editor.current, preferences = copyVoicePreferences(voicePreferences), controller = new AbortController();
+    const origin = editor.current, controller = new AbortController();
     sessionCreation.current = controller; pendingRequests.current.add(controller);
     setLive('connecting'); connectionActive.current = true; activeWork.current.realtime = true;
     const attempt = ++connectionAttempt.current;
     const stillActive = () => currentOrigin(origin) && connectionActive.current && connectionAttempt.current === attempt;
     try {
-      const sessionBody: VoiceSessionRequest = { ...voiceRealtimeBody(provider!, preferences), ...(includeConversation && conversation ? { conversationId: conversation.id } : {}) };
+      const sessionBody: VoiceSessionRequest = { ...(includeConversation && conversation ? { conversationId: conversation.id } : {}) };
       const session = await requestVoiceSession(sessionBody, controller.signal, stillActive, request, (sessionId) => { accountClient.cleanup('/voice/session/release', { body: JSON.stringify({ sessionId }) }).catch(() => {}); });
       if (!session) return;
       sessionLease.current = session.sessionId ? { sessionId: session.sessionId, client: accountClient } : null;
@@ -321,7 +317,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
       const playRemote = () => { speaker.play().catch(() => { if (stillActive()) setStatus('浏览器阻止自动播放，请点击播放对话音频'); }); };
       const bootstrap = new RealtimeVoiceBootstrap(bridge, stream.getTracks(), {
         isCurrent: () => stillActive() && peer.current === pc,
-        ready: () => { speaker.autoplay = true; if (speaker.srcObject) playRemote(); setLive('connected'); setStatus(sessionBody.conversationId ? `已接上当前对话的 ${bridge.count} 条文字${bridge.truncated ? '（部分历史未带入）' : ''}，可以开口了` : `已连接实时语音 · ${session.model}`); },
+        ready: () => { speaker.autoplay = true; if (speaker.srcObject) playRemote(); setLive('connected'); setStatus(sessionBody.conversationId ? `已接上当前对话的 ${bridge.count} 条文字${bridge.truncated ? '（部分历史未带入）' : ''}，可以开口了` : '已连接实时语音'); },
         failed: (message) => { stopLive(); onError(message); },
       }); voiceBootstrap.current = bootstrap;
       pc.ontrack = (event) => { if (!stillActive()) return; speaker.srcObject = event.streams[0]; if (bootstrap.ready) playRemote(); };
@@ -340,7 +336,7 @@ export default function VoicePanel({ draft, providers, conversation, records, on
           if (bootstrap.receive(entry) || !stillActive()) return;
           const forwarded = bridge.forTranscript(entry); if (forwarded === undefined) return;
           const result = buffer.receive(forwarded);
-          const captured = [...priorTurns, ...buffer.turns().map((turn) => ({ ...turn, ...(sessionBody.persona ? { voiceRoleId: preferences.roleId } : {}) }))];
+          const captured = [...priorTurns, ...buffer.turns()];
           const applied = applyRealtimeDraftResult(origin, captured, result, () => { stopLive(); onError('本次实时转写已达到保存上限或回执格式无效，连接已结束。请审阅仍可保存的片段。'); });
           if (applied.limitReached) return;
           if (entry.type === 'error') onError(entry.error?.message || '实时语音服务返回错误。');
@@ -364,17 +360,14 @@ export default function VoicePanel({ draft, providers, conversation, records, on
     <h1>有些想法，<span>说出来更好。</span></h1>
     <p className="page-description">实时交流、录音转写，或把文字变成声音。每次麦克风连接都由你开始。</p>
     <div className="voice-playback-control"><p role="status" aria-live="polite">{playingCount ? `正在播放 ${playingCount} 段语音` : '没有正在播放的语音'}</p><button type="button" className="secondary" onClick={() => playback.pauseAll()} disabled={!playingCount}><CircleStop size={16} />停止播放</button></div>
-    <VoicePersonalityPicker value={voicePreferences.roleId} disabled={busy || saving} onChange={(roleId) => setVoicePreferences((value) => ({ ...value, roleId }))} />
+    <p className="helper-text">内部语音工具使用服务端固定配置；本页不选择模型、声线、人格或轮转方式。旧本地偏好不用于本轮请求。</p>
     <div className="voice-hero"><div className={`voice-orb ${live !== 'idle' || recording || recognizing ? 'active' : ''}`}><AudioLines size={54} strokeWidth={1.4} /></div><div>
       <Badge tone={live === 'connected' ? 'green' : 'neutral'}>{live === 'connected' ? '正在实时对话' : live === 'connecting' ? '建立连接中' : '准备好时，开口就好'}</Badge><h2>你的声音，也是一种输入。</h2><p>自然地思考、练习表达，和 AI 一起推进一个想法。</p>
-      <ProviderSelect providers={providers} value={providerId} onChange={setProviderId} capability="realtime" label="实时语音服务" disabled={busy} />
-      <VoiceSoundPicker provider={provider} capability="realtime" value={realtimeVoice} disabled={busy || saving} onChange={(voice) => setVoicePreferences((value) => ({ ...value, realtimeVoices: { ...value.realtimeVoices, [providerId]: voice } }))} />
-      <VoiceTurnTakingPicker provider={provider} value={voicePreferences.turnTaking} disabled={busy || saving} onChange={(turnTaking) => setVoicePreferences((value) => ({ ...value, turnTaking }))} />
-      {realtimeVoiceProblem && <p className="helper-text">{realtimeVoiceProblem}</p>}
+      <ProviderSelect providers={providers} value={providerId} onChange={setProviderId} capability="realtime" label="实时语音服务（只读目录）" disabled />
       <p id="voice-realtime-availability" aria-live="polite">实时对话：{capabilities.realtime.reason}</p>
-      {conversation && <label className="helper-text"><input type="checkbox" checked={includeConversation} disabled={busy || saving} onChange={(event) => setIncludeConversation(event.target.checked)} />继续当前对话的最近文字</label>}
+      {conversation && <label className="helper-text"><input type="checkbox" checked={includeConversation} disabled onChange={(event) => setIncludeConversation(event.target.checked)} />继续当前对话的最近文字</label>}
       {includeConversation && conversation && <p className="helper-text">本次连接会带入最近最多 20 条已完成的文字消息。文件、语音摘录和已保存记忆不会随本次连接传递；连接完成后再开启麦克风。</p>}
-      <div className="voice-controls">{live === 'idle' ? <button className="primary" onClick={startLive} disabled={controls.realtimeDisabled || !!realtimeVoiceProblem} aria-describedby="voice-realtime-availability"><Radio size={16} />开始实时对话</button> : <button className="primary stop" onClick={stopLive}><CircleStop size={16} />结束实时对话</button>}<button className="secondary" onClick={() => remoteAudio.current?.play()} disabled={live !== 'connected'}><Headphones size={16} />播放对话音频</button></div>
+      <div className="voice-controls">{live === 'idle' ? <button className="primary" onClick={startLive} disabled={controls.realtimeDisabled} aria-describedby="voice-realtime-availability"><Radio size={16} />开始实时对话</button> : <button className="primary stop" onClick={stopLive}><CircleStop size={16} />结束实时对话</button>}<button className="secondary" onClick={() => remoteAudio.current?.play()} disabled={live !== 'connected'}><Headphones size={16} />播放对话音频</button></div>
     </div></div>
     {status && <div className="voice-status" aria-live="polite">{status}</div>}
     {notice && <div className="voice-status" aria-live="polite">{notice}</div>}
@@ -386,26 +379,24 @@ export default function VoicePanel({ draft, providers, conversation, records, on
       {!!allRealtimeInputs.length && <button className="secondary" disabled={saving || live !== 'idle' || !hasUnsavedTurns} onClick={() => saveInputs(allRealtimeInputs)}><Save size={14} />{saving ? '保存中…' : hasUnsavedTurns ? '保存全部完整片段' : '完整片段已保存'}</button>}
     </section>}
     <div className="voice-editor"><div className="section-title"><h3>逐回合语音交流</h3><span>听清 · 审阅 · 回答 · 朗读</span></div>
-      <p className="helper-text">录音或导入音频后，先审阅文字，再明确发送这一轮问题。你可以分别选择转写、对话和朗读服务。</p>
-      <div className="voice-service-row"><span>录音转写</span><ProviderSelect providers={providers} value={transcriptionProviderId} onChange={setTranscriptionProviderId} capability="transcription" label="录音转写服务" disabled={busy} /></div>
+      <p className="helper-text">录音或导入音频后，先审阅文字，再明确发送这一轮问题。转写、对话和朗读均使用服务端固定配置。</p>
+      <div className="voice-service-row"><span>录音转写</span><ProviderSelect providers={providers} value={transcriptionProviderId} onChange={setTranscriptionProviderId} capability="transcription" label="录音转写服务（只读目录）" disabled /></div>
       <textarea aria-label="语音文本" maxLength={8000} value={text} onChange={(event) => setText(event.target.value)} disabled={turnBusy} placeholder="录下一段话，审阅转写后让 AI 回答，或直接输入问题…" rows={6} />
       <div className="voice-toolbar"><div>{recognitionType && <button className="secondary" onClick={() => recognizing ? recognition.current?.stop() : startRecognition()} disabled={controls.recognitionDisabled || !recognizing && busy} aria-describedby="voice-browser-recognition"><Mic size={15} />{recognizing ? '结束听写' : '浏览器听写'}</button>}<button className="secondary" disabled={requestingMicrophone || controls.recordingDisabled} aria-describedby="voice-transcription-availability voice-microphone-availability" onClick={() => recording ? recorder.current?.stop() : startRecording()}>{recording ? <CircleStop size={15} /> : <Mic size={15} />}{recording ? '结束并转写' : requestingMicrophone ? '等待麦克风…' : transcribing ? '转写中…' : '录音转文字'}</button>{recording && <button className="secondary" onClick={cancelRecording}><CircleStop size={15} />取消录音</button>}<button className="secondary" onClick={chooseAudio} disabled={controls.importDisabled} aria-describedby="voice-transcription-availability"><Upload size={15} />导入音频转写</button>{transcribing && <button className="secondary" onClick={() => transcriptionRequest.current?.abort()}><CircleStop size={15} />取消转写</button>}<input ref={audioInput} type="file" accept={TRANSCRIPTION_AUDIO_ACCEPT} onChange={importAudio} hidden aria-label="选择转写音频" /></div></div>
       {microphoneProblem && <p className="helper-text" id="voice-microphone-availability">{microphoneProblem}</p>}
-      <p className="helper-text">导入音频最多 20 MiB，交给当前所选服务转写。音频不会自动保存；文字仍需审阅后明确保存。</p>
+      <p className="helper-text">导入音频最多 20 MiB，交给当前服务端固定路线转写。音频不会自动保存；文字仍需审阅后明确保存。</p>
       <p className="helper-text" id="voice-transcription-availability" aria-live="polite">录音转写：{transcriptionCapabilities.transcription.reason}</p>
-      <div className="voice-answer-controls"><div className="voice-service-row"><span>AI 对话</span><ProviderSelect providers={providers} value={chatProviderId} onChange={(id) => { setChatProviderId(id); setChatModel(voiceConversationModels(providers.find((entry) => entry.id === id))[0] || ''); }} capability="chat" label="语音交流对话服务" disabled={busy} /><label className="voice-model-choice"><span>模型</span><select aria-label="语音交流对话模型" value={chatModel} onChange={(event) => setChatModel(event.target.value)} disabled={busy}><option value="">选择模型</option>{chatModel && !chatModels.includes(chatModel) && <option value={chatModel}>{chatModel} · 当前不可用</option>}{chatModels.map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div>
+      <div className="voice-answer-controls"><div className="voice-service-row"><span>AI 对话</span><ProviderSelect providers={providers} value={chatProviderId} onChange={(id) => { setChatProviderId(id); setChatModel(voiceConversationModels(providers.find((entry) => entry.id === id))[0] || ''); }} capability="chat" label="语音交流对话服务（只读目录）" disabled /><label className="voice-model-choice"><span>模型</span><select aria-label="语音交流对话模型" value={chatModel} onChange={(event) => setChatModel(event.target.value)} disabled><option value="">选择模型</option>{chatModel && !chatModels.includes(chatModel) && <option value={chatModel}>{chatModel} · 当前不可用</option>}{chatModels.map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div>
         {conversation?.mode === 'agent' && <p className="helper-text">请开启普通或陪伴会话进行语音交流。</p>}
-        {!voiceConversationProviderReady(chatProvider, 'chat') && <p className="helper-text">对话服务待配置或未启用，请选择可用服务。</p>}
-        <div className="voice-excerpt-actions"><button className="primary" onClick={answerQuestion} disabled={busy || !text.trim() || !voiceConversationProviderReady(chatProvider, 'chat') || !chatModels.includes(chatModel) || conversation?.mode === 'agent' || voiceConversation.alreadySent(text, conversation?.id)}><MessageCircle size={15} />{turn.stage === 'preparing' ? '准备会话…' : turn.stage === 'answering' ? 'AI 回答中…' : '发送这一轮问题'}</button>{turnBusy && <button className="secondary" onClick={() => voiceConversation.cancel()}><CircleStop size={15} />{turn.stage === 'speaking' ? '停止朗读生成' : '停止回答'}</button>}{!busy && text && <button className="text-button" onClick={() => { setText(''); editor.current.update((value) => ({ ...value, hasTranscription: false, transcriptInput: null })); }}>清空文字，准备下一轮</button>}</div>
+        {!publicCapabilities?.chat && <p className="helper-text">对话服务待配置或未启用，请刷新能力后再试。</p>}
+        <div className="voice-excerpt-actions"><button className="primary" onClick={answerQuestion} disabled={busy || !text.trim() || !publicCapabilities?.chat || conversation?.mode === 'agent' || voiceConversation.alreadySent(text, conversation?.id)}><MessageCircle size={15} />{turn.stage === 'preparing' ? '准备会话…' : turn.stage === 'answering' ? 'AI 回答中…' : '发送这一轮问题'}</button>{turnBusy && <button className="secondary" onClick={() => voiceConversation.cancel()}><CircleStop size={15} />{turn.stage === 'speaking' ? '停止朗读生成' : '停止回答'}</button>}{!busy && text && <button className="text-button" onClick={() => { setText(''); editor.current.update((value) => ({ ...value, hasTranscription: false, transcriptInput: null })); }}>清空文字，准备下一轮</button>}</div>
         {voiceConversation.alreadySent(text, conversation?.id) && <p className="helper-text">这段问题已经发送，未自动重发。查看会话中的结果，或清空文字准备下一轮。</p>}
       </div>
-      <div className="voice-service-row"><span>文字朗读</span><ProviderSelect providers={providers} value={speechProviderId} onChange={setSpeechProviderId} capability="speech" label="文字朗读服务" disabled={busy} /></div>
-      <VoiceSoundPicker provider={speechProvider} capability="speech" value={speechVoice} disabled={busy || saving} onChange={(voice) => setVoicePreferences((value) => ({ ...value, speechVoices: { ...value.speechVoices, [speechProviderId]: voice } }))} />
-      {speechVoiceProblem && <p className="helper-text">{speechVoiceProblem}</p>}
+      <div className="voice-service-row"><span>文字朗读</span><ProviderSelect providers={providers} value={speechProviderId} onChange={setSpeechProviderId} capability="speech" label="文字朗读服务（只读目录）" disabled /></div>
       <p className="helper-text" id="voice-speech-availability" aria-live="polite">语音合成：{speechCapabilities.speech.reason}</p>
-      {speechProvider?.id === 'kokoro' && <p className="helper-text">Kokoro 目前只支持美式英语朗读。可以用英语交流练习；其他语言的文字仍可保存。</p>}
-      <div className="voice-excerpt-actions"><button className="secondary" onClick={speak} disabled={controls.speechDisabled || !!speechVoiceProblem} aria-describedby="voice-speech-availability"><Volume2 size={15} />{speaking ? '朗读生成中…' : '朗读编辑框文字'}</button>{speaking && <button className="secondary" onClick={() => speechRequest.current?.abort()}><CircleStop size={15} />取消朗读生成</button>}</div>
-      {recognitionType && <p className="helper-text" id="voice-browser-recognition">浏览器听写由浏览器提供，独立于所选语音服务。</p>}
+
+      <div className="voice-excerpt-actions"><button className="secondary" onClick={speak} disabled={controls.speechDisabled} aria-describedby="voice-speech-availability"><Volume2 size={15} />{speaking ? '朗读生成中…' : '朗读编辑框文字'}</button>{speaking && <button className="secondary" onClick={() => speechRequest.current?.abort()}><CircleStop size={15} />取消朗读生成</button>}</div>
+      {recognitionType && <p className="helper-text" id="voice-browser-recognition">浏览器听写由浏览器提供，独立于服务端语音配置。</p>}
       {text.length > 4000 && <p className="helper-text">朗读合成每次最多 4,000 字；转写摘录最多保存 8,000 字，请审阅后编辑。</p>}
       {hasTranscription && <><p className="voice-provenance">录音、听写或你修改后的文字会作为客户端摘录保存，未经服务端核验。音频不会自动加入摘录。</p><div className="voice-excerpt-actions"><button className="secondary" disabled={saving || !text.trim() || text.length > 8000 || transcribing || recording || recognizing} onClick={() => saveInputs([currentTranscriptInput()])}><Save size={14} />{saving ? '保存中…' : '保存转写摘录'}</button><button className="text-button" disabled={!text.trim() || saving} onClick={() => onBringToChat(quotedVoiceText('transcription_excerpt', text.trim(), 'user'))}><ArrowRight size={14} />带回对话草稿</button></div></>}
       {speechSnapshot && speechSnapshot.audio.id !== turn.audio?.id && <div className="speech-snapshot"><ArtifactView artifact={speechSnapshot.audio} voicePlayback={playback} />{speechSnapshot.audioConfiguration && <VoiceAudioLabel configuration={speechSnapshot.audioConfiguration} />}<p className="voice-provenance">保存的是此次合成使用的文本和生成音频。编辑上方文字不会改变这份摘录。</p><p className="speech-snapshot-text">{speechSnapshot.input.text}</p><button className="secondary" disabled={saving || savedIds.has(speechSnapshot.input.clientRecordId)} onClick={() => saveInputs([speechSnapshot.input])}><Save size={14} />{savedIds.has(speechSnapshot.input.clientRecordId) ? '朗读摘录已保存' : '保存朗读文本与音频'}</button></div>}

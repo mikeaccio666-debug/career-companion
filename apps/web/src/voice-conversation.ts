@@ -1,6 +1,6 @@
 import type { StreamEvent } from './api.ts';
 import type { Artifact, Conversation, Provider } from './types.ts';
-import { voiceAudioConfiguration, voicePersonalityId, voicePersona, voiceSpeechBody, type VoiceAudioConfiguration, type VoicePersonalityId } from './voice-personality.ts';
+import { type VoiceAudioConfiguration, type VoicePersonalityId } from './voice-personality.ts';
 
 export type VoiceConversationStage = 'idle' | 'preparing' | 'answering' | 'complete' | 'failed' | 'cancelled' | 'speaking';
 export interface VoiceConversationSnapshot {
@@ -69,20 +69,19 @@ export class VoiceConversationSession {
   busy() { return !!this.operation; }
   alreadySent(text: string, conversationId?: string | null) { return !!this.lastDispatch && this.lastDispatch.text === text.trim() && (!conversationId || this.lastDispatch.conversationId === conversationId); }
 
-  async answer(input: { text: string; roleId?: VoicePersonalityId; provider?: Provider; model: string; conversation?: Conversation; ensureConversation: () => Promise<string>; onConversationChanged?: (id: string) => void }, transport: VoiceConversationTransport): Promise<void> {
+  async answer(input: { text: string; available: boolean; conversation?: Conversation; ensureConversation: () => Promise<string>; onConversationChanged?: (id: string) => void }, transport: VoiceConversationTransport): Promise<void> {
     if (!this.current()) aborted();
     if (this.operation) throw new Error('请先结束当前语音回合。');
     if (input.conversation?.mode === 'agent') throw new Error('请为语音交流开启普通或陪伴会话，再审阅并发送问题。');
     const question = input.text.trim();
     if (!safeText(question, 8000) || !question) throw new Error('请先审阅这轮问题，最多 8,000 字。');
-    if (!voiceConversationProviderReady(input.provider, 'chat') || !voiceConversationModels(input.provider).includes(input.model)) throw new Error('请选择已配置的对话服务和对应模型。');
+    if (input.available !== true) throw new Error('对话服务尚未开启或配置，请刷新能力后再试。');
     if (this.alreadySent(question, input.conversation?.id)) throw new Error('这段问题已经发送过。请查看会话中的保存结果；没有自动重发。');
     const controller = new AbortController(), epoch = this.epoch;
     this.operation = controller;
     const active = () => this.current() && this.epoch === epoch && this.operation === controller;
     const check = () => { if (!active() || controller.signal.aborted) aborted(); };
-    const roleId = voicePersonalityId(input.roleId), persona = voicePersona(roleId);
-    this.update({ ...empty(), stage: 'preparing', question, roleId });
+    this.update({ ...empty(), stage: 'preparing', question, roleId: null });
     let target: string | null = null;
     let completed: { id: string; content: string } | null = null;
     try {
@@ -90,7 +89,7 @@ export class VoiceConversationSession {
       if (!target || target.length > 100) throw new Error('会话尚未准备好，请重新选择会话。');
       this.lastDispatch = { conversationId: target, text: question };
       this.update({ conversationId: target, stage: 'answering', dispatched: true });
-      await transport.streamMessage(target, { content: question, mode: input.conversation?.mode === 'companion' ? 'companion' : 'chat', provider: input.provider!.id, model: input.model, attachmentIds: [], persona }, controller.signal, ({ event, data }) => {
+      await transport.streamMessage(target, { content: question, attachmentIds: [] }, controller.signal, ({ event, data }) => {
         check();
         if (event === 'start') {
           if (typeof data?.messageId !== 'string' || !data.messageId || data.messageId.length > 100 || this.snapshot.messageId && this.snapshot.messageId !== data.messageId) throw new Error('回答的会话记录不一致，请查看已保存的会话。');
@@ -118,14 +117,14 @@ export class VoiceConversationSession {
     }
   }
 
-  async speak(provider: Provider | undefined, transport: VoiceConversationTransport, retainedVoice = ''): Promise<void> {
+  async speak(transport: VoiceConversationTransport, available: boolean): Promise<void> {
     if (!this.current()) aborted();
     if (this.operation) throw new Error('请先结束当前语音回合。');
     if (!this.snapshot.complete) throw new Error('只有完整回答可以生成朗读。');
-    const problem = voiceAnswerSpeechProblem(this.snapshot.answer, provider); if (problem) throw new Error(problem);
-    const roleId = this.snapshot.roleId || 'warm';
-    const body = voiceSpeechBody(provider!, this.snapshot.answer, roleId, retainedVoice);
-    const audioConfiguration = voiceAudioConfiguration(provider!, roleId, retainedVoice);
+    if (available !== true) throw new Error('朗读服务暂不可用。');
+    if (!this.snapshot.answer.trim() || this.snapshot.answer.length > 4000) throw new Error('完整回答需在 4,000 字以内才能朗读。');
+    const body = { text: this.snapshot.answer };
+    const audioConfiguration = null;
     const controller = new AbortController(), epoch = this.epoch, answer = this.snapshot.answer;
     this.operation = controller;
     const active = () => this.current() && this.epoch === epoch && this.operation === controller;

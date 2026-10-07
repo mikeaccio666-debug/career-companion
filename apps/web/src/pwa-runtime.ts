@@ -126,6 +126,7 @@ export interface WorkspaceBootstrap<Options> {
   account: unknown | null;
   health: PromiseSettledResult<unknown>;
   capabilities: PromiseSettledResult<unknown>;
+  features: PromiseSettledResult<unknown>;
 }
 /** Explicitly read-only initialization, bounded even if a transport ignores abort. */
 export async function readWorkspaceBootstrap<Options>(
@@ -147,8 +148,8 @@ export async function readWorkspaceBootstrap<Options>(
     const operation = Promise.all([
       read('/auth/options', controller.signal).then(parseOptions),
       read('/auth/me', controller.signal).catch((failure) => { if (isAnonymous(failure)) return null; throw failure; }),
-      Promise.allSettled([read('/ready', controller.signal), read('/capabilities', controller.signal)]),
-    ]).then(([options, account, publicResults]) => ({ options, account, health: publicResults[0], capabilities: publicResults[1] }));
+      Promise.allSettled([read('/ready', controller.signal), read('/capabilities', controller.signal), read('/features', controller.signal)]),
+    ]).then(([options, account, publicResults]) => ({ options, account, health: publicResults[0], capabilities: publicResults[1], features: publicResults[2] }));
     const result = await Promise.race([operation, aborted]);
     if (signal.aborted || controller.signal.aborted) throw new DOMException('Connection cancelled.', 'AbortError');
     return result;
