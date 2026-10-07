@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAccountEmailConfig, type AccountEmailConfig } from './account-mail.ts';
 import { readMcpConfig, type McpCatalogConfig } from './mcp-config.ts';
+import type { ModelRoutePurpose } from './model-routing.ts';
 
 export const workspaceRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 
@@ -12,6 +13,9 @@ export interface PlatformConfig {
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
+  workbenchEnabled: boolean;
+  modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
+  exposeProviderDetails: boolean;
   mcp?: McpCatalogConfig;
 }
 
@@ -55,8 +59,38 @@ function serverUrl(value: string | undefined, name: string, protocols: readonly 
   return value;
 }
 
+function modelRoutes(env: NodeJS.ProcessEnv): PlatformConfig['modelRoutes'] {
+  const variables: Record<ModelRoutePurpose, string> = {
+    chat: 'PLATFORM_CHAT_PROVIDER', agent: 'PLATFORM_AGENT_PROVIDER',
+    realtime: 'PLATFORM_REALTIME_PROVIDER', transcription: 'PLATFORM_TRANSCRIPTION_PROVIDER', speech: 'PLATFORM_SPEECH_PROVIDER',
+  };
+  const routes: PlatformConfig['modelRoutes'] = {};
+  for (const purpose of Object.keys(variables) as ModelRoutePurpose[]) {
+    const name = variables[purpose], provider = env[name];
+    if (provider === undefined) continue;
+    if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.exec(provider)?.[0] !== provider) {
+      throw new Error(`${name} must be a bounded provider identifier`);
+    }
+    routes[purpose] = { provider };
+  }
+  return routes;
+}
+
 export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig {
   const production = env.NODE_ENV === 'production';
+  if (env.PLATFORM_ENABLE_WORKBENCH !== undefined && !['0', '1'].includes(env.PLATFORM_ENABLE_WORKBENCH)) {
+    throw new Error('PLATFORM_ENABLE_WORKBENCH must be 0 or 1');
+  }
+  const workbenchEnabled = env.PLATFORM_ENABLE_WORKBENCH === '1';
+  // Internal deployment mode is not employee authorization. Production cannot
+  // expose this mode before the separate staff-role boundary is implemented.
+  if (production && workbenchEnabled) throw new Error('PLATFORM_ENABLE_WORKBENCH cannot enable a public production workbench before staff authorization is implemented');
+  if (env.PLATFORM_EXPOSE_PROVIDER_DETAILS !== undefined && !['0', '1'].includes(env.PLATFORM_EXPOSE_PROVIDER_DETAILS)) {
+    throw new Error('PLATFORM_EXPOSE_PROVIDER_DETAILS must be 0 or 1');
+  }
+  // Deployment diagnostics never grant a caller model-selection or staff rights.
+  const exposeProviderDetails = env.NODE_ENV === 'development' && workbenchEnabled && env.PLATFORM_EXPOSE_PROVIDER_DETAILS === '1';
+  const configuredModelRoutes = modelRoutes(env);
   const databasePoolMax = boundedInteger(env.PLATFORM_DATABASE_POOL_MAX, 'PLATFORM_DATABASE_POOL_MAX', 12, 1, 100);
   const databaseConnectTimeoutMs = boundedInteger(env.PLATFORM_DATABASE_CONNECT_TIMEOUT_MS, 'PLATFORM_DATABASE_CONNECT_TIMEOUT_MS', 5000, 100, 5000);
   const codeVersion = runtimeIdentifier(env.PLATFORM_BUILD_ID, 'PLATFORM_BUILD_ID', 'development');
@@ -105,7 +139,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
-    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail,
+    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, workbenchEnabled,
+    modelRoutes: configuredModelRoutes, exposeProviderDetails,
     queueName, s3, mcp: readMcpConfig(env),
   };
 }

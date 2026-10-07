@@ -83,7 +83,7 @@ test('React navigation serves HTML only for explicit GET HTML requests and never
   const head = await request('/career/plan', { method: 'HEAD', headers: { accept: 'text/html' } }); assert.equal(head.status, 404); assert.equal(head.body, '');
   assertNotFound(await request('/career/plan', { method: 'POST', headers: { origin, accept: 'text/html' } }));
   const capabilities = await request('/api/platform/capabilities', { headers: { accept: 'text/html' } });
-  assert.equal(capabilities.status, 200); assert.deepEqual(JSON.parse(capabilities.body), { providers: [] });
+  assert.equal(capabilities.status, 200); assert.deepEqual(JSON.parse(capabilities.body), { capabilities: { chat: false, agent: false, realtime: false, transcription: false, speech: false, image: false, video: false, browser: false, cli: false, workflow: false, mcp: false } });
   const privateFile = await request('/api/platform/artifacts/00000000-0000-4000-8000-000000000000', { headers: { accept: 'text/html' } });
   assert.equal(privateFile.status, 401); assert.equal(JSON.parse(privateFile.body).error.code, 'AUTH_REQUIRED');
 });

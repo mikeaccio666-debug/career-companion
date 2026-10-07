@@ -8,6 +8,8 @@
 !packages/platform-contracts/**
 !packages/ai-core/
 !packages/ai-core/**
+!packages/career-core/
+!packages/career-core/**
 !apps/
 !apps/web/
 !apps/web/**

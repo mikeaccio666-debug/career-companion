@@ -107,7 +107,7 @@ export interface BoundPlatformClient {
 /** Exact method/path exemptions only; a public GET never grants access to a private POST. */
 export function isPublicPlatformRequest(path: string, method = 'GET'): boolean {
   const verb = method.toUpperCase();
-  if (verb === 'GET' || verb === 'HEAD') return ['/health', '/live', '/ready', '/execution-ready', '/capabilities', '/auth/options', '/auth/me'].includes(path);
+  if (verb === 'GET' || verb === 'HEAD') return ['/health', '/live', '/ready', '/execution-ready', '/capabilities', '/features', '/auth/options', '/auth/me'].includes(path);
   return verb === 'POST' && ['/auth/login', '/auth/register', '/auth/password-reset/request', '/auth/password-reset/complete'].includes(path);
 }
 function parsedBody(body: string): any { try { return body ? JSON.parse(body) : null; } catch { return null; } }

@@ -165,6 +165,10 @@ importers:
         version: link:../contracts
 
   packages/career-core:
+    dependencies:
+      '@companion/platform-contracts':
+        specifier: workspace:*
+        version: link:../platform-contracts
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -227,6 +231,9 @@ importers:
       '@companion/ai-core':
         specifier: workspace:*
         version: link:../../packages/ai-core
+      '@companion/career-core':
+        specifier: workspace:*
+        version: link:../../packages/career-core
       '@companion/platform-contracts':
         specifier: workspace:*
         version: link:../../packages/platform-contracts

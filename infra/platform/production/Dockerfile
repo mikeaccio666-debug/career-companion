@@ -6,6 +6,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/platform-contracts/package.json packages/platform-contracts/package.json
 COPY packages/ai-core/package.json packages/ai-core/package.json
+COPY packages/career-core/package.json packages/career-core/package.json
 COPY services/platform-api/package.json services/platform-api/package.json
 COPY apps/web/package.json apps/web/package.json
 
@@ -26,10 +27,12 @@ WORKDIR /app
 COPY --from=runtime-deps /app/node_modules/ node_modules/
 COPY --from=runtime-deps /app/packages/platform-contracts/ packages/platform-contracts/
 COPY --from=runtime-deps /app/packages/ai-core/ packages/ai-core/
+COPY --from=runtime-deps /app/packages/career-core/ packages/career-core/
 COPY --from=runtime-deps /app/services/platform-api/ services/platform-api/
 COPY package.json ./
 COPY packages/platform-contracts/src/ packages/platform-contracts/src/
 COPY packages/ai-core/src/ packages/ai-core/src/
+COPY packages/career-core/src/ packages/career-core/src/
 COPY services/platform-api/src/ services/platform-api/src/
 COPY services/platform-api/migrations/ services/platform-api/migrations/
 COPY --from=web-build /app/apps/web/dist/ apps/web/dist/
