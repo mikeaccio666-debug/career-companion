@@ -164,6 +164,42 @@ export class CompanionIdentityDrafts {
       await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return result;
     });
   }
+  /** Trusted composition only: use the caller's actual bounded transaction.
+   * This verifies the source anew and does not grant authority to later writes. */
+  async readInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionIdentityDraft> | null> {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), taskId = taskInput(value);
+    const verified = await this.source(client, fixed, taskId, signal), row = await this.row(client, fixed, verified.source.companionId);
+    const result = row ? await this.decode(client, row, fixed, verified) : null;
+    await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return result;
+  }
+  /** Server-owned encrypted history composition only. A capture must match the
+   * actual immutable naming operation, historical reviewed assets and source;
+   * equal current revisions additionally match the actual current ciphertext. */
+  async validateCapturedInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), input = record(value, ['taskId', 'operationId', 'payload']);
+    if (!uuid(input.taskId) || !uuid(input.operationId) || typeof input.payload !== 'string' || Buffer.byteLength(input.payload, 'utf8') > 65536) throw unavailable();
+    try {
+      const verified = await this.source(client, fixed, input.taskId, signal), current = await this.row(client, fixed, verified.source.companionId);
+      if (!current) throw unavailable();
+      await this.decode(client, current, fixed, verified);
+      const data = JSON.parse(input.payload);
+      if (data?.id !== current.id || !Number.isSafeInteger(data?.revision) || data.revision < 1 || data.revision > current.revision) throw unavailable();
+      const row: DraftRow = { ...current, revision: data.revision, bundle_revision: data.bundleRevision,
+        content_digest: data.contentDigest, review_digest: data.reviewDigest };
+      const snapshot = await this.decodeSnapshot(client, row, fixed, verified, input.payload);
+      if (row.revision === current.revision && this.storage.crypto!.openUtf8(current.payload_ciphertext, { table: 'platform_companion_identity_drafts', column: 'payload_ciphertext',
+        rowId: current.id, ownerId: fixed.userId, revision: current.revision }) !== input.payload) throw unavailable();
+      const operation = (await client.query<OperationRow>('SELECT operation_id,draft_id,applied_revision,request_ciphertext FROM platform_companion_identity_operations '
+        + 'WHERE user_id=$1 AND operation_id=$2 FOR SHARE', [fixed.userId, input.operationId])).rows[0];
+      if (!operation || operation.draft_id !== row.id || operation.applied_revision !== row.revision) throw unavailable();
+      const text = this.storage.crypto!.openUtf8(operation.request_ciphertext, { table: 'platform_companion_identity_operations', column: 'request_ciphertext',
+        rowId: operation.operation_id, ownerId: fixed.userId, revision: operation.applied_revision });
+      const request = command(JSON.parse(text));
+      if (text !== JSON.stringify(request) || text !== JSON.stringify({ taskId: row.task_id, expectedRevision: row.revision - 1,
+        operationId: input.operationId, name: snapshot.draft.name })) throw unavailable();
+      await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return snapshot.draft;
+    } catch { throw unavailable(); }
+  }
   private async selectionRow(client: PoolClient, fixed: FixedSessionContext, draftId: string): Promise<SelectionRow | undefined> {
     return (await client.query<SelectionRow>('SELECT * FROM platform_companion_identity_selections WHERE draft_id=$1 AND user_id=$2 FOR UPDATE',
       [draftId, fixed.userId])).rows[0];
@@ -327,8 +363,13 @@ export class CompanionIdentityDrafts {
   }
   async save(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionIdentitySaveResult>> {
     const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), input = command(value), canonical = JSON.stringify(input);
+    return this.db.withBoundedTransaction(client => this.saveInTransaction(client, fixed, JSON.parse(canonical), signal));
+  }
+  /** Internal semantic/application stage. The caller owns the transaction and
+   * must commit actual name classification before entering this stage. */
+  async saveInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionIdentitySaveResult>> {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), input = command(value), canonical = JSON.stringify(input);
     try {
-      return await this.db.withBoundedTransaction(async client => {
         const verified = await this.source(client, fixed, input.taskId, signal), previous = await this.row(client, fixed, verified.source.companionId);
         const current = previous ? await this.decode(client, previous, fixed, verified) : null;
         const operation = (await client.query<OperationRow>('SELECT operation_id,draft_id,applied_revision,request_ciphertext '
@@ -389,7 +430,6 @@ export class CompanionIdentityDrafts {
         await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
         return Object.freeze({ draft: this.view(row, name, candidates, verified),
           operation: Object.freeze({ id: input.operationId, appliedRevision: row.revision, replayed: false }) });
-      });
     } catch (error) { if (error instanceof DataCryptoError) throw unavailable(); throw error; }
   }
 }
