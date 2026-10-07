@@ -16,7 +16,7 @@ import { jobDefinitionHash, processJob, recoverInterrupted } from '../src/jobs.t
 import { mcpSchemaHash, type McpCatalogConfig } from '../src/mcp-config.ts';
 import type { McpDiscoveredTool, McpToolResult, McpTransport } from '../src/mcp-transport-port.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig();
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' });
 const schema = `mcp_call_test_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());

@@ -56,6 +56,8 @@ pnpm dev:platform
 
 打开 [本地工作台](http://localhost:4321/)。首次创建本地账号；会话、明确保存的记忆、审批和任务属于该账号。API 监听 localhost4320，独立 worker 从队列取任务，PostgreSQL 和 Redis 分别监听 localhost5442、6388。停止开发进程用 Ctrl C；`pnpm infra:stop` 停止本项目容器并保留数据卷。
 
+新的浏览器、CLI、工作流、图片、视频及 MCP 工作台任务默认关闭，创建、重试和首次批准返回 `403 WORKBENCH_DISABLED`。已有任务的读取、取消、拒绝审批及已接受任务的执行和恢复继续使用原有授权；普通聊天、保存资料及独立语音接口保留。内部开发需要这些底座任务时，在忽略的服务端配置中显式设置 `PLATFORM_ENABLE_WORKBENCH=1` 并重启。该开关不授予员工身份、工具授权或商业调用权限；真实员工授权尚未实现，production 会拒绝开启。学生界面的全面收拢与服务端模型选择仍待后续 PR。
+
 模型配置只放在后端。首次配置且 `.env.platform` 尚不存在时，将根目录 `.env.example` 复制为忽略的 `.env.platform`；已有该文件时只补充需要的配置，保留本地模型设置。填写自己的供应商配置后重启。商业请求还受 `PLATFORM_ALLOW_PROVIDER_CALLS` 控制，默认关闭。[ChatGPT 订阅与开发者 API 分别计费](https://help.openai.com/en/articles/9039756-managing-billing-settings-on-chatgpt-web-and-platform)，接入前确认对应账户有模型权限和预算；不要在聊天、浏览器存储或源码中放密钥。
 
 初次正式接入建议先使用 OpenAI 的文字 API，确认聊天体验后再启用语音与图片，视频另接 Ark／Seedance 或 fal。创建开发者 API key 的流程见 [官方快速入门](https://developers.openai.com/api/docs/quickstart)。在现有本地配置中补充 `OPENAI_API_KEY` 与账号可用的 `OPENAI_CHAT_MODEL`，然后重启。保留 `PLATFORM_ALLOW_PROVIDER_CALLS=0` 时不会发出商业请求；真实试用属于下一阶段，需要明确允许付费调用再开启。先用同一组虚构求职场景检查事实、工具执行、失败处理、首段等待时间与用量，再决定默认模型；不要仅凭模型名称或接通成功判断产品质量。正式账户设置预算与用量限制的依据见 [官方生产接入说明](https://developers.openai.com/api/docs/guides/production-best-practices)。界面的“已配置”只描述配置，真实账号权限和质量仍需实测。

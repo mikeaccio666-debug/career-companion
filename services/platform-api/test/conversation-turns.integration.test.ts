@@ -18,22 +18,31 @@ import { GoalPlans } from '../src/goal-plans.ts';
 import { GoalPlanProposals } from '../src/goal-plan-proposals.ts';
 import { GoalPlanReaders } from '../src/goal-plan-readers.ts';
 
-const base = readConfig(), schema = `direct_turns_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '0' }), schema = `direct_turns_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
 let directory: string, turns: ConversationTurns, calls = 0, lastInput: ChatInput | undefined, schemaCreated = false;
 let waiting: (() => void) | undefined;
+let lastTools: string[] = [], lastToolResult: unknown;
 const forbidden = async (): Promise<never> => { throw new Error('This direct-service fixture never calls external media or model providers.'); };
 const runtime: PlatformProviderRuntime = {
   capabilities: () => [{ id: 'turn-fixture', name: 'Synthetic direct turn', enabled: true, keyConfigured: true, capabilities: ['chat', 'agent'], models: ['synthetic-turn'], envVariables: [] }],
   createVoiceSession: forbidden, executeJob: forbidden, transcribe: forbidden, speech: forbidden,
   async *streamChat(input, context) {
-    calls++; lastInput = input;
+    calls++; lastInput = input; lastTools = context?.tools?.map(tool => tool.name) ?? []; lastToolResult = undefined;
     const callId = randomUUID();
     await context?.onModelCall?.({ type: 'started', callId, index: 1, provider: 'turn-fixture', model: 'synthetic-turn' });
     yield { type: 'delta', text: 'Synthetic ' };
     const prompt = input.messages.at(-1)?.content;
+    if (prompt?.startsWith('Synthetic workbench tool ')) {
+      assert(context?.executeTool);
+      lastToolResult = await context.executeTool(prompt.slice('Synthetic workbench tool '.length), {});
+    }
+    if (prompt === 'Synthetic reader') {
+      assert(context?.executeTool);
+      lastToolResult = await context.executeTool('read_saved_memories', {});
+    }
     if (prompt === 'Synthetic wait') {
       waiting?.();
       await new Promise<void>(resolve => { if (context?.signal?.aborted) resolve(); else context?.signal?.addEventListener('abort', () => resolve(), { once: true }); });
@@ -137,4 +146,44 @@ test('preparation cancellation rolls back message and lease creation before open
   const item = await actor(), sink = new CollectingTurnSink(), before = calls; sink.disconnect();
   await assert.rejects(submit(item, sink));
   assert.deepEqual(await messages(item), []); assert.equal(await leases(item), 0); assert.equal(calls, before); assert(!sink.opened);
+});
+
+
+const hiddenWorkbenchTools = ['create_job', 'prepare_browser_task', 'prepare_mcp_task', 'get_execution_capabilities', 'propose_goal_plan'];
+
+test('default-closed Agent advertises saved-source readers without unavailable workbench planning instructions', async () => {
+  const item = await actor(), sink = new CollectingTurnSink();
+  await db.query('INSERT INTO platform_memories(id,user_id,content) VALUES($1,$2,$3)', [randomUUID(), item.userId, 'Synthetic owned reader evidence']);
+  await submit(item, sink, { mode: 'agent', content: 'Synthetic reader' });
+  assert(hiddenWorkbenchTools.every(name => !lastTools.includes(name)));
+  assert(lastTools.includes('read_saved_memories') && lastTools.includes('read_artifact_text') && lastTools.includes('read_mcp_result') && lastTools.includes('read_goal_plan'));
+  assert(!lastInput?.persona?.includes('first read get_execution_capabilities'));
+  assert.deepEqual((lastToolResult as { memories: { content: string }[] }).memories.map(memory => memory.content), ['Synthetic owned reader evidence']);
+  assert(sink.events.some(event => event.event === 'done'));
+  assert.equal(await leases(item), 0);
+});
+
+for (const name of hiddenWorkbenchTools) test(`injected runtime cannot call hidden ${name} through the owned conversation callback`, async () => {
+  const item = await actor(), sink = new CollectingTurnSink();
+  await submit(item, sink, { mode: 'agent', content: `Synthetic workbench tool ${name}` });
+  assert(!lastTools.includes(name));
+  assert(sink.events.some(event => event.event === 'error' && typeof event.payload === 'object' && event.payload !== null && 'code' in event.payload && event.payload.code === 'WORKBENCH_DISABLED'));
+  assert(!sink.events.some(event => event.event === 'done'));
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM platform_jobs WHERE user_id=$1', [item.userId])).rows[0].n, 0);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM platform_approvals WHERE user_id=$1', [item.userId])).rows[0].n, 0);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM platform_goal_plan_proposals WHERE user_id=$1', [item.userId])).rows[0].n, 0);
+  assert.equal(await leases(item), 0);
+});
+
+test('explicit internal workbench retains actual tool discovery and planning instructions', async () => {
+  const item = await actor(), sink = new CollectingTurnSink();
+  const config = { ...base, workbenchEnabled: true, databaseUrl: url.toString(), storageDir: directory };
+  const storage = createStorage(config), jobs = new JobService(db, config, runtime, storage), goalPlans = new GoalPlans(db, jobs, runtime);
+  const internal = new ConversationTurns({ db, runtime, jobs, goalPlans, knowledge: new KnowledgeSources(db), audioTranscriptions: new AudioTranscriptions(db, storage, runtime), goalPlanProposals: new GoalPlanProposals(db, goalPlans), goalPlanReaders: new GoalPlanReaders(db) });
+  await internal.submit({ userId: item.userId, conversationId: item.conversationId, data: { provider: 'turn-fixture', mode: 'agent', content: 'Synthetic workbench tool get_execution_capabilities' } }, sink, item.access);
+  assert(hiddenWorkbenchTools.every(name => lastTools.includes(name)));
+  assert(lastInput?.persona?.includes('first read get_execution_capabilities'));
+  assert.equal((lastToolResult as { providers: { id: string }[] }).providers[0].id, 'turn-fixture');
+  assert(sink.events.some(event => event.event === 'done'));
+  assert.equal(await leases(item), 0);
 });

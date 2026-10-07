@@ -15,7 +15,7 @@ import { processJob } from '../src/jobs.ts';
 import { mcpSchemaHash } from '../src/mcp-config.ts';
 import type { McpTransport } from '../src/mcp-transport-port.ts';
 
-const base = readConfig(), prefix = '/api/platform', origin = 'http://localhost:4321';
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }), prefix = '/api/platform', origin = 'http://localhost:4321';
 const schema = `outcome_review_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), databaseUrl = new URL(base.databaseUrl);
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`); databaseUrl.searchParams.set('application_name', schema); const db = new Database(databaseUrl.toString());
 let system: Awaited<ReturnType<typeof buildApp>>, directory: string, executions = 0, mcpCalls = 0, registrations = 0;

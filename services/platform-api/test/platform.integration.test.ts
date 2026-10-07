@@ -15,7 +15,7 @@ import { acquireRuntimeLease, recoverStaleStreams, withVoiceLease } from '../src
 
 const origin='http://localhost:4321',prefix='/api/platform';
 const schema=`platform_test_${randomUUID().replaceAll('-','')}`;
-const base=readConfig(),admin=new Database(base.databaseUrl);
+const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }),admin=new Database(base.databaseUrl);
 const testUrl=new URL(base.databaseUrl);testUrl.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(testUrl.toString());
 let directory:string,system:Awaited<ReturnType<typeof buildApp>>;
