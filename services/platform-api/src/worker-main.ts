@@ -6,17 +6,25 @@ import { createStorage } from './storage.ts';
 import { createWorker, JobService, recoverInterrupted } from './jobs.ts';
 import { startAccountEmailWorker } from './account-mail.ts';
 import { startWorkerHeartbeat } from './worker-heartbeat.ts';
+import { CompanionEntry } from './companion-entry.ts';
+import { requireModelConsent } from './model-consent.ts';
+import { CompanionGenerationQueue, createCompanionGenerationWorker, reconcileCompanionAccounting } from './companion-generation-queue.ts';
 const config=readConfig(),db=new Database(config.databaseUrl,{max:config.databasePoolMax,connectionTimeoutMillis:config.databaseConnectTimeoutMs});
-const jobs=new JobService(db,config,createProviderRuntime(),createStorage(config),undefined,undefined,await loadLegalBundle(config.legalBundlePath));
+const legal=await loadLegalBundle(config.legalBundlePath),runtime=requireModelConsent(createProviderRuntime());
+const jobs=new JobService(db,config,runtime,createStorage(config),undefined,undefined,legal);
+const companion=new CompanionEntry(db,config,legal,runtime);
 await db.query('SELECT 1');await recoverInterrupted(jobs);
+await reconcileCompanionAccounting(companion);
 const worker=createWorker(jobs);
+const companionWorker=createCompanionGenerationWorker(companion),companionQueue=new CompanionGenerationQueue(companion);
+companionQueue.start();
 const accountEmailWorker=startAccountEmailWorker(db,config.accountEmail);
 worker.on('error',()=>{process.stderr.write('Worker connection interrupted; waiting for recovery.\n');});
 const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeVersion:config.codeVersion});
 let closing=false,recovering:Promise<void>|undefined,shutdown:Promise<void>|undefined;
 const recovery=setInterval(()=>{
   if(closing||recovering)return;
-  const current=recoverInterrupted(jobs).then(()=>{},()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
+  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion)]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
   recovering=current;
 },15_000);recovery.unref();
 process.stdout.write('Platform task worker started.\n');
@@ -27,7 +35,7 @@ for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{
     await heartbeat.stop();
     await recovering;
     // BullMQ close waits for processors and has no built-in deadline. A stopping report is not proof of shutdown.
-    const results=await Promise.allSettled([worker.close(),accountEmailWorker.close()]);
+    const results=await Promise.allSettled([worker.close(),accountEmailWorker.close(),companionWorker.close(),companionQueue.close()]);
     await db.close();
     if(results.some(result=>result.status==='rejected'))throw new Error('Worker shutdown could not be confirmed.');
   })();

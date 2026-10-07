@@ -1,0 +1,25 @@
+.companion-preview { margin-top: 24px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); padding: 24px; color: var(--ink); --companion-yanzhi: #95425F; --companion-zheshi: #86503A; --companion-ganlan: #53650F; --companion-jiangzi: #8D4572; --companion-dai: #4D635B; --companion-yanzi: #70566E; --companion-hehui: #695B53; }
+.companion-preview-heading { display: flex; align-items: center; gap: 20px; }
+.companion-preview h2 { font-size: 18px; line-height: 28px; font-weight: 600; margin: 0 0 4px; }
+.companion-preview-seal { display: block; flex: 0 0 64px; width: 64px; height: 64px; background: var(--ink-2); border-radius: 50%; transform: rotate(-3deg); position: relative; transition: background-color 400ms; }
+.companion-preview-seal::after { content: ''; position: absolute; inset: 5%; border: 2.5px solid var(--sheet); border-radius: 50%; }
+.companion-preview-seal[data-ink="yanzhi"] { background: var(--companion-yanzhi); }
+.companion-preview-seal[data-ink="zheshi"] { background: var(--companion-zheshi); }
+.companion-preview-seal[data-ink="ganlan"] { background: var(--companion-ganlan); }
+.companion-preview-seal[data-ink="jiangzi"] { background: var(--companion-jiangzi); }
+.companion-preview-seal[data-ink="dai"] { background: var(--companion-dai); }
+.companion-preview-seal[data-ink="yanzi"] { background: var(--companion-yanzi); }
+.companion-preview-seal[data-ink="hehui"] { background: var(--companion-hehui); }
+.companion-preview-summary { margin: 20px 0; font-size: 16px; line-height: 26px; overflow-wrap: anywhere; }
+.companion-preview-samples { display: grid; gap: 10px; }
+.companion-preview-samples p { margin: 0; padding: 10px 0 10px 16px; border-left: 2px solid var(--rule); overflow-wrap: anywhere; white-space: pre-wrap; }
+.companion-preview-provenance, .companion-preview-next, .companion-preview-status > p + p { color: var(--ink-2); font-size: 14px; line-height: 24px; }
+.companion-preview-next { margin: 24px 0 8px; }
+.companion-preview-status p { margin: 12px 0; }
+.companion-preview-notice { color: var(--ink-2); overflow-wrap: anywhere; }
+.companion-preview-seal-generating { animation: companion-preview-ink 2.4s ease-in-out infinite; }
+@keyframes companion-preview-ink { 0%, 100% { opacity: .15; } 50% { opacity: .6; } }
+@media (max-width: 639px) { .companion-preview { padding: 20px 16px; } .companion-preview-heading { gap: 16px; align-items: flex-start; } .companion-preview h2 { font-size: 16px; line-height: 26px; } }
+@media (prefers-color-scheme: dark) { .companion-preview { --companion-yanzhi: #F094B0; --companion-zheshi: #DFA187; --companion-ganlan: #A7B760; --companion-jiangzi: #E597C5; --companion-dai: #9CB4AC; --companion-yanzi: #C4A6C1; --companion-hehui: #BCACA3; } }
+@media (prefers-reduced-motion: reduce) { .companion-preview-seal { transform: none; transition: none; } .companion-preview-seal-generating { animation: none; opacity: 1; } }
+@media (forced-colors: active) { .companion-preview-seal { background: CanvasText; forced-color-adjust: none; } .companion-preview-seal::after { border-color: Canvas; } .companion-preview-seal-generating { animation: none; opacity: 1; } }

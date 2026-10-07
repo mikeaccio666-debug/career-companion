@@ -41,6 +41,8 @@ import { StaffAccess } from './staff-access.ts';
 import { loadLegalBundle, parseLegalBundle, legalAvailability, publicLegalDocuments, type LegalBundle } from './legal-documents.ts';
 import { StudentEntry } from './student-entry.ts';
 import { createOnboardingEntry } from './onboarding-entry.ts';
+import { CompanionEntry } from './companion-entry.ts';
+import { CompanionGenerationQueue } from './companion-generation-queue.ts';
 import { ModelConsent, requireModelConsent } from './model-routing.ts';
 import {
   projectPlatformFeatures, projectPublicAccountUsage, projectPublicApproval, projectPublicAudioTranscriptionReceipt,
@@ -71,6 +73,7 @@ export async function buildApp(options:AppOptions={}) {
   const entry=new StudentEntry(db,config,bundle),modelConsent=new ModelConsent(db,bundle);
   const runtime=requireModelConsent(options.runtime??createProviderRuntime());
   const onboarding=await createOnboardingEntry(db,config,bundle,runtime);
+  const companion=new CompanionEntry(db,config,bundle,runtime);
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
@@ -84,6 +87,7 @@ export async function buildApp(options:AppOptions={}) {
   const conversationTurns=new ConversationTurns({db,runtime,jobs,knowledge,audioTranscriptions,goalPlans,goalPlanProposals,goalPlanReaders});
   const jobOutcomeReviews=new JobOutcomeReviews(db);
   const queue=options.queue??(options.enableQueue===false?undefined:new TaskQueue(jobs));
+  const companionQueue=options.enableQueue===false?undefined:new CompanionGenerationQueue(companion);
   const readiness=new OperationsReadiness(db,config,Boolean(queue));
   const app=Fastify({logger:false,bodyLimit:256*1024,requestTimeout:120_000});
   await configurePlatformHttp(app,config);
@@ -204,6 +208,17 @@ export async function buildApp(options:AppOptions={}) {
     if(Object.keys(object(request.body)).length)throw invalid('Safety retry does not accept classifier inputs.');
     const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
     try{return {entry:await onboarding.retrySafety(fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/drafts/current`,secure,async(request,reply)=>{
+    if(Object.keys(object(request.query)).length)throw invalid('Companion progress is scoped to the current account.');
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {entry:await companion.read(fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/drafts`,secure,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{const result=await companion.accept(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);reply.code(202);return result;}
     finally{cancellation.dispose();}
   });
   // Fixed resources and receipt declarations do not consume ordinary API quota or depend on current terms/provider availability.
@@ -455,11 +470,12 @@ export async function buildApp(options:AppOptions={}) {
   });
 
   const streamRecovery=setInterval(()=>void recoverStaleStreams(db).catch(()=>{}),30_000);streamRecovery.unref();
-  app.addHook('onClose',async()=>{clearInterval(streamRecovery);await readiness.close();if(queue)await queue.close();if(!options.db)await db.close();});
+  app.addHook('onClose',async()=>{clearInterval(streamRecovery);await readiness.close();if(queue)await queue.close();if(companionQueue)await companionQueue.close();if(!options.db)await db.close();});
   try{
     if(config.webStaticDir)await configureStaticWeb(app,config.webStaticDir);
     await app.ready();
     if(queue)queue.start();
+    if(companionQueue)companionQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

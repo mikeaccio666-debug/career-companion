@@ -289,3 +289,4 @@ export * from './staff.ts';
 export * from './student-entry.ts';
 export * from './onboarding.ts';
 export * from './onboarding-followup.ts';
+export * from './companion-entry.ts';
