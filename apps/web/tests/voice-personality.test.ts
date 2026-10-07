@@ -119,18 +119,17 @@ test('preference projection is bounded, copied and does not accept unknown roles
   assert.equal(unknown.roleId, 'warm'); assert.equal(unknown.turnTaking, 'patient'); assert.deepEqual(unknown.speechVoices, {});
 });
 
-test('an answer freezes its role before awaiting conversation creation and speech keeps that role with the selected actual voice', async () => {
+test('legacy role/model/voice values stay out of server-routed requests and cannot stamp audio attribution', async () => {
   const value = new VoiceConversationSession(); value.activate(() => true); const binding = deferred<string>();
-  let body: any; const mutable = { ...turnInput(), roleId: 'warm' as 'warm' | 'career', ensureConversation: () => binding.promise };
+  let body: any; const mutable = { ...turnInput(), available: true, roleId: 'warm' as 'warm' | 'career', ensureConversation: () => binding.promise };
   const answer = value.answer(mutable, { ...transport(), async streamMessage(id, input, signal, receive) { body = input; await transport().streamMessage(id, input, signal, receive); } });
   mutable.roleId = 'career'; binding.resolve(conversationId); await answer;
-  assert.equal(body.persona, voicePersona('warm')); assert.equal(value.getSnapshot().roleId, 'warm');
+  assert.deepEqual(Object.keys(body).sort(), ['attachmentIds', 'content']); assert.equal(value.getSnapshot().roleId, null);
   let speechBody: any; const release = deferred<unknown>();
-  const speaking = value.speak(provider, { ...transport(), async request(_, init) { speechBody = JSON.parse(String(init.body)); return release.promise; } }, 'sage');
-  assert.equal(speechBody.voice, 'sage'); assert.equal(speechBody.instructions, voicePersonality('warm').expression);
-  release.resolve({ attachment: audio }); await speaking;
-  assert.deepEqual(value.getSnapshot().audioConfiguration, { roleId: 'warm', providerId: provider.id, voice: 'sage', expressionApplied: true });
-  const before = structuredClone(value.getSnapshot()); await value.speak(provider, { ...transport(), async request() { throw new Error('Fictional speech failed.'); } }, 'coral');
+  const speaking = value.speak({ ...transport(), async request(_, init) { speechBody = JSON.parse(String(init.body)); return release.promise; } }, true);
+  assert.deepEqual(speechBody, { text: value.getSnapshot().answer });
+  release.resolve({ attachment: audio }); await speaking; assert.equal(value.getSnapshot().audioConfiguration, null);
+  const before = structuredClone(value.getSnapshot()); await value.speak({ ...transport(), async request() { throw new Error('Fictional speech failed.'); } }, true);
   assert.deepEqual(value.getSnapshot().audio, before.audio); assert.deepEqual(value.getSnapshot().audioConfiguration, before.audioConfiguration); assert.equal(value.getSnapshot().answer, before.answer);
 });
 
@@ -143,8 +142,8 @@ test('creation request cancellation propagates to actual loopback HTTP without m
     const context = new AccountRequestContext(); context.changeSession(accountId);
     const client = createPlatformClient(createPlatformEndpoints(`http://127.0.0.1:${address.port}`), undefined, context);
     const controller = new AbortController(), preferences = defaultVoicePreferences();
-    const pending = requestVoiceSession(voiceRealtimeBody(provider, preferences), controller.signal, () => true, client.request, () => assert.fail('No acknowledged lease to release.'));
-    await started.promise; assert.equal(requestBody.voice, 'marin'); assert.equal(requestBody.persona, voicePersona('warm')); assert.equal(requestBody.turnTaking, 'patient');
+    const pending = requestVoiceSession({}, controller.signal, () => true, client.request, () => assert.fail('No acknowledged lease to release.'));
+    await started.promise; assert.deepEqual(requestBody, {});
     disposeVoiceSession({ controllers: [controller] }); await assert.rejects(pending, { name: 'AbortError' });
     await Promise.race([closed.promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Fixture socket stayed open.')), 2000))]);
   } finally { server.closeAllConnections(); await new Promise<void>((done) => server.close(() => done())); }
@@ -153,7 +152,7 @@ test('creation request cancellation propagates to actual loopback HTTP without m
 test('a transport ignoring cancellation releases its late lease without returning credentials or touching a later session', async () => {
   for (const cancel of [true, false]) {
     const response = deferred<unknown>(), controller = new AbortController(); let current = true; const released: string[] = [];
-    const pending = requestVoiceSession({ provider: provider.id }, controller.signal, () => current, (_, init) => { assert.equal(init.signal, controller.signal); return response.promise; }, (id) => released.push(id));
+    const pending = requestVoiceSession({}, controller.signal, () => current, (_, init) => { assert.equal(init.signal, controller.signal); return response.promise; }, (id) => released.push(id));
     if (cancel) controller.abort(); else current = false;
     response.resolve({ sessionId: 'fictional-late-lease', clientSecret: 'fictional-ephemeral-value' });
     assert.equal(await pending, null); assert.deepEqual(released, ['fictional-late-lease']);
@@ -164,4 +163,13 @@ test('a pre-aborted or stale creation never dispatches a request', async () => {
   let calls = 0; const read = async () => { calls++; return {}; }, aborted = new AbortController(); aborted.abort();
   await assert.rejects(requestVoiceSession({}, aborted.signal, () => true, read, () => {}), { name: 'AbortError' });
   assert.equal(await requestVoiceSession({}, new AbortController().signal, () => false, read, () => {}), null); assert.equal(calls, 0);
+});
+
+
+test('active realtime creation rejects legacy selector bodies before HTTP while accepting only optional conversation context', async () => {
+  let calls = 0; const read = async () => { ++calls; return {}; };
+  for (const key of ['provider', 'model', 'voice', 'persona', 'instructions', 'turnTaking']) {
+    await assert.rejects(requestVoiceSession({ conversationId, [key]: 'fictional-old-value' } as any, new AbortController().signal, () => true, read, () => {}));
+  }
+  assert.equal(calls, 0);
 });

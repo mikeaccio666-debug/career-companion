@@ -15,7 +15,7 @@ import { recoverStaleStreams } from '../src/runtime-leases.ts';
 import { mcpSchemaHash } from '../src/mcp-config.ts';
 import type { McpTransport } from '../src/mcp-transport-port.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig();
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' });
 const schema = `conversation_tasks_test_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), databaseUrl = new URL(base.databaseUrl);
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString());
@@ -87,7 +87,7 @@ async function mcp(user: Actor): Promise<ToolRequest> {
 }
 function registerPlan(plan: Plan) { const key = `fictional-plan-${randomUUID()}`; plans.set(key, plan); return key; }
 async function respond(user: Actor, conversationId: string, plan: Plan) {
-  const response = await fetch(httpOrigin + prefix + `/conversations/${conversationId}/messages`, { method: 'POST', headers: { ...headers(user), 'content-type': 'application/json' }, body: JSON.stringify({ content: registerPlan(plan), provider: 'synthetic', mode: 'agent' }) });
+  const response = await fetch(httpOrigin + prefix + `/conversations/${conversationId}/messages`, { method: 'POST', headers: { ...headers(user), 'content-type': 'application/json' }, body: JSON.stringify({ content: registerPlan(plan), mode: 'agent' }) });
   assert.equal(response.status, 200); return response.text();
 }
 function event(body: string, name: string) { const match = body.match(new RegExp(`event: ${name}\\ndata: ([^\\n]+)`)); assert(match, `Missing synthetic ${name} event.`); return JSON.parse(match[1]); }
@@ -116,7 +116,7 @@ function interceptTransactions(intercept: (text: string, values: any, run: () =>
 }
 async function liveTurn(user: Actor, conversationId: string, requests: ToolRequest[] = []) {
   const controller = new AbortController(), plan: Plan = { requests, hold: true };
-  const response = await fetch(httpOrigin + prefix + `/conversations/${conversationId}/messages`, { method: 'POST', headers: { ...headers(user), 'content-type': 'application/json' }, body: JSON.stringify({ content: registerPlan(plan), provider: 'synthetic', mode: 'agent' }), signal: controller.signal });
+  const response = await fetch(httpOrigin + prefix + `/conversations/${conversationId}/messages`, { method: 'POST', headers: { ...headers(user), 'content-type': 'application/json' }, body: JSON.stringify({ content: registerPlan(plan), mode: 'agent' }), signal: controller.signal });
   assert.equal(response.status, 200); const reader = response.body!.getReader(); let body = '';
   while (!body.includes('event: delta')) { const chunk = await reader.read(); assert.equal(chunk.done, false); body += new TextDecoder().decode(chunk.value); }
   const messageId = event(body, 'start').messageId;
@@ -263,7 +263,7 @@ test('chat conversation lock remains compatible with a task creator holding the 
   let chatting: ReturnType<typeof request> | undefined;
   try {
     await bounded(userHeld.promise);
-    chatting = request(user, 'POST', `/conversations/${conv.id}/messages`, { content: registerPlan({}), provider: 'synthetic', mode: 'agent' });
+    chatting = request(user, 'POST', `/conversations/${conv.id}/messages`, { content: registerPlan({}), mode: 'agent' });
     await bounded(conversationHeld.promise); releaseOrigin.resolve();
     const created = await bounded(creating); assert.equal(created.job.status, 'queued');
     releaseChat.resolve(); assert.equal((await bounded(chatting)).statusCode, 409);

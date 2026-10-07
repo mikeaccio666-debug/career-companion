@@ -12,7 +12,7 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 const endpoints = createPlatformEndpoints('https://api.example.test');
 
 test('public exemptions are exact method/path pairs; missing private context sends nothing', async () => {
-  for (const path of ['/health', '/live', '/ready', '/execution-ready', '/capabilities', '/auth/options', '/auth/me']) assert.equal(isPublicPlatformRequest(path), true);
+  for (const path of ['/health', '/live', '/ready', '/execution-ready', '/capabilities', '/features', '/auth/options', '/auth/me']) assert.equal(isPublicPlatformRequest(path), true);
   for (const path of ['/auth/login', '/auth/register', '/auth/password-reset/request', '/auth/password-reset/complete']) assert.equal(isPublicPlatformRequest(path, 'POST'), true);
   for (const path of ['/live', '/ready', '/execution-ready']) {
     assert.equal(isPublicPlatformRequest(path, 'HEAD'), true);

@@ -13,7 +13,7 @@ import { JobService, processJob, recoverInterrupted } from '../src/jobs.ts';
 import { LocalBlobStorage } from '../src/storage.ts';
 import { applyWorkflowCheckpoint, loadWorkflowCheckpoint, readWorkflowArtifact, type WorkflowBinding } from '../src/workflow-checkpoints.ts';
 
-const schema=`workflow_checkpoints_test_${randomUUID().replaceAll('-','')}`,config=readConfig(),admin=new Database(config.databaseUrl),url=new URL(config.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const schema=`workflow_checkpoints_test_${randomUUID().replaceAll('-','')}`,config=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }),admin=new Database(config.databaseUrl),url=new URL(config.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string,storage:LocalBlobStorage,jobs:JobService;
 let execute:(input:CreateJobInput,context:JobExecutionContext)=>Promise<JobExecutionResult>=async()=>({artifacts:[]});
 const unused=async()=>{throw new Error('No commercial model calls are permitted in checkpoint fixtures.');};

@@ -7,7 +7,7 @@ const context = (overrides: Partial<CareerRunContext> = {}): CareerRunContext =>
 const evidence = (overrides: Partial<CareerEvidence> = {}): CareerEvidence => ({ id: 'fixture-receipt-1', ownerId: 'fictional-owner', subjectId: 'fixture-application-1', kind: 'application', state: 'active', verification: 'user_confirmed', referenceId: 'private-fixture-reference', occurredAt: '2026-10-06T12:00:00Z', ...overrides });
 
 test('intake needs no invented profile and exposes only its compiled draft tools', () => {
-  const result = prepareCareerRun('career-intake', context({ tools: { read_profile: 'ready', save_plan_draft: 'ready', prepare_application_draft: 'ready' } }));
+  const result = prepareCareerRun('career-intake', context({ tools: { read_profile: 'ready', save_plan_draft: 'ready', draft_outbound: 'ready' } }));
   assert.equal(result.state, 'ready_for_draft');
   if (result.state !== 'ready_for_draft') return;
   assert.deepEqual(result.tools, ['read_profile', 'save_plan_draft']);
@@ -24,7 +24,7 @@ test('foreign, stale and withdrawn inputs cannot satisfy a skill', () => {
     const result = prepareCareerRun('evidence-story', context({ inputs: [
       { input: 'profile', id: 'profile-ref', revision: 3, ownerId: 'fictional-owner', state: 'current', ...override },
       { input: 'project-facts', id: 'project-ref', revision: 1, ownerId: 'fictional-owner', state: 'current' },
-    ], tools: { read_profile: 'ready', read_evidence: 'ready', save_practice_draft: 'ready' } }));
+    ], tools: { read_profile: 'ready', read_evidence: 'ready', save_story_draft: 'ready' } }));
     assert.equal(result.state, 'blocked');
     if (result.state === 'blocked') assert.deepEqual(result.reasons, ['missing_input:profile']);
   }
@@ -32,7 +32,7 @@ test('foreign, stale and withdrawn inputs cannot satisfy a skill', () => {
 test('profile changes and conflicting current references require renewed preparation', () => {
   const reference = { input: 'profile' as const, id: 'profile-ref', revision: 2, ownerId: 'fictional-owner', state: 'current' as const };
   const project = { input: 'project-facts' as const, id: 'project-ref', revision: 1, ownerId: 'fictional-owner', state: 'current' as const };
-  const tools = { read_profile: 'ready', read_evidence: 'ready', save_practice_draft: 'ready' } as const;
+  const tools = { read_profile: 'ready', read_evidence: 'ready', save_story_draft: 'ready' } as const;
   let result = prepareCareerRun('evidence-story', context({ inputs: [reference, project], tools }));
   assert.equal(result.state, 'blocked');
   if (result.state === 'blocked') assert.ok(result.reasons.includes('profile_revision_changed:profile'));
@@ -51,7 +51,7 @@ test('missing connectors and invalid authenticated contexts block instead of fal
 });
 test('application preparation remains a draft and snapshots rather than aliases its inputs', () => {
   const inputs: CareerRunContext['inputs'] = ['target-job', 'confirmed-profile', 'reviewed-resume'].map(input => ({ input: input as 'target-job' | 'confirmed-profile' | 'reviewed-resume', id: `fixture-${input}`, revision: 3, ownerId: 'fictional-owner', state: 'current' }));
-  const result = prepareCareerRun('application-preparation', context({ inputs, tools: { read_profile: 'ready', read_evidence: 'ready', prepare_application_draft: 'ready' } }));
+  const result = prepareCareerRun('application-preparation', context({ inputs, tools: { read_profile: 'ready', read_evidence: 'ready', draft_outbound: 'ready' } }));
   assert.equal(result.state, 'ready_for_draft');
   if (result.state !== 'ready_for_draft') return;
   assert.equal(result.externalActions, 'forbidden');

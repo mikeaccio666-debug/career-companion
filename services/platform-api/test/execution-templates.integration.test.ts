@@ -15,7 +15,7 @@ import { JobService, parseJob, processJob, recoverInterrupted } from '../src/job
 import { LocalBlobStorage } from '../src/storage.ts';
 import { GoalPlans } from '../src/goal-plans.ts';
 
-const schema=`execution_templates_test_${randomUUID().replaceAll('-','')}`,base=readConfig(),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const schema=`execution_templates_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' }),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString()),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 let directory:string,templatePath:string,storage:LocalBlobStorage;
 const graph=(marker:string)=>({'1':{class_type:'SyntheticPromptEncoder',inputs:{text:'Synthetic template default'}},'2':{class_type:'SyntheticOutput',inputs:{privateTemplateMarker:marker}}});

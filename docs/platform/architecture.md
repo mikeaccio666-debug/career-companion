@@ -19,6 +19,8 @@
 | apps/extension 等原包 | 迁入的求职填写执行端，尚未与新平台身份和任务接口连接 |
 | imports | 带来源记录的历史参考，不运行或部署 |
 
+当前单助手文字流程由 `services/platform-api/src/conversation-turns.ts` 的 `ConversationTurns.submit` 承接。HTTP 路由负责身份、账号上下文、限流、请求对象与会话 ID 解析；字段校验仍在服务内按原时序执行。服务保留会话归属、历史与音频来源、工具与审批、租约、用量及消息落库。`SseTurnSink` 处理网页传输，`CollectingTurnSink` 支持进程内调用；调用方必须提供真实账号的重核回调。这次抽取保留回复中返回 409、断线取消等现有行为，小组发言者、断线续跑和 Discord 尚未接入。`career-core` 已加入服务依赖与生产镜像范围，其求职规则尚未接入轮次编排。
+
 ```mermaid
 flowchart LR
   Web[电脑与手机网页] --> API[独立 API 与身份校验]

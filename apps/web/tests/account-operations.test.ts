@@ -47,7 +47,7 @@ function assertPrivateBatch(state: ReturnType<typeof harness>['state'], label: s
 
 test('normal authenticated refresh executes the four real request callbacks and applies all current collections', async () => {
   const context = harness(); context.authenticate('fictional-a');
-  const request = batch(), refresh = refreshAccountData(context.scope, request.read, context.callbacks);
+  const request = batch(), refresh = refreshAccountData(context.scope, request.read, context.callbacks, { workbench: true });
   assert.deepEqual(request.called, paths); request.settle('current');
   assert.equal((await refresh).status, 'applied'); assertPrivateBatch(context.state, 'current');
   assert.equal(context.state.user!.id, 'fictional-a'); assert.equal(context.state.error, '');
@@ -55,9 +55,9 @@ test('normal authenticated refresh executes the four real request callbacks and 
 
 test('old account refresh success cannot overwrite a newly authenticated account after its current refresh', async () => {
   const context = harness(); context.authenticate('fictional-a');
-  const previous = batch(), oldRefresh = refreshAccountData(context.scope, previous.read, context.callbacks);
+  const previous = batch(), oldRefresh = refreshAccountData(context.scope, previous.read, context.callbacks, { workbench: true });
   context.authenticate('fictional-b');
-  const active = batch(), currentRefresh = refreshAccountData(context.scope, active.read, context.callbacks);
+  const active = batch(), currentRefresh = refreshAccountData(context.scope, active.read, context.callbacks, { workbench: true });
   active.settle('account-b'); await currentRefresh;
   previous.settle('account-a'); assert.equal((await oldRefresh).status, 'discarded');
   assertPrivateBatch(context.state, 'account-b'); assert.equal(context.state.user!.id, 'fictional-b');
@@ -65,7 +65,7 @@ test('old account refresh success cannot overwrite a newly authenticated account
 
 test('old account 401 is discarded instead of clearing the new account or showing its private error', async () => {
   const context = harness(); context.authenticate('fictional-a');
-  const previous = batch(), refresh = refreshAccountData(context.scope, previous.read, context.callbacks);
+  const previous = batch(), refresh = refreshAccountData(context.scope, previous.read, context.callbacks, { workbench: true });
   context.authenticate('fictional-b'); context.state.draft = 'Fictional B draft.'; context.state.error = 'Current B message.';
   previous.settle('account-a', '/jobs', new ApiError('Fictional expired A session.', 401));
   assert.equal((await refresh).status, 'discarded');
@@ -76,7 +76,7 @@ test('old account 401 is discarded instead of clearing the new account or showin
 test('logout followed by login to the same account creates a new session that rejects old success and 401', async () => {
   for (const error of [undefined, new ApiError('Fictional previous session expired.', 401)]) {
     const context = harness(); context.authenticate('fictional-a');
-    const previous = batch(), oldRefresh = refreshAccountData(context.scope, previous.read, context.callbacks);
+    const previous = batch(), oldRefresh = refreshAccountData(context.scope, previous.read, context.callbacks, { workbench: true });
     context.authenticate(null); context.authenticate('fictional-a'); context.state.jobs = ['current-same-account-job'];
     previous.settle('previous-session', error ? '/jobs' : undefined, error);
     assert.equal((await oldRefresh).status, 'discarded');
@@ -88,8 +88,8 @@ test('logout followed by login to the same account creates a new session that re
 test('overlapping polling applies the newer response first and discards the slower older response', async () => {
   const context = harness(); context.authenticate('fictional-a');
   const older = batch(), newer = batch();
-  const oldRefresh = refreshAccountData(context.scope, older.read, context.callbacks);
-  const newRefresh = refreshAccountData(context.scope, newer.read, context.callbacks);
+  const oldRefresh = refreshAccountData(context.scope, older.read, context.callbacks, { workbench: true });
+  const newRefresh = refreshAccountData(context.scope, newer.read, context.callbacks, { workbench: true });
   newer.settle('newest'); await newRefresh; older.settle('older');
   assert.equal((await oldRefresh).status, 'discarded'); assertPrivateBatch(context.state, 'newest');
 });
@@ -97,8 +97,8 @@ test('overlapping polling applies the newer response first and discards the slow
 test('overlapping stale polling errors cannot log out an otherwise valid same-session refresh', async () => {
   const context = harness(); context.authenticate('fictional-a');
   const older = batch(), newer = batch();
-  const oldRefresh = refreshAccountData(context.scope, older.read, context.callbacks);
-  const newRefresh = refreshAccountData(context.scope, newer.read, context.callbacks);
+  const oldRefresh = refreshAccountData(context.scope, older.read, context.callbacks, { workbench: true });
+  const newRefresh = refreshAccountData(context.scope, newer.read, context.callbacks, { workbench: true });
   newer.settle('current'); await newRefresh; older.settle('older', '/approvals', new ApiError('Fictional stale request 401.', 401));
   await oldRefresh; assertPrivateBatch(context.state, 'current'); assert.equal(context.state.user!.id, 'fictional-a'); assert.equal(context.events.includes('error'), false);
 });
@@ -106,7 +106,7 @@ test('overlapping stale polling errors cannot log out an otherwise valid same-se
 test('a current 401 resets authentication and all transient private state before applying any partial response', async () => {
   const context = harness(); context.authenticate('fictional-a');
   context.state.draft = 'Fictional private draft.'; context.state.uploads = ['fictional-private-upload']; context.state.dialog = 'Fictional memory edit.'; context.state.messages = ['Fictional message.']; context.state.loading = true;
-  const requests = batch(), refresh = refreshAccountData(context.scope, requests.read, context.callbacks);
+  const requests = batch(), refresh = refreshAccountData(context.scope, requests.read, context.callbacks, { workbench: true });
   requests.requests.get('/conversations')!.reject(new ApiError('Fictional non-auth failure.', 500));
   requests.requests.get('/jobs')!.resolve({ jobs: [{ id: 'must-not-be-applied' }] });
   requests.requests.get('/memories')!.resolve({ memories: [{ id: 'must-not-be-applied' }] });
@@ -151,7 +151,7 @@ test('conversation selection invalidates stale messages and their errors while c
 
 test('publishing a current task and approval invalidates an older poll that predates that mutation', async () => {
   const context = harness(); context.authenticate('fictional-a'); const old = batch();
-  const poll = refreshAccountData(context.scope, old.read, context.callbacks);
+  const poll = refreshAccountData(context.scope, old.read, context.callbacks, { workbench: true });
   await executeAccountOperation(context.scope, context.scope.begin()!, async () => ({ jobId: 'fictional-new-task', approvalId: 'fictional-new-approval' }), {
     apply({ jobId, approvalId }) { context.scope.invalidate('private-refresh'); context.state.jobs = [jobId]; context.state.approvals = [approvalId]; },
   });

@@ -4,8 +4,8 @@ export type Fetch = typeof globalThis.fetch;
 export type ResolveHost = (hostname: string) => Promise<{address:string;family:number}[]>;
 export class HttpClient {
   constructor(readonly fetch: Fetch, readonly resolveHost: ResolveHost = hostname => lookup(hostname,{all:true})) {}
-  async request(url: string | URL, init: RequestInit = {}): Promise<Response> {
-    const timeout = AbortSignal.timeout(120_000);
+  async request(url: string | URL, init: RequestInit = {}, timeoutMs = 120_000): Promise<Response> {
+    const timeout = AbortSignal.timeout(timeoutMs);
     const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
     let response: Response;
     try { response = await this.fetch(url, { ...init, signal, redirect: 'error' }); }

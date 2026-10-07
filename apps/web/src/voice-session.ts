@@ -1,4 +1,4 @@
-import type { VoiceSessionRequest } from '@companion/platform-contracts';
+import { studentVoiceSessionRequest, type StudentVoiceSessionRequest } from './student-requests.ts';
 import type { VoiceSession } from './types.ts';
 interface RecordingResource { state: string; onstop: unknown; ondataavailable: unknown; onerror?: unknown; stop(): void; }
 interface RecognitionResource { onresult: unknown; onerror: unknown; onend: unknown; stop(): void; }
@@ -40,10 +40,10 @@ export function microphoneErrorText(error: unknown): string {
 }
 
 /** Creation uses the same cancellation boundary as negotiation; late leases are released without publishing credentials. */
-export async function requestVoiceSession(body: VoiceSessionRequest, signal: AbortSignal, isCurrent: () => boolean, read: (path: string, init: RequestInit) => Promise<unknown>, release: (sessionId: string) => void): Promise<VoiceSession | null> {
+export async function requestVoiceSession(body: StudentVoiceSessionRequest, signal: AbortSignal, isCurrent: () => boolean, read: (path: string, init: RequestInit) => Promise<unknown>, release: (sessionId: string) => void): Promise<VoiceSession | null> {
   signal.throwIfAborted();
   if (!isCurrent()) return null;
-  const session = await read('/voice/session', { method: 'POST', body: JSON.stringify(body), signal }) as VoiceSession;
+  const session = await read('/voice/session', { method: 'POST', body: JSON.stringify(studentVoiceSessionRequest(body)), signal }) as VoiceSession;
   if (signal.aborted || !isCurrent()) { if (typeof session?.sessionId === 'string' && session.sessionId) release(session.sessionId); return null; }
   return session;
 }
