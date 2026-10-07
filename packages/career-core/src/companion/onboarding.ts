@@ -255,18 +255,27 @@ function parseResolution(value: unknown): OnboardingTextResolution {
   if (data.kind === 'unmatched') { record(value, ['kind']); return { kind: 'unmatched' }; }
   const action = parseAction(value); if (action.kind !== 'answer') fail(); return action;
 }
+/** Closed detector result codec. The actual pending question is validated by the resolver. */
+export function parseOnboardingSafetyResult(value: unknown): OnboardingSafetyResult {
+  return guarded(() => {
+    const data = record(value, ['textId', 'submittedAtRevision', 'level', 'detectorRevision', 'mode'], ['resolution']);
+    const level = member(data.level, ['L0', 'L1', 'L2']), mode = member(data.mode, ['full', 'keyword_only']);
+    if (level === 'L0' && mode === 'keyword_only' || level !== 'L0' && Object.hasOwn(data, 'resolution')) fail();
+    const result: OnboardingSafetyResult = { textId: uuid(data.textId), submittedAtRevision: integer(data.submittedAtRevision, 1),
+      level, detectorRevision: integer(data.detectorRevision, 1), mode };
+    if (Object.hasOwn(data, 'resolution')) result.resolution = parseResolution(data.resolution);
+    return result;
+  });
+}
 /** A trusted port must persist and bind a real result. A caller cannot send this through the action parser. */
 export function resolveOnboardingText(value: OnboardingDraft, input: OnboardingSafetyResult, context: { at: string }): OnboardingDraft {
-  const draft = parseOnboardingDraft(value), data = record(input, ['textId', 'submittedAtRevision', 'level', 'detectorRevision', 'mode'], ['resolution']);
-  const id = uuid(data.textId), submittedAtRevision = integer(data.submittedAtRevision, 1), level = member(data.level, ['L0', 'L1', 'L2']);
-  const detectorRevision = integer(data.detectorRevision, 1), mode = member(data.mode, ['full', 'keyword_only']);
+  const draft = parseOnboardingDraft(value), result = parseOnboardingSafetyResult(input);
+  const { textId: id, submittedAtRevision, level, detectorRevision, mode, resolution } = result;
   if (draft.state !== 'safety_pending' || !draft.pendingText || draft.pendingText.id !== id
     || draft.pendingText.submittedAtRevision !== submittedAtRevision || draft.revision !== submittedAtRevision) fail('ONBOARDING_TEXT_STALE');
-  if (level === 'L0' && mode === 'keyword_only') fail();
   if (draft.revision === MAX_REVISION) fail('ONBOARDING_INVALID_STATE');
   const questionId = draft.pendingText.questionId;
-  const resolution = Object.hasOwn(data, 'resolution') ? parseResolution(data.resolution) : undefined;
-  if (level !== 'L0' && resolution || questionId === 'extra' && resolution || level === 'L0' && questionId !== 'extra' && !resolution) fail();
+  if (questionId === 'extra' && resolution || level === 'L0' && questionId !== 'extra' && !resolution) fail();
   draft.updatedAt = timestamp(record(context, ['at']).at); ++draft.revision;
   draft.safety = { textId: id, questionId, submittedAtRevision, level, detectorRevision, mode }; delete draft.pendingText;
   if (level !== 'L0') draft.state = 'safety_paused';
