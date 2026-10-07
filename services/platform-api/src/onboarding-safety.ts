@@ -7,6 +7,7 @@ import type { Database } from './database.ts';
 import { ApiError } from './errors.ts';
 import { intakeUnavailable, OnboardingStorage, safetyClaimChanged, type IntakeOperationRow, type SafetySubmissionRow } from './onboarding-storage.ts';
 import { parseOnboardingSafetyClaim, parseOnboardingSafetyDecision, type OnboardingSafetyClaim } from './onboarding-safety-protocol.ts';
+import { enqueueSafetyResponse } from './onboarding-safety-response-outbox.ts';
 
 export type SafetyFailure = 'unavailable' | 'timeout' | 'invalid_result';
 /** Injected only by a trusted server runtime. Tests use explicit fictional fixtures, never an HTTP-supplied decision. */
@@ -167,6 +168,7 @@ export class OnboardingSafety {
         WHERE id=$1 AND status='running' AND generation=$5 AND lease_token=$6 AND lease_until>clock_timestamp() RETURNING *`,
       [claim.submissionId, ciphertext, result.level, result.mode, claim.generation, claim.leaseToken]);
       if (!saved.rowCount) throw safetyClaimChanged();
+      await enqueueSafetyResponse(client, saved.rows[0], this.storage.decodeResult(saved.rows[0]));
       const rows = owned.rows.map(row => row.id === claim.submissionId ? saved.rows[0] : row);
       const advanced = await this.advance(client, owned.draft, rows);
       // Writes linearize at this final lease-time check; later expiry does not undo an accepted COMMIT.

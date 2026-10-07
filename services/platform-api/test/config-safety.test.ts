@@ -38,3 +38,15 @@ test('safety profile configuration rejects blank and control paths and never cla
   assert.equal(config.safetyDetectorProfilePath,path.join(workspaceRoot,'.local/nonexistent-fictional-profile.json'));
   assert.equal(config.dataCrypto,undefined); assert.equal(config.modelRoutes.safety_classify,undefined);
 });
+
+test('fixed-response bundle is server-only, absent by default, and rejects invalid paths without echoing them',() => {
+  assert.equal(readConfig({}).safetyResponseBundlePath,undefined);
+  for (const value of ['', ' ', 'fictional-private\n.json', 'fictional-private\r.json', 'fictional-private\0.json', 'fictional-private\x7f.json']) {
+    assert.throws(()=>readConfig({ PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE:value }),error=>error instanceof Error
+      && error.message==='PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE must name a server-controlled file');
+  }
+  const config=readConfig({ PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE:'.local/nonexistent-fictional-response-bundle.json' });
+  assert.equal(config.safetyResponseBundlePath,path.join(workspaceRoot,'.local/nonexistent-fictional-response-bundle.json'));
+  assert.equal(config.dataCrypto,undefined); assert.equal(config.workbenchEnabled,false);
+  assert.deepEqual(config.modelRoutes,{}); assert.equal(config.safetyDailyModelCallLimit,0);
+});

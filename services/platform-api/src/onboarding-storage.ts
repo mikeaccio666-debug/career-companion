@@ -8,6 +8,7 @@ import type { DataCrypto } from './data-crypto.ts';
 import { ApiError } from './errors.ts';
 import { assertActiveLegal, type LegalBundle } from './legal-documents.ts';
 import { parseOnboardingSafetyClaim, type OnboardingSafetyClaim } from './onboarding-safety-protocol.ts';
+import { enqueueSafetyResponse } from './onboarding-safety-response-outbox.ts';
 
 export interface IntakeDraftRow { id: string; user_id: string; revision: number; payload_ciphertext: Buffer; updated_at: Date; }
 export interface IntakeOperationRow { operation_id: string; draft_id: string; applied_revision: number; request_ciphertext: Buffer; }
@@ -115,7 +116,7 @@ export class OnboardingStorage {
       const command = texts.get(row.operation_id);
       if (!command || command.action.kind !== 'text' || row.draft_id !== draft.id || row.submitted_revision !== command.expectedRevision + 1
         || row.question_id !== command.action.questionId) throw intakeUnavailable();
-      if (row.status === 'detected') this.decodeResult(row);
+      if (row.status === 'detected') await enqueueSafetyResponse(client, row, this.decodeResult(row));
     }
     if (draft.pendingText) {
       const row = rows.find(item => item.operation_id === draft.pendingText!.id);
