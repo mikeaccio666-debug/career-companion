@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ModelRelayRequest } from '@companion/platform-contracts';
 import type { Database } from './database.ts';
 import { ApiError } from './errors.ts';
+import { cliModelConfiguration, OPENAI_CLI_ENDPOINT } from '@companion/ai-core';
 
 export interface ModelRelayBinding {
   jobId: string; userId: string; generation: number; leaseToken: string; signal: AbortSignal;
@@ -9,6 +10,7 @@ export interface ModelRelayBinding {
 export interface ModelRelayOptions { env?: NodeJS.ProcessEnv; fetch?: typeof globalThis.fetch; }
 export interface ModelRelayPolicy {
   model: string; maxRequests: number; maxTokens: number; dailyTokens: number; maxOutputTokens: number;
+  provider?: 'openai' | 'ollama'; upstreamHash?: string;
 }
 
 const MAX_INPUT_BYTES=256*1024, MAX_RESPONSE_BYTES=8*1024*1024;
@@ -22,24 +24,50 @@ function limit(env:NodeJS.ProcessEnv,key:string,fallback:number,min:number,max:n
   return value;
 }
 export function configuredModelRelayPolicy(env:NodeJS.ProcessEnv=process.env):ModelRelayPolicy {
-  const model=env.PLATFORM_CLI_MODEL||env.OPENAI_CHAT_MODEL||'gpt-6-astra';
-  if(model.length>160)throw new ApiError(503,'MODEL_RELAY_CONFIG_INVALID','Check the server relay model.');
-  return {model,maxRequests:limit(env,'PLATFORM_CLI_RELAY_MAX_REQUESTS',16,1,64),maxTokens:limit(env,'PLATFORM_CLI_RELAY_MAX_TOKENS',131072,4096,16*1024*1024),dailyTokens:limit(env,'PLATFORM_CLI_RELAY_DAILY_TOKENS',524288,4096,64*1024*1024),maxOutputTokens:limit(env,'PLATFORM_CLI_RELAY_MAX_OUTPUT_TOKENS',4096,256,16384)};
+  const config=relayConfiguration(env);
+  return {model:config.model,provider:config.provider,upstreamHash:upstreamHash(config.endpoint),maxRequests:limit(env,'PLATFORM_CLI_RELAY_MAX_REQUESTS',16,1,64),maxTokens:limit(env,'PLATFORM_CLI_RELAY_MAX_TOKENS',131072,4096,16*1024*1024),dailyTokens:limit(env,'PLATFORM_CLI_RELAY_DAILY_TOKENS',524288,4096,64*1024*1024),maxOutputTokens:limit(env,'PLATFORM_CLI_RELAY_MAX_OUTPUT_TOKENS',4096,256,16384)};
 }
-function localTools(value:unknown,depth=0):void {
+function relayConfiguration(env:NodeJS.ProcessEnv) {
+  try{return cliModelConfiguration(env);}catch{throw new ApiError(503,'MODEL_RELAY_CONFIG_INVALID','Check the server relay provider, model and local endpoint.');}
+}
+const upstreamHash=(endpoint:string)=>createHash('sha256').update(endpoint).digest('hex');
+// Prior approvals only ever used this fixed commercial route. They cannot become local approvals.
+const approvedProvider=(policy:Record<string,unknown>)=>policy.provider??'openai';
+const approvedUpstream=(policy:Record<string,unknown>)=>policy.upstreamHash??(policy.provider===undefined?upstreamHash(OPENAI_CLI_ENDPOINT):undefined);
+
+/** Ollama may proxy cloud models; verify the actual server disables that path. */
+async function confirmLocalOllama(endpoint:string,fetch:typeof globalThis.fetch,signal:AbortSignal) {
+  const bounded=AbortSignal.any([signal,AbortSignal.timeout(5_000)]);
+  let response:Response|undefined,reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
+  const cancel=()=>{void reader?.cancel().catch(()=>{});};
+  try{
+    response=await fetch(new URL('/api/status',endpoint),{redirect:'error',signal:bounded,headers:{Accept:'application/json'}});
+    if(!response.ok||!response.body||(response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase()!=='application/json')throw new Error('Invalid status');
+    reader=response.body.getReader();bounded.addEventListener('abort',cancel,{once:true});
+    const chunks:Uint8Array[]=[];let total=0;
+    while(true){bounded.throwIfAborted();const part=await reader.read();if(part.done)break;total+=part.value.length;if(total>16*1024)throw new Error('Oversized status');chunks.push(part.value);}
+    bounded.throwIfAborted();
+    const bytes=Buffer.concat(chunks,total),status=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+    if(!record(status)||!record(status.cloud)||status.cloud.disabled!==true)throw new Error('Cloud state unavailable');
+  }catch{throw new ApiError(503,'MODEL_RELAY_CONFIG_INVALID','The local model server must confirm that cloud inference is disabled.');}
+  finally{bounded.removeEventListener('abort',cancel);if(reader){await reader.cancel().catch(()=>{});reader.releaseLock();}else await response?.body?.cancel().catch(()=>{});}
+}
+function localTools(value:unknown,depth=0,allowCustom=true):void {
   if(value===undefined)return;
   if(!Array.isArray(value)||value.length>128||depth>3)bad('The model relay accepts bounded local tool definitions.');
   for(const tool of value){
     if(!record(tool))bad('Invalid tool definition.');
-    if(tool.type==='namespace'){if(typeof tool.name!=='string')bad('Invalid tool namespace.');localTools(tool.tools,depth+1);}
+    if(tool.type==='namespace'){if(typeof tool.name!=='string')bad('Invalid tool namespace.');localTools(tool.tools,depth+1,allowCustom);}
     else if(!['function','custom'].includes(String(tool.type))||typeof tool.name!=='string')bad('Only tools executed inside the task container are permitted.');
+    else if(tool.type==='custom'&&!allowCustom)bad('This local model adapter supports function tools, not freeform tools.');
   }
 }
-function textInput(value:unknown):void {
+function textInput(value:unknown,allowCustom=true):void {
   if(typeof value==='string')return;
   if(!Array.isArray(value)||value.length>500)bad('The model relay requires bounded stateless input.');
   for(const item of value){
     if(!record(item)|| (item.type!==undefined&&!inputTypes.has(String(item.type))))bad('Unsupported model input item.');
+    if(!allowCustom&&['custom_tool_call','custom_tool_call_output','compaction'].includes(String(item.type)))bad('This input item is not supported by the local Responses adapter.');
     if(item.type===undefined||item.type==='message'){
       if(!['user','assistant','system','developer'].includes(String(item.role)))bad('Invalid message role.');
       if(typeof item.content==='string')continue;
@@ -49,17 +77,19 @@ function textInput(value:unknown):void {
   }
 }
 function prepare(env:NodeJS.ProcessEnv,request:ModelRelayRequest,userId:string,approvedPolicy?:ModelRelayPolicy){
-  if(env.PLATFORM_CLI_MODEL_RELAY!=='1'||env.PLATFORM_ALLOW_PROVIDER_CALLS!=='1'||!env.OPENAI_API_KEY)throw new ApiError(503,'MODEL_RELAY_DISABLED','Configure and explicitly enable the server model relay.');
+  const config=relayConfiguration(env);
+  if(env.PLATFORM_CLI_MODEL_RELAY!=='1'||!config.enabled)throw new ApiError(503,'MODEL_RELAY_DISABLED','Configure and explicitly enable the server model relay.');
   if(!/^[A-Za-z0-9_-]{1,100}$/.test(request.requestId)||!record(request.body))bad('Invalid model relay request.');
-  const selected=env.PLATFORM_CLI_MODEL||env.OPENAI_CHAT_MODEL||'gpt-6-astra';
+  const selected=config.model;
   if(selected.length>160)throw new ApiError(503,'MODEL_RELAY_CONFIG_INVALID','Check the server relay model.');
   if(request.body.model!==undefined&&request.body.model!==selected)bad('The model is fixed by the server for this task.');
   for(const key of Object.keys(request.body))if(!fields.has(key))bad('This model request field is not supported by the task relay.');
   if(request.body.background===true)bad('Background provider execution is not permitted.');
   if(request.body.stream!==undefined&&typeof request.body.stream!=='boolean')bad('Invalid streaming option.');
-  textInput(request.body.input);localTools(request.body.tools);
+  textInput(request.body.input,config.provider!=='ollama');localTools(request.body.tools,0,config.provider!=='ollama');
   if(record(request.body.tool_choice)&&!['function','custom','allowed_tools'].includes(String(request.body.tool_choice.type)))bad('Hosted tool selection is not permitted.');
-  if(record(request.body.tool_choice)&&request.body.tool_choice.type==='allowed_tools')localTools(request.body.tool_choice.tools);
+  if(record(request.body.tool_choice)&&request.body.tool_choice.type==='custom'&&config.provider==='ollama')bad('This local model adapter supports function tools, not freeform tools.');
+  if(record(request.body.tool_choice)&&request.body.tool_choice.type==='allowed_tools')localTools(request.body.tool_choice.tools,0,config.provider!=='ollama');
   if(request.body.include!==undefined&&(!Array.isArray(request.body.include)||request.body.include.some(value=>value!=='reasoning.encrypted_content')))bad('Unsupported additional response data.');
   const maxOutput=Math.min(limit(env,'PLATFORM_CLI_RELAY_MAX_OUTPUT_TOKENS',4096,256,16384),approvedPolicy?.maxOutputTokens??16384);
   const requested=request.body.max_output_tokens;
@@ -102,7 +132,7 @@ export function createJobModelRelay(db:Database,binding:ModelRelayBinding,option
   const env={...(options.env??process.env)},fetch=options.fetch??globalThis.fetch;
   return async request=>{
     binding.signal.throwIfAborted();request.signal.throwIfAborted();
-    let prepared=prepare(env,request,binding.userId);const auditId=randomUUID(),currentPolicy=configuredModelRelayPolicy(env);
+    let prepared=prepare(env,request,binding.userId);const auditId=randomUUID(),currentPolicy=configuredModelRelayPolicy(env),upstreamConfig=relayConfiguration(env);
     await db.transaction(async client=>{
       await client.query("SELECT pg_advisory_xact_lock(hashtext('platform-model-relay:'||$1))",[binding.userId]);
       const job=await client.query("SELECT id,model,execution_policy FROM platform_jobs WHERE id=$1 AND user_id=$2 AND generation=$3 AND lease_token=$4 AND lease_until>now() AND status='running' AND kind='cli' AND provider='cli' AND requires_approval FOR UPDATE",[binding.jobId,binding.userId,binding.generation,binding.leaseToken]);
@@ -110,7 +140,7 @@ export function createJobModelRelay(db:Database,binding:ModelRelayBinding,option
       const approval=await client.query("SELECT id,args FROM platform_approvals WHERE job_id=$1 AND user_id=$2 AND generation=$3 AND status='approved'",[binding.jobId,binding.userId,binding.generation]);
       if(!approval.rowCount)throw new ApiError(409,'MODEL_RELAY_AUTH_REVOKED','The task has no current approval for model access.');
       const policy=job.rows[0].execution_policy?.modelRelay;
-      if(!record(policy)||policy.model!==prepared.model||job.rows[0].model!==prepared.model||approval.rows[0].args.model!==prepared.model||!record(approval.rows[0].args.modelRelayLimits)||Object.keys(currentPolicy).some(key=>approval.rows[0].args.modelRelayLimits[key]!==policy[key])||['maxRequests','maxTokens','dailyTokens','maxOutputTokens'].some(key=>!Number.isSafeInteger(policy[key])||Number(policy[key])<1))throw new ApiError(409,'MODEL_RELAY_POLICY_CHANGED','The approved task model and limits no longer match. Create a new reviewed task.');
+      if(!record(policy)||policy.model!==prepared.model||job.rows[0].model!==prepared.model||approval.rows[0].args.model!==prepared.model||approval.rows[0].args.modelProvider!==approvedProvider(policy)||approvedProvider(policy)!==currentPolicy.provider||approvedUpstream(policy)!==currentPolicy.upstreamHash||!record(approval.rows[0].args.modelRelayLimits)||Object.keys(currentPolicy).some(key=>approval.rows[0].args.modelRelayLimits[key]!==policy[key])||['maxRequests','maxTokens','dailyTokens','maxOutputTokens'].some(key=>!Number.isSafeInteger(policy[key])||Number(policy[key])<1))throw new ApiError(409,'MODEL_RELAY_POLICY_CHANGED','The approved task provider, model and limits no longer match. Create a new reviewed task.');
       const approvedPolicy=policy as unknown as ModelRelayPolicy;
       prepared=prepare(env,request,binding.userId,approvedPolicy);
       const maxCalls=Math.min(currentPolicy.maxRequests,approvedPolicy.maxRequests),maxTokens=Math.min(currentPolicy.maxTokens,approvedPolicy.maxTokens),dailyTokens=Math.min(currentPolicy.dailyTokens,approvedPolicy.dailyTokens);
@@ -119,15 +149,17 @@ export function createJobModelRelay(db:Database,binding:ModelRelayBinding,option
       const total=await client.query('SELECT count(*)::integer AS count,coalesce(sum(reserved_tokens),0)::bigint AS tokens FROM platform_model_relay_requests WHERE job_id=$1',[binding.jobId]);
       const day=await client.query("SELECT coalesce(sum(reserved_tokens),0)::bigint AS tokens FROM platform_model_relay_requests WHERE user_id=$1 AND created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",[binding.userId]);
       if(total.rows[0].count>=maxCalls||Number(total.rows[0].tokens)+prepared.reserved>maxTokens||Number(day.rows[0].tokens)+prepared.reserved>dailyTokens)throw new ApiError(429,'MODEL_RELAY_BUDGET_LIMIT','This task or account reached its model relay allowance.');
-      await client.query("INSERT INTO platform_model_relay_requests(id,user_id,job_id,generation,request_id,model,reserved_tokens,status) VALUES($1,$2,$3,$4,$5,$6,$7,'reserved')",[auditId,binding.userId,binding.jobId,binding.generation,request.requestId,prepared.model,prepared.reserved]);
+      await client.query("INSERT INTO platform_model_relay_requests(id,user_id,job_id,generation,request_id,provider,model,reserved_tokens,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'reserved')",[auditId,binding.userId,binding.jobId,binding.generation,request.requestId,upstreamConfig.provider,prepared.model,prepared.reserved]);
     });
     const revoked=new AbortController(),signal=AbortSignal.any([binding.signal,request.signal,revoked.signal,AbortSignal.timeout(120_000)]);
     let checking=false;
     const heartbeat=setInterval(()=>{if(checking)return;checking=true;void authorize(db,binding,prepared.model).catch(()=>revoked.abort()).finally(()=>{checking=false;});},1000);heartbeat.unref();
     let upstream:Response|undefined,attempted=false;
     try{
+      await authorize(db,binding,prepared.model);signal.throwIfAborted();
+      if(upstreamConfig.provider==='ollama')await confirmLocalOllama(upstreamConfig.endpoint,fetch,signal);
       await authorize(db,binding,prepared.model);signal.throwIfAborted();attempted=true;
-      upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${env.OPENAI_API_KEY}`},body:prepared.encoded,redirect:'error',signal});
+      upstream=await fetch(upstreamConfig.endpoint,{method:'POST',headers:{'Content-Type':'application/json',...(upstreamConfig.provider==='openai'?{Authorization:`Bearer ${env.OPENAI_API_KEY}`}:{})},body:prepared.encoded,redirect:'error',signal});
       if(!upstream.ok){await upstream.body?.cancel();if(upstream.status>=500)throw new ApiError(502,'MODEL_RELAY_UNCERTAIN','The provider could not confirm the result. Review before retrying.');throw new ApiError(upstream.status===429?429:502,'MODEL_RELAY_PROVIDER_REJECTED','Check the model account, access and available credits.');}
       const contentType=(upstream.headers.get('content-type')??'').split(';')[0].trim().toLowerCase();
       const stream=prepared.body.stream===true;

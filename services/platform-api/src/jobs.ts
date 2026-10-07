@@ -73,7 +73,7 @@ function approvalMatches(row:any,args:any):boolean {
     for(const name of ['previousAttemptUncertain','newProviderRequest','mayIncurAdditionalCharge','resumeExistingProviderTask'])
       if(!(name in (row.options??{}))&&options[name]===true)delete options[name];
     if(inputHash({kind:args.kind,provider:args.provider,prompt:args.prompt,model:args.model??undefined,options,attachmentIds:args.attachmentIds??[],executionTemplate:args.executionTemplate})!==inputHash(jobInput(row)))return false;
-    if(row.execution_policy?.modelRelay&&(args.modelProvider!=='openai'||workflowHash(args.modelRelayLimits)!==workflowHash(row.execution_policy.modelRelay)))return false;
+    if(row.execution_policy?.modelRelay&&(args.modelProvider!==(row.execution_policy.modelRelay.provider??'openai')||workflowHash(args.modelRelayLimits)!==workflowHash(row.execution_policy.modelRelay)))return false;
     if(row.kind==='workflow'&&args.workflowDefinitionHash!==workflowDefinitionHash(jobInput(row)))return false;
     if(row.kind==='browser'&&args.browserDefinitionHash!==browserDefinitionHash(jobInput(row)))return false;
     if(row.kind==='mcp'&&!mcpApprovalMatches(row,args))return false;
@@ -223,7 +223,7 @@ export class JobService {
     const relayPolicy=input.kind==='cli'&&input.provider==='cli'?(await client.query('SELECT execution_policy FROM platform_jobs WHERE id=$1',[jobId])).rows[0]?.execution_policy?.modelRelay:undefined;
     const mcpPolicy=input.kind==='mcp'?(await client.query('SELECT execution_policy FROM platform_jobs WHERE id=$1 AND user_id=$2',[jobId,userId])).rows[0]?.execution_policy?.mcp:undefined;
     const result = await client.query('INSERT INTO platform_approvals(id,user_id,job_id,tool_name,args,generation) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
-      [randomUUID(),userId,jobId,input.kind,JSON.stringify({...input,...(relayPolicy?{modelProvider:'openai',modelRelayLimits:relayPolicy}: {}),...(input.kind==='workflow'?{workflowDefinitionHash:workflowDefinitionHash(input)}:{}),...(input.kind==='browser'?{browserDefinitionHash:browserDefinitionHash(input)}:{}),...(mcpPolicy?{mcp:mcpSummary(mcpPolicy),mcpDefinitionHash:mcpDefinitionHash(input,mcpPolicy)}:{}),...(goalPlanInput?{goalPlanInput}:{})}),generation]);
+      [randomUUID(),userId,jobId,input.kind,JSON.stringify({...input,...(relayPolicy?{modelProvider:relayPolicy.provider??'openai',modelRelayLimits:relayPolicy}: {}),...(input.kind==='workflow'?{workflowDefinitionHash:workflowDefinitionHash(input)}:{}),...(input.kind==='browser'?{browserDefinitionHash:browserDefinitionHash(input)}:{}),...(mcpPolicy?{mcp:mcpSummary(mcpPolicy),mcpDefinitionHash:mcpDefinitionHash(input,mcpPolicy)}:{}),...(goalPlanInput?{goalPlanInput}:{})}),generation]);
     return mapApproval(result.rows[0]);
   }
   async list(userId: string): Promise<Job[]> {
