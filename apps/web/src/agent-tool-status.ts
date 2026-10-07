@@ -1,10 +1,10 @@
 export type AgentToolState = 'pending' | 'returned' | 'failed' | 'unconfirmed' | 'approval';
 export interface AgentToolStatus { key: string; name: string; state: AgentToolState; }
-const labels: Record<string, string> = { read_saved_memories: '读取已保存记忆', search_knowledge: '检索已保存资料', read_knowledge_passage: '读取资料段落', list_jobs: '查询任务记录', get_browser_observation: '读取网页结果', get_artifact_reference: '读取图片引用', read_artifact_text: '读取成果文字', create_job: '准备任务', prepare_browser_task: '准备浏览器计划', list_mcp_connections: '查询外部工具连接', list_mcp_tools: '读取外部工具目录', prepare_mcp_task: '准备外部工具调用', read_mcp_result: '读取外部工具结果' };
+const labels: Record<string, string> = { read_saved_memories: '读取已保存记忆', search_knowledge: '检索已保存资料', read_knowledge_passage: '读取资料段落', list_jobs: '查询任务记录', get_browser_observation: '读取网页结果', get_artifact_reference: '读取图片引用', read_artifact_text: '读取成果文字', create_job: '准备任务', prepare_browser_task: '准备浏览器计划', list_mcp_connections: '查询外部工具连接', list_mcp_tools: '读取外部工具目录', prepare_mcp_task: '准备外部工具调用', read_mcp_result: '读取外部工具结果', propose_goal_plan: '提出计划草稿', get_execution_capabilities: '读取执行能力', list_goal_plans: '查询当前对话计划', read_goal_plan: '读取计划版本' };
 const stateLabels: Record<AgentToolState, string> = { pending: '处理中', returned: '已返回', failed: '未成功返回', unconfirmed: '结果未确认', approval: '已请求审批' };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 function name(value: unknown) { return typeof value === 'string' && value.trim() ? value.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 100) : '工具'; }
-export function agentToolStatusText(item: AgentToolStatus): string { return `${labels[item.name] || item.name} · ${stateLabels[item.state]}`; }
+export function agentToolStatusText(item: AgentToolStatus): string { return item.name === 'propose_goal_plan' && item.state === 'returned' ? '提出计划草稿 · 已返回，请核对保存记录' : `${labels[item.name] || item.name} · ${stateLabels[item.state]}`; }
 export function upsertAgentToolStatus(current: AgentToolStatus[], event: unknown): AgentToolStatus[] {
   if (!object(event)) return current;
   const callId = typeof event.callId === 'string' && event.callId.length <= 256 && event.callId ? event.callId : undefined;

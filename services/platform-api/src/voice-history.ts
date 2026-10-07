@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import type { Attachment, VoiceRecord, VoiceRecordInput, VoiceRecordSource } from '@companion/platform-contracts';
 import type { Database } from './database.ts';
 import { ApiError, identifier, invalid, notFound, object, string } from './errors.ts';
+import { assertVoiceConversation } from './voice-context.ts';
 
 export const VOICE_HISTORY_LIMITS = {
   textCharacters: 8_000,
@@ -60,11 +61,13 @@ async function readAudioAttachments(client: Pick<PoolClient, 'query'>, userId: s
   return attachments;
 }
 
-export async function rememberVoiceSession(db: Database, userId: string, sessionId: string, provider: string, model: string) {
+export async function rememberVoiceSession(db: Database, userId: string, sessionId: string, provider: string, model: string, options: { conversationId?: string; authorize?: (client: PoolClient) => Promise<void> } = {}) {
   await db.transaction(async client => {
+    if (options.authorize) await options.authorize(client);
+    if (options.conversationId) await assertVoiceConversation(client, userId, options.conversationId);
     const lease = await client.query("SELECT id FROM platform_runtime_leases WHERE id=$1 AND user_id=$2 AND kind='voice' AND expires_at>now() FOR SHARE", [sessionId, userId]);
     if (!lease.rowCount) throw new ApiError(409, 'VOICE_SESSION_EXPIRED', 'The voice session ended before it could be connected.');
-    await client.query("INSERT INTO platform_voice_sessions(id,user_id,provider,model,expires_at,save_until) SELECT id,user_id,$3,$4,expires_at,now()+interval '24 hours' FROM platform_runtime_leases WHERE id=$1 AND user_id=$2", [sessionId, userId, string(provider, 'voice provider', 80), string(model, 'voice model', 150)]);
+    await client.query("INSERT INTO platform_voice_sessions(id,user_id,provider,model,expires_at,save_until,conversation_id) SELECT id,user_id,$3,$4,expires_at,now()+interval '24 hours',$5::uuid FROM platform_runtime_leases WHERE id=$1 AND user_id=$2", [sessionId, userId, string(provider, 'voice provider', 80), string(model, 'voice model', 150), options.conversationId ?? null]);
   });
 }
 
@@ -104,6 +107,7 @@ export async function saveVoiceRecord(db: Database, userId: string, conversation
     if (input.sessionId) {
       const issued = await client.query('SELECT * FROM platform_voice_sessions WHERE id=$1 AND user_id=$2 FOR SHARE', [input.sessionId, userId]);
       if (!issued.rowCount) throw notFound();
+      if (issued.rows[0].conversation_id && issued.rows[0].conversation_id !== conversationId) throw notFound();
       if (new Date(issued.rows[0].save_until).getTime() <= Date.now()) throw new ApiError(409, 'VOICE_SESSION_SAVE_EXPIRED', 'Save realtime excerpts within 24 hours of starting the session.');
       const lease = await client.query('SELECT user_id,kind FROM platform_runtime_leases WHERE id=$1 FOR SHARE', [input.sessionId]);
       if (lease.rowCount && (lease.rows[0].user_id !== userId || lease.rows[0].kind !== 'voice')) throw notFound();

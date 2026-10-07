@@ -1,0 +1,24 @@
+.chat-input-attachments { padding: 10px 4px 8px; max-height: min(42dvh, 420px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.chat-input-capabilities { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--muted, #71766e); font-size: 11px; line-height: 1.6; }
+.chat-input-capabilities .text-button { flex-shrink: 0; font-size: 11px; }
+.chat-input-files { display: grid; gap: 8px; margin-top: 8px; }
+.chat-input-file { border: 1px solid var(--border, #e1e3da); border-radius: 12px; padding: 10px 12px; background: var(--surface, #fafbf7); }
+.chat-input-file-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chat-input-file-heading strong { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.chat-input-file-status, .chat-input-note { margin: 5px 0; color: var(--muted, #71766e); font-size: 11px; line-height: 1.7; }
+.chat-input-warning { margin: 7px 0; color: #8a4b25; font-size: 12px; line-height: 1.7; }
+.audio-review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 7px 0; }
+.audio-review-actions > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.audio-request-id { display: block; overflow-wrap: anywhere; font-size: 10px; color: var(--muted, #71766e); }
+.audio-review-editor { display: grid; gap: 7px; margin-top: 9px; }
+.audio-review-editor details, .audio-transcript-history details { font-size: 12px; }
+.audio-review-editor pre, .audio-transcript-history pre { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; font: inherit; line-height: 1.7; }
+.audio-review-editor > label { display: grid; gap: 5px; font-size: 12px; }
+.chat-composer .audio-review-editor textarea { border: 1px solid var(--border, #e1e3da); border-radius: 8px; background: #fff; padding: 9px; min-height: 85px; font-size: 12px; }
+.audio-review-editor > .audio-review-check { display: flex; align-items: flex-start; gap: 7px; line-height: 1.7; }
+.audio-review-check input { width: 16px; height: 16px; margin: 2px 0 0; flex-shrink: 0; }
+.audio-transcript-history-list { display: grid; gap: 8px; margin-top: 12px; }
+.audio-transcript-history { padding: 10px 12px; border: 1px solid var(--border, #e1e3da); border-radius: 10px; font-size: 12px; }
+.audio-transcript-history > strong { display: block; font-size: 12px; overflow-wrap: anywhere; }
+.audio-transcript-history > small { display: block; color: var(--muted, #71766e); font-size: 10px; line-height: 1.7; }
+@media (max-width: 600px) { .chat-input-capabilities { align-items: flex-start; flex-direction: column; gap: 3px; } }

@@ -14,6 +14,7 @@ import { speechJobOptions } from './voice-input.ts';
 import { speechElevenLabs } from './elevenlabs.ts';
 export { parseExecutionTemplateBinding, validateComfyUITemplateSnapshot } from './comfyui-template.ts';
 export { ProviderError } from './errors.ts';
+export { cliModelConfiguration, OPENAI_CLI_ENDPOINT } from './cli-model.ts';
 export { workflowHash, workflowDefinitionHash } from './workflow.ts';
 export { validateMediaReferenceBinding, validateMediaJobInput, validateMediaReferenceImages, isArkSeedance25Model } from './media-input.ts';
 export { parseBrowserTaskOptions, browserDefinitionHash } from './browser-actions.ts';
@@ -33,14 +34,19 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
   try { comfyuiTemplate = captureComfyUITemplate(env); } catch { /* An invalid local template disables this provider without stopping the platform. */ }
   const runtime:PlatformProviderRuntime={
     capabilities:()=>providerStatuses(env).map(provider => provider.id === 'comfyui' ? { ...provider,
-      enabled: Boolean(comfyuiTemplate), keyConfigured: Boolean(comfyuiTemplate),
+      enabled: Boolean(comfyuiTemplate), keyConfigured: Boolean(comfyuiTemplate), capabilities: comfyuiTemplate?.outputKind ? [comfyuiTemplate.outputKind] : [],
       ...(comfyuiTemplate ? { executionTemplate: { version: 1 as const, hash: comfyuiTemplate.hash }, reason: undefined } : { reason: 'Connect ComfyUI and a valid server-reviewed API workflow, then restart the services.' }),
     } : provider),
     captureComfyUITemplate() {
       if (!comfyuiTemplate) throw new ProviderError('INVALID_COMFYUI_TEMPLATE', 'Configure a valid server-reviewed ComfyUI API workflow, then restart the services.', 503);
       return structuredClone(comfyuiTemplate);
     },
-    validateComfyUITemplate(snapshot, binding) { checkComfyUIServer(validateComfyUITemplateSnapshot(snapshot, binding), env); },
+    validateComfyUITemplate(snapshot, binding) {
+      const checked=validateComfyUITemplateSnapshot(snapshot,binding);
+      if(!comfyuiTemplate)throw new ProviderError('INVALID_COMFYUI_TEMPLATE','Configure a valid server-reviewed ComfyUI API workflow and output kind, then restart the services.',503);
+      if(checked.outputKind!==comfyuiTemplate.outputKind)throw new ProviderError('COMFYUI_OUTPUT_KIND_MISMATCH','The reviewed generation template does not match the current output kind. Prepare a new reviewed task.',409);
+      checkComfyUIServer(checked,env);
+    },
     streamChat(input:ChatInput,context:ChatContext={}){
       requireProvider(env,input.provider,input.mode==='agent'?'agent':'chat');
       if(!input.messages.length||input.messages.length>200)invalid('A conversation must contain between 1 and 200 context messages.');
@@ -48,6 +54,14 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
     },
     async executeJob(input:CreateJobInput,context:JobExecutionContext):Promise<JobExecutionResult>{
       if(input.executionTemplate&&input.provider!=='comfyui')invalid('Only ComfyUI generation tasks use a server template version.');
+      if(input.provider==='comfyui'){
+        if(!comfyuiTemplate)throw new ProviderError('INVALID_COMFYUI_TEMPLATE','Configure a valid server-reviewed ComfyUI API workflow and output kind, then restart the services.',503);
+        if(comfyuiTemplate.outputKind!==input.kind)throw new ProviderError('COMFYUI_OUTPUT_KIND_MISMATCH','The current generation template does not produce the requested media kind. Prepare a new reviewed task.',409);
+      }
+      if(input.provider==='comfyui'&&context.comfyuiTemplate&&input.executionTemplate){
+        const saved=validateComfyUITemplateSnapshot(context.comfyuiTemplate,input.executionTemplate);
+        if(saved.outputKind!==input.kind)throw new ProviderError('COMFYUI_OUTPUT_KIND_MISMATCH','The reviewed generation template does not produce the requested media kind. Prepare a new reviewed task.',409);
+      }
       requireProvider(env,input.provider,input.kind);context.signal?.throwIfAborted();
       if(!input.prompt||input.prompt.length>20_000)invalid('A task prompt must contain between 1 and 20000 characters.');
       if(input.kind==='workflow'&&input.provider==='workflow')return executeWorkflow(runtime,input,context);

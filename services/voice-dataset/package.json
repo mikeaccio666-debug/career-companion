@@ -1,0 +1,9 @@
+{
+  "name": "@companion/voice-dataset",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "check": "python3 -c \"import ast,pathlib; [ast.parse(p.read_text(),filename=str(p)) for p in pathlib.Path('.').rglob('*.py') if '__pycache__' not in p.parts]\"",
+    "test": "python3 -m unittest discover -s tests -p 'test_*.py'"
+  }
+}

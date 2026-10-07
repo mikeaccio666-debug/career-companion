@@ -1,6 +1,6 @@
 # 本人专业声线：录制脚本与验收手册
 
-版本：2026-10-06。目标已确定：专业训练本人声音，优先追求逼真、自然与稳定；ElevenLabs Professional Voice Cloning（PVC）是第一候选，实际优劣仍需同样内容的试听比较。本手册只准备脚本与流程；尚未采购、录音、上传、训练或实现 ElevenLabs adapter，没有音质或训练成功的实测结论。
+版本：2026-10-06。目标已确定：专业训练本人声音，优先追求逼真、自然与稳定；ElevenLabs Professional Voice Cloning（PVC）是第一候选，实际优劣仍需同样内容的试听比较。平台已经实现 ElevenLabs TTS adapter，使用服务端配置的已批准声线合成；它不创建、上传或训练克隆。本人声线项目仍未购买专业训练服务，也未录音、上传、训练或完成接入验收，没有音质或训练成功的实测结论。
 
 这里的文本均为原创、虚构的求职练习材料，可以进入公开仓库。实际声音、本人身份、账号、同意记录、清单、转录和生成结果保存在私人目录；不要把它们填回本文件或提交到源码。
 
@@ -154,6 +154,7 @@ After recording: actual duration ________; beginning/end consistency ________; n
 | 字段 | 内容 |
 | --- | --- |
 | clip_id / relative_path / sha256 | 唯一编号、私人根目录内相对路径、文件校验值 |
+| phrase_id / style | 片段内容编号与稳定表演风格；同一句的不同 take 共用内容编号 |
 | split | `probe`、`train`、`holdout_reference` 或 `evaluation` |
 | dataset_version / script_id / take | 数据版本、内容编号、take；改述后新增版本 |
 | language / target_locale | `zh`、`en`、`mixed`；期望地区或口音单独记录 |
@@ -165,6 +166,18 @@ After recording: actual duration ________; beginning/end consistency ________; n
 | upload_status / training_status | 初始 `not_uploaded` / `not_started`，有真实回执才更新 |
 
 上传候选清单只从 `split=train` 且质量已通过的记录生成。`probe` 是否转成训练资料必须人工确认并改分类；`holdout_reference` 和下文测试文本始终排除。不要直接递归上传整个私人根目录；个人同意记录按供应商单独流程保存，不能用合成声音替本人完成验证。
+
+### 可运行的离线检查与候选导出
+
+现在可使用 [voice-dataset 工具](../../services/voice-dataset/README.md) 创建私人空清单、检查 PCM WAV，再审阅并导出候选索引。它只依赖 Python 标准库，默认资料和结果放在忽略的 `.local/voice-dataset/`。不会录制、上传、训练，也不会把本人声明当成身份或法律验证。
+
+```sh
+python3 services/voice-dataset/voice_dataset.py init --root .local/voice-dataset/my-voice
+```
+
+用录音软件保存母版，把筛选后的训练副本放到对应语言目录，在私人 JSON 清单记录 `phrase_id`、`language`、`style`、`split`、人工质量及转录审阅状态、实际净可用时长。CLI 可补测实际 WAV 格式、时长、文件／PCM SHA、削波和近静音指标；同时拒绝重复音频、同一句训练／留出混用、路径越界与符号链接。手册 ZH-T / EN-T 留出编号不能进入训练或试录筛选。具体字段、权限及 `validate → 审阅报告 → export` 命令见工具 README。
+
+导出要求本人明确确认已审阅并提供报告 SHA；录音或清单改变后旧报告失效。输出仅为按语言分组的私人候选清单，不复制音频或文稿。数值通过不证明自然度、本人相似度、口音或供应商训练合格；人工审听和真实供应商本人验证仍需完成。网页录音转写不是专业训练母版录制器。
 
 ## 独立留出集：禁止用于训练或试录筛选
 
@@ -256,4 +269,4 @@ After recording: actual duration ________; beginning/end consistency ________; n
 - 接入完成：实现并验证真实 adapter、服务端声线归属、状态/失败/用量、身份与租约、取消和私人音频；前端用内部 profile ID，不接受任意外部 voice ID。
 - 质量完成：普通话陪伴、英文 networking、口音目标及多轮体验各有审听与测量证据，仍有问题的项明确保留。
 
-本手册目前只完成第一步的可录制材料准备。实际本人验证、录音、训练与 adapter 接入仍待执行；不需要通过让 Mac 或尚有驱动故障的 GPU 运行模型来完成托管 PVC 的录制准备。
+目前已完成可录制材料和离线清单检查／候选导出工具；TTS adapter 已实现，但本人声线还未录制、训练、配置或完成产品试听验收。实际本人验证、录音、训练与质量验收仍待执行；不需要通过让 Mac 或尚有驱动故障的 GPU 运行模型来完成托管 PVC 的录制准备。

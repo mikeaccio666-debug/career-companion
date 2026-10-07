@@ -25,12 +25,12 @@ function completed(stream=true){const body={status:'completed',output:[],usage:{
 function fake(fn:(url:string,init:RequestInit)=>Promise<Response>|Response):typeof fetch{return ((url:any,init:RequestInit={})=>fn(String(url),init)) as typeof fetch;}
 before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate();});
 after(async()=>{await db.close();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();});
-async function seed(userId:string=randomUUID()):Promise<ModelRelayBinding>{
+async function seed(userId:string=randomUUID(),policyEnv:NodeJS.ProcessEnv=env):Promise<ModelRelayBinding>{
   await db.query('INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[userId,`${userId}@example.invalid`,'Fictional relay user','fictional-unused-password-hash']);
   const jobId=randomUUID(),leaseToken=randomUUID();
-  const policy=configuredModelRelayPolicy(env);
+  const policy=configuredModelRelayPolicy(policyEnv);
   await db.query("INSERT INTO platform_jobs(id,user_id,kind,provider,prompt,status,requires_approval,lease_token,lease_until,model,execution_policy) VALUES($1,$2,'cli','cli','Fictional fixture','running',true,$3,now()+interval '60 seconds',$4,$5)",[jobId,userId,leaseToken,policy.model,JSON.stringify({modelRelay:policy})]);
-  await db.query("INSERT INTO platform_approvals(id,user_id,job_id,tool_name,generation,status,args) VALUES($1,$2,$3,'cli',1,'approved',$4)",[randomUUID(),userId,jobId,JSON.stringify({model:policy.model,modelRelayLimits:policy})]);
+  await db.query("INSERT INTO platform_approvals(id,user_id,job_id,tool_name,generation,status,args) VALUES($1,$2,$3,'cli',1,'approved',$4)",[randomUUID(),userId,jobId,JSON.stringify({model:policy.model,modelProvider:policy.provider,modelRelayLimits:policy})]);
   return {userId,jobId,generation:1,leaseToken,signal:new AbortController().signal};
 }
 
@@ -55,6 +55,72 @@ test('relay fixes upstream route/model and caps output without sharing credentia
   const audit=(await db.query('SELECT * FROM platform_model_relay_requests WHERE job_id=$1',[binding.jobId])).rows[0];assert.equal(audit.status,'succeeded');assert.equal(audit.input_tokens,16);assert.equal(audit.output_tokens,4);assert(!JSON.stringify(audit).includes('Invented local coding task'));
 });
 
+const localEnv={...env,PLATFORM_ALLOW_PROVIDER_CALLS:'0',PLATFORM_CLI_MODEL_PROVIDER:'ollama',PLATFORM_CLI_OLLAMA_BASE_URL:'http://127.0.0.1:23456'};
+const localStatus=()=>Response.json({cloud:{disabled:true,source:'env'}});
+test('local relay verifies actual cloud-disabled status and forwards native function/namespace Responses without a commercial credential',async()=>{
+  const binding=await seed(undefined,localEnv);let statusReads=0,modelCalls=0;
+  const tools=[{type:'namespace',name:'functions',tools:[{type:'function',name:'exec_command',parameters:{type:'object',properties:{cmd:{type:'string'}}}}]}];
+  const relay=createJobModelRelay(db,binding,{env:localEnv,fetch:fake((url,init)=>{
+    assert.equal(new Headers(init.headers).get('authorization'),null);assert.equal(init.redirect,'error');
+    if(url==='http://127.0.0.1:23456/api/status'){statusReads++;assert.equal(init.method,undefined);return localStatus();}
+    assert.equal(url,'http://127.0.0.1:23456/v1/responses');assert.equal(init.method,'POST');
+    const sent=JSON.parse(String(init.body));assert.deepEqual(sent.tools,tools);assert.equal(sent.model,'fictional-model');assert.equal(sent.store,false);
+    modelCalls++;return completed();
+  })});
+  await relay({requestId:'native-local-first',body:{...input,tools},signal:new AbortController().signal});
+  await relay({requestId:'native-local-next',body:{...input,tools},signal:new AbortController().signal});
+  assert.equal(statusReads,2);assert.equal(modelCalls,2);
+  const audits=(await db.query('SELECT provider,status,input_tokens,output_tokens FROM platform_model_relay_requests WHERE job_id=$1',[binding.jobId])).rows;
+  assert.equal(audits.length,2);assert(audits.every(row=>row.provider==='ollama'&&row.status==='succeeded'&&row.input_tokens===16&&row.output_tokens===4));
+});
+test('local relay rejects missing/false/malformed or oversized cloud state before any model POST',async()=>{
+  const binding=await seed(undefined,localEnv);let modelCalls=0;
+  const statuses=[()=>Response.json({}),()=>Response.json({cloud:{disabled:false}}),()=>Response.json({cloud:{disabled:'true'}}),()=>new Response('{invalid',{headers:{'content-type':'application/json'}}),()=>Response.json({cloud:{disabled:true},padding:'x'.repeat(17*1024)}),()=>new Response('unavailable',{status:503})];
+  for(const status of statuses){
+    const relay=createJobModelRelay(db,binding,{env:localEnv,fetch:fake((url)=>{if(url.endsWith('/api/status'))return status();modelCalls++;return completed();})});
+    await assert.rejects(relay({requestId:randomUUID(),body:input,signal:new AbortController().signal}),error('MODEL_RELAY_CONFIG_INVALID'));
+  }
+  assert.equal(modelCalls,0);
+  const rows=(await db.query('SELECT status FROM platform_model_relay_requests WHERE job_id=$1',[binding.jobId])).rows;assert.equal(rows.length,statuses.length);assert(rows.every(row=>row.status==='failed'));
+});
+test('local relay rejects unsupported custom tools and inputs before status or model requests',async()=>{
+  const binding=await seed(undefined,localEnv);let calls=0;
+  const relay=createJobModelRelay(db,binding,{env:localEnv,fetch:fake(()=>{calls++;return localStatus();})});
+  for(const body of [{...input,tools:[{type:'custom',name:'apply_patch'}]},{...input,tools:[{type:'namespace',name:'functions',tools:[{type:'custom',name:'apply_patch'}]}]},{...input,input:[{type:'custom_tool_call',name:'apply_patch',input:'fictional'}]},{...input,input:[{type:'custom_tool_call_output',call_id:'fictional',output:'fictional'}]},{...input,tool_choice:{type:'custom',name:'apply_patch'}}])
+    await assert.rejects(relay({requestId:randomUUID(),body,signal:new AbortController().signal}),error('MODEL_RELAY_INVALID_REQUEST'));
+  assert.equal(calls,0);
+});
+test('local status streaming is cancelled when the task request aborts, without calling a model',async()=>{
+  const binding=await seed(undefined,localEnv),controller=new AbortController();let started!:()=>void,cancelled=false,modelCalls=0;
+  const ready=new Promise<void>(resolve=>{started=resolve;});
+  const relay=createJobModelRelay(db,binding,{env:localEnv,fetch:fake(url=>{
+    if(!url.endsWith('/api/status')){modelCalls++;return completed();}
+    return new Response(new ReadableStream<Uint8Array>({start(){started();},cancel(){cancelled=true;}}),{headers:{'content-type':'application/json'}});
+  })});
+  const result=relay({requestId:'cancel-status',body:input,signal:controller.signal});await ready;controller.abort();
+  await assert.rejects(result,error('MODEL_RELAY_CONFIG_INVALID'));assert(cancelled);assert.equal(modelCalls,0);
+});
+test('provider/endpoint changes and foreign identity cannot consume a local model request under an existing approval',async()=>{
+  const binding=await seed(undefined,localEnv);let calls=0;
+  const fetch=fake(()=>{calls++;return localStatus();});
+  for(const changedEnv of [{...localEnv,PLATFORM_CLI_OLLAMA_BASE_URL:'http://127.0.0.1:23457'},{...env}])
+    await assert.rejects(createJobModelRelay(db,binding,{env:changedEnv,fetch})({requestId:randomUUID(),body:input,signal:new AbortController().signal}),error('MODEL_RELAY_POLICY_CHANGED'));
+  await assert.rejects(createJobModelRelay(db,{...binding,userId:randomUUID()},{env:localEnv,fetch})({requestId:'foreign-local',body:input,signal:new AbortController().signal}),error('MODEL_RELAY_AUTH_REVOKED'));
+  const commercial=await seed();
+  await assert.rejects(createJobModelRelay(db,commercial,{env:localEnv,fetch})({requestId:'commercial-to-local',body:input,signal:new AbortController().signal}),error('MODEL_RELAY_POLICY_CHANGED'));
+  assert.equal(calls,0);
+});
+test('legacy approvals remain bound to the original fixed OpenAI upstream',async()=>{
+  const binding=await seed();
+  const legacy=configuredModelRelayPolicy(env);delete legacy.provider;delete legacy.upstreamHash;
+  await db.query('UPDATE platform_jobs SET execution_policy=$2 WHERE id=$1',[binding.jobId,JSON.stringify({modelRelay:legacy})]);
+  await db.query('UPDATE platform_approvals SET args=$2 WHERE job_id=$1',[binding.jobId,JSON.stringify({model:'fictional-model',modelProvider:'openai',modelRelayLimits:legacy})]);
+  let calls=0;
+  await createJobModelRelay(db,binding,{env,fetch:fake((url)=>{calls++;assert.equal(url,'https://api.openai.com/v1/responses');return completed();})})({requestId:'legacy-commercial',body:input,signal:new AbortController().signal});
+  await assert.rejects(createJobModelRelay(db,binding,{env:localEnv,fetch:fake(()=>{calls++;return completed();})})({requestId:'legacy-local-blocked',body:input,signal:new AbortController().signal}),error('MODEL_RELAY_POLICY_CHANGED'));
+  assert.equal(calls,1);
+});
+
 test('relay rejects hosted tools, remote state, input files and disabled calls before upstream acceptance',async()=>{
   const binding=await seed();let calls=0;
   const relay=createJobModelRelay(db,binding,{env,fetch:fake(()=>{calls++;return completed();})});
@@ -75,6 +141,20 @@ test('CLI task approval records the actual server model and durable relay limits
     const policy=(await db.query('SELECT execution_policy FROM platform_jobs WHERE id=$1',[result.job.id])).rows[0].execution_policy.modelRelay;
     assert.deepEqual(result.approval.args.modelRelayLimits,policy);
 });
+test('local CLI task approval and outbox bind the configured provider and endpoint fingerprint',async()=>{
+  const binding=await seed(undefined,localEnv);
+  const unavailable=async()=>{throw new Error('This fixture must not call a provider.');};
+  const runtime:PlatformProviderRuntime={capabilities:()=>[{id:'cli',name:'Fictional CLI',enabled:true,keyConfigured:true,capabilities:['cli'],models:['fictional-model'],envVariables:[]}],streamChat:async function*(){throw new Error('No provider calls');},executeJob:unavailable,createVoiceSession:unavailable,transcribe:unavailable,speech:unavailable};
+  const service=new JobService(db,base,runtime,{} as BlobStorage,{env:localEnv,fetch:fake(()=>{throw new Error('No model calls expected');})});
+  const created=await service.create(binding.userId,{kind:'cli',provider:'cli',prompt:'Fictional local task'});
+  assert.equal(created.approval.args.modelProvider,'ollama');assert.equal(created.approval.args.modelRelayLimits.provider,'ollama');
+  assert.match(created.approval.args.modelRelayLimits.upstreamHash,/^[a-f0-9]{64}$/);
+  assert(!JSON.stringify(created.approval.args).includes('http://127.0.0.1'));
+  await service.decide(binding.userId,created.approval.id,'approved');
+  const row=(await db.query('SELECT status,execution_policy FROM platform_jobs WHERE id=$1',[created.job.id])).rows[0];
+  assert.equal(row.status,'queued');assert.deepEqual(row.execution_policy.modelRelay,created.approval.args.modelRelayLimits);
+  const outbox=(await db.query('SELECT definition_hash FROM platform_job_outbox WHERE job_id=$1 AND generation=1',[created.job.id])).rows;assert.equal(outbox.length,1);assert.match(outbox[0].definition_hash,/^[a-f0-9]{64}$/);
+});
 
 test('relay cannot silently change the approved model or enlarge approved output allowance',async()=>{
   const binding=await seed();let calls=0;
@@ -93,7 +173,7 @@ test('relay budget reservation is atomic and retries cannot reset a task allowan
   const accepted=(await db.query('SELECT request_id FROM platform_model_relay_requests WHERE job_id=$1',[binding.jobId])).rows[0].request_id;
   await assert.rejects(relay({requestId:accepted,body:input,signal:new AbortController().signal}),error('MODEL_RELAY_DUPLICATE'));
   await db.query('UPDATE platform_jobs SET generation=2 WHERE id=$1',[binding.jobId]);
-  await db.query("INSERT INTO platform_approvals(id,user_id,job_id,tool_name,generation,status,args) VALUES($1,$2,$3,'cli',2,'approved',$4)",[randomUUID(),binding.userId,binding.jobId,JSON.stringify({model:'fictional-model',modelRelayLimits:configuredModelRelayPolicy(env)})]);
+  await db.query("INSERT INTO platform_approvals(id,user_id,job_id,tool_name,generation,status,args) VALUES($1,$2,$3,'cli',2,'approved',$4)",[randomUUID(),binding.userId,binding.jobId,JSON.stringify({model:'fictional-model',modelProvider:'openai',modelRelayLimits:configuredModelRelayPolicy(env)})]);
   await assert.rejects(createJobModelRelay(db,{...binding,generation:2},{env:{...env,PLATFORM_CLI_RELAY_MAX_REQUESTS:'1'},fetch:fake(()=>{calls++;return completed();})})({requestId:'new-attempt',body:input,signal:new AbortController().signal}),error('MODEL_RELAY_BUDGET_LIMIT'));assert.equal(calls,1);
 });
 

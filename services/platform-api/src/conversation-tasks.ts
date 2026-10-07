@@ -3,6 +3,7 @@ import type { ConversationTaskOrigin, ConversationTaskTool } from '@companion/pl
 import type { PoolClient } from 'pg';
 import type { Database } from './database.ts';
 import { ApiError, invalid, notFound, object } from './errors.ts';
+import { authorizeAssistantTurn } from './assistant-turn-origin.ts';
 
 /** Supplied only by the authenticated chat handler, never a model or HTTP body. */
 export type ConversationTaskCreationOrigin = Pick<ConversationTaskOrigin, 'conversationId' | 'messageId' | 'tool'>;
@@ -34,16 +35,7 @@ const inactiveOrigin = () => new ApiError(409, 'CONVERSATION_TASK_ORIGIN_INACTIV
 export async function authorizeConversationTaskOrigin(client: PoolClient, userId: string, origin: ConversationTaskCreationOrigin): Promise<void> {
   // KEY SHARE is compatible with chat's NO KEY UPDATE conversation lock. A
   // stronger lock here would reverse conversation -> user chat lease locking.
-  const conversation = await client.query('SELECT id FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR KEY SHARE', [origin.conversationId, userId]);
-  if (!conversation.rowCount) throw inactiveOrigin();
-  // Lock the assistant turn so completion/recovery cannot race this transaction.
-  const message = await client.query(`SELECT id FROM platform_messages
-    WHERE id=$1 AND conversation_id=$2 AND role='assistant' AND status='streaming' AND lease_until>clock_timestamp()
-    FOR NO KEY UPDATE`, [origin.messageId, origin.conversationId]);
-  if (!message.rowCount) throw inactiveOrigin();
-  const lease = await client.query(`SELECT id FROM platform_runtime_leases
-    WHERE id=$1 AND user_id=$2 AND kind='chat' AND expires_at>clock_timestamp() FOR KEY SHARE`, [origin.messageId, userId]);
-  if (!lease.rowCount) throw inactiveOrigin();
+  await authorizeAssistantTurn(client,userId,origin,undefined,inactiveOrigin);
 }
 
 export async function saveConversationTaskOrigin(client: PoolClient, userId: string, jobId: string, generation: number, origin: ConversationTaskCreationOrigin): Promise<void> {

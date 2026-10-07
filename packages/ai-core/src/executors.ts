@@ -10,8 +10,11 @@ import { mkdir, lstat, realpath, chown, open, opendir, mkdtemp, rm } from 'node:
 import { constants as fsConstants } from 'node:fs';
 import { join, basename, extname } from 'node:path';
 import type { CreateJobInput, GeneratedArtifact, JobExecutionContext, JobExecutionResult, BrowserCheckpoint, BrowserCheckpointEvent } from '@companion/platform-contracts';
+import { CLI_INPUT_MAX_FILES as MAX_INPUT_FILES, CLI_INPUT_MAX_FILE_BYTES as MAX_INPUT_FILE_BYTES, CLI_INPUT_MAX_TOTAL_BYTES as MAX_INPUT_TOTAL_BYTES } from '@companion/platform-contracts';
 import { ProviderError } from './errors.ts';
 import { executeCliRelay } from './cli-relay.ts';
+import { cliModelConfiguration } from './cli-model.ts';
+import { cliMediaMime } from './cli-artifact-mime.ts';
 import { parseBrowserTaskOptions, browserDefinitionHash, performBrowserAction, captureBrowserResult } from './browser-actions.ts';
 import { browserFixtureOrigins } from './browser-origins.ts';
 import { BROWSER_ISOLATION_SCRIPT } from './browser-isolation.ts';
@@ -22,9 +25,6 @@ const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_REQUESTS = 80;
-const MAX_INPUT_FILES = 4;
-const MAX_INPUT_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_INPUT_TOTAL_BYTES = 20 * 1024 * 1024;
 const MAX_MATERIAL_FILES = 20;
 const MAX_MATERIAL_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_MATERIAL_TOTAL_BYTES = 32 * 1024 * 1024;
@@ -380,6 +380,8 @@ async function stageAttachments(input: CreateJobInput, ctx: JobExecutionContext,
 }
 function materialMime(name: string, bytes: Buffer): string {
   const extension = extname(name).toLowerCase();
+  const media = cliMediaMime(extension, bytes);
+  if (media) return media;
   if (extension === '.png' && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
   if (['.jpg', '.jpeg'].includes(extension) && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
   if (extension === '.webp' && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
@@ -466,7 +468,7 @@ export async function executeCli(input: CreateJobInput, ctx: JobExecutionContext
   const relay = env.PLATFORM_CLI_MODEL_RELAY === '1';
   if (relay && !ctx.requestModel) fail('CLI_MODEL_RELAY_UNAVAILABLE', 'This task has no authorized model relay.', 503);
   if (relay && basename(command[0]) !== 'codex') fail('EXECUTOR_CONFIGURATION', 'The stdio model relay currently supports Codex only.', 503);
-  const relayModel = env.PLATFORM_CLI_MODEL || env.OPENAI_CHAT_MODEL || 'gpt-6-astra';
+  const relayModel = relay ? cliModelConfiguration(env).model : '';
   if (relay && !/^[a-zA-Z0-9._:/-]{1,160}$/.test(relayModel)) fail('EXECUTOR_CONFIGURATION', 'The server CLI model is invalid.', 503);
   const user = env.PLATFORM_CLI_USER || `${process.getuid?.() || 65532}:${process.getgid?.() || 65532}`;
   if (!/^[1-9][0-9]*:[0-9]+$/.test(user)) fail('EXECUTOR_CONFIGURATION', 'The CLI container must use a non-root numeric user.', 503);

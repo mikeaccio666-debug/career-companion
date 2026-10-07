@@ -1,6 +1,8 @@
 export { PLATFORM_ACCOUNT_HEADER, PLATFORM_ACCOUNT_QUERY, platformAccountId } from './account-context.ts';
 export * from './mcp.ts';
 export * from './conversation-tasks.ts';
+export * from './audio-transcriptions.ts';
+import type { ChatAttachmentSupport, ReviewedAudioTranscript } from './audio-transcriptions.ts';
 import type { McpTaskSummary } from './mcp.ts';
 export const CHAT_MODES = ['chat', 'companion', 'agent'] as const;
 export type ChatMode = typeof CHAT_MODES[number];
@@ -12,6 +14,8 @@ export type Capability = 'chat' | 'agent' | 'image' | 'video' | 'speech' | 'tran
 export interface ExecutionTemplateBinding { version: 1; hash: string; }
 /** Private worker snapshot, stored in the execution policy rather than a client plan. */
 export interface ComfyUITemplateSnapshot extends ExecutionTemplateBinding {
+  /** Absent only in historical snapshots; new preparation and execution require a kind. */
+  outputKind?: 'image' | 'video';
   baseUrl: string; promptNode: string; promptField: string; graph: Record<string, unknown>;
 }
 
@@ -23,6 +27,8 @@ export interface ProviderStatus {
   capabilities: Capability[];
   models: string[];
   modelsByCapability?: Partial<Record<Capability,string[]>>;
+  /** Supported server chat inputs and explicit local audio preprocessing; no quality claim. */
+  chatAttachments?: ChatAttachmentSupport;
   /** Declared speech languages (BCP 47); absence makes no language claim. */
   speechLanguages?: string[];
   /** Voices and controls verified for the server's configured voice model. */
@@ -53,6 +59,7 @@ export interface Message {
   status: 'complete' | 'streaming' | 'failed' | 'cancelled';
   provider?: string; model?: string; createdAt: string;
   attachments?: Attachment[];
+  audioTranscripts?: ReviewedAudioTranscript[];
 }
 export interface Memory { id: string; content: string; createdAt: string; }
 /** Private user-selected knowledge. Source URLs are provenance metadata, never fetched. */
@@ -251,3 +258,7 @@ export interface PlatformProviderRuntime {
   transcribe(input: ProviderAttachment, context?: TranscriptionContext): Promise<{ text: string }>;
   speech(input: SpeechInput, context?: {signal?:AbortSignal}): Promise<GeneratedArtifact>;
 }
+export * from './plans.ts';
+export * from './goal-proposals.ts';
+export * from './job-outcome-reviews.ts';
+export * from './voice-context.ts';

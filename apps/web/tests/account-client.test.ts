@@ -12,8 +12,13 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 const endpoints = createPlatformEndpoints('https://api.example.test');
 
 test('public exemptions are exact method/path pairs; missing private context sends nothing', async () => {
-  for (const path of ['/health', '/capabilities', '/auth/options', '/auth/me']) assert.equal(isPublicPlatformRequest(path), true);
+  for (const path of ['/health', '/live', '/ready', '/execution-ready', '/capabilities', '/auth/options', '/auth/me']) assert.equal(isPublicPlatformRequest(path), true);
   for (const path of ['/auth/login', '/auth/register', '/auth/password-reset/request', '/auth/password-reset/complete']) assert.equal(isPublicPlatformRequest(path, 'POST'), true);
+  for (const path of ['/live', '/ready', '/execution-ready']) {
+    assert.equal(isPublicPlatformRequest(path, 'HEAD'), true);
+    assert.equal(isPublicPlatformRequest(path, 'POST'), false);
+    assert.equal(isPublicPlatformRequest(path + '?alias=1', 'GET'), false);
+  }
   for (const [path, method] of [['/auth/logout', 'POST'], ['/auth/email-verification/request', 'POST'], ['/auth/email-verification/complete', 'POST'], ['/auth/me', 'POST'], ['/auth/login', 'GET'], ['/auth/me?alias=1', 'GET'], ['/jobs', 'GET']]) assert.equal(isPublicPlatformRequest(path, method), false);
   let calls = 0; const scope = new AccountRequestContext(), client = createPlatformClient(endpoints, async (_, init) => { calls++; assert.equal(new Headers(init?.headers).has(PLATFORM_ACCOUNT_HEADER), false); return Response.json({ user: null }); }, scope);
   await client.request('/auth/me', { headers: { [PLATFORM_ACCOUNT_HEADER]: B } });
