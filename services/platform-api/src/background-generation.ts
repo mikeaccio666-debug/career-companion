@@ -14,7 +14,7 @@ import { CompanionIntakePreparation } from './companion-intake-preparation.ts';
 import { OnboardingStorage, intakeUnavailable } from './onboarding-storage.ts';
 import { resolveModelRoute } from './model-routing.ts';
 import { acquireRuntimeLease } from './runtime-leases.ts';
-import { CostGuard } from './cost-guard.ts';
+import { CostGuard, tokenCostMicros } from './cost-guard.ts';
 import type { CostReservationBinding, CostReserveInput } from './cost-guard.ts';
 
 type Configuration = Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail' | 'modelRoutes'>;
@@ -25,6 +25,7 @@ interface TaskRow {
   current_revision: number; draft_rerolls: number; generation: number; lease_token: string | null;
   runtime_lease_id: string | null; lease_until: Date | null;
   quirk_draw: number;
+  error_code: string | null;
 }
 interface Seed {
   readonly dimensions: Readonly<CompanionDimensions>; readonly quirks: CompanionQuirks;
@@ -47,6 +48,26 @@ export interface VerifiedCompanionPreviewEnvelope {
     questionnaireRevision: number; rulesRevision: number; generatorVersion: number;
   }>;
 }
+export interface CompanionGenerationTaskStatus {
+  readonly taskId: string; readonly companionId: string;
+  readonly status: 'pending' | 'running' | 'failed' | 'uncertain' | 'interrupted' | 'completed';
+  readonly generation: number; readonly leaseExpired: boolean;
+  readonly recovery: 'none' | 'no_calls' | 'validated_preview' | 'invalid_outputs' | 'eligible_fallback' | 'uncertain' | 'terminal_failure';
+  readonly errorCode: string | null;
+  readonly source: Readonly<{ sourceDraftId: string; sourceRevision: number; answersId: string;
+    questionnaireRevision: number; rulesRevision: number; generatorVersion: number }>;
+  readonly preview?: Readonly<CompanionGeneratedPreview>;
+}
+interface CheckpointRow {
+  task_id: string; user_id: string; companion_id: string; generation: number;
+  source_draft_id: string; source_revision: number; call_ids: string[]; policy_revision: number;
+  payload_digest: string; payload_ciphertext: Buffer;
+}
+interface AuthenticatedCall { readonly call: CallRow; readonly receipt: Readonly<Record<string, unknown>> | null; }
+interface RecoveryState {
+  readonly recovery: CompanionGenerationTaskStatus['recovery']; readonly calls: readonly AuthenticatedCall[];
+  readonly checkpoint: CompanionModelPreview | null;
+}
 interface CallRow {
   call_id: string; task_id: string; user_id: string; companion_id: string; generation: number; attempt: number;
   provider: string; model: string; purpose: string; reservation_id: string; status: string; usage_status: string;
@@ -55,12 +76,22 @@ interface CallRow {
   structured_outcome: string | null;
 }
 const MAX_OUTPUT = 1536, TIMEOUT = 15_000;
+const LEASE_SECONDS = 60, HEARTBEAT_MS = 15_000, GENERATION_DEADLINE_MS = 90_000;
 const uuid = (value: unknown): value is string => typeof value === 'string'
   && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(value)?.[0] === value;
 const unavailable = () => new ApiError(503, 'COMPANION_GENERATION_UNAVAILABLE', 'The companion preview could not be confirmed.');
 const sourceChanged = () => new ApiError(409, 'COMPANION_DRAFT_SOURCE_CHANGED', 'Read the current intake before generating a companion.');
 const lost = () => new ApiError(409, 'COMPANION_GENERATION_CANCELLED', 'The companion generation is no longer authorized.');
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const rejectionRules = new Set(['preview.invalid_format', 'preview.requires_review', 'invalid_input', 'unsupported_context',
+  'forbidden_expression', 'outcome_promise', 'identity_claim', 'provider_disclosure', 'paid_without_authorization',
+  'unverified_numeric', 'unverified_entity', 'unverified_user_fact', 'unverified_execution', 'immigration_fact',
+  'channel_limit', 'personality_conflict', 'semantic_review_required']);
+function sameUnits(value: unknown, expected: Record<string, number>): boolean {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === Object.keys(expected).length
+    && Object.entries(expected).every(([key, amount]) => (value as Record<string, unknown>)[key] === amount);
+}
 const invalidPreviewCall = (row: CallRow) => row.status === 'complete' && ['blocked', 'requires_review', 'invalid_format'].includes(row.validation_status!)
   || row.status === 'failed' && row.structured_outcome === 'invalid_format' && row.validation_status === 'invalid_format';
 function taskInput(value: unknown): string {
@@ -68,6 +99,15 @@ function taskInput(value: unknown): string {
   const descriptors = Object.getOwnPropertyDescriptors(value), entry = descriptors.taskId;
   if (Reflect.ownKeys(value).length !== 1 || !entry || !('value' in entry) || !entry.enumerable || !uuid(entry.value)) throw invalid();
   return entry.value;
+}
+function recoveryInput(value: unknown): Readonly<{ taskId: string; expectedGeneration: number }> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw invalid();
+  const descriptors = Object.getOwnPropertyDescriptors(value), task = descriptors.taskId, generation = descriptors.expectedGeneration;
+  if (Reflect.ownKeys(value).length !== 2 || !task || !generation || !('value' in task) || !('value' in generation)
+    || !task.enumerable || !generation.enumerable || !uuid(task.value) || !Number.isSafeInteger(generation.value)
+    || generation.value < 0 || generation.value > 2147483647 || Object.is(generation.value, -0)) throw invalid();
+  return Object.freeze({ taskId: task.value, expectedGeneration: generation.value });
 }
 const invalid = () => new ApiError(400, 'INVALID_INPUT', 'Use the prepared companion task.');
 function usageSnapshot(usage: ModelCallUsage): ModelCallUsage {
@@ -150,6 +190,150 @@ export class BackgroundGeneration {
     signal?.throwIfAborted(); if (!live.rowCount) throw lost();
     await authorizeFixedSession(client, fixed, signal);
   }
+  /** Authenticate every recorded attempt, including unfinished dispatch risk.
+   * Terminal cost rows are historical receipts, not current price availability.
+   */
+  private async authenticatedCalls(client: PoolClient, claim: Claim): Promise<readonly AuthenticatedCall[]> {
+    const calls = (await client.query<CallRow>(`SELECT * FROM platform_companion_generation_calls
+      WHERE task_id=$1 ORDER BY generation,attempt FOR UPDATE`, [claim.row.id])).rows;
+    if (calls.length > 3 || calls.some((c, i) => c.user_id !== claim.row.user_id || c.companion_id !== claim.row.companion_id
+      || c.generation !== claim.generation || c.attempt !== i + 1 || c.provider !== claim.seed.provider
+      || c.model !== claim.seed.model || c.purpose !== 'companion_generation')) throw unavailable();
+    const result: AuthenticatedCall[] = [];
+    for (const call of calls) {
+      const reservation = (await client.query('SELECT * FROM platform_cost_reservations WHERE id=$1 FOR UPDATE', [call.reservation_id])).rows[0];
+      const ledger = (await client.query('SELECT * FROM platform_cost_ledger WHERE reservation_id=$1 FOR UPDATE', [call.reservation_id])).rows[0];
+      const prices = (await client.query('SELECT * FROM platform_model_prices WHERE id=ANY($1::uuid[]) FOR SHARE',
+        [[reservation?.input_price_id, reservation?.output_price_id].filter(Boolean)])).rows;
+      const input = prices.find(p => p.id === reservation?.input_price_id), output = prices.find(p => p.id === reservation?.output_price_id);
+      const matching = (row: any) => row && row.user_id === call.user_id && row.source_kind === 'job'
+        && row.source_id === call.task_id && row.capability === 'background' && row.purpose === call.purpose
+        && row.provider === call.provider && row.model === call.model;
+      if (!matching(reservation) || prices.length !== 2 || !input || !output || input.unit !== 'input_token' || output.unit !== 'output_token'
+        || [input, output].some(p => p.provider !== call.provider || p.model !== call.model || p.capability !== 'background')
+        || input.micros_per_unit !== reservation.input_micros_per_unit || output.micros_per_unit !== reservation.output_micros_per_unit
+        || reservation.estimate_micros !== tokenCostMicros(reservation.max_input_tokens, reservation.max_output_tokens,
+          reservation.input_micros_per_unit, reservation.output_micros_per_unit)
+        || ledger && !matching(ledger)) throw unavailable();
+      const terminal = ['complete', 'failed', 'cancelled', 'interrupted'].includes(call.status);
+      if (!terminal) {
+        if (!['prepared', 'admitted'].includes(call.status) || call.finished_at || call.usage_status !== 'pending'
+          || call.validation_status || call.structured_outcome || !reservation.dispatch_intent_at
+          || !['reserved', 'admitted', 'committed'].includes(reservation.status)
+          || call.status === 'admitted' && (!call.admitted_at || reservation.status === 'reserved')
+          || call.status === 'prepared' && call.admitted_at
+          || reservation.status === 'committed' && (!ledger || !ledger.estimated
+            || !['expired', 'dispatch_uncertain'].includes(ledger.usage_status))) throw unavailable();
+        if (ledger && (ledger.cost_micros !== reservation.estimate_micros || !ledger.estimated
+          || !['expired', 'dispatch_uncertain'].includes(ledger.usage_status)
+          || !sameUnits(ledger.units, { maxInputTokens: reservation.max_input_tokens, maxOutputTokens: reservation.max_output_tokens }))) throw unavailable();
+        result.push(Object.freeze({ call, receipt: null })); continue;
+      }
+      if (!call.finished_at || call.usage_status === 'pending' || call.admitted_at && call.admitted_at > call.finished_at
+        || call.status === 'complete' && !call.admitted_at) throw unavailable();
+      const blocks = (await client.query('SELECT rules FROM platform_companion_output_blocks WHERE call_id=$1 FOR UPDATE', [call.call_id])).rows;
+      const bad = invalidPreviewCall(call);
+      if (bad && (blocks.length !== 1 || !Array.isArray(blocks[0].rules) || !blocks[0].rules.length
+        || blocks[0].rules.some((rule: unknown) => typeof rule !== 'string' || !rejectionRules.has(rule))
+        || call.validation_status === 'invalid_format' && JSON.stringify(blocks[0].rules) !== '["preview.invalid_format"]')
+        || !bad && blocks.length || call.structured_outcome && (call.structured_outcome !== 'invalid_format'
+          || call.status !== 'failed' || !call.admitted_at)
+        || call.validation_status === 'passed_rules' && (call.status !== 'complete' || call.structured_outcome)
+        || call.validation_status === 'timed_out' && (!call.admitted_at || !['failed', 'cancelled', 'interrupted'].includes(call.status))) throw unavailable();
+      if (!call.admitted_at && reservation.status === 'released') {
+        if (ledger || reservation.dispatch_intent_at || call.validation_status || call.structured_outcome
+          || call.usage_status === 'reported' && (call.input_tokens !== 0 || call.output_tokens !== 0)) throw unavailable();
+        result.push(Object.freeze({ call, receipt: null })); continue;
+      }
+      // A terminal call whose authorization COMMIT was lost can have a settled
+      // risk ledger but no execution admission. It is never an eligible attempt.
+      if (reservation.status !== 'committed' || !reservation.dispatch_intent_at || !ledger
+        || ledger.usage_status !== call.usage_status || ledger.estimated !== (call.usage_status !== 'reported')) throw unavailable();
+      const units: Record<string, number> = call.usage_status === 'reported' ? { inputTokens: call.input_tokens!, outputTokens: call.output_tokens! }
+        : { maxInputTokens: reservation.max_input_tokens, maxOutputTokens: reservation.max_output_tokens };
+      const cost = call.usage_status === 'reported'
+        ? tokenCostMicros(call.input_tokens!, call.output_tokens!, reservation.input_micros_per_unit, reservation.output_micros_per_unit)
+        : reservation.estimate_micros;
+      if (!sameUnits(ledger.units, units) || ledger.cost_micros !== cost) throw unavailable();
+      result.push(Object.freeze({ call, receipt: Object.freeze({ callId: call.call_id, reservationId: call.reservation_id,
+        attempt: call.attempt, status: call.status, structuredOutcome: call.structured_outcome, validationStatus: call.validation_status,
+        admittedAt: call.admitted_at?.toISOString() ?? null, finishedAt: call.finished_at.toISOString(),
+        usageStatus: call.usage_status, units, costMicros: ledger.cost_micros, estimated: ledger.estimated,
+        inputPriceId: reservation.input_price_id, outputPriceId: reservation.output_price_id,
+        inputRate: reservation.input_micros_per_unit, outputRate: reservation.output_micros_per_unit,
+        estimateMicros: reservation.estimate_micros, rejectionRules: bad ? [...blocks[0].rules] : [] }) }));
+    }
+    return Object.freeze(result);
+  }
+  private async checkpoint(client: PoolClient, fixed: FixedSessionContext, claim: Claim,
+    calls: readonly AuthenticatedCall[]): Promise<CompanionModelPreview | null> {
+    const rows = (await client.query<CheckpointRow>(`SELECT * FROM platform_companion_generation_checkpoints
+      WHERE task_id=$1 FOR UPDATE`, [claim.row.id])).rows;
+    if (!rows.length) return null;
+    if (rows.length !== 1) throw unavailable();
+    const row = rows[0];
+    if (row.user_id !== fixed.userId || row.companion_id !== claim.row.companion_id || row.generation !== claim.generation
+      || row.source_draft_id !== claim.row.source_draft_id || row.source_revision !== claim.row.source_revision
+      || row.policy_revision !== 1 || calls.some(item => !item.receipt)) throw unavailable();
+    let payload: any, preview: CompanionModelPreview;
+    try {
+      payload = JSON.parse(this.storage.crypto!.openUtf8(row.payload_ciphertext, { table: 'platform_companion_generation_checkpoints',
+        column: 'payload_ciphertext', rowId: row.task_id, ownerId: fixed.userId, revision: row.generation }));
+      preview = parseCompanionModelPreview({ summary: payload?.preview?.summary, samples: payload?.preview?.samples });
+    } catch { throw unavailable(); }
+    const callIds = calls.map(item => item.call.call_id);
+    const expected = { schemaVersion: 1, preview: this.payload(fixed, claim, preview, 'model', callIds),
+      costReceipts: calls.map(item => item.receipt) };
+    if (JSON.stringify(row.call_ids) !== JSON.stringify(callIds) || JSON.stringify(payload) !== JSON.stringify(expected)
+      || row.payload_digest !== hash(expected) || !outputRules(preview, claim).every(check => check.status === 'passed_rules')) throw unavailable();
+    await this.provenance(client, claim, 'model', callIds); return preview;
+  }
+  private async recoveryState(client: PoolClient, fixed: FixedSessionContext, claim: Claim): Promise<RecoveryState> {
+    const calls = await this.authenticatedCalls(client, claim), checkpoint = await this.checkpoint(client, fixed, claim, calls);
+    const state = (recovery: RecoveryState['recovery']) => Object.freeze({ recovery, calls, checkpoint });
+    if (!calls.length) return state('no_calls');
+    if (calls.some(item => !item.call.finished_at || ['prepared', 'admitted'].includes(item.call.status))) return state('uncertain');
+    if (checkpoint) return state('validated_preview');
+    // Completed text lost before its durable validation checkpoint cannot be
+    // reconstructed from a receipt and must never trigger automatic regeneration.
+    if (calls.some(item => item.call.status === 'complete'
+      && (item.call.validation_status === null || item.call.validation_status === 'passed_rules'))) return state('uncertain');
+    const rows = calls.map(item => item.call), last = rows.at(-1)!;
+    if (calls.some(item => !item.receipt || !item.call.admitted_at)) return state('terminal_failure');
+    if (rows.slice(0, -1).every(invalidPreviewCall) && last.validation_status === 'timed_out'
+      && ['failed', 'cancelled', 'interrupted'].includes(last.status)) return state('eligible_fallback');
+    if (rows.every(invalidPreviewCall)) return state(rows.length === 3 ? 'eligible_fallback' : 'invalid_outputs');
+    return state('terminal_failure');
+  }
+  private async expired(client: PoolClient, row: TaskRow): Promise<boolean> {
+    if (row.status !== 'running') return false;
+    return !(await client.query(`SELECT t.id FROM platform_companion_generation_tasks t JOIN platform_runtime_leases l
+      ON l.id=t.runtime_lease_id AND l.user_id=t.user_id AND l.kind='background'
+      WHERE t.id=$1 AND t.generation=$2 AND t.lease_token=$3 AND t.lease_until>clock_timestamp()
+      AND l.expires_at>clock_timestamp() FOR UPDATE OF t,l`, [row.id, row.generation, row.lease_token])).rowCount;
+  }
+  async readTaskStatus(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionGenerationTaskStatus>> {
+    const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
+    return this.db.withBoundedTransaction(client => this.readTaskStatusInTransaction(client, fixed, { taskId }, signal));
+  }
+  async readTaskStatusInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown,
+    signal?: AbortSignal): Promise<Readonly<CompanionGenerationTaskStatus>> {
+    const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
+    const row = await this.task(client, fixed, taskId, signal), seed = await this.seed(client, fixed, row, signal);
+    if (!['pending', 'running', 'failed', 'uncertain', 'interrupted', 'completed'].includes(row.status)
+      || (row.status === 'completed' ? row.companion_status !== 'awaiting_name' || row.current_revision !== 1
+        : row.companion_status !== 'drafting' || row.current_revision !== 0)) throw intakeUnavailable();
+    const claim: Claim = { row, seed, generation: row.generation, leaseToken: row.lease_token ?? '', runtimeLeaseId: row.runtime_lease_id ?? '' };
+    const state = await this.recoveryState(client, fixed, claim), leaseExpired = await this.expired(client, row);
+    const completed = row.status === 'completed' ? await this.readInTransaction(client, fixed, { taskId }, signal) : null;
+    await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
+    return Object.freeze({ taskId, companionId: row.companion_id, status: row.status as CompanionGenerationTaskStatus['status'],
+      generation: row.generation, leaseExpired,
+      recovery: row.status === 'pending' || row.status === 'completed' || row.status === 'running' && !leaseExpired ? 'none' : state.recovery,
+      errorCode: row.error_code, source: Object.freeze({ sourceDraftId: row.source_draft_id, sourceRevision: row.source_revision,
+        answersId: row.answers_id, questionnaireRevision: row.questionnaire_revision, rulesRevision: row.rules_revision, generatorVersion: row.generator_version }),
+      ...(completed ? { preview: completed.preview } : {}) });
+  }
   async read(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionGeneratedPreview> | null> {
     const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
     return this.db.withBoundedTransaction(async client =>
@@ -178,6 +362,8 @@ export class BackgroundGeneration {
     const expected = this.payload(fixed, claim, preview, revision.generated_by, payload?.callIds);
     if (JSON.stringify(payload) !== JSON.stringify(expected) || !outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw intakeUnavailable();
     await this.provenance(client, claim, revision.generated_by, payload.callIds);
+    const calls = await this.authenticatedCalls(client, claim), checkpoint = await this.checkpoint(client, fixed, claim, calls);
+    if (checkpoint && (revision.generated_by !== 'model' || JSON.stringify(checkpoint) !== JSON.stringify(preview))) throw intakeUnavailable();
     await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
     return Object.freeze({ preview: this.preview(claim, preview, revision.generated_by), dimensions: seed.dimensions,
       source: Object.freeze({ taskId: row.id, companionId: row.companion_id, previewRevision: 1 as const,
@@ -195,23 +381,97 @@ export class BackgroundGeneration {
       const route = resolveModelRoute(this.configuration, this.runtime, 'companion_generation');
       if (route.provider !== seed.provider || route.model !== seed.model) throw new ApiError(503, 'MODEL_ROUTE_UNAVAILABLE', 'The prepared model route is unavailable.');
       if (row.status !== 'pending' || row.generation !== 0 || row.companion_status !== 'drafting' || row.current_revision !== 0) throw lost();
-      const runtimeLeaseId = await acquireRuntimeLease(client, fixed.userId, 'background', randomUUID(), 60), leaseToken = randomUUID();
+      const clean = await this.recoveryState(client, fixed, { row, seed, generation: row.generation, leaseToken: '', runtimeLeaseId: '' });
+      if (clean.calls.length || clean.checkpoint) throw unavailable();
+      const runtimeLeaseId = await acquireRuntimeLease(client, fixed.userId, 'background', randomUUID(), LEASE_SECONDS), leaseToken = randomUUID();
       await client.query(`UPDATE platform_companion_generation_tasks SET status='running',generation=1,lease_token=$2,
         lease_until=clock_timestamp()+interval '60 seconds',runtime_lease_id=$3 WHERE id=$1 AND status='pending'`, [taskId, leaseToken, runtimeLeaseId]);
       const result = Object.freeze({ row, seed, generation: 1, leaseToken, runtimeLeaseId });
       await this.current(client, fixed, result, signal); return result;
     });
-    const callIds: string[] = [];
+    return this.consume(fixed, claim, { recovery: 'no_calls', calls: [], checkpoint: null }, signal);
+  }
+  /** Internal recovery of the original accepted execution only. An unknown
+   * external result never authorizes another attempt or a fresh generation.
+   */
+  async recover(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionGenerationTaskStatus>> {
+    const request = recoveryInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
+    const work = await this.db.withBoundedTransaction(async client => {
+      const row = await this.task(client, fixed, request.taskId, signal), seed = await this.seed(client, fixed, row, signal);
+      if (row.generation !== request.expectedGeneration) throw lost();
+      if (row.status === 'uncertain') {
+        // Task expiry can precede money-reservation expiry. Repeated recovery
+        // must continue accounting reconciliation without granting a new call.
+        await this.costs.reconcileInTransaction(client, signal);
+        await this.recoveryState(client, fixed, { row, seed, generation: row.generation, leaseToken: '', runtimeLeaseId: '' });
+        await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null;
+      }
+      if (row.status === 'pending' || row.status === 'completed'
+        || row.status === 'running' && !await this.expired(client, row)) return null;
+      if (!['running', 'failed', 'interrupted'].includes(row.status) || row.generation < 1
+        || row.companion_status !== 'drafting' || row.current_revision !== 0) throw lost();
+      const version = await this.storage.authorizeSession(client, fixed, signal);
+      if (version !== String(row.auth_version)) throw sourceChanged();
+      await this.costs.reconcileInTransaction(client, signal);
+      const oldClaim: Claim = { row, seed, generation: row.generation, leaseToken: row.lease_token ?? '', runtimeLeaseId: row.runtime_lease_id ?? '' };
+      const state = await this.recoveryState(client, fixed, oldClaim);
+      if (row.runtime_lease_id) await client.query("DELETE FROM platform_runtime_leases WHERE id=$1 AND user_id=$2 AND kind='background'", [row.runtime_lease_id, fixed.userId]);
+      if (state.recovery === 'uncertain' || state.recovery === 'terminal_failure') {
+        const status = state.recovery === 'uncertain' ? 'uncertain' : 'interrupted';
+        await client.query(`UPDATE platform_companion_generation_tasks SET status=$2,lease_token=NULL,lease_until=NULL,runtime_lease_id=NULL,
+          error_code=$3,finished_at=clock_timestamp() WHERE id=$1 AND user_id=$4 AND generation=$5`,
+        [row.id, status, status === 'uncertain' ? 'COMPANION_GENERATION_UNCERTAIN' : 'COMPANION_GENERATION_INTERRUPTED', fixed.userId, row.generation]);
+        await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null;
+      }
+      if (state.recovery === 'invalid_outputs' || state.recovery === 'no_calls') {
+        const route = resolveModelRoute(this.configuration, this.runtime, 'companion_generation');
+        if (route.provider !== seed.provider || route.model !== seed.model) throw new ApiError(503, 'MODEL_ROUTE_UNAVAILABLE', 'The prepared model route is unavailable.');
+      }
+      const runtimeLeaseId = await acquireRuntimeLease(client, fixed.userId, 'background', randomUUID(), LEASE_SECONDS), leaseToken = randomUUID();
+      await client.query(`UPDATE platform_companion_generation_tasks SET status='running',lease_token=$2,
+        lease_until=clock_timestamp()+interval '60 seconds',runtime_lease_id=$3,finished_at=NULL,error_code=NULL
+        WHERE id=$1 AND user_id=$4 AND generation=$5`, [row.id, leaseToken, runtimeLeaseId, fixed.userId, row.generation]);
+      const claim: Claim = Object.freeze({ row, seed, generation: row.generation, leaseToken, runtimeLeaseId });
+      await this.current(client, fixed, claim, signal); return { claim, state };
+    });
+    if (work) await this.consume(fixed, work.claim, work.state, signal);
+    return this.readTaskStatus(fixed, { taskId: request.taskId }, signal);
+  }
+  private async renew(client: PoolClient, fixed: FixedSessionContext, claim: Claim, signal?: AbortSignal): Promise<void> {
+    await this.current(client, fixed, claim, signal);
+    const changed = await client.query(`UPDATE platform_runtime_leases l SET expires_at=clock_timestamp()+interval '60 seconds'
+      WHERE l.id=$1 AND l.user_id=$2 AND l.kind='background' AND l.expires_at>clock_timestamp()
+      AND EXISTS(SELECT 1 FROM platform_companion_generation_tasks t WHERE t.id=$3 AND t.user_id=$2
+        AND t.generation=$4 AND t.lease_token=$5 AND t.runtime_lease_id=l.id AND t.status='running'
+        AND t.lease_until>clock_timestamp()) RETURNING l.id`, [claim.runtimeLeaseId, fixed.userId, claim.row.id, claim.generation, claim.leaseToken]);
+    if (!changed.rowCount) throw lost();
+    const task = await client.query(`UPDATE platform_companion_generation_tasks SET lease_until=clock_timestamp()+interval '60 seconds'
+      WHERE id=$1 AND user_id=$2 AND generation=$3 AND lease_token=$4 AND runtime_lease_id=$5
+      AND status='running' AND lease_until>clock_timestamp() RETURNING id`,
+    [claim.row.id, fixed.userId, claim.generation, claim.leaseToken, claim.runtimeLeaseId]);
+    if (!task.rowCount) throw lost();
+    await this.current(client, fixed, claim, signal);
+  }
+  private async consume(fixed: FixedSessionContext, claim: Claim, recovered: RecoveryState,
+    parent?: AbortSignal): Promise<Readonly<CompanionGeneratedPreview>> {
+    const stopped = new AbortController(), signal = AbortSignal.any([stopped.signal, ...(parent ? [parent] : [])]);
+    let renewal: Promise<void> | undefined, closing = false;
+    const heartbeat = setInterval(() => {
+      if (closing || renewal || signal.aborted) return;
+      const current = this.db.withBoundedTransaction(client => this.renew(client, fixed, claim, signal));
+      renewal = current; void current.catch(error => stopped.abort(error)).finally(() => { if (renewal === current) renewal = undefined; });
+    }, HEARTBEAT_MS); heartbeat.unref();
+    const deadline = setTimeout(() => stopped.abort(lost()), GENERATION_DEADLINE_MS); deadline.unref();
+    const callIds = recovered.calls.map(item => item.call.call_id);
     try {
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      if (recovered.checkpoint) return await this.save(fixed, claim, recovered.checkpoint, 'model', callIds, signal);
+      if (recovered.recovery === 'eligible_fallback') return await this.fallback(fixed, claim, callIds, signal);
+      for (let attempt = callIds.length + 1; attempt <= 3; attempt++) {
         const result = await this.attempt(fixed, claim, attempt, signal);
         callIds.push(result.callId);
         if (result.preview) return await this.save(fixed, claim, result.preview, 'model', callIds, signal);
         if (result.timedOut || attempt === 3) {
-          const fallback = compileFallbackCompanionStyle({ companionId: claim.row.companion_id, dimensions: { ...claim.seed.dimensions }, quirkDraw: claim.row.quirk_draw as 0 | 1 });
-          const preview = parseCompanionModelPreview({ summary: fallback.summary, samples: [...fallback.samples] });
-          if (!outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw unavailable();
-          return await this.save(fixed, claim, preview, 'fallback', callIds, signal);
+          return await this.fallback(fixed, claim, callIds, signal);
         }
       }
       throw unavailable();
@@ -219,16 +479,27 @@ export class BackgroundGeneration {
       // Terminal cleanup owns only this exact claim. It cannot release money for
       // an admitted or uncertain request and cannot overwrite a newer generation.
       await this.db.withBoundedTransaction(async client => {
+        await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE', [fixed.userId]);
+        const errorCode = error instanceof ApiError && ['COMPANION_GENERATION_CANCELLED','COMPANION_GENERATION_BUDGET_UNAVAILABLE',
+          'MODEL_ROUTE_UNAVAILABLE','COMPANION_DRAFT_SOURCE_CHANGED'].includes(error.code) ? error.code : 'COMPANION_GENERATION_UNAVAILABLE';
         const changed = await client.query(`UPDATE platform_companion_generation_tasks SET status='failed',lease_token=NULL,
-          lease_until=NULL,runtime_lease_id=NULL,finished_at=clock_timestamp()
+          lease_until=NULL,runtime_lease_id=NULL,finished_at=clock_timestamp(),error_code=$5
           WHERE id=$1 AND user_id=$2 AND generation=$3 AND lease_token=$4 AND status='running' RETURNING id`,
-        [taskId, fixed.userId, claim.generation, claim.leaseToken]);
+        [claim.row.id, fixed.userId, claim.generation, claim.leaseToken, errorCode]);
         if (changed.rowCount) await client.query('DELETE FROM platform_runtime_leases WHERE id=$1 AND user_id=$2', [claim.runtimeLeaseId, fixed.userId]);
       }).catch(() => {});
       if (error instanceof ApiError) throw error;
       if (signal?.aborted) signal.throwIfAborted();
       throw unavailable();
+    } finally {
+      closing = true; clearInterval(heartbeat); clearTimeout(deadline); await renewal?.catch(() => {});
     }
+  }
+  private async fallback(fixed: FixedSessionContext, claim: Claim, callIds: readonly string[], signal?: AbortSignal) {
+    const fallback = compileFallbackCompanionStyle({ companionId: claim.row.companion_id, dimensions: { ...claim.seed.dimensions }, quirkDraw: claim.row.quirk_draw as 0 | 1 });
+    const preview = parseCompanionModelPreview({ summary: fallback.summary, samples: [...fallback.samples] });
+    if (!outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw unavailable();
+    return this.save(fixed, claim, preview, 'fallback', callIds, signal);
   }
   private prompt(claim: Claim): ChatInput {
     return { provider: claim.seed.provider, model: claim.seed.model, mode: 'chat', messages: [
@@ -272,12 +543,17 @@ export class BackgroundGeneration {
     signal.throwIfAborted(); if (!saved.rowCount) throw unavailable();
   }
   private async priorAttempts(client: PoolClient, claim: Claim, attempt: number) {
-    const rows = (await client.query<CallRow>(`SELECT c.* FROM platform_companion_generation_calls c
+    // Keep the dedicated prior-attempt admission barrier. It observes the
+    // current completion proof under the caller's locks, then the complete
+    // verifier also authenticates prices, amounts and any current prepared call.
+    const scoped = (await client.query<CallRow>(`SELECT c.* FROM platform_companion_generation_calls c
       JOIN platform_cost_ledger l ON l.reservation_id=c.reservation_id AND l.user_id=c.user_id AND l.source_id=c.task_id
         AND l.source_kind='job' AND l.capability='background' AND l.purpose=c.purpose AND l.provider=c.provider AND l.model=c.model
       WHERE c.task_id=$1 AND c.user_id=$2 AND c.generation=$3 AND c.attempt<$4 ORDER BY c.attempt FOR UPDATE OF c,l`,
     [claim.row.id, claim.row.user_id, claim.generation, attempt])).rows;
-    if (rows.length !== attempt - 1 || rows.some((row, i) => row.attempt !== i + 1 || !row.admitted_at || !row.finished_at
+    const rows = (await this.authenticatedCalls(client, claim)).filter(item => item.call.attempt < attempt).map(item => item.call);
+    if (scoped.length !== rows.length || scoped.some((row, i) => row.call_id !== rows[i].call_id || !invalidPreviewCall(row))
+      || rows.length !== attempt - 1 || rows.some((row, i) => row.attempt !== i + 1 || !row.admitted_at || !row.finished_at
       || row.companion_id !== claim.row.companion_id || row.provider !== claim.seed.provider || row.model !== claim.seed.model
       || row.purpose !== 'companion_generation' || !invalidPreviewCall(row))) throw unavailable();
   }
@@ -402,10 +678,11 @@ export class BackgroundGeneration {
     catch { await this.validation(fixed, claim, callId, 'invalid_format', ['preview.invalid_format'], parent); return { callId }; }
     const checks = outputRules(preview, claim), rules = [...new Set(checks.flatMap(result => result.rules))];
     const status = checks.some(c => c.status === 'blocked') ? 'blocked' : checks.some(c => c.status === 'requires_review') ? 'requires_review' : 'passed_rules';
-    await this.validation(fixed, claim, callId, status, rules, parent);
+    await this.validation(fixed, claim, callId, status, rules, parent, status === 'passed_rules' ? preview : undefined);
     return status === 'passed_rules' ? { callId, preview } : { callId };
   }
-  private async validation(fixed: FixedSessionContext, claim: Claim, callId: string, status: string, rules: readonly string[], signal?: AbortSignal) {
+  private async validation(fixed: FixedSessionContext, claim: Claim, callId: string, status: string, rules: readonly string[],
+    signal?: AbortSignal, preview?: CompanionModelPreview) {
     await this.db.withBoundedTransaction(async client => {
       await this.current(client, fixed, claim, signal);
       const saved = await client.query(`UPDATE platform_companion_generation_calls SET validation_status=$2 WHERE call_id=$1
@@ -416,6 +693,20 @@ export class BackgroundGeneration {
       [callId, status, claim.row.id, claim.generation]);
       if (!saved.rowCount) throw unavailable();
       if (status !== 'passed_rules' && status !== 'timed_out') await client.query('INSERT INTO platform_companion_output_blocks(call_id,rules) VALUES($1,$2)', [callId, rules.length ? rules.slice(0, 32) : ['preview.requires_review']]);
+      if (status === 'passed_rules') {
+        if (!preview || !outputRules(preview, claim).every(check => check.status === 'passed_rules')) throw unavailable();
+        const calls = await this.authenticatedCalls(client, claim), callIds = calls.map(item => item.call.call_id);
+        if (callIds.at(-1) !== callId || calls.some(item => !item.receipt)) throw unavailable();
+        await this.provenance(client, claim, 'model', callIds);
+        const payload = { schemaVersion: 1, preview: this.payload(fixed, claim, preview, 'model', callIds),
+          costReceipts: calls.map(item => item.receipt) };
+        const ciphertext = this.storage.crypto!.sealUtf8(JSON.stringify(payload), { table: 'platform_companion_generation_checkpoints',
+          column: 'payload_ciphertext', rowId: claim.row.id, ownerId: fixed.userId, revision: claim.generation });
+        await client.query(`INSERT INTO platform_companion_generation_checkpoints(task_id,user_id,companion_id,generation,
+          source_draft_id,source_revision,call_ids,policy_revision,payload_digest,payload_ciphertext)
+          VALUES($1,$2,$3,$4,$5,$6,$7,1,$8,$9)`, [claim.row.id, fixed.userId, claim.row.companion_id, claim.generation,
+        claim.row.source_draft_id, claim.row.source_revision, callIds, hash(payload), ciphertext]);
+      } else if (preview !== undefined) throw unavailable();
       await this.current(client, fixed, claim, signal);
     });
   }
@@ -428,11 +719,8 @@ export class BackgroundGeneration {
       inkToken: claim.seed.inkToken, styleCard: claim.seed.styleCard };
   }
   private async provenance(client: PoolClient, claim: Claim, generatedBy: 'model' | 'fallback', callIds: readonly string[]) {
-    const rows = (await client.query<CallRow>(`SELECT c.* FROM platform_companion_generation_calls c JOIN platform_cost_ledger l
-      ON l.reservation_id=c.reservation_id AND l.user_id=c.user_id AND l.source_id=c.task_id AND l.capability='background'
-      AND l.source_kind='job' AND l.purpose=c.purpose AND l.provider=c.provider AND l.model=c.model
-      WHERE c.task_id=$1 AND c.user_id=$2 AND c.generation=$3 ORDER BY attempt FOR UPDATE OF c,l`,
-    [claim.row.id, claim.row.user_id, claim.generation])).rows;
+    const authenticated = await this.authenticatedCalls(client, claim), rows = authenticated.map(item => item.call);
+    if (authenticated.some(item => !item.receipt)) throw unavailable();
     if (rows.length !== callIds.length || rows.some((row, i) => row.call_id !== callIds[i] || row.attempt !== i + 1
       || row.companion_id !== claim.row.companion_id || row.provider !== claim.seed.provider || row.model !== claim.seed.model
       || row.purpose !== 'companion_generation' || !row.admitted_at || !row.finished_at)) throw unavailable();
@@ -453,6 +741,10 @@ export class BackgroundGeneration {
       await this.current(client, fixed, claim, signal);
       await this.provenance(client, claim, generatedBy, callIds);
       if (!outputRules(preview, claim).every(item => item.status === 'passed_rules')) throw unavailable();
+      if (generatedBy === 'model') {
+        const checkpoint = await this.checkpoint(client, fixed, claim, await this.authenticatedCalls(client, claim));
+        if (!checkpoint || JSON.stringify(checkpoint) !== JSON.stringify(preview)) throw unavailable();
+      }
       const ciphertext = this.storage.crypto!.sealUtf8(JSON.stringify(this.payload(fixed, claim, preview, generatedBy, callIds)),
         { table: 'platform_companion_revisions', column: 'payload_ciphertext', rowId: claim.row.companion_id, ownerId: fixed.userId, revision: 1 });
       await client.query(`INSERT INTO platform_companion_revisions(companion_id,user_id,revision,task_id,generation,generated_by,payload_ciphertext)

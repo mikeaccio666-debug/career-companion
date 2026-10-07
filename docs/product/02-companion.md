@@ -744,7 +744,8 @@ P0 不选声线；P1-12 起在 05 O9（可跳过）或「我 → 主理人 → �
 
 | 方法和路径 | 作用 |
 |---|---|
-| `POST /companion/drafts` | 提交基本事实、答案（或 `fastTrack: true`），返回预览 |
+| `POST /companion/drafts` | `{operationId, expectedRevision}`：消费首次见面已保存、已通过安全检查的回答，原子保存生成请求、原始授权和任务通知；返回 `202` 与实际任务状态，同一操作重放不重复生成 |
+| `GET /companion/drafts/current` | 当前账号的真实进度与已保存的预览；刷新只恢复观察，不创建任务或调用模型 |
 | `POST /companion/drafts/current/reroll` | 换一种感觉，`direction`：`shorter` / `longer` / `gentler` / `more_direct` / `more_space` / `more_push` / `more_serious` / `lighter` |
 | `POST /companion/drafts/current/seal-candidates` | 印章字换一组 |
 | `POST /companion/name-inspiration` | 3 个灵感词 |
@@ -756,6 +757,8 @@ P0 不选声线；P1-12 起在 05 O9（可跳过）或「我 → 主理人 → �
 | `GET /memories?category=`、`POST /memories`、`PATCH /memories/:id`、`DELETE /memories/:id`、`POST /memories/:id/confirm`、`POST /memories/:id/dismiss` | 记忆与提议 |
 
 **错误码**：400 `PERSONA_NOT_ACCEPTED`；409 `REROLL_LIMIT`（超过 3 次，或重新刻章 30 天内）；422 `NAME_REJECTED`（带 `category`）；422 `SEAL_REJECTED`（不在候选里）；409 `COMPANION_EXISTS`。
+
+O5 在已完成首次见面的页面自动提交一次生成意图；O6 读取后台已保存的原预览。页面关闭或 HTTP 断线只停止观察，不撤销已受理任务。后台通知只带数据库引用，实际调用和保存仍检查原始真实会话、当前账号、回答来源、协议、租约与费用。进程中断后，已通过校验并加密保存的结果在相同代次恢复；已发出的请求若无法确认结果，记录 `uncertain`，保留可能发生的费用，不自动重发或用模板冒充。普通失败的重试与「换一种感觉」分别需要后续独立操作回执；本段机制不授予新代次、起名或诞生权限。
 
 ### 15.4 上下文组装与优先级
 

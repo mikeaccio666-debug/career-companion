@@ -5,6 +5,7 @@ import { useRequiredPlatformAccountClient } from './account-client';
 import { readOnboardingEntry, readOnboardingFollowup, retryOnboardingSafety, saveOnboardingDraft, saveOnboardingFollowup, onboardingResourceHref } from './onboarding-api';
 import { acknowledgeOnboardingPresentation, onboardingContinuationAvailable, onboardingDraftCommand, replaceOnboardingPresentation, type OnboardingPresentation } from './onboarding-ui';
 import type { User } from './types';
+import StudentCompanionPreview from './StudentCompanionPreview';
 import './onboarding.css';
 
 const name = '你的主理人 · 还没有名字';
@@ -162,7 +163,7 @@ export default function StudentOnboarding({ user, onLogout }: { user: User; onLo
       {entry?.question && draft?.step !== 'O1' && <section key={`${draft?.id}:${entry.question.questionId}`} aria-label="当前问题"><p className="onboarding-bubble">{entry.question.prompt}</p><QuestionChoices key={entry.question.questionId} entry={entry} disabled={pending || !collecting} answer={action => void save(action)} /><div className="onboarding-choices"><button type="button" disabled={pending || !collecting} onClick={() => void save({ kind: 'skip', questionId: entry.question!.questionId })}>跳过这一问</button>{draft?.step === 'O3' && <button type="button" disabled={pending || !collecting} onClick={() => void save({ kind: 'skip_remaining' })}>剩下的跳过，先用默认</button>}</div></section>}
       {draft?.state === 'safety_pending' && <div className="onboarding-wait"><p role="status">你的文字已保存，正在确认。确认完成后会从刚才的问题继续。</p><button type="button" disabled={pending} onClick={() => void retry()}>重新确认这段文字</button></div>}
       <OnboardingSafetyResources key={resourcesVersion} onChange={() => void reload()} />
-      {draft?.state === 'intake_ready' && <div className="onboarding-wait"><p role="status">认识你的这几问已经保存好了。</p><p>主理人的生成与预览还没有开放。你可以稍后回来，进度会从这里继续。</p></div>}
+      {draft?.state === 'intake_ready' && <StudentCompanionPreview intakeRevision={draft.revision} />}
       {error && <p role="alert" className="onboarding-notice">{error}</p>}{pending && <p role="status">正在确认进度…</p>}
       {collecting && entry?.question && <form className="onboarding-composer" onSubmit={event => { event.preventDefault(); if (text.trim()) void save({ kind: 'text', questionId: entry.question!.questionId, text }); }}><label htmlFor="onboarding-text">也可以用自己的话说</label><textarea id="onboarding-text" value={text} maxLength={4000} disabled={pending || !entry.freeTextAvailable} onChange={event => setText(event.target.value)} placeholder={entry.freeTextAvailable ? '写给还没有名字的主理人…' : '暂时不能发送文字，可以用选项或跳过'} /><button type="submit" disabled={pending || !entry.freeTextAvailable || !text.trim()}>发送</button>{!entry.freeTextAvailable && <p>暂时不能发送文字，可以用选项或跳过。</p>}</form>}
       <button type="button" className="onboarding-link" disabled={pending} onClick={() => void reload()}>重新读取进度</button>

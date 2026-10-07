@@ -109,6 +109,12 @@ interface Periods { now: Date; day: Date; day_end: Date; week: Date; week_end: D
 /** Accounting only. Callers must independently fence the real source, identity, consent and execution lease. */
 export class CostGuard {
   constructor(private readonly db: Database) {}
+  /** Reconcile expired accounting under the caller's bounded transaction; this grants no execution authority. */
+  async reconcileInTransaction(client: PoolClient, signal?: AbortSignal): Promise<void> {
+    await this.lock(client, signal);
+    await this.recover(client);
+    signal?.throwIfAborted();
+  }
   private async lock(client: PoolClient, signal?: AbortSignal) {
     signal?.throwIfAborted();
     // One advisory money lock also serializes the initially empty global-policy case and late settlements.
