@@ -110,8 +110,8 @@ export async function buildApp(options:AppOptions={}) {
   const careerTargets=new CareerTargets(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerStories=new CareerStories(db,config,bundle);
-  const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories);
   const resumeReview=new ResumeOriginalReview(db,config,bundle);
+  const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const storage=options.storage??createStorage(config);

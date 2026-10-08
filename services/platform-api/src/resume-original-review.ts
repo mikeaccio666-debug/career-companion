@@ -1,3 +1,4 @@
+import type { OwnedCareerResume } from './career-run-context.ts';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { workflowHash } from '@companion/ai-core';
@@ -70,6 +71,21 @@ export class ResumeOriginalReview {
   let view=await this.decode(client,context,row);const now=(await client.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
   if(view.item.status==='pending'&&view.item.expiresAt<=now)view=await this.transition(client,context,view,'expire',now,auth);
   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return view;
+ }
+ /** Actual owner-confirmed source coordinates only. The private label and
+  * every original body stay out of preparation metadata and model summaries. */
+ async readForPreparationInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal):Promise<readonly Readonly<OwnedCareerResume>[]>{
+  const context=this.fixed(value);await this.authorize(client,context,signal);await this.storage.authorizeSession(client,context,signal);
+  const rows=(await client.query('SELECT * FROM platform_pending_items WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[context.userId])).rows;
+  if(rows.length>500)throw unavailable();
+  const labels={swe:'软件工程',mle:'机器学习工程',ds:'数据科学',da:'数据分析',de:'数据工程',hw:'硬件等本专业方向',other:'其他方向'};
+  const records:Readonly<OwnedCareerResume>[]=[];
+  for(const row of rows){
+   signal?.throwIfAborted();const {item}=await this.decode(client,context,row);
+   if(item.status!=='approved'||item.resumeStatus!=='active')continue;
+   records.push(Object.freeze({ownerId:context.userId,id:item.resumeVersionId,revision:item.revision,state:'current',status:'active',track:item.track,approvedAt:item.approvedAt!,normalSummary:'本人已确认的简历；岗位方向：'+labels[item.track]+'。'}));
+  }
+  await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return Object.freeze(records);
  }
  async get(value:FixedSessionContext,key:unknown,byResume=false,signal?:AbortSignal){const context=this.fixed(value);let id:string;try{id=careerRecordId(key);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{const auth=await this.authorize(client,context,signal),row=await this.row(client,context,id,byResume);if(!row)throw missing();return this.current(client,context,row,auth,signal);});

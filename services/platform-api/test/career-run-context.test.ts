@@ -75,3 +75,26 @@ test('knowledge revocation and cancellation remain factual, without fallback row
   const controller = new AbortController();
   await assert.rejects(build('career-intake', { readProfile: async scope => { assert.equal(scope.signal, controller.signal); controller.abort(); return profile(); } }, { signal: controller.signal }), { code: 'CAREER_PREPARATION_CANCELLED' });
 });
+
+test('latest active resume uses genuine approval time independently of list order, preserves explicit older choices and excludes foreign or archived records', async()=>{
+ const old={...record('older'),status:'active' as const,track:'fictional-track-a',approvedAt:'2026-10-01T00:00:00.000Z'};
+ const latest={...record('latest'),status:'active' as const,track:'fictional-track-a',approvedAt:'2026-10-02T00:00:00.000Z'};
+ const rows=[old,latest,{...latest,id:'foreign',ownerId:'other-owner',approvedAt:'2026-10-07T00:00:00.000Z'},{...latest,id:'archived',status:'archived' as const,approvedAt:'2026-10-08T00:00:00.000Z'}];
+ const ports:CareerRunPorts={readProfile:async()=>profile(),listResumeVersions:async()=>rows};
+ for(const list of [rows,[...rows].reverse()]){const result=await build('resume-revision',{...ports,listResumeVersions:async()=>list});assert.equal(result.context.inputs.find(r=>r.input==='resume-source')!.id,'latest');}
+ const selected=await build('resume-revision',ports,{selection:{resumeId:'older'}});assert.equal(selected.context.inputs.find(r=>r.input==='resume-source')!.id,'older');
+ for(const id of ['foreign','archived','absent'])assert.equal((await build('resume-revision',ports,{selection:{resumeId:id}})).context.inputs.some(r=>r.input==='resume-source'),false);
+});
+test('equal-time or unproven resume recency remains ambiguous until a real version is explicitly selected',async()=>{
+ const a={...record('a'),status:'active' as const,track:'fictional-track-a',approvedAt:'2026-10-02T00:00:00.000Z'},b={...a,id:'b'};
+ for(const rows of [[a,b],[a,{...b,approvedAt:undefined}],[a,{...b,approvedAt:'invented-date'}]]){
+  const result=await build('resume-revision',{listResumeVersions:async()=>rows});const plan=prepareCareerRun('resume-revision',result.context);assert.equal(plan.state,'blocked');if(plan.state==='blocked')assert(plan.reasons.includes('ambiguous_input:resume-source'));
+ }
+});
+test('reviewed resume selects the latest actual approval within the selected job track and does not switch an explicit mismatching version',async()=>{
+ const rows=[{...record('older-a'),status:'active' as const,track:'fictional-track-a',approvedAt:'2026-10-01T00:00:00.000Z'},{...record('latest-a'),status:'active' as const,track:'fictional-track-a',approvedAt:'2026-10-02T00:00:00.000Z'},{...record('latest-b'),status:'active' as const,track:'fictional-track-b',approvedAt:'2026-10-08T00:00:00.000Z'}];
+ const ports:CareerRunPorts={readProfile:async()=>profile(),listApplications:async()=>[job('job-a')],listResumeVersions:async()=>rows};
+ const result=await build('application-preparation',ports,{selection:{targetJobId:'job-a'}});assert.equal(result.context.inputs.find(r=>r.input==='reviewed-resume')!.id,'latest-a');
+ const explicit=await build('application-preparation',ports,{selection:{targetJobId:'job-a',resumeId:'older-a'}});assert.equal(explicit.context.inputs.find(r=>r.input==='reviewed-resume')!.id,'older-a');
+ const wrong=await build('application-preparation',ports,{selection:{targetJobId:'job-a',resumeId:'latest-b'}});assert.equal(wrong.context.inputs.some(r=>r.input==='reviewed-resume'),false);
+});

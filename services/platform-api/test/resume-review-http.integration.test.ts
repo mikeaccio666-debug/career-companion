@@ -3,7 +3,7 @@ import { PLATFORM_ACCOUNT_HEADER,parseResumeReviewView } from '@companion/platfo
 const origin='https://fictional-resume-review.example.invalid',password='Fictional-original-password-123',root='/api/platform/';
 let f:Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>,system:Awaited<ReturnType<typeof buildApp>>,calls=0;
 before(async()=>{f=await createCompanionNameSafetyFixture();system=await buildApp({db:f.db,legalBundle:FICTIONAL_LEGAL,config:{...readConfig(),dataCrypto:f.crypto,requireVerifiedEmail:true,allowedOrigins:new Set([origin])},enableQueue:false,runtime:createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'},fetch:async()=>{calls++;throw Error('No provider request allowed.');}})});});after(async()=>{await system?.app.close();assert.equal(calls,0);await f?.close();});
-async function actor(){const who=await f.actor();await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[who.userId,await hashPassword(password)]);const r=await system.app.inject({method:'POST',url:root+'auth/login',headers:{origin},payload:{email:who.userId+'@example.invalid',password}});assert.equal(r.statusCode,200);const raw=r.headers['set-cookie'],cookie=(Array.isArray(raw)?raw[0]:raw)!.split(';')[0];return {id:who.userId,headers:{origin,cookie,[PLATFORM_ACCOUNT_HEADER]:who.userId}};}
+async function actor(){const who=await f.actor();await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[who.userId,await hashPassword(password)]);const r=await system.app.inject({method:'POST',url:root+'auth/login',headers:{origin},payload:{email:who.userId+'@example.invalid',password}});assert.equal(r.statusCode,200);const raw=r.headers['set-cookie'],cookie=(Array.isArray(raw)?raw[0]:raw)!.split(';')[0];return {id:who.userId,context:who,headers:{origin,cookie,[PLATFORM_ACCOUNT_HEADER]:who.userId}};}
 const create=()=>({operationId:randomUUID(),expectedRevision:0,track:'da',label:'Fictional raw original',text:'Fictional strategy course project; personal research action.'});
 test('actual password-login Web original review confirms one immutable payload and leaves approved old version usable when creating a new same-track draft',async()=>{
  const a=await actor(),body=create(),r=await system.app.inject({method:'POST',url:root+'career/resume-versions',headers:a.headers,payload:body});assert.equal(r.statusCode,201,r.body);assert.equal(r.headers['cache-control'],'private, no-store');const v=parseResumeReviewView(r.json().view);
@@ -76,4 +76,12 @@ test('real HTTP memory pagination keeps unreviewed legacy sensitivity private an
  assert.equal((await system.app.inject({url:root+'memories?cursor='+cursor,headers:other.headers})).statusCode,400);
  assert.equal((await system.app.inject({url:root+'memories?limit=2&limit=3',headers:a.headers})).statusCode,400);
  assert.equal((await system.app.inject({url:root+'career/targets?ownerId='+a.id,headers:a.headers})).statusCode,400);
+});
+
+test('actual buildApp assembly feeds an HTTP-confirmed original into the real source index without granting model access or copying its body',async()=>{
+ const a=await actor(),body=create(),r=await system.app.inject({method:'POST',url:root+'career/resume-versions',headers:a.headers,payload:body}),v=parseResumeReviewView(r.json().view);
+ assert.deepEqual((await system.careerPreparationSources.read(a.context)).resumes,[]);
+ const confirmed=await system.app.inject({method:'POST',url:root+'pending-items/'+v.item.id+'/decision',headers:a.headers,payload:{operationId:randomUUID(),revision:1,payloadDigest:v.item.payloadDigest,decision:'approve'}});assert.equal(confirmed.statusCode,200,confirmed.body);
+ const index=await system.careerPreparationSources.read(a.context);assert.equal(index.resumes!.length,1);assert.equal(index.resumes![0].id,v.item.resumeVersionId);assert.equal(index.resumes![0].revision,1);assert(!JSON.stringify(index).includes(body.text));assert(!JSON.stringify(index).includes(body.label));
+ const prepared=await system.careerPreparationSources.prepare(a.context,{skillId:'resume-revision',selection:{resumeId:v.item.resumeVersionId}});assert.equal(prepared.built.context.inputs.find(r=>r.input==='resume-source')!.id,v.item.resumeVersionId);assert.deepEqual(prepared.built.context.tools,{});assert(prepared.built.unavailableSources.includes('readProfile'));assert.equal(calls,0);
 });
