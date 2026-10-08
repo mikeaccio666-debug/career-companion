@@ -5,12 +5,14 @@ import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import { ApiError, identifier } from './errors.ts';
 
-export const STAFF_AUDIT_ACTIONS = ['organization_viewed', 'staff_memberships_viewed', 'provider_details_viewed'] as const;
+export const STAFF_AUDIT_ACTIONS = ['organization_viewed', 'staff_memberships_viewed', 'provider_details_viewed', 'org_license_registered', 'org_license_revoked', 'org_entitlement_changed', 'org_content_imported', 'org_content_published', 'org_content_withdrawn', 'org_sources_viewed'] as const;
 export type StaffAuditAction = typeof STAFF_AUDIT_ACTIONS[number];
 export interface StaffReadPolicy {
   readonly roles: readonly StaffRole[];
   readonly action: StaffAuditAction;
   readonly targetId?: string;
+  /** Trusted operation policy; mutation takes UPDATE directly to avoid lock upgrades. */
+  readonly exclusiveOrganization?: boolean;
 }
 export interface StaffReadResult<T> { readonly value: T; readonly recordCount: number; }
 const privilegedRoles: readonly StaffRole[] = ['ops', 'org_admin'];
@@ -71,7 +73,9 @@ export class StaffAccess {
     const organizationId = orgId === undefined ? null : identifier(orgId), action = policy.action;
     if (!STAFF_AUDIT_ACTIONS.includes(action) || !Array.isArray(policy.roles) || policy.roles.length === 0
       || policy.roles.some(role => !STAFF_ROLES.includes(role))) throw new Error('Invalid staff read policy.');
-    const roles = [...new Set(policy.roles)].filter(role => action === 'organization_viewed' || privilegedRoles.includes(role));
+    if (policy.exclusiveOrganization !== undefined && typeof policy.exclusiveOrganization !== 'boolean') throw new Error('Invalid organization lock policy.');
+    const exclusive = policy.exclusiveOrganization === true;
+    const roles = [...new Set(policy.roles)].filter(role => action === 'organization_viewed' || action === 'org_sources_viewed' || action === 'org_content_imported' && role === 'content_editor' || action === 'org_content_published' && role === 'content_reviewer' || privilegedRoles.includes(role));
     const targetId = policy.targetId === undefined ? null : identifier(policy.targetId);
     const outcome = await this.db.withBoundedTransaction(async client => {
       // Keep password reset's user -> session order, then organization -> membership -> audit.
@@ -86,7 +90,7 @@ export class StaffAccess {
       const account = await client.query('SELECT account_kind FROM platform_users WHERE id=$1', [fixed.userId]);
       if (account.rows[0]?.account_kind !== 'staff') return deny('student_account');
       if (organizationId === null) return deny('organization_missing');
-      const org = await client.query("SELECT id FROM platform_orgs WHERE id=$1 AND status='active' FOR SHARE", [organizationId]);
+      const org = await client.query(exclusive ? "SELECT id FROM platform_orgs WHERE id=$1 AND status='active' FOR UPDATE" : "SELECT id FROM platform_orgs WHERE id=$1 AND status='active' FOR SHARE", [organizationId]);
       signal?.throwIfAborted(); if (!org.rowCount) return deny('organization_unavailable');
       const membership = await client.query<{role: StaffRole}>(`SELECT role FROM platform_org_roles
         WHERE org_id=$1 AND user_id=$2 AND status='active' AND role=ANY($3::text[]) ORDER BY role LIMIT 1 FOR SHARE`,

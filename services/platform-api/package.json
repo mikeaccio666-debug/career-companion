@@ -14,7 +14,8 @@
     "operations": "tsx src/operations-main.ts",
     "eval:plan": "tsx evals/main.ts",
     "check": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1 test/*.test.ts"
+    "test": "tsx --test --test-concurrency=1 test/*.test.ts",
+    "org-content": "tsx src/org-content-import.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.922.0",
