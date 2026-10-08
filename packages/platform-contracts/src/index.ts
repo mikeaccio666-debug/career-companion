@@ -296,3 +296,5 @@ export * from './companion-journey.ts';
 export * from './companion-safety-resource.ts';
 export * from './companion-naming.ts';
 export * from './companion-birth.ts';
+
+export * from './companion-welcome.ts';

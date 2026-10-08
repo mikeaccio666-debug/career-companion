@@ -1,3 +1,4 @@
+import { CompanionWelcomeService } from './companion-welcome.ts';
 import { ConversationTurns, mapMessage } from './conversation-turns.ts';
 import { SseTurnSink } from './turn-sinks.ts';
 import { ProjectingTurnSink } from './projecting-turn-sink.ts';
@@ -94,6 +95,7 @@ export async function buildApp(options:AppOptions={}) {
   if(config.companionSealGlyphs){try{birthGlyphs=loadCompanionSealGlyphLookup(config.companionSealGlyphs.file,config.companionSealGlyphs.bindings);}catch{/* New seal rendering is unavailable; own saved origins remain readable. */}}
   const birth=new CompanionBirthService(db,config,bundle,studentOnboarding.prebirth,studentOnboarding.names,
     companion.generation,studentOnboarding.identities,new CompanionBirthOriginStore(config.dataCrypto),birthGlyphs);
+  const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
@@ -322,6 +324,18 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/companion`,birthReadAccess,async(request,reply)=>{
     birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
     try{return await birth.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/welcome`,birthReadAccess,async(request,reply)=>{
+    birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return await welcome.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/welcome/open`,limitedAccount,async(request,reply)=>{
+    birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return await welcome.open(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/welcome/choice`,limitedAccount,async(request,reply)=>{
+    birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return await welcome.choose(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}
   });
   app.get(`${prefix}/companion/birth/receipts/:idempotencyKey`,birthReadAccess,async(request,reply)=>{
     birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
@@ -684,5 +698,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

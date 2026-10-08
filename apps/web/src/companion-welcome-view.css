@@ -1,0 +1,9 @@
+.companion-welcome { margin-top: 24px; }
+.companion-welcome-message { padding: 16px 20px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); }
+.companion-welcome-message p { margin: 8px 0 0; font: 400 15px/24px var(--f-ui); overflow-wrap: anywhere; }
+.companion-welcome-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.companion-welcome-choices button { min-height: 44px; padding: 8px 16px; border: 1px solid var(--rule); border-radius: 24px; background: var(--sheet); color: var(--ink); font: 400 15px/24px var(--f-ui); cursor: pointer; }
+.companion-welcome-choices button:hover:not(:disabled) { border-color: var(--ink-2); }
+.companion-welcome-choices button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.companion-welcome-choices button:disabled { opacity: .55; cursor: default; }
+.companion-welcome-progress { color: var(--ink-2); font: 400 13px/20px var(--f-ui); }

@@ -24,8 +24,8 @@ export class CompanionPrebirthSafety {
     private readonly identities:CompanionIdentityDrafts) {
     this.storage=new OnboardingStorage(config,legal);
   }
-  async assertCurrentWriteInTransaction(client:PoolClient,context:FixedSessionContext,value:unknown,signal?:AbortSignal):Promise<void> {
-    const contextSnapshot=fixed(context),taskId=parseCompanionNameTask(value);
+  async assertCurrentSafetyInTransaction(client:PoolClient,context:FixedSessionContext,signal?:AbortSignal):Promise<void> {
+    const contextSnapshot=fixed(context);
     // Every writer starts with the actual owner before session/draft/source
     // locks, serializing even an entry or raw text that did not exist yet.
     await this.storage.authorizeSession(client,contextSnapshot,signal);
@@ -41,9 +41,14 @@ export class CompanionPrebirthSafety {
     if(state.status!=='clear' || sources.some(source=>!handled.has(source.id) && (source.status!=='detected' || source.level!=='L0' || source.detector_mode!=='full')))
       throw new ApiError(409,'ONBOARDING_SAFETY_REQUIRED','Wait for the complete current intake safety check before continuing.');
     // Handled risks remain their actual L1/L2 and cannot provide profile facts.
-    // background's seed still enforces current revision, questionnaire, rules,
-    // classified dimensions and the original authentic generation provenance.
+    // Validate every authentic name capture as well. Writers needing a persona
+    // preview additionally check its generation provenance in the method below.
     await this.names.assertPrebirthNamesInTransaction(client,contextSnapshot,signal);
+    await authorizeFixedSession(client,contextSnapshot,signal);signal?.throwIfAborted();
+  }
+  async assertCurrentWriteInTransaction(client:PoolClient,context:FixedSessionContext,value:unknown,signal?:AbortSignal):Promise<void> {
+    const contextSnapshot=fixed(context),taskId=parseCompanionNameTask(value);
+    await this.assertCurrentSafetyInTransaction(client,contextSnapshot,signal);
     const current=await this.background.readInTransaction(client,contextSnapshot,{taskId},signal);
     if(!current) throw new ApiError(409,'COMPANION_PREVIEW_REQUIRED','Wait for the current completed companion preview.');
     await authorizeFixedSession(client,contextSnapshot,signal); signal?.throwIfAborted();
