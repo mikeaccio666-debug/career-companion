@@ -1,5 +1,5 @@
 import { before,after,test } from 'node:test';import assert from 'node:assert/strict';import { randomUUID } from 'node:crypto';
-import { PLATFORM_ACCOUNT_HEADER,parseCareerStory,parseCareerProject } from '@companion/platform-contracts';import { createProviderRuntime } from '@companion/ai-core';import { buildApp } from '../src/app.ts';import { readConfig } from '../src/config.ts';import { hashPassword } from '../src/auth.ts';import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safety.ts';import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
+import { PLATFORM_ACCOUNT_HEADER,parseCareerStory,parseCareerProject } from '@companion/platform-contracts';import { createProviderRuntime } from '@companion/ai-core';import { buildApp } from '../src/app.ts';import { readConfig } from '../src/config.ts';import { hashPassword,tokenHash } from '../src/auth.ts';import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safety.ts';import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
 const origin='https://fictional-stories.example.invalid',root='/api/platform/career/',password='Fictional-story-password-123';let f:Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>,system:Awaited<ReturnType<typeof buildApp>>,calls=0;
 before(async()=>{f=await createCompanionNameSafetyFixture();system=await buildApp({db:f.db,legalBundle:FICTIONAL_LEGAL,config:{...readConfig(),dataCrypto:f.crypto,requireVerifiedEmail:true,allowedOrigins:new Set([origin])},enableQueue:false,runtime:createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'},fetch:async()=>{calls++;throw Error('No provider request allowed');}})});});after(async()=>{await system?.app.close();assert.equal(calls,0);await f?.close();});
 async function actor(){const who=await f.actor();await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[who.userId,await hashPassword(password)]);const r=await system.app.inject({method:'POST',url:'/api/platform/auth/login',headers:{origin},payload:{email:who.userId+'@example.invalid',password}});assert.equal(r.statusCode,200);const raw=r.headers['set-cookie'],cookie=(Array.isArray(raw)?raw[0]:raw)!.split(';')[0];return {id:who.userId,headers:{origin,cookie,[PLATFORM_ACCOUNT_HEADER]:who.userId}};}
@@ -19,4 +19,19 @@ test('real HTTP rejects cross-owner reads/writes/linking, stale account window, 
  for(const patch of [{status:'confirmed'},{source:'expert'},{confirmedAt:'2026-10-08T00:00:00.000Z'},{ownerId:b.id},{practiceCount:100}])assert.equal((await system.app.inject({method:'POST',url:root+'stories',headers:a.headers,payload:{...story(),...patch}})).statusCode,400);
  for(const patch of [{verification:'mentor_reviewed'},{mentorReview:{reviewerId:a.id}},{kind:'interview'},{state:'active'}])assert.equal((await system.app.inject({method:'POST',url:root+'projects',headers:a.headers,payload:{...project(),...patch}})).statusCode,400);
  assert.equal((await system.app.inject({url:root+'stories?userId='+b.id,headers:a.headers})).statusCode,400);assert.equal((await system.app.inject({url:root+'stories'})).statusCode,401);assert.equal(calls,0);
+});
+
+test('application assembly reads actual records written through password-authenticated HTTP and revalidates the original source after an owner edit',async()=>{
+ const a=await actor(),b=await actor();
+ const who={userId:a.id,tokenHash:tokenHash(decodeURIComponent(a.headers.cookie.slice(a.headers.cookie.indexOf('=')+1)))};
+ const saved=await system.app.inject({method:'POST',url:root+'projects',headers:a.headers,payload:project()});assert.equal(saved.statusCode,201,saved.body);
+ const p=parseCareerProject(saved.json().record),index=await system.careerPreparationSources.read(who);assert.deepEqual(index.projects.map(p=>p.id),[p.id]);assert.equal(index.projects[0].revision,1);assert(!JSON.stringify(index).includes('Fictional individual work.'));
+ const prepared=await system.careerPreparationSources.prepare(who,{skillId:'evidence-story',selection:{projectId:p.id}});assert.equal(prepared.built.context.inputs[0].id,p.id);assert.equal(prepared.built.context.profileRevision,0);
+ assert.equal((await system.app.inject({url:root+'preparation-sources',headers:a.headers})).statusCode,404);
+ await system.db.withBoundedTransaction(client=>system.careerPreparationSources.assertCurrentInTransaction(client,who,{ownerId:a.id,indexId:index.indexId}));
+ const changed=await system.app.inject({method:'PATCH',url:root+'projects/'+p.id,headers:a.headers,payload:{...project(),expectedRevision:1,sensitivity:'restricted'}});assert.equal(changed.statusCode,200,changed.body);
+ assert.deepEqual((await system.careerPreparationSources.read(who)).projects,[]);
+ await assert.rejects(system.db.withBoundedTransaction(client=>system.careerPreparationSources.assertCurrentInTransaction(client,who,{ownerId:a.id,indexId:index.indexId})),(e:any)=>e.status===409);
+ await assert.rejects(system.db.withBoundedTransaction(client=>system.careerPreparationSources.assertCurrentInTransaction(client,who,{ownerId:b.id,indexId:index.indexId})),(e:any)=>e.status===404);
+ assert.equal(calls,0);
 });

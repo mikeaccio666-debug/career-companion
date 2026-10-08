@@ -1,3 +1,4 @@
+import type { OwnedCareerEvidence,OwnedCareerInput } from './career-run-context.ts';
 import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId,careerRecordObject,parseCareerLibraryCommand,parseCareerProject,parseCareerStory,careerLibrarySummary,type CareerLibraryKind,type CareerLibraryAction,type CareerLibraryRecord,type CareerProject,type CareerStory,type CareerStoryEvidenceAvailability } from '@companion/platform-contracts';
@@ -56,6 +57,30 @@ export class CareerStories {
    const rows=(await client.query('SELECT * FROM '+tables[kind]+' WHERE user_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2::timestamptz,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT 51 FOR SHARE',[context.userId,cursor?.created_at??null,after])).rows,records=[];
    for(const row of rows.slice(0,50)){signal?.throwIfAborted();const record=await this.record(client,context,kind,row);records.push(Object.freeze({record:careerLibrarySummary(kind,record),evidenceAvailability:kind==='story'?await this.availability(client,context,record as CareerStory,signal):null}));}await authorizeFixedSession(client,context,signal);return Object.freeze({records:Object.freeze(records),nextAfter:rows.length>50?records.at(-1)!.record.id:null});
   });}
+ /** Metadata-only internal index. Actual source text has its own classification,
+  * speaker privacy and frozen-version gates; these references authorize no read
+  * or model request. Authenticated current projects remain distinct from proof. */
+ async readPreparationIndexInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
+  const context=this.fixed(value);await this.authorize(client,context,signal);await this.storage.authorizeSession(client,context,signal);
+  const projectRows=(await client.query('SELECT * FROM platform_career_evidence WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[context.userId])).rows;
+  const storyRows=(await client.query('SELECT * FROM platform_career_stories WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[context.userId])).rows;
+  if(projectRows.length>500||storyRows.length>500)throw unavailable();
+  const projects=new Map<string,Readonly<CareerProject>>(),evidence:Readonly<OwnedCareerEvidence>[]=[],stories:Readonly<OwnedCareerInput>[]=[];
+  const labels={course_project:'课程项目',independent_project:'独立项目',internship:'实习',employment:'工作经历',volunteering:'志愿经历',other:'其他经历'};
+  for(const row of projectRows){
+   signal?.throwIfAborted();const p=await this.record(client,context,'project',row) as Readonly<CareerProject>;projects.set(p.id,p);
+   if(p.state!=='active'||p.sensitivity!=='normal')continue;
+   evidence.push(Object.freeze({ownerId:context.userId,id:p.id,revision:p.revision,state:'current',kind:'project',normalSummary:'经历类型：'+labels[p.experienceKind]+'；事实状态：'+(p.verification==='user_confirmed'?'本人已确认':'本人填写，待确认')+'。'}));
+  }
+  for(const row of storyRows){
+   signal?.throwIfAborted();const s=await this.record(client,context,'story',row) as Readonly<CareerStory>;
+   if(s.status!=='confirmed'||s.sensitivity!=='normal')continue;
+   if(s.projects.some(ref=>{const p=projects.get(ref.id);return !p||p.state!=='active'||p.revision!==ref.revision||p.verification!=='user_confirmed'||p.sensitivity!=='normal'||p.experienceKind!==s.experienceKind;}))continue;
+   stories.push(Object.freeze({ownerId:context.userId,id:s.id,revision:s.revision,state:'current',normalSummary:'经历类型：'+labels[s.experienceKind]+'；故事状态：本人已确认；关联事实为当前确认版本。'}));
+  }
+  await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
+  return Object.freeze({projects:Object.freeze(evidence),stories:Object.freeze(stories)});
+ }
  async progress(value:FixedSessionContext,signal?:AbortSignal){const context=this.fixed(value);return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);const rows=(await client.query('SELECT * FROM platform_career_evidence WHERE user_id=$1 ORDER BY created_at,id LIMIT 501 FOR SHARE',[context.userId])).rows;if(rows.length>500)throw unavailable();const evidence=[];for(const row of rows){signal?.throwIfAborted();evidence.push(await this.record(client,context,'project',row) as CareerProject);}const progress=careerProgress(context.userId,evidence);await authorizeFixedSession(client,context,signal);return Object.freeze({progress,coverage:Object.freeze(['project'])});});}
  async mutate(value:FixedSessionContext,inputKind:CareerLibraryKind,action:CareerLibraryAction,key:unknown,input:unknown,signal?:AbortSignal){const context=this.fixed(value),kind=this.kind(inputKind);let command:ReturnType<typeof parseCareerLibraryCommand>,requested:string|null;try{command=parseCareerLibraryCommand(kind,action,input);requested=action==='create'?null:careerRecordId(key);}catch{throw bad();}
   const digest=createHash('sha256').update(canonical({kind,action,recordId:requested,command})).digest('hex');
