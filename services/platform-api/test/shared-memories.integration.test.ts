@@ -1,3 +1,4 @@
+import { createMemorySafetyLoopback } from './fixtures/shared-memory-safety.ts';
 import fs from 'node:fs/promises';
 import { Database } from '../src/database.ts';
 import { readConfig } from '../src/config.ts';
@@ -10,9 +11,9 @@ import { ApiError } from '../src/errors.ts';
 import { tokenHash } from '../src/auth.ts';
 import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
 import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safety.ts';
-let f:Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>,service:SharedMemories;
-before(async()=>{f=await createCompanionNameSafetyFixture();service=new SharedMemories(f.db,f.config,FICTIONAL_LEGAL);});
-after(async()=>{await f?.close();});
+let f:Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>,service:SharedMemories,detector:Awaited<ReturnType<typeof createMemorySafetyLoopback>>;
+before(async()=>{f=await createCompanionNameSafetyFixture();service=new SharedMemories(f.db,f.config,FICTIONAL_LEGAL);detector=await createMemorySafetyLoopback(f,service);});
+after(async()=>{try{await detector?.close();}finally{await f?.close();}});
 const bad=(status:number)=>(e:unknown)=>e instanceof ApiError&&e.status===status;
 const create=(patch:Record<string,unknown>={})=>({operationId:randomUUID(),content:'Fictional owner preference',category:'goal_preference',sensitivity:'normal',usePolicy:'normal',speakerScope:null,validUntil:null,...patch});
 const scope=(userId:string,patch:Record<string,unknown>={})=>({ownerId:userId,speaker:'companion' as const,channel:'web' as const,purpose:'chat' as const,now:new Date().toISOString(),intentKeys:[],userRaisedMemoryIds:[],selfSetReminderMemoryIds:[],...patch});
@@ -31,6 +32,7 @@ test('migration leaves actual old rows unclassified; owner review is required be
  assert.equal(accepted.memory.kind,'memory');assert.equal(accepted.memory.revision,1);assert.equal(accepted.memory.confidence,'high');assert(accepted.memory.confirmedAt);
  assert.equal((await f.db.query('SELECT content FROM platform_memories WHERE id=$1',[id])).rows[0].content,'');
  const hidden=await f.db.withBoundedTransaction(c=>service.selectInTransaction(c,who,scope(who.userId)));assert.equal(hidden.useReferences.length,0);
+ await detector.safety.runCurrent(who,id);
  const raised=await f.db.withBoundedTransaction(c=>service.selectInTransaction(c,who,scope(who.userId,{userRaisedMemoryIds:[id]})));assert.equal(raised.current[0].content,'Fictional old private content');
 });
 
@@ -40,6 +42,7 @@ test('real encrypted owner save is versioned, replayable without another effect,
  assert.equal(a.operation.replayed,false);assert.equal(b.operation.replayed,true);assert.deepEqual(b.memory,a.memory);
  const row=(await f.db.query('SELECT * FROM platform_memories WHERE id=$1',[a.memory.id])).rows[0];assert.equal(row.content,'');assert(!row.record_ciphertext.includes(Buffer.from(command.content)));
  assert.deepEqual(await counts(who.userId),{operations:1,events:1,memories:1,jobs:0});
+ await detector.safety.runCurrent(who,a.memory.id);
  const selected=await f.db.withBoundedTransaction(c=>service.selectInTransaction(c,who,scope(who.userId)));assert.equal(selected.stable[0].content,command.content);
  await assert.rejects(service.mutate(who,'create',null,{...command,content:'Fictional changed duplicate'}),bad(409));
 });
@@ -72,6 +75,7 @@ test('concurrent edits serialize on the real account: exactly one new revision a
 
 test('sensitivity and only-if-raised changes take effect on the next genuine selection, with content-free audit events',async()=>{
  const who=await f.actor(),a=await service.mutate(who,'create',null,create());
+ await detector.safety.runCurrent(who,a.memory.id);
  const b=await service.mutate(who,'edit',a.memory.id,{operationId:randomUUID(),expectedRevision:1,sensitivity:'restricted',usePolicy:'only_if_user_raises'});
  const quiet=await f.db.withBoundedTransaction(c=>service.selectInTransaction(c,who,scope(who.userId)));assert.equal(quiet.useReferences.length,0);
  const expert=await f.db.withBoundedTransaction(c=>service.selectInTransaction(c,who,scope(who.userId,{speaker:'applier',userRaisedMemoryIds:[a.memory.id]})));assert.equal(expert.useReferences.length,0);
@@ -148,6 +152,7 @@ test('real account deletion cascades all private memories, audit events and oper
 
 test('genuine undo expiry physically purges content and stale create replay cannot resurrect it',async()=>{
  const who=await f.actor(),command=create(),a=await service.mutate(who,'create',null,command);
+ await detector.safety.runCurrent(who,a.memory.id);
  const deleted=await service.mutate(who,'delete',a.memory.id,{operationId:randomUUID(),expectedRevision:1});
  await new Promise(resolve=>setTimeout(resolve,10100));
  await assert.rejects(service.mutate(who,'undo',a.memory.id,{operationId:randomUUID(),expectedRevision:2,deletionOperationId:deleted.operation.id}),bad(409));
@@ -160,6 +165,7 @@ test('genuine undo expiry physically purges content and stale create replay cann
  assert.equal((await f.db.query('SELECT id FROM platform_memories WHERE id=$1',[fresh.memory.id])).rowCount,1);
  await service.mutate(who,'undo',fresh.memory.id,{operationId:randomUUID(),expectedRevision:2,deletionOperationId:recent.operation.id});
  assert.equal((await f.db.query('SELECT id FROM platform_memories WHERE id=$1',[a.memory.id])).rowCount,0);
+ assert.equal((await f.db.query('SELECT id FROM platform_memory_safety_sources WHERE memory_id=$1',[a.memory.id])).rowCount,0);assert.equal((await f.db.query("SELECT call_id FROM platform_safety_model_usage WHERE memory_id=$1 AND status='complete'",[a.memory.id])).rowCount,1);
  assert.equal((await f.db.query('SELECT id FROM platform_memory_events WHERE memory_id=$1',[a.memory.id])).rowCount,2);
  await assert.rejects(service.mutate(who,'create',null,command),bad(409));
  assert.equal((await counts(who.userId)).memories,2);

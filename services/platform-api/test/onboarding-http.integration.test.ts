@@ -261,6 +261,11 @@ test('genuine039 archived foundation survives malformed current assets; reconstr
   await fs.writeFile(filename,'{"schemaVersion":1,"fictionalInvalid":true}',{mode:0o600});
   const rebuilt=await buildApp({db,config:{...config,safetyDetectorProfilePath:filename,safetyResponseBundlePath:filename},
     legalBundle:FICTIONAL_LEGAL,runtime,enableQueue:false});additionalSystems.push(rebuilt);
+  const memorySession={userId:who.userId,tokenHash:who.tokenHash};
+  const savedMemory=await rebuilt.sharedMemories.mutate(memorySession,'create',null,{operationId:randomUUID(),content:'Fictional saved preference with unavailable current assets',category:'goal_preference',sensitivity:'normal',usePolicy:'normal',speakerScope:null,validUntil:null});
+  await assert.rejects(rebuilt.memorySafety.runCurrent(memorySession,savedMemory.memory.id),(error:unknown)=>error instanceof ApiError&&error.status===503&&error.code==='MEMORY_SAFETY_UNAVAILABLE');
+  assert.equal((await rebuilt.memorySafety.observe(memorySession,savedMemory.memory.id)).status,'unavailable');
+  assert.equal((await db.query('SELECT id FROM platform_memory_safety_sources WHERE memory_id=$1',[savedMemory.memory.id])).rowCount,0);
   const invalidConfig={...config,safetyDetectorProfilePath:filename,safetyResponseBundlePath:filename};
   const independentArchive=await new OnboardingSafetyFollowup(db,invalidConfig,FICTIONAL_LEGAL).read(who);
   assert.equal(independentArchive.publications.length,1);assert(independentArchive.publications[0].response.resourceCard.contacts.length>0);

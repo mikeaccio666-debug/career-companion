@@ -1,3 +1,4 @@
+import { confirmedMemorySafetyInTransaction } from './shared-memory-safety-protocol.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { parseSharedMemoryRecord, parseSharedMemoryCommand, sharedMemoryId, type SharedMemoryRecord, type SharedMemoryCommand, type SharedMemoryCommandKind } from '@companion/platform-contracts';
@@ -114,6 +115,12 @@ export class SharedMemories {
       [r.operationId,s.userId,r.memoryId,r.action,r.appliedRevision,sealed,r.createdAt]);
     for(const action of actions)await client.query("INSERT INTO platform_memory_events(id,user_id,memory_id,operation_id,action,actor,channel,revision,created_at) VALUES($1,$2,$3,$4,$5,'user','web',$6,$7)",[randomUUID(),s.userId,r.memoryId,r.operationId,action,r.appliedRevision,r.createdAt]);
   }
+  /** Server-only actual state reader. No caller snapshot, source ID or grade is accepted. */
+  async readInTransaction(client:PoolClient,context:FixedSessionContext,value:unknown,signal?:AbortSignal){
+    const s=fixed(context);let id:string;try{id=sharedMemoryId(value);}catch{throw bad();}
+    await this.authorize(client,s,signal);const row=await this.row(client,s,id);if(!row)throw notFound();const snapshot=await this.decode(client,s,row);
+    if(snapshot.state.deletedAt!==null)throw notFound();await authorizeFixedSession(client,s,signal);return snapshot.state;
+  }
   async get(context:FixedSessionContext,value:unknown,signal?:AbortSignal) {
     let id:string;try{id=sharedMemoryId(value);}catch{throw bad();}
     const s=fixed(context);
@@ -193,7 +200,7 @@ export class SharedMemories {
     const rows=(await client.query('SELECT * FROM platform_memories WHERE user_id=$1 AND record_ciphertext IS NOT NULL AND deleted_at IS NULL ORDER BY id LIMIT 2001 FOR SHARE',[context.userId])).rows;
     if(rows.length>2000)throw new ApiError(409,'MEMORY_CONTEXT_CAPACITY','The memory context requires a bounded page.');
     const memories:ContextMemory[]=[];
-    for(const row of rows){const {state}=await this.decode(client,context,row);if(state.kind!=='memory')continue;
+    for(const row of rows){const {state}=await this.decode(client,context,row);if(state.kind!=='memory'||!await confirmedMemorySafetyInTransaction(client,this.storage.crypto!,state,signal))continue;
       memories.push({id:state.id,ownerId:state.ownerId,revision:state.revision,category:state.category!,sensitivity:state.sensitivity!,status:state.status!,confidence:state.confidence!,
         usePolicy:state.usePolicy!,content:state.content,confirmedAt:state.confirmedAt,validUntil:state.validUntil,speakerScope:state.speakerScope,intentKeys:[]});}
     const result=selectCompanionContextMemories({scope:{...scope,now:await this.time(client)},memories});await authorizeFixedSession(client,context,signal);return result;
