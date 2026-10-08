@@ -9,6 +9,7 @@ import { parseCompanionNameApplication, parseCompanionNameTask, type CompanionNa
 import { resolveModelRoute } from './model-routing.ts';
 import { createCompanionNameSafetyModelUsage } from './safety-model-usage.ts';
 import { assertActiveSafetyDetector, readSafetyDetectorProfile, type SafetyDetectorProfile } from './safety-detector-profile.ts';
+import { companionNameNotification } from './companion-name-dispatch-protocol.ts';
 
 const unavailable = () => new ApiError(503, 'COMPANION_NAME_SAFETY_UNAVAILABLE', 'Name detection is not available.');
 /** Server-only execution for already committed name inputs. A read never launches
@@ -37,6 +38,13 @@ export class CompanionNameSafetyRunner {
     }
     const claim = await this.names.claimSubmission(fixed, { ...target, detectorRevision: this.profile.revision }, signal);
     return this.runClaim(claim, this.profile, signal);
+  }
+  /** Accepted target only; the core's managed fence also protects every older
+   * claim/process port. Notification loss cannot bypass a recorded start. */
+  async runAcceptedSubmission(context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
+    const notice=companionNameNotification(value),captured=Object.freeze({userId:context.userId,tokenHash:context.tokenHash});
+    await this.names.assertAcceptedDispatch(captured,notice,signal);
+    return this.runSubmission(captured,{taskId:notice.taskId,submissionId:notice.submissionId},signal);
   }
   private async runClaim(claim: Readonly<CompanionNameSafetyClaim> | null, profile: SafetyDetectorProfile, signal?: AbortSignal) {
     if (!claim) return null;

@@ -43,6 +43,9 @@ import { StudentEntry } from './student-entry.ts';
 import { createOnboardingEntry } from './onboarding-entry.ts';
 import { CompanionEntry } from './companion-entry.ts';
 import { CompanionGenerationQueue } from './companion-generation-queue.ts';
+import { createCompanionNamingEntry } from './companion-naming-entry.ts';
+import { CompanionNameQueue } from './companion-name-queue.ts';
+import { companionNameUuid } from './companion-name-safety-protocol.ts';
 import { ModelConsent, requireModelConsent } from './model-routing.ts';
 import {
   projectPlatformFeatures, projectPublicAccountUsage, projectPublicApproval, projectPublicAudioTranscriptionReceipt,
@@ -74,6 +77,7 @@ export async function buildApp(options:AppOptions={}) {
   const runtime=requireModelConsent(options.runtime??createProviderRuntime());
   const onboarding=await createOnboardingEntry(db,config,bundle,runtime);
   const companion=new CompanionEntry(db,config,bundle,runtime);
+  const naming=await createCompanionNamingEntry(db,config,bundle,runtime,companion.generation);
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
@@ -88,6 +92,7 @@ export async function buildApp(options:AppOptions={}) {
   const jobOutcomeReviews=new JobOutcomeReviews(db);
   const queue=options.queue??(options.enableQueue===false?undefined:new TaskQueue(jobs));
   const companionQueue=options.enableQueue===false?undefined:new CompanionGenerationQueue(companion);
+  const companionNameQueue=options.enableQueue===false?undefined:new CompanionNameQueue(naming);
   const readiness=new OperationsReadiness(db,config,Boolean(queue));
   const app=Fastify({logger:false,bodyLimit:256*1024,requestTimeout:120_000});
   await configurePlatformHttp(app,config);
@@ -219,6 +224,39 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/companion/drafts`,secure,async(request,reply)=>{
     const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
     try{const result=await companion.accept(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);reply.code(202);return result;}
+    finally{cancellation.dispose();}
+  });
+  // Internal transport only. Raw acceptance has its own durable lifetime;
+  // observation does not classify, dispatch, apply or repair saved evidence.
+  const namingReadSecure={preHandler:[...secure.preHandler,async(request:FastifyRequest)=>{
+    const origin=request.headers.origin;
+    if(origin!==undefined&&!config.allowedOrigins.has(origin))throw new ApiError(403,'ORIGIN_REJECTED','Use this action from the configured application origin.');
+  }]};
+  function namingQuery(request:FastifyRequest){
+    if(Object.keys(request.query as Record<string,unknown>).length)throw invalid('Naming reads and submissions do not accept query authority.');
+  }
+  app.post(`${prefix}/companion/naming/submissions`,secure,async(request,reply)=>{
+    namingQuery(request);
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{
+      const accepted=await naming.accept(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);
+      // Optional post-COMMIT notification only; the independent outbox worker
+      // remains the executor even after this HTTP connection disappears.
+      if(companionNameQueue)void companionNameQueue.dispatch().catch(()=>{});
+      reply.code(202);return accepted;
+    }finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/naming`,namingReadSecure,async(request,reply)=>{
+    namingQuery(request);
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {state:await naming.read(fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/naming/submissions/:operationId`,namingReadSecure,async(request,reply)=>{
+    namingQuery(request);
+    const operationId=companionNameUuid((request.params as Record<string,unknown>).operationId);
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {accepted:await naming.readOperation(fixedRequestSession(request,userId(request)),operationId,cancellation.signal)};}
     finally{cancellation.dispose();}
   });
   // Fixed resources and receipt declarations do not consume ordinary API quota or depend on current terms/provider availability.
@@ -470,12 +508,18 @@ export async function buildApp(options:AppOptions={}) {
   });
 
   const streamRecovery=setInterval(()=>void recoverStaleStreams(db).catch(()=>{}),30_000);streamRecovery.unref();
-  app.addHook('onClose',async()=>{clearInterval(streamRecovery);await readiness.close();if(queue)await queue.close();if(companionQueue)await companionQueue.close();if(!options.db)await db.close();});
+  app.addHook('onClose',async()=>{
+    clearInterval(streamRecovery);
+    const results=await Promise.allSettled([readiness.close(),queue?.close(),companionQueue?.close(),companionNameQueue?.close()]);
+    if(!options.db)await db.close();
+    if(results.some(result=>result.status==='rejected'))throw new Error('Platform shutdown could not be confirmed.');
+  });
   try{
     if(config.webStaticDir)await configureStaticWeb(app,config.webStaticDir);
     await app.ready();
     if(queue)queue.start();
     if(companionQueue)companionQueue.start();
+    if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,naming,companionNameQueue,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

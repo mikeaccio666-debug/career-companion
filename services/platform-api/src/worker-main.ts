@@ -9,15 +9,20 @@ import { startWorkerHeartbeat } from './worker-heartbeat.ts';
 import { CompanionEntry } from './companion-entry.ts';
 import { requireModelConsent } from './model-consent.ts';
 import { CompanionGenerationQueue, createCompanionGenerationWorker, reconcileCompanionAccounting } from './companion-generation-queue.ts';
+import { createCompanionNamingEntry } from './companion-naming-entry.ts';
+import { CompanionNameQueue, createCompanionNameWorker } from './companion-name-queue.ts';
 const config=readConfig(),db=new Database(config.databaseUrl,{max:config.databasePoolMax,connectionTimeoutMillis:config.databaseConnectTimeoutMs});
 const legal=await loadLegalBundle(config.legalBundlePath),runtime=requireModelConsent(createProviderRuntime());
 const jobs=new JobService(db,config,runtime,createStorage(config),undefined,undefined,legal);
 const companion=new CompanionEntry(db,config,legal,runtime);
+const naming=await createCompanionNamingEntry(db,config,legal,runtime,companion.generation);
 await db.query('SELECT 1');await recoverInterrupted(jobs);
 await reconcileCompanionAccounting(companion);
 const worker=createWorker(jobs);
 const companionWorker=createCompanionGenerationWorker(companion),companionQueue=new CompanionGenerationQueue(companion);
+const companionNameWorker=createCompanionNameWorker(naming),companionNameQueue=new CompanionNameQueue(naming);
 companionQueue.start();
+companionNameQueue.start();
 const accountEmailWorker=startAccountEmailWorker(db,config.accountEmail);
 worker.on('error',()=>{process.stderr.write('Worker connection interrupted; waiting for recovery.\n');});
 const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeVersion:config.codeVersion});
@@ -35,7 +40,8 @@ for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{
     await heartbeat.stop();
     await recovering;
     // BullMQ close waits for processors and has no built-in deadline. A stopping report is not proof of shutdown.
-    const results=await Promise.allSettled([worker.close(),accountEmailWorker.close(),companionWorker.close(),companionQueue.close()]);
+    const results=await Promise.allSettled([worker.close(),accountEmailWorker.close(),companionWorker.close(),companionQueue.close(),
+      companionNameWorker.close(),companionNameQueue.close()]);
     await db.close();
     if(results.some(result=>result.status==='rejected'))throw new Error('Worker shutdown could not be confirmed.');
   })();

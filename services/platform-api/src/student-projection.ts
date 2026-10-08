@@ -388,6 +388,11 @@ keepErrorCodes(['ONBOARDING_SAFETY_REQUIRED', 'ONBOARDING_SAFETY_REVIEW_REQUIRED
 keepErrorCodes(['ONBOARDING_SAFETY_CLAIM_CHANGED'], 'Read the current intake safety progress before retrying.');
 keepErrorCodes(['ONBOARDING_SAFETY_PRESENTATION_REQUIRED', 'ONBOARDING_SAFETY_ACKNOWLEDGMENT_REQUIRED'], 'Read and acknowledge the current support response before continuing.');
 keepErrorCodes(['ONBOARDING_SAFETY_RESPONSE_EXPIRED'], 'A current reviewed support response is needed.');
+keepErrorCodes(['COMPANION_NAME_ENTRY_REVISION_CHANGED'], 'Read the current naming progress before submitting another name.');
+keepErrorCodes(['COMPANION_NAME_OPERATION_CONFLICT'], 'Use the saved naming request or a new operation identifier for different text.');
+keepErrorCodes(['COMPANION_PREVIEW_REQUIRED'], 'Wait for the completed companion preview before submitting a name.');
+keepErrorCodes(['COMPANION_NAMING_UNAVAILABLE', 'COMPANION_PREBIRTH_INVENTORY_UNAVAILABLE', 'COMPANION_NAME_SAFETY_UNAVAILABLE'], 'Saved naming progress is temporarily unavailable. No new result has been inferred.');
+keepErrorCodes(['COMPANION_NAME_RESOURCE_UNAVAILABLE', 'COMPANION_NAME_SAFETY_RESPONSE_UNAVAILABLE'], 'Saved naming support resources are temporarily unavailable.');
 keepErrorCodes(['EMAIL_EXISTS'], 'An account already exists for this email.');
 keepErrorCodes(['ACCOUNT_CONTEXT_REQUIRED', 'ACCOUNT_CONTEXT_INVALID', 'ACCOUNT_CONTEXT_CHANGED'], 'Reload the current account before continuing.');
 keepErrorCodes(['ACCOUNT_ACTION_INVALID'], 'This account link is invalid or expired. Request a new email.');
