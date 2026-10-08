@@ -1,0 +1,96 @@
+import test, { after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile, chmod } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MENTOR_INTENT_PRIVACY, MENTOR_INTENT_PRIVACY_VERSION } from '@companion/platform-contracts';
+const webRoot = fileURLToPath(new URL('../', import.meta.url));
+await mkdir(path.join(webRoot, '.local'), { recursive: true });
+const directory = await mkdtemp(path.join(webRoot, '.local', 'mentor-markup-test-')); await chmod(directory, 0o700);
+after(() => rm(directory, { recursive: true, force: true }));
+const output = await build({ stdin: { contents: "export { MentorIntentScene, MentorIntentPage } from './src/mentor-intent-view'; export { MentorHumanEntry } from './src/mentor-human-entry'; export { PlatformAccountClientProvider } from './src/account-client';", resolveDir: webRoot, loader: 'ts' },
+  bundle: true, write: false, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' }, logLevel: 'silent' });
+const filename = path.join(directory, 'entry.mjs'); await writeFile(filename, output.outputFiles[0].text, { mode: 0o600 });
+const views = await import(pathToFileURL(filename).href);
+const owner = '11111111-1111-1111-1111-111111111111', id = '22222222-2222-2222-2222-222222222222', at = '2026-10-08T10:00:00.000Z';
+const offer = (patch: object = {}) => ({ id, organizationId: owner, revision: 1, kind: 'resume_direction', title: 'Fictional service',
+  description: 'Fictional purchased purpose', exclusions: 'Fictional explicit exclusions', priceCents: 12700, currency: 'USD', durationMin: 47,
+  collector: 'Fictional collector', refundVersion: 'fictional-1', refundRules: 'Fictional actual refund', appealInstructions: 'Fictional actual appeal',
+  disclosureVersion: 'fictional-1', disclosure: 'Fictional actual relationship', intentPrivacy: MENTOR_INTENT_PRIVACY, updatedAt: at,
+  validFrom: '2025-01-01T00:00:00.000Z', validUntil: '2028-01-01T00:00:00.000Z', earliestSlotAt: '2027-01-01T00:00:00.000Z', availability: 'available', ...patch });
+const entry = (patch: object = {}) => ({ configured: true, contactEmail: 'fictional@example.invalid', privacyVersion: MENTOR_INTENT_PRIVACY_VERSION,
+  intentPrivacy: MENTOR_INTENT_PRIVACY, offers: [offer()], ...patch });
+const state = (patch: object = {}) => ({ entry: entry(), records: [], nextCursor: null, loaded: true, busy: false, suspended: false,
+  pending: null, uncertain: false, needsRefresh: false, error: '', lastResult: null, ...patch });
+const editor = (patch: object = {}) => ({ offer: offer(), contactName: '', note: '', confirmed: false, ...patch });
+const props = (patch: object = {}) => ({ state: state(), editor: null, setEditor() {}, cancelling: null, setCancelling() {}, inputError: '', setInputError() {},
+  controller: { refresh() {}, loadMore() {}, begin() {}, observe() {}, retry() {} }, ...patch });
+const markup = (patch: object = {}) => renderToStaticMarkup(createElement(views.MentorIntentScene, props(patch)));
+const record = (patch: object = {}) => ({ id, ownerId: owner, organizationId: owner, offerId: id, offerRevision: 1, kind: 'resume_direction', durationMin: 47,
+  contactName: 'Fictional student', contactEmail: 'fictional@example.invalid', intentNote: '<img src=x onerror=alert(1)>', status: 'requested',
+  orderId: null, mentorId: null, privacyVersion: MENTOR_INTENT_PRIVACY_VERSION, visibilityConfirmedAt: at, revision: 1, createdAt: at,
+  updatedAt: at, lastOperationId: owner, ...patch });
+test('ServiceCard keeps every source term expanded, showing actual price/duration/collector and no referral or named tutor promise', () => {
+  const html = markup();
+  for (const text of ['你付的是什么', '不包含什么', '价格、时长与收款方', '退款与申诉', '利益关系', '对方能看到什么',
+      'Fictional purchased purpose', 'Fictional explicit exclusions', '$127.00', '47 min', 'Fictional collector',
+      'Fictional actual refund', 'Fictional actual appeal', 'Fictional actual relationship', '我想约一次', '不承诺面试或 offer', '最早可约']) assert(html.includes(text));
+  assert(html.includes(MENTOR_INTENT_PRIVACY)); for (const text of ['<details', '付款链接', '李老师', '确认购买', '内推评估', '免费诊断']) assert(!html.includes(text));
+  assert.match(html, /dateTime="2027-01-01T00:00:00.000Z"/i);
+});
+test('initial form is empty with explicit unchecked visibility and a server-provided read-only email', () => {
+  const html = markup({ editor: editor() });
+  assert.match(html, /value=""/); assert.match(html, /<textarea[^>]*><\/textarea>/); assert(!/type="checkbox"[^>]*checked/.test(html));
+  assert.match(html, /<button type="submit"[^>]*disabled/); assert(html.includes('我确认将上述称呼、邮箱和我写的需求提供给蔓藤运营。'));
+  assert(html.includes('fictional@example.invalid')); assert(!html.includes('type="email"')); assert(!html.includes('type="file"'));
+});
+test('stale or unavailable terms cannot be submitted or scheduled; refreshed cards do not silently reconfirm an old form', () => {
+  const unavailable = markup({ state: state({ entry: entry({ offers: [offer({ availability: 'unavailable', earliestSlotAt: null })] }) }) });
+  assert.match(unavailable, /目前没有确认的可约时段/); assert.match(unavailable, /<button[^>]*disabled="">我想约一次/);
+  const changed = markup({ state: state({ entry: entry({ offers: [offer({ revision: 2, priceCents: 12900 })] }) }),
+    editor: editor({ contactName: 'Fictional', note: 'Own fictional note', confirmed: true }) });
+  assert(changed.includes('$129.00')); assert.match(changed, /重新阅读上方最新说明/); assert.match(changed, /<button type="submit"[^>]*disabled/);
+});
+test('uncertain original operation remains recoverable even when catalog rereading fails; it is never shown as saved', () => {
+  const pending = { action: 'create', sessionId: null, body: { operationId: owner } };
+  for (const patch of [{}, { loaded: false, entry: null, needsRefresh: true }]) {
+    const html = markup({ state: state({ ...patch, pending, uncertain: true, error: 'Fictional read failure' }), editor: editor() });
+    assert.match(html, /核对这次操作/); assert.match(html, /用原操作重试/); assert(!html.includes('收到了')); assert(!html.includes('已匹配'));
+  }
+});
+test('suspended and unloaded scenes conceal typed private data and prior service content, including passed-in editors', () => {
+  for (const patch of [{ suspended: true }, { loaded: false, entry: null }]) {
+    const html = markup({ state: state({ ...patch, records: [record()] }), editor: editor({ note: 'Fictional private editor note' }) });
+    assert(!html.includes('Fictional private editor note')); assert(!html.includes('fictional@example.invalid')); assert(!html.includes('Fictional service'));
+    assert(!html.includes('onerror')); assert(!html.includes('我想约一次'));
+  }
+});
+test('real requested/cancelled history is literal escaped text with explicit cancel confirmation, without inferred match or order', () => {
+  const actual = record(), html = markup({ state: state({ records: [actual] }), cancelling: actual });
+  assert(html.includes('&lt;img')); assert(!html.includes('<img')); assert.match(html, /已提交意向/); assert.match(html, /等待人工匹配与报价/);
+  assert.match(html, /aria-label="确认取消预约意向"/); assert.match(html, /确认取消这份意向/); assert.match(html, />保留</);
+  for (const text of ['已匹配', '已排期', '已付款', '订单号', '看交接包', '导师房间']) assert(!html.includes(text));
+  const cancelled = markup({ state: state({ records: [record({ status: 'cancelled', revision: 2 })] }) });
+  assert.match(cancelled, /已取消/); assert(!cancelled.includes('取消这份意向')); assert(!cancelled.includes('等待人工匹配与报价'));
+});
+test('no partner configuration shows a truthful empty state without imaginary prices, entitlements or private editor defaults', () => {
+  const html = markup({ state: state({ entry: entry({ configured: false, offers: [] }) }) });
+  assert.match(html, /当前暂无可预约的安排/); assert(!html.includes('$')); assert(!html.includes('我想约一次')); assert(!html.includes('免费'));
+});
+test('anonymous human entry stays distinct from AI; account-bound SSR cannot load or expose private data', () => {
+  const human = renderToStaticMarkup(createElement(views.MentorHumanEntry, { current: true }));
+  assert.match(human, /href="\/community\/mentors"/); assert.match(human, /aria-current="page"/); assert.match(human, /付费 · 看不到你的对话/);
+  const current = { account: { accountId: owner, generation: 1 }, isCurrent: () => true, subscribe: () => () => {}, request() { throw Error('SSR must not read'); } };
+  const html = renderToStaticMarkup(createElement(views.PlatformAccountClientProvider, { value: current }, createElement(views.MentorIntentPage, { onLogout() {} })));
+  assert.match(html, /AI 主理人与队伍 · 真人服务入口/); assert.match(html, /真人与社区/); assert(!html.includes('Fictional service'));
+  const stale = renderToStaticMarkup(createElement(views.PlatformAccountClientProvider, { value: { ...current, isCurrent: () => false } }, createElement(views.MentorIntentPage, { onLogout() {} })));
+  assert(!stale.includes('mentor-loading')); assert(!stale.includes('mentor-panel'));
+});
+
+test('a stale cancellation decision cannot act on a refreshed cancelled record', () => {
+  const html = markup({ state: state({ records: [record({ status: 'cancelled', revision: 2 })] }), cancelling: record() });
+  assert.match(html, /请求已有变化/); assert.match(html, /<button type="button" disabled="">确认取消这份意向/);
+});

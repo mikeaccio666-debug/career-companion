@@ -1,0 +1,11 @@
+@import "./career-design-tokens.css";
+.mentor-human-entry { display: flex; gap: 12px; align-items: center; min-height: 52px; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: var(--ink,#15223a); font: 500 15px/22px var(--f-ui,system-ui,sans-serif); }
+.mentor-human-entry[aria-current=page], .mentor-human-entry:hover { background: var(--tint,#e6eaf1); }
+.mentor-human-entry:focus-visible { outline: 2px solid var(--focus,#28488e); outline-offset: 3px; }
+.mentor-human-circle { display: grid; place-items: center; flex: 0 0 28px; height: 28px; border-radius: 50%; border: 1px solid var(--air,#28488e); color: var(--air,#28488e); }
+.mentor-human-name, .mentor-human-subtitle { display: block; overflow-wrap: anywhere; }
+.mentor-human-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.mentor-human-tag { color: var(--air,#28488e); background: var(--air-tint,#e4eaf5); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+.mentor-human-subtitle { color: var(--ink-3,#5d6a80); font-size: 12px; line-height: 18px; }
+.mentor-human-group { margin: 24px 0; }
+.mentor-human-group > h2 { margin: 0 0 8px; color: var(--ink-3,#5d6a80); font: 500 12px/18px var(--f-ui,system-ui,sans-serif); }

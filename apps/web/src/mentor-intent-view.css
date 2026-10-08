@@ -1,0 +1,44 @@
+@import "./career-design-tokens.css";
+.mentor-page { display: grid; grid-template-columns: 240px minmax(0,1fr); max-width: 1200px; margin: 0 auto; min-height: 100vh; background: var(--paper); color: var(--ink); font: 15px/24px var(--f-ui,system-ui,sans-serif); }
+.mentor-sidebar { padding: 24px 12px; border-right: 1px solid var(--rule); background: var(--sheet); }
+.mentor-sidebar nav { display: grid; gap: 8px; }
+.mentor-sidebar nav > a { min-height: 44px; display: flex; align-items: center; padding: 8px 12px; color: var(--ink); text-decoration: none; border-radius: 8px; }
+.mentor-page main { min-width: 0; padding: 0 32px 40px; }
+.mentor-page-header { position: sticky; top: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; z-index: 2; min-height: 56px; padding: 8px 0; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.mentor-page-header > span { font-size: 12px; color: var(--ink-3); }
+.mentor-page button { min-height: 44px; padding: 10px 14px; font: inherit; border: 1px solid var(--ink-4); border-radius: 8px; color: var(--ink); background: var(--sheet); cursor: pointer; }
+.mentor-page button:disabled { opacity: .6; cursor: default; }
+.mentor-page .mentor-primary { background: var(--air); border-color: var(--air); color: var(--sheet); }
+.mentor-page :is(a,button,input,textarea):focus-visible { outline: 2px solid var(--focus,var(--air)); outline-offset: 3px; }
+.mentor-panel, .mentor-loading { padding: 24px 0; }
+.mentor-panel h1 { font-size: 24px; line-height: 32px; margin: 8px 0; }
+.mentor-panel h2 { font-size: 18px; line-height: 28px; margin: 4px 0 12px; }
+.mentor-panel h3 { font-size: 15px; line-height: 24px; margin: 0 0 4px; }
+.mentor-panel p { margin: 8px 0; overflow-wrap: anywhere; }
+.mentor-eyebrow { font-size: 12px; color: var(--ink-3); }
+.mentor-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.mentor-service-list { display: grid; gap: 16px; }
+.mentor-service-card, .mentor-editor, .mentor-cancel { padding: 16px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); margin: 16px 0; min-width: 0; overflow-wrap: anywhere; }
+.mentor-service-card > section { margin: 16px 0; }
+.mentor-service-facts { margin: 8px 0; }
+.mentor-service-facts > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 8px 0; }
+.mentor-service-facts dt { min-width: 64px; color: var(--ink-2); }
+.mentor-service-facts dd { margin: 0; }
+.mentor-num { font-family: var(--f-num,ui-monospace,monospace); font-variant-numeric: tabular-nums; }
+.mentor-notice { padding: 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--tint); margin: 16px 0; overflow-wrap: anywhere; }
+.mentor-editor label { display: grid; gap: 6px; margin: 16px 0; }
+.mentor-editor :is(input:not([type=checkbox]),textarea) { width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid var(--ink-4); border-radius: 8px; background: var(--sheet); color: var(--ink); font: inherit; }
+.mentor-editor textarea { resize: vertical; }
+.mentor-editor .mentor-checkbox { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; }
+.mentor-checkbox input { flex: 0 0 20px; width: 20px; height: 20px; margin-top: 2px; accent-color: var(--air); }
+.mentor-email, .mentor-record-contact { overflow-wrap: anywhere; }
+.mentor-private-note { white-space: pre-wrap; }
+.mentor-history { margin-top: 32px; }
+.mentor-history ul { padding: 0; list-style: none; }
+.mentor-history li { padding: 16px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px; margin: 12px 0; overflow-wrap: anywhere; }
+.mentor-record-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+.mentor-session-status { font-size: 12px; line-height: 20px; padding: 0 6px; border-radius: 4px; background: var(--tint); color: var(--ink-2); }
+.mentor-session-status.cancelled { color: var(--ink-3); }
+.mentor-history time { font-size: 12px; color: var(--ink-3); }
+@media(max-width:800px) { .mentor-page { display: block; } .mentor-sidebar { padding: 12px 16px; border-right: 0; border-bottom: 1px solid var(--rule); } .mentor-sidebar nav { display: flex; flex-wrap: wrap; } .mentor-human-group { margin: 8px 0; } .mentor-page main { padding: 0 16px 24px; } }
+@media(prefers-reduced-motion:reduce) { .mentor-page * { scroll-behavior: auto; } }
