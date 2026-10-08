@@ -1,3 +1,4 @@
+import { purgeExpiredMemoryDeletions } from './memory-retention.ts';
 import { loadLegalBundle } from './legal-documents.ts';
 import { createProviderRuntime } from '@companion/ai-core';
 import { Database } from './database.ts';
@@ -21,6 +22,7 @@ const studentOnboarding=await createCompanionStudentOnboarding(db,config,legal,r
 const naming=studentOnboarding.naming;
 await db.query('SELECT 1');await recoverInterrupted(jobs);
 await reconcileCompanionAccounting(companion);
+await purgeExpiredMemoryDeletions(db);
 const worker=createWorker(jobs);
 const companionWorker=createCompanionGenerationWorker(companion),companionQueue=new CompanionGenerationQueue(companion);
 const companionNameWorker=createCompanionNameWorker(naming),companionNameQueue=new CompanionNameQueue(naming);
@@ -32,7 +34,7 @@ const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeV
 let closing=false,recovering:Promise<void>|undefined,shutdown:Promise<void>|undefined;
 const recovery=setInterval(()=>{
   if(closing||recovering)return;
-  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion)]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
+  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db)]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
   recovering=current;
 },15_000);recovery.unref();
 process.stdout.write('Platform task worker started.\n');

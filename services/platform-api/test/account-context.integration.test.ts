@@ -17,7 +17,7 @@ import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 // Node explicitly replays cookies; this does not reproduce a browser's cookie jar.
 const prefix = '/api/platform', origin = 'http://localhost:4321';
 const password = 'Fictional-account-context-password-2026';
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'account-context-fixture', PLATFORM_AGENT_PROVIDER: 'account-context-fixture', PLATFORM_REALTIME_PROVIDER: 'account-context-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'account-context-fixture', PLATFORM_SPEECH_PROVIDER: 'account-context-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `account_context_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_DATA_KEY:'c7'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'account-context-fixture', PLATFORM_AGENT_PROVIDER: 'account-context-fixture', PLATFORM_REALTIME_PROVIDER: 'account-context-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'account-context-fixture', PLATFORM_SPEECH_PROVIDER: 'account-context-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `account_context_${randomUUID().replaceAll('-', '')}`;
 const databaseUrl = new URL(base.databaseUrl);
 assert(['127.0.0.1', 'localhost', '[::1]'].includes(databaseUrl.hostname), 'This fixture must use a loopback PostgreSQL instance.');
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
@@ -256,13 +256,14 @@ test('an auth/me result cannot authorize a later request after the shared cookie
   const saved = await state(), effects = sideEffects();
   expectError(await exchange('/memories', { method: 'POST', cookie: sharedCookie, expected: windowAccount, payload: { content: 'Fictional stale-window memory' } }), 409, 'ACCOUNT_CONTEXT_CHANGED');
   const racing = await Promise.all([
-    exchange('/memories', { method: 'POST', cookie: alice.cookie, expected: alice.id, payload: { content: 'Fictional current-window memory' } }),
+    exchange('/memories', { method: 'POST', cookie: alice.cookie, expected: alice.id, payload: { operationId:randomUUID(),content:'Fictional current-window memory',category:'goal_preference',sensitivity:'normal',usePolicy:'normal',speakerScope:null,validUntil:null } }),
     exchange('/memories', { method: 'POST', cookie: sharedCookie, expected: alice.id, payload: { content: 'Fictional stale-window race' } }),
   ]);
   assert.equal(racing[0]!.status, 201, racing[0]!.bytes.toString()); expectError(racing[1]!, 409, 'ACCOUNT_CONTEXT_CHANGED');
   const memories = await db.query('SELECT user_id,content FROM platform_memories');
-  assert.deepEqual(memories.rows, [{ user_id: alice.id, content: 'Fictional current-window memory' }]);
+  assert.deepEqual(memories.rows, [{ user_id: alice.id, content:'' }]);
   const afterRace = await state(); assert.equal(afterRace.memories, saved.memories + 1); assert.equal(afterRace.user_requests, saved.user_requests + 1);
+  const observed=await exchange('/memories',{cookie:alice.cookie,expected:alice.id});assert.equal(JSON.parse(observed.bytes.toString()).memories[0].content,'Fictional current-window memory');
   assert.deepEqual(sideEffects(), effects);
   const chat = await exchange(`/conversations/${bobConversation}/messages`, { method: 'POST', cookie: sharedCookie, expected: bob.id,
     payload: { content: 'Fictional correctly bound chat', mode: 'chat' } });

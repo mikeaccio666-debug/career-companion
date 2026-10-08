@@ -90,14 +90,14 @@ function submit(item: Actor, sink: CollectingTurnSink, data: Record<string, unkn
 async function messages(item: Actor) { return (await db.query('SELECT role,content,status FROM platform_messages WHERE conversation_id=$1 ORDER BY ordinal', [item.conversationId])).rows; }
 async function leases(item: Actor) { return (await db.query('SELECT count(*)::int AS n FROM platform_runtime_leases WHERE user_id=$1', [item.userId])).rows[0].n; }
 
-test('a direct Collecting sink completes the owned response, assembles history and memories, and settles one real call ledger', async () => {
+test('a direct Collecting sink completes the owned response, assembles allowed history, withholds unreviewed memories, and settles one real call ledger', async () => {
   const item = await actor(), sink = new CollectingTurnSink();
   await db.query("INSERT INTO platform_messages(id,conversation_id,role,content) VALUES($1,$2,'user','Synthetic earlier question'),($3,$2,'assistant','Synthetic earlier reply')", [randomUUID(), item.conversationId, randomUUID()]);
   await db.query('INSERT INTO platform_memories(id,user_id,content) VALUES($1,$2,$3)', [randomUUID(), item.userId, 'Synthetic explicitly saved preference']);
   await submit(item, sink, { mode: 'companion' });
   assert.deepEqual(sink.events.map(event => event.event), ['start', 'delta', 'delta', 'usage', 'done']);
   assert.deepEqual(lastInput?.messages.map(message => message.content), ['Synthetic earlier question', 'Synthetic earlier reply', 'Synthetic question']);
-  assert.deepEqual(lastInput?.memories, ['Synthetic explicitly saved preference']); assert.equal(lastInput?.persona, 'Synthetic stored persona');
+  assert.deepEqual(lastInput?.memories, []); assert.equal(lastInput?.persona, 'Synthetic stored persona');
   assert.deepEqual((await messages(item)).slice(-2), [{ role: 'user', content: 'Synthetic question', status: 'complete' }, { role: 'assistant', content: 'Synthetic reply', status: 'complete' }]);
   const ledger = await db.query('SELECT status,usage_status,input_tokens,output_tokens FROM platform_chat_calls WHERE user_id=$1', [item.userId]);
   assert.deepEqual(ledger.rows, [{ status: 'complete', usage_status: 'reported', input_tokens: 7, output_tokens: 2 }]);
@@ -161,7 +161,8 @@ test('default-closed Agent advertises saved-source readers without unavailable w
   assert(hiddenWorkbenchTools.every(name => !lastTools.includes(name)));
   assert(lastTools.includes('read_saved_memories') && lastTools.includes('read_artifact_text') && lastTools.includes('read_mcp_result') && lastTools.includes('read_goal_plan'));
   assert(!lastInput?.persona?.includes('first read get_execution_capabilities'));
-  assert.deepEqual((lastToolResult as { memories: { content: string }[] }).memories.map(memory => memory.content), ['Synthetic owned reader evidence']);
+  assert.deepEqual((lastToolResult as { memories: { content: string }[] }).memories, []);
+  assert.equal((lastToolResult as { status:string }).status, 'unavailable');
   assert(sink.events.some(event => event.event === 'done'));
   assert.equal(await leases(item), 0);
 });

@@ -1,6 +1,6 @@
-import { EXPERT_KEYS, type AgentSpeakerKey } from '@companion/platform-contracts';
+import { EXPERT_KEYS, SHARED_MEMORY_CATEGORIES as COMPANION_MEMORY_CATEGORIES, type AgentSpeakerKey } from '@companion/platform-contracts';
 
-export const COMPANION_MEMORY_CATEGORIES = Object.freeze(['agreement', 'communication', 'goal_preference', 'experience', 'identity_timeline', 'emotion_rhythm'] as const);
+export { COMPANION_MEMORY_CATEGORIES };
 export type CompanionMemoryCategory = typeof COMPANION_MEMORY_CATEGORIES[number];
 export type ContextSensitivity = 'normal' | 'sensitive' | 'restricted';
 export type ContextChannel = 'web' | 'discord' | 'voice';

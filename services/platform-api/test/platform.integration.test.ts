@@ -16,7 +16,7 @@ import { acquireRuntimeLease, recoverStaleStreams, withVoiceLease } from '../src
 
 const origin='http://localhost:4321',prefix='/api/platform';
 const schema=`platform_test_${randomUUID().replaceAll('-','')}`;
-const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'local-test', PLATFORM_AGENT_PROVIDER: 'local-test' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl);
+const base=readConfig({ ...process.env, PLATFORM_DATA_KEY:'c7'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'local-test', PLATFORM_AGENT_PROVIDER: 'local-test' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl);
 const testUrl=new URL(base.databaseUrl);testUrl.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(testUrl.toString());
 let directory:string,system:Awaited<ReturnType<typeof buildApp>>;
@@ -77,8 +77,8 @@ test('ownership applies to conversations, memories, uploads and message creation
   const conversation=(await request(alice,'POST','/conversations',{title:'Synthetic project',mode:'companion'})).json().conversation;
   assert.equal((await request(bob,'GET',`/conversations/${conversation.id}`)).statusCode,404);
   assert.equal((await request(bob,'DELETE',`/conversations/${conversation.id}`)).statusCode,404);
-  const memory=(await request(alice,'POST','/memories',{content:'Synthetic saved context'})).json().memory;
-  assert.equal((await request(bob,'DELETE',`/memories/${memory.id}`)).statusCode,404);assert.equal((await request(bob,'GET','/memories')).json().memories.length,0);
+  const memory=(await request(alice,'POST','/memories',{operationId:randomUUID(),content:'Synthetic saved context',category:'goal_preference',sensitivity:'normal',usePolicy:'normal',speakerScope:null,validUntil:null})).json().memory;
+  assert.equal((await request(bob,'DELETE',`/memories/${memory.id}`,{operationId:randomUUID(),expectedRevision:1})).statusCode,404);assert.equal((await request(bob,'GET','/memories')).json().memories.length,0);
   const boundary='synthetic-boundary';
   const payload=Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="synthetic.txt"\r\nContent-Type: text/plain\r\n\r\nSynthetic document\r\n--${boundary}--\r\n`);
   const upload=await system.app.inject({method:'POST',url:prefix+'/uploads',headers:{origin,cookie:alice.cookie, [PLATFORM_ACCOUNT_HEADER]: alice.user.id,'content-type':`multipart/form-data; boundary=${boundary}`},payload});assert.equal(upload.statusCode,201,upload.body);

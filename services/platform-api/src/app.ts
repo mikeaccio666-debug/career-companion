@@ -1,3 +1,4 @@
+import { SharedMemories } from './shared-memories.ts';
 import { CompanionContextSources } from './companion-context-source.ts';
 import { CompanionWelcomeService } from './companion-welcome.ts';
 import { ConversationTurns, mapMessage } from './conversation-turns.ts';
@@ -97,6 +98,7 @@ export async function buildApp(options:AppOptions={}) {
   const birth=new CompanionBirthService(db,config,bundle,studentOnboarding.prebirth,studentOnboarding.names,
     companion.generation,studentOnboarding.identities,new CompanionBirthOriginStore(config.dataCrypto),birthGlyphs);
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
+  const sharedMemories=new SharedMemories(db,config,bundle);
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
@@ -568,9 +570,27 @@ export async function buildApp(options:AppOptions={}) {
     try{const result=await jobs.mcp.result(userId(request),{jobId:artifactId,...page},cancellation.signal);reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff');return {result};}
     finally{cancellation.dispose();}
   });
-  app.get(`${prefix}/memories`,secure,async request=>{const result=await db.query('SELECT * FROM platform_memories WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',[userId(request)]);return {memories:result.rows.map(row=>({id:row.id,content:row.content,createdAt:new Date(row.created_at).toISOString()}))};});
-  app.post(`${prefix}/memories`,secure,async(request,reply)=>{const data=object(request.body),id=randomUUID();const result=await db.query('INSERT INTO platform_memories(id,user_id,content) VALUES($1,$2,$3) RETURNING *',[id,userId(request),string(data.content,'content',4000)]);reply.code(201);return {memory:{id,content:result.rows[0].content,createdAt:new Date(result.rows[0].created_at).toISOString()}};});
-  app.delete(`${prefix}/memories/:id`,secure,async request=>{const result=await db.query('DELETE FROM platform_memories WHERE id=$1 AND user_id=$2 RETURNING id',[params(request),userId(request)]);if(!result.rowCount)throw notFound();return {ok:true};});
+  app.get(`${prefix}/memories`,limitedAccount,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await sharedMemories.list(fixedRequestSession(request,userId(request)),request.query,cancellation.signal);}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/memories/:id`,limitedAccount,async(request,reply)=>{
+    if(Object.keys(object(request.query)).length)throw new ApiError(400,'MEMORY_INPUT_INVALID','Unsupported memory query.');
+    const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {memory:await sharedMemories.get(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/memories/:id/uses`,limitedAccount,async(request,reply)=>{
+    if(Object.keys(object(request.query)).length)throw new ApiError(400,'MEMORY_INPUT_INVALID','Unsupported memory use query.');
+    const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await sharedMemories.uses(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}
+  });
+  async function memoryMutation(request:FastifyRequest,reply:FastifyReply,kind:'create'|'confirm'|'edit'|'delete'|'undo') {
+    const cancellation=requestSignal(request,reply);try{const result=await sharedMemories.mutate(fixedRequestSession(request,userId(request)),kind,kind==='create'?null:params(request),request.body,cancellation.signal);
+      reply.header('Cache-Control','private, no-store');if(kind==='create')reply.code(result.operation.replayed?200:201);return result;
+    }finally{cancellation.dispose();}
+  }
+  app.post(`${prefix}/memories`,limitedAccount,(request,reply)=>memoryMutation(request,reply,'create'));
+  app.patch(`${prefix}/memories/:id`,limitedAccount,(request,reply)=>memoryMutation(request,reply,'edit'));
+  app.post(`${prefix}/memories/:id/confirm`,limitedAccount,(request,reply)=>memoryMutation(request,reply,'confirm'));
+  app.delete(`${prefix}/memories/:id`,limitedAccount,(request,reply)=>memoryMutation(request,reply,'delete'));
+  app.post(`${prefix}/memories/:id/undo`,limitedAccount,(request,reply)=>memoryMutation(request,reply,'undo'));
   app.get(`${prefix}/knowledge-sources`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {sources:await knowledge.list(userId(request))};});
   app.get(`${prefix}/knowledge-sources/:id`,secure,async(request,reply)=>{reply.header('Cache-Control','private, no-store');return {source:await knowledge.get(userId(request),params(request))};});
   app.post(`${prefix}/knowledge-sources`,secure,async(request,reply)=>{const source=await knowledge.create(userId(request),request.body);reply.code(201).header('Cache-Control','private, no-store');return {source};});
@@ -700,5 +720,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
