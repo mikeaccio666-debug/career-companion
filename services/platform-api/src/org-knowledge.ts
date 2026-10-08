@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { careerRecordObject, careerRecordId, careerLibraryTime, STAFF_ROLES, type AgentSpeakerKey } from '@companion/platform-contracts';
-import { parseOrgP0Asset, orgChoice, orgArray, orgInteger, orgText, orgAssetBody, orgAssetSpeakers } from '@companion/career-core';
+import { careerRecordObject, orgKnowledgeBrand, careerRecordId, careerLibraryTime, STAFF_ROLES, type AgentSpeakerKey } from '@companion/platform-contracts';
+import { parseOrgP0Asset, orgChoice, orgArray, orgInteger, orgText, orgAssetBody, orgAssetLegacyBody, orgAssetSpeakers } from '@companion/career-core';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
@@ -22,13 +22,15 @@ export interface OrgPassage {
   readonly sourceId: string; readonly revision: number; readonly passageId: string;
   readonly title: string; readonly text: string; readonly updatedAt: string;
   readonly scope: 'org'; readonly assetClass: string; readonly provenanceLabel: string;
+  readonly brand: string; readonly assetRevision: number | null;
   readonly provenance: 'untrusted_knowledge'; readonly deidentified: true; readonly older: boolean;
 }
 export class OrgKnowledge {
   private readonly store: OnboardingStorage;
+  private readonly brand: string;
   private readonly staff: StaffAccess;
-  constructor(private readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, legal: LegalBundle | null, private readonly blobs: Pick<BlobStorage, 'stat'>, staff?: StaffAccess) {
-    this.store = new OnboardingStorage(config, legal); this.staff = staff ?? new StaffAccess(db);
+  constructor(private readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail' | 'orgContentBrand'>, legal: LegalBundle | null, private readonly blobs: Pick<BlobStorage, 'stat'>, staff?: StaffAccess) {
+    this.brand = orgKnowledgeBrand(config.orgContentBrand ?? '蔓藤'); this.store = new OnboardingStorage(config, legal); this.staff = staff ?? new StaffAccess(db);
   }
   private crypto() { if (!this.store.crypto) throw orgUnavailable(); return this.store.crypto; }
   private seal(table: string, id: string, ownerId: string, revision: number, value: unknown) {
@@ -153,7 +155,7 @@ export class OrgKnowledge {
     if (row.review_status !== 'withdrawn') {
       try {
         const asset = parseOrgP0Asset(row.asset_class, row.structured);
-        if (orgAssetBody(asset) !== row.body || orgDigest(orgSourceContent(row)) !== row.content_hash || row.deid_status !== 'passed') throw orgUnavailable();
+        if ((orgAssetBody(asset) !== row.body && orgAssetLegacyBody(asset) !== row.body) || orgDigest(orgSourceContent(row)) !== row.content_hash || row.deid_status !== 'passed') throw orgUnavailable();
       } catch { throw orgUnavailable(); }
     }
     return state;
@@ -259,7 +261,8 @@ export class OrgKnowledge {
     await c.query("INSERT INTO platform_knowledge_access_log(id,user_id,source_id,revision,passage_id,asset_class,speaker,purpose,created_at,retention_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9::timestamptz+interval '180 days')",
       [randomUUID(), session.userId, row.id, row.revision, passageId, row.asset_class, speaker, purpose, at]);
     return Object.freeze({ sourceId: row.id, revision: row.revision, passageId, title: row.title, text: part.content, updatedAt: state.updatedAt,
-      scope: 'org', assetClass: row.asset_class, provenanceLabel: row.asset_class === 'question' ? '蔓藤题库' : '蔓藤方法',
+      scope: 'org', assetClass: row.asset_class, brand: this.brand, assetRevision: row.asset_class === 'method_card' ? row.structured.revision : null,
+      provenanceLabel: row.asset_class === 'question' ? this.brand + '题库' : row.asset_class === 'method_card' ? this.brand + '方法 · v' + row.structured.revision : this.brand + '对话参考',
       provenance: 'untrusted_knowledge', deidentified: true, older: false });
   }
   async readPassage(session: FixedSessionContext, sourceId: string, revision: unknown, passageId: string, signal?: AbortSignal): Promise<OrgPassage> {

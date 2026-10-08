@@ -94,7 +94,25 @@ export function assertOrgAssetText(assetClass: OrgP0AssetClass, body: string) {
       /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\b\d{10}\b|\b\d{3}[-. ]\d{3}[-. ]\d{4}\b/i.test(body)) return fail();
   if (assetClass === 'conversation_pattern' && /名额只剩|最后\s*\d+\s*个|错过就没|再不.{0,20}就|保\s*offer|包内推|上岸率|必考|一定会考|稳过|sales_pressure|sales_qualify/i.test(body)) return fail();
 }
-export function orgAssetBody(asset: OrgP0Asset) { return JSON.stringify(asset, null, 2); }
+export function orgAssetLegacyBody(asset: OrgP0Asset) { return JSON.stringify(asset, null, 2); }
+/** Source excerpts carry the reviewed words, not internal author IDs, role
+ * bindings or tool declarations. The structured record stays separate. */
+export function orgAssetBody(asset: OrgP0Asset): string {
+  if (new TextEncoder().encode(orgAssetLegacyBody(asset)).length > 65536) return fail();
+  const list = (heading: string, lines: readonly string[]) => lines.length ? '\n\n' + heading + '\n' + lines.map(x => '• ' + x).join('\n') : '';
+  if ('question_ref' in asset) {
+    return asset.prompt_en + (asset.prompt_zh ? '\n\n中文说明\n' + asset.prompt_zh : '') +
+      (asset.external_ref ? '\n\n公开题目引用\n' + asset.external_ref.platform + ' · ' + asset.external_ref.key + '\n' + asset.external_ref.url : '') +
+      list('要点（不是完整答案）', asset.key_points) + list('追问', asset.follow_ups) +
+      (asset.rubric ? '\n\n本次练习的评分依据\n' + asset.rubric.map(d => d.dimension + '\n' + d.scores.map((s, i) => i + '：' + s).join('\n')).join('\n\n') : '');
+  }
+  if ('method_id' in asset) {
+    return asset.when_to_use + '\n\n依据性质：' + asset.evidence_nature + '\n\n' +
+      asset.steps.map((s, i) => '步骤 ' + (i + 1) + ' · ' + s.goal + '\n' + s.method + '\n产出：' + s.output).join('\n\n') +
+      list('何时停止', asset.stop_when) + list('不适用的情况', asset.counterexamples) + list('何时请真人帮助', asset.escalate_when);
+  }
+  return asset.goal + list('建议方式', asset.do) + list('避免的方式', asset.dont) + list('话术参考', asset.example_lines_zh);
+}
 export function orgAssetSpeakers(assetClass: OrgP0AssetClass, asset: OrgP0Asset): readonly AgentSpeakerKey[] {
   if (assetClass === 'method_card') return (asset as { bound_speakers: readonly AgentSpeakerKey[] }).bound_speakers;
   if (assetClass === 'conversation_pattern') return ['companion', 'planner'];

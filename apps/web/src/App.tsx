@@ -1,3 +1,5 @@
+import { OrgSourcePage } from './org-source-view';
+import { orgSourceReferenceFromPath } from './org-source-api';
 import { CareerInterviewPage } from './career-interview-view';
 import { CareerIdentityPage } from './career-identity-view';
 import { CareerApplicationPage } from './career-application-view';
@@ -765,6 +767,7 @@ function AccountEntryApp() {
   if ((window.location.pathname === '/journey/stories'||storyPath) && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerStoryPage initialStoryId={storyPath?.[1]} onLogout={() => void logout()} />;
   const interviewPath = /^\/journey\/interviews\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(window.location.pathname);
   if ((window.location.pathname === '/journey/interviews' || interviewPath) && accountClient?.isCurrent() && accountClient.account.accountId === user.id) return <CareerInterviewPage initialInterviewId={interviewPath?.[1].toLowerCase()} onLogout={() => void logout()} />;
+  if (window.location.pathname.startsWith('/sources/org/') && accountClient?.isCurrent() && accountClient.account.accountId === user.id) return <OrgSourcePage reference={orgSourceReferenceFromPath(window.location.pathname)} onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/applications' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerApplicationPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/jobs' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <ManualJobPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/targets' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerTargetPage onLogout={() => void logout()} />;

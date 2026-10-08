@@ -1,3 +1,4 @@
+import { parseOrgKnowledgeReference } from '@companion/platform-contracts';
 import { careerRecordId } from '@companion/platform-contracts';
 import { OrgKnowledge } from './org-knowledge.ts';
 import { CareerInterviews } from './career-interviews.ts';
@@ -650,7 +651,7 @@ export async function buildApp(options:AppOptions={}) {
         careerRecordObject(careerHttpQuery(request.query), []);
         const v = careerRecordObject(careerHttpQuery(request.params), ['sourceId', 'revision', 'passageId']);
         if (typeof v.revision !== 'string' || !/^[1-9][0-9]{0,9}$/.test(v.revision)) throw Error();
-        coordinates = { sourceId: careerRecordId(v.sourceId), revision: Number(v.revision), passageId: String(v.passageId) };
+        coordinates = parseOrgKnowledgeReference({ sourceId: v.sourceId, revision: Number(v.revision), passageId: v.passageId });
         if (!Number.isSafeInteger(coordinates.revision) || coordinates.revision > 2147483647) throw Error();
       } catch { throw new ApiError(400, 'ORG_CONTENT_INPUT_INVALID', '请使用支持的来源坐标。'); }
       return { passage: await orgKnowledge.readPassage(fixedRequestSession(request,userId(request)), coordinates.sourceId,
