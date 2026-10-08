@@ -8,11 +8,11 @@
 
 create 复核学生、验证邮箱、当前法律协议、真实 session、当前配置的机构、实际审核文件、目录版本和数据库时间。服务或可约时段已变就拒绝，并要求重新查看。源目录和提交共用真实事务与组织锁，不创建另一个持有相同账号锁的连接。
 
-成功只建立 requested 意向，mentorId / orderId 为 null。用户可在 requested 阶段取消；这不是已匹配导师、排期、报价或收款。重复 nonce 只确认原操作，读取当前状态；已取消后重试创建不会恢复 requested。取消、原操作观察和分页都按真实账号隔离。
+成功只建立 requested 意向，mentorId / orderId 为 null。提交本身不是排期、报价或收款。后续 [实际人工匹配与报价](mentor-quotes.md) 支持 requested → matched；用户可在 requested / matched 阶段按当前版本取消。重复 nonce 只确认原操作，读取当前状态；已取消后重试创建不会恢复 requested。取消、原操作观察和分页都按真实账号隔离。
 
 ## 存储与可见范围
 
-068 迁移建立 platform_mentor_sessions 和 platform_mentor_intent_operations。sessions 不含价格或支付字段；称呼、邮箱、本人文字和完整状态以密文保存。SQL 留归属、服务引用、版本、状态和数据库时间等索引元数据。mentor / order / packet / scheduled / review 坐标留空，本层不写入后续履约。
+068 迁移建立 platform_mentor_sessions 和 platform_mentor_intent_operations。sessions 不含价格或支付字段；称呼、邮箱、本人文字和完整状态以密文保存。SQL 留归属、服务引用、版本、状态和数据库时间等索引元数据。requested 的 mentor / order / packet / scheduled / review 坐标留空；070 匹配扩展只写真实 mentor / order 与建议时段，packet / scheduled / review 仍未启用。
 
 第一次不可变操作回执密文保存当时实际展示的 offer，作为后续人工报价不得高于当时展示价格的证据；**没有创建 quoted 订单**。回执不通过学生或运营列表返回。所有回执认证 owner、操作、记录、版本、内容摘要和实际时间；读取核对当前记录、创建操作与最新操作，不能恢复旧有效密文来撤销已确认的取消。
 
@@ -31,7 +31,7 @@ PLATFORM_MENTOR_ORG_ID 是服务端可选 UUID 配置，不接受客户端组织
 - GET /career/mentor-intents/:id：本人记录。
 - GET /career/mentor-intents/operations/:id：原操作回执坐标与记录的当前状态。
 - POST /career/mentor-intents：operationId、offerId、offerRevision、contactName、intentNote、privacyVersion 和 confirmVisibility=true。
-- POST /career/mentor-intents/:id/cancel：operationId、expectedRevision=1。
+- POST /career/mentor-intents/:id/cancel：operationId、真实 expectedRevision（requested 为 1，matched 为 2）。
 - GET /staff/orgs/:id/mentor-intents：经审计的运营只读列表，同样最多 50 条，分页锚点限本机构。
 
 路由前缀为 /api/platform。除列表的 after 外，附加查询字段、重复查询数组、伪造邮箱、价格、状态、组织、导师、记忆附件及未支持的免费/内推输入都拒绝。契约在 packages/platform-contracts/src/mentor-intents.ts；请求客户端在 apps/web/src/mentor-intent-api.ts，绑定调用开始时的账号，解析闭合响应并核对原操作、本人、服务版本和输入，不包含 UI 或本地存储。
@@ -40,15 +40,15 @@ PLATFORM_MENTOR_ORG_ID 是服务端可选 UUID 配置，不接受客户端组织
 
 Web 新增 `/community/mentors` 账号页面、`/me/profile` 的「真人与社区」入口和实际诞生后的返回入口。匿名真人条目与 AI 队伍分开，不先展示具名导师。服务卡逐段展开真实目录里的用途、排除项、金额/时长/收款方、退款/申诉、利益关系、可见范围与最早可约时间；无来源时展示未配置/无服务，不使用文档示例价目。
 
-表单称呼/需求为空，可见范围确认初始不勾选；真实邮箱只读。更换服务后须重新确认；目录版本或可约状态变化后旧表不能提交。本人请求列表和取消确认只显示服务器支持的 requested / cancelled，不虚构匹配、订单或预约。
+表单称呼/需求为空，可见范围确认初始不勾选；真实邮箱只读。更换服务后须重新确认；目录版本或可约状态变化后旧表不能提交。本人请求列表和取消确认显示服务器支持的 requested / matched / cancelled；报价仅通过真实本人订单成对读取，不将匹配或报价当成正式预约或付款。
 
 `mentor-intent-controller.ts` 保存账号内存态，冻结原操作 nonce。未知写入结果必须显式观察或重试原操作；仅刷新列表不视为回执。超时、隐藏和离线中止本轮等待，晚到响应不能重画。暂停时清空已读取内容，恢复只做读取；读取失败隐藏过期目录和私人记录，仍允许核对原提交。退出/账号失效清除内容与待确认操作；没有本地存储、后台发送或自动再次提交。刷新/离开期间待确认 nonce 仅在内存，页面用 beforeunload 提醒；关闭后应从本人请求列表核对结果。
 
 完整学生 ChatList 左栏还未接入；本轮在独立导师页提供真人分组导航，在现有实际诞生和个人资料页提供入口。现有主预览和主要数据库没有更新，不把分支构建当成用户已经可见。
 
-[运营导师与时段来源](mentor-capacity.md) 已作为独立的私有录入与读取层实现，尚未授予任何意向匹配或时段预订。
+[运营导师与时段来源](mentor-capacity.md) 作为私有来源实现；[070 匹配与报价](mentor-quotes.md) 已将其与本人意向和真实时段占用绑定。
 
-P0-12 还缺真实人工匹配、订单与线下收款外部引用、scheduled / completed、未完成阶段取消、旅程预约卡、系统通知、1–5 分评分、免费诊断真实 cohort 权益及明确激活来源、排满队列，以及 PaidSuggestionPolicy。匹配/报价时仍必须再次复核实际可约时段，报价不高于保存的展示价格。导师行为准则、合作条款、运营隐私和实际响应时限仍是上线前的人工确认项。本层不承诺真人已阅读、48 小时履约、实际可约名额预留或付费建议闸门已经通过。
+P0-12 已实现人工匹配、quoted / void 订单和用户取消；还缺线下收款外部引用与付款状态、scheduled / completed、未完成阶段取消、旅程预约卡、系统通知、1–5 分评分、免费诊断真实 cohort 权益及明确激活来源、排满队列，以及 PaidSuggestionPolicy。匹配/报价时仍必须再次复核实际可约时段，报价不高于保存的展示价格。导师行为准则、合作条款、运营隐私和实际响应时限仍是上线前的人工确认项。本层不承诺真人已阅读、48 小时履约、实际可约名额预留或付费建议闸门已经通过。
 
 ## 验证
 

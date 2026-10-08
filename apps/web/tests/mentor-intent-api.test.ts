@@ -15,7 +15,7 @@ test('mutation freezes a closed explicit privacy choice without inferring consen
   command.intentNote='Later fictional editor text';assert.notEqual((v.body as {intentNote:string}).intentNote,command.intentNote);command.intentNote=record.intentNote;
   for(const body of [{...command,confirmVisibility:false},{...command,contactEmail:'other@example.invalid'},{...command,memoryIds:[id]},{...command,privacyVersion:'old'}])
     assert.throws(()=>parseMentorIntentCommand(body));
-  assert.throws(()=>freezeMentorMutation({action:'cancel',sessionId:id,body:{operationId:op,expectedRevision:2}}));
+  assert.throws(()=>freezeMentorMutation({action:'cancel',sessionId:id,body:{operationId:op,expectedRevision:0}}));
 });
 test('entry accepts truthful unconfigured state and rejects altered privacy, unproven offers, extra fields and stale accounts',async()=>{
   const entry={configured:false,contactEmail:'fictional@example.invalid',privacyVersion:MENTOR_INTENT_PRIVACY_VERSION,intentPrivacy:MENTOR_INTENT_PRIVACY,offers:[]};

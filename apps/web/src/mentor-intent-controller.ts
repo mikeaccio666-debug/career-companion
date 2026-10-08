@@ -1,6 +1,6 @@
 import type { MentorIntent, MentorIntentCommand } from '@companion/platform-contracts';
 import { ApiError } from './api-error.ts';
-import { readMentorEntry, readMentorIntents, changeMentorIntent, observeMentorIntent, freezeMentorMutation,
+import { readMentorEntry, readMentorIntents, changeMentorIntent, observeMentorIntent, freezeMentorMutation, readMentorOrder,
   type MentorIntentClient, type MentorEntry, type MentorMutationIntent, type MentorIntentResult } from './mentor-intent-api.ts';
 
 export interface MentorControllerClient extends MentorIntentClient {
@@ -10,11 +10,12 @@ export interface MentorSnapshot {
   readonly entry: Readonly<MentorEntry> | null; readonly records: readonly Readonly<MentorIntent>[];
   readonly nextCursor: string | null; readonly loaded: boolean; readonly busy: boolean; readonly suspended: boolean;
   readonly pending: Readonly<MentorMutationIntent> | null; readonly uncertain: boolean; readonly needsRefresh: boolean;
+  readonly quote: Awaited<ReturnType<typeof readMentorOrder>> | null;
   readonly error: string; readonly lastResult: Readonly<MentorIntentResult> | null;
 }
 export const emptyMentorSnapshot = (): MentorSnapshot => ({
   entry: null, records: [], nextCursor: null, loaded: false, busy: false, suspended: false,
-  pending: null, uncertain: false, needsRefresh: false, error: '', lastResult: null,
+  pending: null, uncertain: false, needsRefresh: false, error: '', lastResult: null, quote: null,
 });
 /** Memory-only account-scoped state. A transport failure never becomes a failure receipt
  * or a new operation. No automatic write on resume, background send or local storage. */
@@ -53,7 +54,7 @@ export class MentorIntentController {
     if (!this.current()) return;
     this.generation++; this.request?.abort(); this.request = null;
     this.publish({ entry: null, records: [], nextCursor: null, loaded: false, busy: false, suspended: true,
-      uncertain: !!this.state.pending, needsRefresh: true, lastResult: null, error: '' });
+      uncertain: !!this.state.pending, needsRefresh: true, lastResult: null, error: '', quote: null });
   }
   resume() {
     if (!this.current()) return;
@@ -76,7 +77,7 @@ export class MentorIntentController {
   async refresh() {
     if (!this.current() || this.state.suspended || this.request) return;
     const generation = this.generation;
-    this.publish({ busy: true, error: this.state.pending ? this.state.error : '' });
+    this.publish({ busy: true, quote: null, error: this.state.pending ? this.state.error : '' });
     try {
       const result = await this.timed(async signal => {
         const entry = await readMentorEntry(this.client, signal);
@@ -102,6 +103,20 @@ export class MentorIntentController {
       if (this.current(generation)) this.publish({ busy: false, error: '后面的请求暂时没有读到，可以再试一次。' });
     }
   }
+  async loadOrder(sessionId: string) {
+    if (!this.current() || this.state.suspended || this.request || this.state.pending || !this.state.loaded || this.state.needsRefresh) return;
+    const known = this.state.records.find(r => r.id === sessionId);
+    if (!known?.assignment || !known.orderId) return;
+    const generation = this.generation; this.publish({ busy: true, error: '', quote: null });
+    try {
+      const quote = await this.timed(signal => readMentorOrder(this.client, sessionId, signal), this.timeouts.read);
+      if (!this.current(generation)) return;
+      if (quote.session.revision < known.revision) throw Error('Older quote');
+      this.publish({ quote, records: Object.freeze(this.state.records.map(r => r.id === sessionId ? quote.session : r)), busy: false });
+    } catch {
+      if (this.current(generation)) this.publish({ busy: false, quote: null, error: '报价暂时没有读到，可以重新查看。' });
+    }
+  }
   begin(value: MentorMutationIntent) {
     if (!this.current() || this.state.suspended || this.state.busy || this.state.pending || !this.state.loaded || this.state.needsRefresh) return;
     const pending = freezeMentorMutation(value);
@@ -113,11 +128,11 @@ export class MentorIntentController {
       }
     } else {
       const record = this.state.records.find(r => r.id === pending.sessionId);
-      if (!record || record.status !== 'requested' || record.revision !== 1) {
+      if (!record || !['requested','matched'].includes(record.status) || record.revision !== (pending.body as {expectedRevision:number}).expectedRevision) {
         this.publish({ needsRefresh: true, error: '请求已有变化，请先重新读取。' }); return;
       }
     }
-    this.publish({ pending, uncertain: false, error: '', lastResult: null }); void this.execute(false);
+    this.publish({ pending, uncertain: false, error: '', lastResult: null, quote: null }); void this.execute(false);
   }
   async retry() { await this.execute(false); }
   async observe() { await this.execute(true); }

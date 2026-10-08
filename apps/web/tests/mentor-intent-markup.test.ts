@@ -27,7 +27,7 @@ const state = (patch: object = {}) => ({ entry: entry(), records: [], nextCursor
   pending: null, uncertain: false, needsRefresh: false, error: '', lastResult: null, ...patch });
 const editor = (patch: object = {}) => ({ offer: offer(), contactName: '', note: '', confirmed: false, ...patch });
 const props = (patch: object = {}) => ({ state: state(), editor: null, setEditor() {}, cancelling: null, setCancelling() {}, inputError: '', setInputError() {},
-  controller: { refresh() {}, loadMore() {}, begin() {}, observe() {}, retry() {} }, ...patch });
+  controller: { refresh() {}, loadMore() {}, begin() {}, observe() {}, retry() {}, loadOrder() {} }, ...patch });
 const markup = (patch: object = {}) => renderToStaticMarkup(createElement(views.MentorIntentScene, props(patch)));
 const record = (patch: object = {}) => ({ id, ownerId: owner, organizationId: owner, offerId: id, offerRevision: 1, kind: 'resume_direction', durationMin: 47,
   contactName: 'Fictional student', contactEmail: 'fictional@example.invalid', intentNote: '<img src=x onerror=alert(1)>', status: 'requested',
@@ -93,4 +93,18 @@ test('anonymous human entry stays distinct from AI; account-bound SSR cannot loa
 test('a stale cancellation decision cannot act on a refreshed cancelled record', () => {
   const html = markup({ state: state({ records: [record({ status: 'cancelled', revision: 2 })] }), cancelling: record() });
   assert.match(html, /请求已有变化/); assert.match(html, /<button type="button" disabled="">确认取消这份意向/);
+});
+
+test('actual matched history displays literal mentor and proposed time; genuine quote expands original terms without a payment or booking claim',()=>{
+ const actual=record({status:'matched',revision:2,orderId:owner,mentorId:owner,assignment:{mentorDisplayName:'<b>Fictional mentor</b>',
+  startsAt:'2027-01-01T10:00:00.000Z',endsAt:'2027-01-01T10:47:00.000Z',timeZone:'America/New_York'}});
+ const order={status:'quoted',priceCents:9500,shownOffer:offer({priceCents:12700})};
+ const html=markup({state:state({records:[actual],quote:{session:actual,order}}),cancelling:actual});
+ for(const text of ['已匹配 · 排期待确认','&lt;b&gt;Fictional mentor&lt;/b&gt;','America/New_York','查看报价','$95.00','Fictional actual refund','Fictional actual appeal','确认取消这份意向'])assert(html.includes(text));
+ assert(!html.includes('<b>Fictional mentor'));assert(!html.includes('已付款'));assert(!html.includes('已排期'));assert(!html.includes('付款链接'));assert(!html.includes('handoffCode'));
+ assert(!/<button type="button" disabled="">确认取消这份意向/.test(html));
+});
+test('void quote and suspended quote never imply payment; original unassigned cancelled state has no invented mentor',()=>{
+ const html=markup({state:state({quote:{order:{status:'void',priceCents:9500,shownOffer:offer()}}})});assert(html.includes('这份报价已作废。'));assert(!html.includes('已付款'));
+ const hidden=markup({state:state({suspended:true,quote:{order:{status:'quoted',priceCents:9500,shownOffer:offer()}}})});assert(!hidden.includes('$95.00'));
 });

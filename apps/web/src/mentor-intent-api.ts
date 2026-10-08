@@ -1,5 +1,5 @@
 import { careerRecordId,careerRecordObject,parseMentorIntent,parseMentorIntentCommand,parseMentorServiceOffer,
-  mentorIntentEmail,MENTOR_INTENT_PRIVACY,MENTOR_INTENT_PRIVACY_VERSION,type MentorIntent,type MentorServiceOffer,type MentorIntentCommand } from '@companion/platform-contracts';
+  parseMentorOrder,mentorServiceInteger,mentorIntentEmail,MENTOR_INTENT_PRIVACY,MENTOR_INTENT_PRIVACY_VERSION,type MentorIntent,type MentorServiceOffer,type MentorIntentCommand } from '@companion/platform-contracts';
 export interface MentorIntentClient {
   readonly account:{readonly accountId:string};isCurrent():boolean;request<T>(path:string,init?:RequestInit):Promise<T>;
 }
@@ -39,7 +39,7 @@ export async function readMentorIntents(c:MentorIntentClient,after:string|null=n
   current(c);return Object.freeze({sessions,nextCursor});
 }
 export interface MentorMutationIntent {
-  readonly action:'create'|'cancel';readonly sessionId:string|null;readonly body:Readonly<MentorIntentCommand>|Readonly<{operationId:string;expectedRevision:1}>;
+  readonly action:'create'|'cancel';readonly sessionId:string|null;readonly body:Readonly<MentorIntentCommand>|Readonly<{operationId:string;expectedRevision:number}>;
 }
 export function freezeMentorMutation(input:unknown):Readonly<MentorMutationIntent>{
   const v=careerRecordObject(input,['action','sessionId','body']);
@@ -47,15 +47,15 @@ export function freezeMentorMutation(input:unknown):Readonly<MentorMutationInten
     if(v.sessionId!==null)return fail();return Object.freeze({action:'create',sessionId:null,body:parseMentorIntentCommand(v.body)});
   }
   if(v.action!=='cancel')return fail();
-  const b=careerRecordObject(v.body,['operationId','expectedRevision']);if(b.expectedRevision!==1)return fail();
-  return Object.freeze({action:'cancel',sessionId:careerRecordId(v.sessionId),body:Object.freeze({operationId:careerRecordId(b.operationId),expectedRevision:1})});
+  const b=careerRecordObject(v.body,['operationId','expectedRevision']);const expectedRevision=mentorServiceInteger(b.expectedRevision,1,2147483646);
+  return Object.freeze({action:'cancel',sessionId:careerRecordId(v.sessionId),body:Object.freeze({operationId:careerRecordId(b.operationId),expectedRevision})});
 }
 export interface MentorIntentResult {
   readonly session:Readonly<MentorIntent>;readonly operation:Readonly<{id:string;sessionId:string;appliedRevision:number;replayed:boolean}>;
 }
 function result(c:MentorIntentClient,value:unknown,operationId:string):Readonly<MentorIntentResult>{
   const v=careerRecordObject(value,['session','operation']),session=owned(c,v.session),p=careerRecordObject(v.operation,['id','sessionId','appliedRevision','replayed']);
-  if(p.id!==operationId||p.sessionId!==session.id||!Number.isSafeInteger(p.appliedRevision)||(p.appliedRevision!==1&&p.appliedRevision!==2)||
+  if(p.id!==operationId||p.sessionId!==session.id||!Number.isSafeInteger(p.appliedRevision)||((p.appliedRevision as number)<1||(p.appliedRevision as number)>3)||
     (p.appliedRevision as number)>session.revision||typeof p.replayed!=='boolean')return fail();
   return Object.freeze({session,operation:Object.freeze({id:careerRecordId(p.id),sessionId:careerRecordId(p.sessionId),appliedRevision:p.appliedRevision as number,replayed:p.replayed})});
 }
@@ -63,7 +63,7 @@ export async function changeMentorIntent(c:MentorIntentClient,input:MentorMutati
   c=bound(c);current(c);const intent=freezeMentorMutation(input);
   const response=result(c,await c.request(intent.action==='create'?root:root+'/'+intent.sessionId+'/cancel',
     {method:'POST',body:JSON.stringify(intent.body),signal}),intent.body.operationId);
-  if(intent.action==='cancel'&&(response.session.id!==intent.sessionId||response.operation.appliedRevision!==2||response.session.status!=='cancelled'))return fail();
+  if(intent.action==='cancel'&&(response.session.id!==intent.sessionId||response.operation.appliedRevision!==((intent.body as {expectedRevision:number}).expectedRevision+1)||response.session.status!=='cancelled'))return fail();
   if(intent.action==='create'){
     const b=intent.body as MentorIntentCommand;
     if(response.operation.appliedRevision!==1||response.session.offerId!==b.offerId||response.session.offerRevision!==b.offerRevision||
@@ -74,11 +74,22 @@ export async function changeMentorIntent(c:MentorIntentClient,input:MentorMutati
 export async function observeMentorIntent(c:MentorIntentClient,input:MentorMutationIntent,signal?:AbortSignal){
   c=bound(c);current(c);const intent=freezeMentorMutation(input),response=result(c,await c.request(root+'/operations/'+intent.body.operationId,{signal}),intent.body.operationId);
   if(!response.operation.replayed)return fail();
-  if(intent.action==='cancel'&&(response.session.id!==intent.sessionId||response.operation.appliedRevision!==2||response.session.status!=='cancelled'))return fail();
+  if(intent.action==='cancel'&&(response.session.id!==intent.sessionId||response.operation.appliedRevision!==((intent.body as {expectedRevision:number}).expectedRevision+1)||response.session.status!=='cancelled'))return fail();
   if(intent.action==='create'){
     const b=intent.body as MentorIntentCommand;
     if(response.operation.appliedRevision!==1||response.session.offerId!==b.offerId||response.session.offerRevision!==b.offerRevision||
       response.session.contactName!==b.contactName||response.session.intentNote!==b.intentNote)return fail();
   }
   current(c);return response;
+}
+
+export async function readMentorOrder(c:MentorIntentClient,sessionId:string,signal?:AbortSignal){
+ c=bound(c);const key=careerRecordId(sessionId),v=careerRecordObject(await c.request(root+'/'+key+'/order',{signal}),['session','order']);
+ const session=owned(c,v.session),order=parseMentorOrder(v.order);
+ if(session.id!==key||!session.assignment||order.ownerId!==c.account.accountId||order.sessionId!==session.id||order.id!==session.orderId||
+  order.organizationId!==session.organizationId||order.offerId!==session.offerId||order.offerRevision!==session.offerRevision||
+  order.shownOffer.kind!==session.kind||order.shownOffer.durationMin!==session.durationMin||order.createdAt!==session.assignment.matchedAt||
+  order.updatedAt!==session.updatedAt||order.lastOperationId!==session.lastOperationId||
+  (session.status==='matched'?order.status!=='quoted':session.status!=='cancelled'||order.status!=='void'))return fail();
+ current(c);return Object.freeze({session,order});
 }

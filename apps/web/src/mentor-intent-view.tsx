@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { MentorIntent, MentorServiceOffer } from '@companion/platform-contracts';
+import type { MentorIntent, MentorServiceOffer, MentorOrder } from '@companion/platform-contracts';
 import { useRequiredPlatformAccountClient } from './account-client';
 import { MentorIntentController, type MentorSnapshot } from './mentor-intent-controller';
 import { freezeMentorMutation } from './mentor-intent-api';
@@ -9,7 +9,7 @@ import './mentor-intent-view.css';
 export interface MentorEditor {
   readonly offer: Readonly<MentorServiceOffer>; readonly contactName: string; readonly note: string; readonly confirmed: boolean;
 }
-type Controls = Pick<MentorIntentController, 'refresh'|'loadMore'|'begin'|'observe'|'retry'>;
+type Controls = Pick<MentorIntentController, 'refresh'|'loadMore'|'loadOrder'|'begin'|'observe'|'retry'>;
 export function MentorIntentPanel() {
   const client = useRequiredPlatformAccountClient();
   const [observed, setObserved] = useState<{client: typeof client; state: MentorSnapshot} | null>(null);
@@ -43,9 +43,9 @@ export function MentorIntentPanel() {
   return <MentorIntentScene state={state} editor={editor} setEditor={setEditor} cancelling={cancelling}
     setCancelling={setCancelling} inputError={inputError} setInputError={setInputError} controller={controller} />;
 }
-export function mentorTime(at: string): string {
+export function mentorTime(at: string, timeZone?: string): string {
   try { return new Intl.DateTimeFormat('zh-CN', {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',
-    timeZoneName:'short'}).format(new Date(at)); } catch { return at + ' · UTC'; }
+    timeZoneName:'short', ...(timeZone ? {timeZone} : {})}).format(new Date(at)); } catch { return at + ' · UTC'; }
 }
 export function mentorPrice(cents: number): string {
   return new Intl.NumberFormat('en-US', {style:'currency', currency:'USD'}).format(cents/100);
@@ -71,6 +71,23 @@ export function MentorServiceCard({offer, disabled, onChoose}: {
     <button type="button" className="mentor-primary" disabled={disabled || offer.availability !== 'available'} onClick={onChoose}>我想约一次</button>
   </article>;
 }
+export function MentorQuoteCard({order}: {order: Readonly<MentorOrder>}) {
+  const offer = order.shownOffer;
+  return <article className="mentor-service-card" aria-label="这份请求的报价">
+    <header><span className="mentor-human-tag">真人 · 蔓藤导师</span><h2>{offer.title} · 报价</h2></header>
+    <p role="status">{order.status === 'quoted' ? '报价已记录，付款安排和排期待运营确认。' : '这份报价已作废。'}</p>
+    <section><h3>你付的是什么</h3><p>{offer.description}</p></section>
+    <section><h3>不包含什么</h3><p>{offer.exclusions}</p><p>不承诺面试或 offer，不包含内推服务。</p></section>
+    <section><h3>报价、时长与收款方</h3><dl className="mentor-service-facts">
+      <div><dt>这份报价</dt><dd className="mentor-num">{mentorPrice(order.priceCents)} USD</dd></div>
+      <div><dt>时长</dt><dd className="mentor-num">{offer.durationMin} min</dd></div>
+      <div><dt>收款方</dt><dd>{offer.collector}</dd></div>
+    </dl></section>
+    <section><h3>退款与申诉</h3><p>{offer.refundRules}</p><p>{offer.appealInstructions}</p></section>
+    <section><h3>利益关系</h3><p>{offer.disclosure}</p></section>
+    <section><h3>对方能看到什么</h3><p>{offer.intentPrivacy}</p></section>
+  </article>;
+}
 interface SceneProps {
   state: MentorSnapshot | null; editor: MentorEditor | null; setEditor: (v: MentorEditor | null) => void;
   cancelling: Readonly<MentorIntent> | null; setCancelling: (v: Readonly<MentorIntent> | null) => void;
@@ -86,7 +103,7 @@ function MentorOperationStatus({state,controller}: {state: MentorSnapshot; contr
       </div>
     </div>}
     {state.lastResult && <p className="mentor-notice" role="status">{state.lastResult.session.status === 'cancelled'
-      ? '这份意向已取消。' : '收到了，预计 48 小时内由运营为你匹配蔓藤导师（真人）。'}</p>}
+      ? '这份意向已取消。' : state.lastResult.session.status === 'matched' ? '已匹配蔓藤导师（真人），请查看报价；排期仍待确认。' : '收到了，预计 48 小时内由运营为你匹配蔓藤导师（真人）。'}</p>}
   </>;
 }
 export function MentorIntentScene({state,editor,setEditor,cancelling,setCancelling,inputError,setInputError,controller}: SceneProps) {
@@ -100,7 +117,7 @@ export function MentorIntentScene({state,editor,setEditor,cancelling,setCancelli
   const currentOffer = editor ? state.entry.offers.find(o => o.id === editor.offer.id) : null;
   const staleEditor = !!editor && (!currentOffer || currentOffer.revision !== editor.offer.revision || currentOffer.availability !== 'available');
   const currentCancellation = cancelling ? state.records.find(r => r.id === cancelling.id) : null;
-  const staleCancellation = !!cancelling && (!currentCancellation || currentCancellation.revision !== cancelling.revision || currentCancellation.status !== 'requested');
+  const staleCancellation = !!cancelling && (!currentCancellation || currentCancellation.revision !== cancelling.revision || !['requested','matched'].includes(currentCancellation.status));
   function submit() {
     if (!editor || !state?.entry || locked || staleEditor) return;
     try {
@@ -138,19 +155,23 @@ export function MentorIntentScene({state,editor,setEditor,cancelling,setCancelli
     </form>}
     {cancelling && <section className="mentor-cancel" aria-label="确认取消预约意向"><p>取消这份「{serviceLabels[cancelling.kind]}」意向？</p>
       <div className="mentor-actions">{staleCancellation && <p role="alert">请求已有变化，请先重新读取并选择当前意向。</p>}<button type="button" disabled={locked || staleCancellation} onClick={() => controller.begin(freezeMentorMutation({
-        action:'cancel',sessionId:cancelling.id,body:{operationId:crypto.randomUUID(),expectedRevision:1},
+        action:'cancel',sessionId:cancelling.id,body:{operationId:crypto.randomUUID(),expectedRevision:cancelling.revision},
       }))}>确认取消这份意向</button><button type="button" disabled={state.busy || !!state.pending} onClick={() => setCancelling(null)}>保留</button></div>
     </section>}
+    {state.quote && <MentorQuoteCard order={state.quote.order} />}
     <section className="mentor-history" aria-labelledby="mentor-history-title"><h2 id="mentor-history-title">我的请求</h2>
       {!state.records.length && <p>你还没有提交真人服务意向。</p>}
       <ul>{state.records.map(record => <li key={record.id}>
         <div className="mentor-record-heading"><h3>{serviceLabels[record.kind]}</h3>
-          <span className={'mentor-session-status '+record.status}>{record.status === 'requested' ? '已提交意向' : '已取消'}</span></div>
+          <span className={'mentor-session-status '+record.status}>{record.status === 'requested' ? '已提交意向' : record.status === 'matched' ? '已匹配 · 排期待确认' : '已取消'}</span></div>
         <p className="mentor-private-note">{record.intentNote}</p>
         <p className="mentor-record-contact">称呼：{record.contactName} · 邮箱：{record.contactEmail}</p>
         <time className="mentor-num" dateTime={record.createdAt}>{mentorTime(record.createdAt)}</time>
         {record.status === 'requested' && <p>等待人工匹配与报价。</p>}
-        {record.status === 'requested' && <button type="button" disabled={locked || !!editor}
+        {record.assignment && <p>匹配导师：{record.assignment.mentorDisplayName}（真人）<br />建议时段：<time className="mentor-num" dateTime={record.assignment.startsAt}>{mentorTime(record.assignment.startsAt,record.assignment.timeZone)}</time> · {record.assignment.timeZone}</p>}
+        {record.status === 'matched' && <p>报价已记录，付款安排和排期待运营确认。</p>}
+        {record.orderId && <button type="button" disabled={locked} onClick={() => void controller.loadOrder(record.id)}>查看报价</button>}
+        {['requested','matched'].includes(record.status) && <button type="button" disabled={locked || !!editor}
           onClick={() => setCancelling(record)}>取消这份意向</button>}
       </li>)}</ul>
       {state.nextCursor && <button type="button" disabled={locked} onClick={() => void controller.loadMore()}>查看更早的请求</button>}
