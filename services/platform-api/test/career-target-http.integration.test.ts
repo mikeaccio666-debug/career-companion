@@ -35,3 +35,16 @@ test('cross-owner reads and writes, stale account headers, CSRF, and fabricated 
  for(const extra of [{ownerId:a.id},{status:'active'},{proposedBy:'expert:planner'},{source:'model'},{confirmed:true}])assert.equal((await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload:{...command(),...extra}})).statusCode,400);
  assert.equal((await system.app.inject({url:prefix+'?userId='+b.id,headers:a.headers})).statusCode,400);assert.equal((await system.app.inject({url:prefix})).statusCode,401);
 });
+
+
+test('real authenticated HTTP persists and clears a review date, rejects impossible dates, and preserves an original retry',async()=>{
+ const a=await actor(),payload={...command(),reviewOn:'2028-02-29'},created=await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload});
+ assert.equal(created.statusCode,201,created.body);const id=created.json().target.id;
+ assert.equal((await system.app.inject({url:prefix+'/'+id,headers:a.headers})).json().target.reviewOn,'2028-02-29');
+ const invalid=await system.app.inject({method:'PATCH',url:prefix+'/'+id,headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:1,reviewOn:'2027-02-29'}});assert.equal(invalid.statusCode,400);
+ const clear={operationId:randomUUID(),expectedRevision:1,reviewOn:null};
+ const cleared=await system.app.inject({method:'PATCH',url:prefix+'/'+id,headers:a.headers,payload:clear});assert.equal(cleared.statusCode,200,cleared.body);assert.equal(cleared.json().target.reviewOn,null);assert.equal(cleared.json().target.revision,2);
+ const replay=await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload});assert.equal(replay.json().operation.replayed,true);assert.equal(replay.json().target.reviewOn,null);
+ assert.equal((await system.app.inject({url:prefix,headers:a.headers})).json().targets[0].reviewOn,null);
+ const b=await actor();assert.equal((await system.app.inject({method:'PATCH',url:prefix+'/'+id,headers:b.headers,payload:{operationId:randomUUID(),expectedRevision:2,reviewOn:'2028-03-01'}})).statusCode,404);
+});

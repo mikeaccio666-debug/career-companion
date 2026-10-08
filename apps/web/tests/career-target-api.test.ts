@@ -23,3 +23,23 @@ test('a genuine replay may return newer current state or a physically removed ta
  assert.equal((await changeCareerTarget(client(()=>({target:null,operation})),'status',id,body)).target,null);
  await assert.rejects(changeCareerTarget(client(()=>({target:state(),operation})),'status',id,body));
 });
+
+
+test('review-date acknowledgements must match the owner choice, including explicit clearing; creation cannot invent a date',async()=>{
+ for(const reviewOn of ['2028-02-29',null]){
+  const body={operationId:randomUUID(),expectedRevision:1,reviewOn},operation={id:body.operationId,targetId:id,appliedRevision:2,replayed:false};
+  const good=state({revision:2,lastOperationId:body.operationId,reviewOn});
+  assert.equal((await changeCareerTarget(client((path,init)=>{assert.equal(path,'/career/targets/'+id);assert.equal(init.method,'PATCH');assert.deepEqual(JSON.parse(String(init.body)),body);return {target:good,operation};}),'edit',id,body)).target?.reviewOn,reviewOn);
+  for(const wrong of [undefined,reviewOn===null?'2028-02-29':null,'2028-03-01']){
+   const target={...good,reviewOn:wrong};if(wrong===undefined)delete target.reviewOn;
+   await assert.rejects(changeCareerTarget(client(()=>({target,operation})),'edit',id,body));
+  }
+ }
+ const body=command(),operation={id:body.operationId,targetId:id,appliedRevision:1,replayed:false};
+ await assert.rejects(changeCareerTarget(client(()=>({target:state({lastOperationId:body.operationId,reviewOn:'2028-02-29'}),operation})),'create',null,body));
+ let called=false;await assert.rejects(changeCareerTarget(client(()=>{called=true;return {};}),'edit',id,{operationId:randomUUID(),expectedRevision:1,reviewOn:'2027-02-29'}));assert.equal(called,false);
+});
+test('review-date replays return the current newer state, including a later cleared date',async()=>{
+ const body={operationId:randomUUID(),expectedRevision:1,reviewOn:'2028-02-29'},operation={id:body.operationId,targetId:id,appliedRevision:2,replayed:true};
+ assert.equal((await changeCareerTarget(client(()=>({target:state({revision:3,reviewOn:null}),operation})),'edit',id,body)).target?.reviewOn,null);
+});

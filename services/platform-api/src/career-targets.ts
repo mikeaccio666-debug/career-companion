@@ -79,8 +79,8 @@ export class CareerTargets {
    const revision=(base?.revision??0)+1;if(revision>2147483647)throw changed();const at=(await client.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
    let target:Readonly<CareerTarget>|null=null;
    if(action!=='delete'){
-    const fields=Object.fromEntries(['roleFamily','title','locations','priority'].filter(k=>Object.hasOwn(command,k)).map(k=>[k,(command as any)[k]]));
-    target=parseCareerTarget({...base,...fields,id,ownerId:context.userId,status:action==='create'?'exploring':action==='status'?command.status:base!.status,source:'user_entered',proposedBy:null,revision,createdAt:base?.createdAt??at,updatedAt:at,lastOperationId:command.operationId});
+    const fields=Object.fromEntries(['roleFamily','title','locations','priority','reviewOn'].filter(k=>Object.hasOwn(command,k)).map(k=>[k,(command as any)[k]]));
+    target=parseCareerTarget({...base,...(action==='create'?{reviewOn:null}:{}),...fields,id,ownerId:context.userId,status:action==='create'?'exploring':action==='status'?command.status:base!.status,source:'user_entered',proposedBy:null,revision,createdAt:base?.createdAt??at,updatedAt:at,lastOperationId:command.operationId});
    }
    const receipt:Receipt={schemaVersion:1,ownerId:context.userId,operationId:command.operationId,targetId:id,action,commandDigest:digest,appliedRevision:revision,acceptedAuthVersion:String(auth.auth_version),createdAt:at};
    const sealed=this.storage.crypto!.sealUtf8(canonical(receipt),{table:'platform_career_target_operations',column:'receipt_ciphertext',rowId:receipt.operationId,ownerId:context.userId,revision});
