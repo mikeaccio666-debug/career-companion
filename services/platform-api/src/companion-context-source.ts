@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import type { CompanionContextSnapshot } from './context-assembly.ts';
+import type { CompanionContextSnapshot, CompanionPersonaSnapshot } from './context-assembly.ts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { BackgroundGeneration } from './background-generation.ts';
@@ -11,7 +11,7 @@ import { ApiError } from './errors.ts';
 export interface OwnedCompanionContextSource {
   readonly kind: 'owned_companion_context_source'; readonly ownerId: string;
   readonly companionId: string; readonly conversationId: string;
-  readonly persona: CompanionContextSnapshot['persona'];
+  readonly persona: CompanionPersonaSnapshot;
   readonly relationship: CompanionContextSnapshot['relationship'];
   readonly provenance: Readonly<{
     birthReceiptId: string; bornAt: string; taskId: string; generation: number; answersId: string;

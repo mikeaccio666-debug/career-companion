@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { CAREER_SKILLS, careerSkill, careerSkillIndex, buildHandoffNote, selectCompanionContextMemories, type CareerPhase, type CareerSkillId, type ContextChannel, type ContextMemory, type ContextSensitivity, type MemoryPurpose, type MemoryContextSelection } from '@companion/career-core';
-import { EXPERT_KEYS, type AgentSpeakerKey, type AgentToolDefinition, type ProviderChatMessage } from '@companion/platform-contracts';
+import { CAREER_SKILLS, compileExpertPersona, careerSkill, careerSkillIndex, buildHandoffNote, selectCompanionContextMemories, type CareerPhase, type CareerSkillId, type ContextChannel, type ContextMemory, type ContextSensitivity, type MemoryPurpose, type MemoryContextSelection } from '@companion/career-core';
+import { EXPERT_KEYS, type ExpertKey, type AgentSpeakerKey, type AgentToolDefinition, type ProviderChatMessage } from '@companion/platform-contracts';
 import { ApiError } from './errors.ts';
 
 export interface ContextHistoryMessage {
@@ -14,13 +14,19 @@ export interface ContextSourceFact {
   readonly id: string; readonly revision: number; readonly ownerId: string;
   readonly status: 'confirmed' | 'withdrawn'; readonly sensitivity: ContextSensitivity; readonly content: string;
 }
-/** Owned, versioned projections must be supplied by authenticated server readers. Never deserialize this from an HTTP body. */
+/** The companion keeps its verified owner-specific birth source. */
+export interface CompanionPersonaSnapshot {
+  readonly ownerId: string; readonly speaker: 'companion'; readonly revision: number;
+  readonly name: string; readonly styleCard: string; readonly samples: readonly string[];
+}
+/** Reference only. The compiler resolves expert text from the reviewed code revision. */
+export interface ExpertPersonaReference { readonly ownerId: string; readonly speaker: ExpertKey; readonly revision: number; }
+/** Owned, versioned projections must come from authenticated server readers, never an HTTP body. */
 export interface CompanionContextSnapshot {
   readonly ownerId: string; readonly conversationId: string; readonly speaker: AgentSpeakerKey;
   readonly room: { readonly kind: 'main' | 'expert_room' | 'interview'; readonly expert: AgentSpeakerKey | null };
   readonly channel: ContextChannel; readonly purpose: MemoryPurpose; readonly now: string; readonly timeZone: string;
-  readonly persona: { readonly ownerId: string; readonly speaker: AgentSpeakerKey; readonly revision: number;
-    readonly name: string; readonly styleCard: string; readonly samples: readonly string[] };
+  readonly persona: CompanionPersonaSnapshot | ExpertPersonaReference;
   readonly capabilityIndex: { readonly revision: number; readonly enabledFeatures: readonly CareerPhase[]; readonly reviewedSkills: readonly CareerSkillId[]; readonly enabledExperts: readonly AgentSpeakerKey[] };
   readonly relationship: { readonly ownerId: string; readonly revision: number; readonly nickname: string | null; readonly stage: 'acquainting' | 'familiar' | 'dormant' | 'landed' } | null;
   readonly profile: { readonly ownerId: string; readonly revision: number; readonly facts: readonly ContextSourceFact[] } | null;
@@ -133,9 +139,17 @@ export function assembleCompanionContext(value: CompanionContextSnapshot): Conte
   const timeZone = text(r.timeZone, 80); try { new Intl.DateTimeFormat('en', { timeZone }); } catch { invalid(); }
   const room = closed(r.room, ['kind', 'expert']), kind = one(room.kind, ['main', 'expert_room', 'interview']);
   if (who === 'companion' ? kind !== 'main' || room.expert !== null : kind === 'main' || room.expert !== who || kind === 'interview' && who !== 'interviewer') invalid();
-  const persona = closed(r.persona, ['ownerId', 'speaker', 'revision', 'name', 'styleCard', 'samples']);
+  const persona = closed(r.persona, who === 'companion' ? ['ownerId', 'speaker', 'revision', 'name', 'styleCard', 'samples'] : ['ownerId', 'speaker', 'revision']);
   if (id(persona.ownerId) !== ownerId || speaker(persona.speaker) !== who) invalid();
-  const personaData = { name: text(persona.name, 40), revision: positive(persona.revision), styleCard: text(persona.styleCard, 600), samples: strings(persona.samples, 3, 600) };
+  const personaRevision = positive(persona.revision);
+  let personaMessage: ProviderChatMessage;
+  if (who === 'companion') {
+    personaMessage = dataBlock('发言者说话方式', { name: text(persona.name, 40), revision: personaRevision, styleCard: text(persona.styleCard, 600), samples: strings(persona.samples, 3, 600) });
+  } else {
+    // Only code-owned text enters this system layer; arbitrary snapshot strings
+    // remain data and cannot replace an expert's identity or signature form.
+    try { personaMessage = { role: 'system', content: compileExpertPersona(who, personaRevision) }; } catch { invalid(); }
+  }
   const capability = closed(r.capabilityIndex, ['revision', 'enabledFeatures', 'reviewedSkills', 'enabledExperts']);
   const experts = array(capability.enabledExperts, 6, item => one(item, EXPERT_KEYS)); unique(experts);
   const enabledExperts = EXPERT_KEYS.filter(expert => experts.includes(expert));
@@ -202,7 +216,7 @@ export function assembleCompanionContext(value: CompanionContextSnapshot): Conte
   }); unique(tools.map(item => item.name));
   const normalProfile = profileFacts.filter(item => item.status === 'confirmed' && item.sensitivity === 'normal').sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).map(({ id, revision, content }) => ({ id, revision, content }));
   const stableMessages: ProviderChatMessage[] = [{ role: 'system', content: PLATFORM_POLICY }, { role: 'system', content: CHANNEL_POLICY[channel] },
-    dataBlock('发言者说话方式', personaData), dataBlock('能力索引；目录不授予执行权限', capabilityData),
+    personaMessage, dataBlock('能力索引；目录不授予执行权限', capabilityData),
     dataBlock('关系', { available: relationship !== null, relationship }), dataBlock('用户摘要', { profileAvailable: profileRevision !== null, profileRevision, facts: normalProfile, memories: memory.stable })];
   let continuingSkill: { id: CareerSkillId; revision: number; instructions: string } | null = null;
   if (turn.continuingSkill !== null) {
