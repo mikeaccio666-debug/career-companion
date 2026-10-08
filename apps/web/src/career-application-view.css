@@ -1,0 +1,32 @@
+.application-page { max-width: 1440px; }
+.application-board { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)) 76px; gap: 12px; margin: 24px 0; }
+.application-board.closed-expanded { grid-template-columns: repeat(6,minmax(0,1fr)); }
+.application-column { min-width: 0; border-top: 1.5px solid var(--ink,#262522); }
+.application-column h2 { font-size: 13px; margin: 12px 0; display: flex; justify-content: space-between; gap: 8px; }
+.application-column h2 span { font-variant-numeric: tabular-nums; }
+.application-column h2 button { font: inherit; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; }
+.application-card { border: 1px solid var(--rule,#dedbd5); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: var(--paper,#fcfaf6); font-size: 13px; overflow-wrap: anywhere; }
+.application-card p { margin: 8px 0; }
+.application-card small { display: block; margin-top: 8px; color: var(--ink-3,#706d67); }
+.application-card button { margin-top: 12px; }
+.application-chip { display: inline-block; color: var(--ink-2,#555149); background: var(--tint,#eeeae3); border-radius: 4px; padding: 3px 6px; font-size: 12px; }
+.application-mobile-closed-title { display: none; }
+.application-chip.active { color: var(--air,#386b83); background: var(--air-tint,#eef5f8); }
+.application-chip.done { color: var(--ok,#477b55); background: var(--ok-tint,#edf5ee); }
+.application-read-caption { font-size: 12px; color: var(--ink-3,#706d67); }
+.application-history { font-size: 13px; padding-left: 24px; }
+.application-history li { margin-bottom: 10px; }
+.application-history time { font-variant-numeric: tabular-nums; }
+.application-page .career-target-editor form { margin-bottom: 20px; }
+.application-mobile-stages { display: none; }
+@media (min-width:1024px) { .application-board.closed-folded .application-closed .application-column-cards { display: none; } }
+@media (max-width:1023px) {
+ .application-mobile-stages { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+ .application-mobile-stages button[aria-pressed=true] { border-color: var(--ink,#262522); background: var(--tint,#eeeae3); }
+ .application-board, .application-board.closed-expanded { display: block; }
+ .application-column { display: none; }
+ .application-column.mobile-selected { display: block; }
+ .application-closed h2 button { display: none; }
+ .application-mobile-closed-title { display: inline; }
+ .application-card { margin-bottom: 12px; }
+}

@@ -1,3 +1,4 @@
+import { CareerApplicationPage } from './career-application-view';
 import { ResumeReviewPage } from './resume-review-view';
 import { CareerStoryPage } from './career-story-view';
 import { ManualJobPage } from './manual-job-view';
@@ -760,6 +761,7 @@ function AccountEntryApp() {
   if ((window.location.pathname==='/pending'||pendingResumePath)&&accountClient?.isCurrent()&&accountClient.account.accountId===user.id) return <ResumeReviewPage onLogout={()=>void logout()} initialItemId={pendingResumePath?.[1]}/>;
   const storyPath=window.location.pathname.match(/^\/journey\/stories\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/);
   if ((window.location.pathname === '/journey/stories'||storyPath) && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerStoryPage initialStoryId={storyPath?.[1]} onLogout={() => void logout()} />;
+  if (window.location.pathname === '/journey/applications' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerApplicationPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/jobs' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <ManualJobPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/targets' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerTargetPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/me/memory' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <SharedMemoryPage onLogout={() => void logout()} />;

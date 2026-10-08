@@ -1,3 +1,4 @@
+import { CareerApplications } from './career-applications.ts';
 import { UploadRemovals } from './upload-removals.ts';
 import { careerHttpQuery } from './career-http-query.ts';
 import { ResumeOriginalReview } from './resume-original-review.ts';
@@ -110,6 +111,7 @@ export async function buildApp(options:AppOptions={}) {
   const sharedMemories=new SharedMemories(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
+  const careerApplications=new CareerApplications(db,config,bundle,manualJobs);
   const careerStories=new CareerStories(db,config,bundle);
   const storage=options.storage??createStorage(config);
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage);
@@ -606,6 +608,40 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/career/job-observations/duplicates`,limitedAccount,async(request,reply)=>{manualJobQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await manualJobs.duplicates(fixedRequestSession(request,userId(request)),request.body,c.signal);}finally{c.dispose();}});
   app.post(`${prefix}/career/job-observations`,limitedAccount,(request,reply)=>manualJobMutation(request,reply,'create'));
   app.delete(`${prefix}/career/job-observations/:id`,limitedAccount,(request,reply)=>manualJobMutation(request,reply,'delete'));
+  const applicationRoot = prefix + '/career/applications';
+  function applicationQuery(request: FastifyRequest) {
+    try { careerRecordObject(careerHttpQuery(request.query), []); }
+    catch { throw new ApiError(400, 'CAREER_APPLICATION_INPUT_INVALID', '请使用支持的申请查询。'); }
+  }
+  async function applicationRead(request: FastifyRequest, reply: FastifyReply, run: (signal: AbortSignal) => Promise<unknown>) {
+    const cancellation = requestSignal(request, reply);
+    try { reply.header('Cache-Control', 'private, no-store'); return await run(cancellation.signal); }
+    finally { cancellation.dispose(); }
+  }
+  app.get(applicationRoot, limitedAccount, (request, reply) => applicationRead(request, reply,
+    signal => careerApplications.list(fixedRequestSession(request, userId(request)), careerHttpQuery(request.query), signal)));
+  app.get(applicationRoot + '/operations/:id', limitedAccount, (request, reply) => {
+    applicationQuery(request); return applicationRead(request, reply,
+      signal => careerApplications.observe(fixedRequestSession(request, userId(request)), params(request), signal));
+  });
+  app.get(applicationRoot + '/:id', limitedAccount, (request, reply) => {
+    applicationQuery(request); return applicationRead(request, reply, async signal => ({
+      application: await careerApplications.get(fixedRequestSession(request, userId(request)), params(request), signal) }));
+  });
+  app.get(applicationRoot + '/:id/events', limitedAccount, (request, reply) => applicationRead(request, reply,
+    signal => careerApplications.history(fixedRequestSession(request, userId(request)), params(request), careerHttpQuery(request.query), signal)));
+  async function applicationMutation(request: FastifyRequest, reply: FastifyReply, action: import('@companion/platform-contracts').CareerApplicationAction) {
+    applicationQuery(request); return applicationRead(request, reply, async signal => {
+      const result = await careerApplications.mutate(fixedRequestSession(request, userId(request)), action,
+        action === 'create' ? null : params(request), request.body, signal);
+      if (action === 'create') reply.code(result.operation.replayed ? 200 : 201);
+      return result;
+    });
+  }
+  app.post(applicationRoot, limitedAccount, (request, reply) => applicationMutation(request, reply, 'create'));
+  app.post(applicationRoot + '/:id/stage', limitedAccount, (request, reply) => applicationMutation(request, reply, 'stage'));
+  app.patch(applicationRoot + '/:id', limitedAccount, (request, reply) => applicationMutation(request, reply, 'edit'));
+  app.delete(applicationRoot + '/:id', limitedAccount, (request, reply) => applicationMutation(request, reply, 'delete'));
   function targetQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'CAREER_TARGET_INPUT_INVALID','Unsupported direction query.');}
   const resumeClosedQuery=(request:FastifyRequest)=>{try{careerRecordObject(careerHttpQuery(request.query),[]);}catch{throw invalid('Unsupported resume query.');}};
   const resumeRead=async(request:FastifyRequest,reply:FastifyReply,run:(signal:AbortSignal)=>Promise<unknown>)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await run(cancellation.signal);}finally{cancellation.dispose();}};
@@ -800,5 +836,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,manualJobs,careerStories,careerPreparationSources,resumeReview,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,manualJobs,careerApplications,careerStories,careerPreparationSources,resumeReview,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
