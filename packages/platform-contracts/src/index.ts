@@ -298,3 +298,5 @@ export * from './companion-naming.ts';
 export * from './companion-birth.ts';
 
 export * from './companion-welcome.ts';
+
+export * from './shared-memory.ts';
