@@ -1,3 +1,4 @@
+import { CareerStories } from './career-stories.ts';
 import { ManualJobs } from './manual-jobs.ts';
 import { CareerTargets } from './career-targets.ts';
 import { SharedMemorySafety } from './shared-memory-safety.ts';
@@ -105,6 +106,7 @@ export async function buildApp(options:AppOptions={}) {
   const sharedMemories=new SharedMemories(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
+  const careerStories=new CareerStories(db,config,bundle);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const storage=options.storage??createStorage(config);
@@ -577,6 +579,19 @@ export async function buildApp(options:AppOptions={}) {
     try{const result=await jobs.mcp.result(userId(request),{jobId:artifactId,...page},cancellation.signal);reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff');return {result};}
     finally{cancellation.dispose();}
   });
+  function libraryQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'CAREER_LIBRARY_INPUT_INVALID','Unsupported experience query.');}
+  for(const [kind,path] of [['project','projects'],['story','stories']] as const){
+    const root=prefix+'/career/'+path;
+    app.get(root,limitedAccount,async(request,reply)=>{const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerStories.list(fixedRequestSession(request,userId(request)),kind,request.query,c.signal);}finally{c.dispose();}});
+    app.get(root+'/:id',limitedAccount,async(request,reply)=>{libraryQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerStories.get(fixedRequestSession(request,userId(request)),kind,params(request),c.signal);}finally{c.dispose();}});
+    async function mutateLibrary(request:FastifyRequest,reply:FastifyReply,action:'create'|'edit'|'confirm'|'withdraw'|'delete'){libraryQuery(request);const c=requestSignal(request,reply);try{const result=await careerStories.mutate(fixedRequestSession(request,userId(request)),kind,action,action==='create'?null:params(request),request.body,c.signal);reply.header('Cache-Control','private, no-store');if(action==='create')reply.code(result.operation.replayed?200:201);return result;}finally{c.dispose();}}
+    app.post(root,limitedAccount,(request,reply)=>mutateLibrary(request,reply,'create'));
+    app.patch(root+'/:id',limitedAccount,(request,reply)=>mutateLibrary(request,reply,'edit'));
+    app.post(root+'/:id/confirm',limitedAccount,(request,reply)=>mutateLibrary(request,reply,'confirm'));
+    if(kind==='project')app.post(root+'/:id/withdraw',limitedAccount,(request,reply)=>mutateLibrary(request,reply,'withdraw'));
+    app.delete(root+'/:id',limitedAccount,(request,reply)=>mutateLibrary(request,reply,'delete'));
+  }
+  app.get(prefix+'/career/progress',limitedAccount,async(request,reply)=>{libraryQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerStories.progress(fixedRequestSession(request,userId(request)),c.signal);}finally{c.dispose();}});
   function manualJobQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'MANUAL_JOB_INPUT_INVALID','Unsupported saved-job query.');}
   app.get(`${prefix}/career/job-observations`,limitedAccount,async(request,reply)=>{const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await manualJobs.list(fixedRequestSession(request,userId(request)),request.query,c.signal);}finally{c.dispose();}});
   app.get(`${prefix}/career/job-observations/:id`,limitedAccount,async(request,reply)=>{manualJobQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {job:await manualJobs.get(fixedRequestSession(request,userId(request)),params(request),c.signal)};}finally{c.dispose();}});
@@ -744,5 +759,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,manualJobs,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,manualJobs,careerStories,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
