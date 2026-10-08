@@ -1,3 +1,4 @@
+import { readInterviewRecords, readInterviewRecord, changeInterviewRecord, observeInterviewRecord, type InterviewRecordClient, type InterviewIntent } from '../../../apps/web/src/career-interview-api.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -72,4 +73,80 @@ test('revoked actual cookie session cannot read or recover owner schedule operat
     await f.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1', [a.id]);
     assert.equal((await system.app.inject({ url: prefix, headers: a.headers })).statusCode, 401);
     assert.equal((await system.app.inject({ url: prefix + '/operations/' + payload.operationId, headers: a.headers })).statusCode, 401);
+});
+
+/** Real Web protocol client -> password-authenticated HTTP -> isolated PostgreSQL.
+ * These use fictional actors and actual route authorization, not a fake signer. */
+function webClient(a: Awaited<ReturnType<typeof actor>>): InterviewRecordClient {
+    return {
+        account: { accountId: a.id }, isCurrent: () => true,
+        async request<T>(path: string, init: RequestInit = {}) {
+            init.signal?.throwIfAborted();
+            const response = await system.app.inject({
+                method: (init.method ?? 'GET') as 'GET' | 'POST' | 'PATCH' | 'DELETE',
+                url: '/api/platform' + path, headers: a.headers,
+                ...(init.body ? { payload: JSON.parse(String(init.body)) } : {}),
+            });
+            init.signal?.throwIfAborted();
+            if (response.statusCode >= 400) throw Object.assign(Error('Fictional HTTP request rejected'), { status: response.statusCode });
+            return response.json() as T;
+        },
+    };
+}
+test('actual portable Web client reads the owner page and verifies all five authenticated command acknowledgements', async () => {
+    const a = await actor(), { app } = await make(a), client = webClient(a);
+    const original: InterviewIntent = { action: 'create', id: null, body: command(app) };
+    let result = await changeInterviewRecord(client, original);
+    const id = result.interview!.id;
+    assert.equal(result.operation.appliedRevision, 1);
+    assert.equal((await readInterviewRecords(client)).interviews[0].id, id);
+    assert.equal((await readInterviewRecord(client, id)).application.id, app.id);
+    result = await changeInterviewRecord(client, { action: 'edit', id, body: { operationId: randomUUID(), expectedRevision: 1, roundType: 'sql', durationMin: 60 } });
+    assert.equal(result.interview!.roundType, 'sql');
+    result = await changeInterviewRecord(client, { action: 'reschedule', id, body: { operationId: randomUUID(), expectedRevision: 2, startsAt: '2026-11-01T06:30:17.123Z', timeZone: 'America/New_York' } });
+    assert.equal(result.interview!.startsAt, '2026-11-01T06:30:17.123Z');
+    assert.equal(result.interview!.status, 'rescheduled');
+    result = await changeInterviewRecord(client, { action: 'status', id, body: { operationId: randomUUID(), expectedRevision: 3, status: 'done' } });
+    assert.equal(result.interview!.status, 'done');
+    const observed = await observeInterviewRecord(client, original);
+    assert.equal(observed.interview!.revision, 4);
+    assert.equal(observed.operation.replayed, true);
+    assert.equal((await readInterviewRecords(client, null, 'done')).interviews.length, 1);
+    result = await changeInterviewRecord(client, { action: 'delete', id, body: { operationId: randomUUID(), expectedRevision: 4 } });
+    assert.equal(result.interview, null);
+    assert.equal((await observeInterviewRecord(client, original)).interview, null);
+    assert.equal((await changeInterviewRecord(client, original)).interview, null);
+    assert.equal((await readInterviewRecords(client)).interviews.length, 0);
+    const unchanged = await system.app.inject({ url: applicationPrefix + '/' + app.id, headers: a.headers });
+    assert.equal(unchanged.json().application.stage, 'saved');
+});
+test('an actual accepted creation whose Web response is lost is recovered with the same nonce and only one database effect', async () => {
+    const a = await actor(), { app } = await make(a), transport = webClient(a);
+    const original: InterviewIntent = { action: 'create', id: null, body: command(app) };
+    let drop = true;
+    const client: InterviewRecordClient = {
+        ...transport, async request<T>(path: string, init?: RequestInit) {
+            const value = await transport.request<T>(path, init);
+            if (drop && init?.method === 'POST') { drop = false; throw Error('Fictional response lost after acceptance'); }
+            return value;
+        },
+    };
+    await assert.rejects(changeInterviewRecord(client, original), /response lost/);
+    const observed = await observeInterviewRecord(client, original);
+    assert.equal(observed.operation.replayed, true);
+    const retry = await changeInterviewRecord(client, original);
+    assert.equal(retry.interview!.id, observed.interview!.id);
+    const operationId = (original.body as { operationId: string }).operationId;
+    assert.equal(Number((await f.db.query('SELECT count(*) AS n FROM platform_career_interviews WHERE user_id=$1', [a.id])).rows[0].n), 1);
+    assert.equal(Number((await f.db.query('SELECT count(*) AS n FROM platform_career_interview_operations WHERE user_id=$1 AND operation_id=$2', [a.id, operationId])).rows[0].n), 1);
+});
+test('the actual Web read/observer cannot use another owner cookie or a revoked authenticated session', async () => {
+    const a = await actor(), b = await actor(), { app } = await make(a);
+    const original: InterviewIntent = { action: 'create', id: null, body: command(app) }, client = webClient(a);
+    const created = await changeInterviewRecord(client, original);
+    await assert.rejects(readInterviewRecord(webClient(b), created.interview!.id), { status: 404 });
+    await assert.rejects(observeInterviewRecord(webClient(b), original), { status: 404 });
+    await f.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1', [a.id]);
+    await assert.rejects(readInterviewRecords(client), { status: 401 });
+    await assert.rejects(observeInterviewRecord(client, original), { status: 401 });
 });
