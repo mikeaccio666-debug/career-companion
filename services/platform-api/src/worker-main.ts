@@ -1,3 +1,4 @@
+import { UploadRemovals } from './upload-removals.ts';
 import { purgeExpiredMemoryDeletions } from './memory-retention.ts';
 import { loadLegalBundle } from './legal-documents.ts';
 import { createProviderRuntime } from '@companion/ai-core';
@@ -15,7 +16,8 @@ import { readCompanionSafetyResourceConfiguration } from './companion-safety-res
 import { CompanionNameQueue, createCompanionNameWorker } from './companion-name-queue.ts';
 const config=readConfig(),db=new Database(config.databaseUrl,{max:config.databasePoolMax,connectionTimeoutMillis:config.databaseConnectTimeoutMs});
 const legal=await loadLegalBundle(config.legalBundlePath),runtime=requireModelConsent(createProviderRuntime());
-const jobs=new JobService(db,config,runtime,createStorage(config),undefined,undefined,legal);
+const storage=createStorage(config),uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage);
+const jobs=new JobService(db,config,runtime,storage,undefined,undefined,legal);
 const companion=new CompanionEntry(db,config,legal,runtime);
 const safetyResourcesConfiguration=await readCompanionSafetyResourceConfiguration(config);
 const studentOnboarding=await createCompanionStudentOnboarding(db,config,legal,runtime,companion.generation,safetyResourcesConfiguration.review);
@@ -23,6 +25,7 @@ const naming=studentOnboarding.naming;
 await db.query('SELECT 1');await recoverInterrupted(jobs);
 await reconcileCompanionAccounting(companion);
 await purgeExpiredMemoryDeletions(db);
+if(config.dataCrypto)await uploadRemovals.recover();
 const worker=createWorker(jobs);
 const companionWorker=createCompanionGenerationWorker(companion),companionQueue=new CompanionGenerationQueue(companion);
 const companionNameWorker=createCompanionNameWorker(naming),companionNameQueue=new CompanionNameQueue(naming);
@@ -34,7 +37,7 @@ const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeV
 let closing=false,recovering:Promise<void>|undefined,shutdown:Promise<void>|undefined;
 const recovery=setInterval(()=>{
   if(closing||recovering)return;
-  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db)]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
+  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),...(config.dataCrypto?[uploadRemovals.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
   recovering=current;
 },15_000);recovery.unref();
 process.stdout.write('Platform task worker started.\n');

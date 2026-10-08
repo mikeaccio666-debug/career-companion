@@ -1,3 +1,4 @@
+import { UploadRemovals } from './upload-removals.ts';
 import { careerHttpQuery } from './career-http-query.ts';
 import { ResumeOriginalReview } from './resume-original-review.ts';
 import { CareerPreparationSources } from './career-preparation-sources.ts';
@@ -111,6 +112,7 @@ export async function buildApp(options:AppOptions={}) {
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerStories=new CareerStories(db,config,bundle);
   const storage=options.storage??createStorage(config);
+  const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
   const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
@@ -681,6 +683,15 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/uploads`,secure,async(request,reply)=>{
     const file=await request.file();if(!file)throw invalid('Choose a file to upload.');const bytes=await file.toBuffer();if(file.file.truncated)throw new ApiError(413,'FILE_TOO_LARGE','Files must be at most 20 MB.');
     validateUpload(file.filename,file.mimetype,bytes);const attachment=await saveUpload(userId(request),file.filename,file.mimetype,bytes);reply.code(201);return {attachment};
+  });
+  app.get(`${prefix}/upload-removals`,limitedAccount,async(request,reply)=>{const cancellation=requestSignal(request,reply);try{const result=await uploadRemovals.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),cancellation.signal);reply.header('Cache-Control','private, no-store');return result;}finally{cancellation.dispose();}});
+  app.delete(`${prefix}/uploads/:id`,limitedAccount,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply),who=fixedRequestSession(request,userId(request));
+    try{if(Object.keys(careerHttpQuery(request.query)).length)throw invalid('Unsupported file removal query.');await uploadRemovals.request(who,params(request),request.body,cancellation.signal);await uploadRemovals.cleanup(params(request),cancellation.signal);const result=await uploadRemovals.get(who,params(request),cancellation.signal);reply.code(result.status==='removed'?200:202).header('Cache-Control','private, no-store');return result;}
+    finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/uploads/:id/removal`,limitedAccount,async(request,reply)=>{
+    const cancellation=requestSignal(request,reply);try{if(Object.keys(careerHttpQuery(request.query)).length)throw invalid('Unsupported file removal query.');const result=await uploadRemovals.get(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);reply.header('Cache-Control','private, no-store');return result;}finally{cancellation.dispose();}
   });
   async function serveFile(request:FastifyRequest,reply:FastifyReply,artifact=false){
     return servePrivateFile(db,storage,request,reply,userId(request),params(request),artifact);
