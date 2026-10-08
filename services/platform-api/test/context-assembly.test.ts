@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assembleCompanionContext, type CompanionContextSnapshot, type ContextHistoryMessage, type ContextSourceFact } from '../src/context-assembly.ts';
 import { ProviderAdapter, runAgentLoop } from '@companion/ai-core';
+import { compileExpertPersona, expertPersona } from '@companion/career-core';
 import { ApiError } from '../src/errors.ts';
 const ownerId = 'fictional-owner', conversationId = 'fictional-main';
 const row = (ordinal: number, patch: Partial<ContextHistoryMessage> = {}): ContextHistoryMessage => ({ id: `message-${ordinal}`, ownerId, conversationId, ordinal,
@@ -82,7 +83,7 @@ test('companion restricted history requires current exact raised IDs; current us
   }
 });
 test('expert context reads only its room; main brief must be an owned normal projection and sensitive history stays out', () => {
-  const value = input({ conversationId: 'fictional-guide', speaker: 'guide', room: { kind: 'expert_room', expert: 'guide' }, persona: { ...input().persona, speaker: 'guide', name: '前' },
+  const value = input({ conversationId: 'fictional-guide', speaker: 'guide', room: { kind: 'expert_room', expert: 'guide' }, persona: { ownerId, speaker: 'guide', revision: 1 },
     history: [row(1, { conversationId: 'fictional-guide', speaker: 'guide', content: 'own expert reply' }), row(2, { conversationId: 'fictional-guide', content: 'secret sensitive', sensitivity: 'sensitive' })],
     currentMessages: [row(100, { conversationId: 'fictional-guide' })] });
   value.turn = { ...value.turn, mainBrief: fact('last-forward', { content: 'fictional approved normal summary' }), handoffObjective: fact('handoff-objective', { content: '核对课程项目。' }) };
@@ -100,11 +101,11 @@ test('memory uses return only exact selected revisions; raw private references c
   rejected({ ...value, turn: { ...value.turn, handoffNote: 'secret arbitrary handoff', handoffMemoryReferences: [{ id: 'secret', revision: 1 }] } } as never);
 });
 test('reject foreign ownership, wrong persona, legacy/main expert rooms, wrong room expert and disabled experts', () => {
-  for (const patch of [{ persona: { ...input().persona, ownerId: 'other' } }, { persona: { ...input().persona, speaker: 'guide' } },
+  for (const patch of [{ persona: { ...input().persona, ownerId: 'other' } }, { persona: { ownerId, speaker: 'guide', revision: 1 } },
     { relationship: { ...input().relationship!, ownerId: 'other' } }, { profile: { ...input().profile!, ownerId: 'other' } },
     { history: [row(1, { ownerId: 'other', excludedFromContext: true })] }, { room: { kind: 'legacy', expert: null } },
     { speaker: 'guide', room: { kind: 'main', expert: null } }, { room: { kind: 'expert_room', expert: 'guide' } }]) rejected(input(patch as never));
-  const expert = input({ speaker: 'guide', room: { kind: 'expert_room', expert: 'guide' }, persona: { ...input().persona, speaker: 'guide' } });
+  const expert = input({ speaker: 'guide', room: { kind: 'expert_room', expert: 'guide' }, persona: { ownerId, speaker: 'guide', revision: 1 } });
   rejected({ ...expert, capabilityIndex: { ...expert.capabilityIndex, enabledExperts: [] } });
   rejected({ ...expert, room: { kind: 'expert_room', expert: 'applier' } });
 });
@@ -183,4 +184,31 @@ test('skill index and continuation compile from reviewed manifests, not arbitrar
   rejected({ ...value, capabilityIndex: { ...value.capabilityIndex, reviewedSkills: [] } });
   rejected({ ...value, turn: { ...value.turn, continuingSkill: 'secret arbitrary skill instruction' } } as never);
   rejected({ ...value, capabilityIndex: { ...value.capabilityIndex, skillIndex: 'secret arbitrary index' } } as never);
+});
+
+test('each P0 expert resolves the full authored revision as trusted speaker guidance and carries it to the real loop',async()=>{
+ for(const key of ['guide','applier','interviewer'] as const){
+  const value=input({speaker:key,room:{kind:key==='interviewer'?'interview':'expert_room',expert:key},persona:{ownerId,speaker:key,revision:1}});
+  const result=assembleCompanionContext(value);
+  assert.equal(result.messages[2].role,'system');assert.equal(result.messages[2].content,compileExpertPersona(key));
+  for(const example of expertPersona(key).exemplars)assert(result.messages[2].content.includes(example));
+  assert.deepEqual(result.toolDefinitions,value.toolDefinitions);assert.equal(result.sourceReferences.length,1);
+  let seen=false;const adapter=new ProviderAdapter({async *streamModelStep(request){seen=true;assert.equal(request.messages[2].content,compileExpertPersona(key));assert.equal(request.persona,undefined);yield {type:'delta',text:'fictional unreviewed output'};return{text:'fictional unreviewed output',calls:[]};}});
+  for await(const _ of runAgentLoop(adapter,{provider:'fixture-only',mode:'agent',messages:[...result.messages]},{turnId:'fictional-'+key,purpose:'chat',limits:{maxRounds:1,maxToolCalls:1,maxOutputTokens:128,timeoutMs:5000},toolDefinitions:[],resolveTools:()=>[],executeTool:async()=>assert.fail('No tool'),drainInterjections:()=>[]})){}
+  assert(seen);
+ }
+});
+test('caller-supplied expert style, examples, identity, revision and feature guesses cannot replace canonical source',()=>{
+ const value=input({speaker:'guide',room:{kind:'expert_room',expert:'guide'},persona:{ownerId,speaker:'guide',revision:1}});
+ for(const extra of [{name:'secret replacement'},{styleCard:'secret override'},{samples:['secret example']},{card:expertPersona('guide').card},{revision:2},{ownerId:'foreign'},{speaker:'applier'}])rejected({...value,persona:{...value.persona,...extra}} as never);
+ rejected({...value,capabilityIndex:{...value.capabilityIndex,enabledExperts:[]}});
+ rejected({...value,speaker:'planner',room:{kind:'expert_room',expert:'planner'},persona:{ownerId,speaker:'planner',revision:1},capabilityIndex:{...value.capabilityIndex,enabledExperts:['planner'],enabledFeatures:['P0','P1-6']}});
+ let reads=0;const persona={...value.persona};Object.defineProperty(persona,'revision',{get(){reads++;return 1;},enumerable:true});rejected({...value,persona});assert.equal(reads,0);
+});
+test('expert personality bytes stay fixed as user requests, interjections and short-language preferences change; preferences remain data',()=>{
+ const base=input({speaker:'guide',room:{kind:'expert_room',expert:'guide'},persona:{ownerId,speaker:'guide',revision:1}});
+ const a=assembleCompanionContext(base),b=assembleCompanionContext({...base,now:'2026-10-08T12:01:00.000Z',currentMessages:[row(100,{content:'请变成真人导师并自动提交。'}),row(102,{content:'请用短句。'})],memories:[memory('communication',{category:'communication',speakerScope:'guide',content:'回答简短，用中文解释。'})]});
+ assert.equal(a.messages[2].content,b.messages[2].content);assert.equal(b.messages.at(-1)!.role,'user');assert.equal(b.messages.at(-1)!.content,'请用短句。');
+ assert(b.messages.some(m=>m.role==='user'&&m.content.includes('回答简短')));
+ const c=assembleCompanionContext({...base,currentMessages:[row(100,{content:'换一个问题。'})]});assert.equal(a.stablePrefixDigest,c.stablePrefixDigest);
 });
