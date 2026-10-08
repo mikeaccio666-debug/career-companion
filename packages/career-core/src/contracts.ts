@@ -68,12 +68,18 @@ export interface CareerProgress {
   milestones: ('first_project_evidence' | 'first_reviewed_resume' | 'first_reviewed_practice' | 'first_confirmed_outreach' | 'first_confirmed_application' | 'first_confirmed_interview')[];
 }
 export interface KnowledgeCitation {
-  /** updatedAt is this knowledge version's registration time, not an inferred source modification time. */
-  sourceId: string; revision: string; passageId: string; updatedAt: string;
+  /** Registration time of this actual version, not an inferred modification time. */
+  readonly sourceId: string; readonly revision: number; readonly passageId: string; readonly updatedAt: string;
+  readonly scope?: 'private' | 'org'; readonly assetClass?: string;
+}
+export interface CareerKnowledgePassage {
+  readonly text: string; readonly citations: readonly KnowledgeCitation[];
+  readonly scope: 'private' | 'org'; readonly assetClass?: string;
+  readonly provenanceLabel: string; readonly provenance: 'untrusted_knowledge';
 }
 export interface CareerKnowledgePort {
-  /** Implementations filter the authenticated owner's access before retrieval. */
-  search(context: { ownerId: string; signal: AbortSignal }, query: string): Promise<{ text: string; citations: KnowledgeCitation[] }[]>;
+  /** Bound by authenticated server dependencies. This is a read port, not an execution grant. */
+  search(context: { ownerId: string; signal: AbortSignal }, query: string): Promise<readonly CareerKnowledgePassage[]>;
 }
 export interface CareerJobObservation {
   source: 'greenhouse' | 'lever' | 'ashby' | 'licensed_feed' | 'manual';

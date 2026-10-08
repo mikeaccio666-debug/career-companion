@@ -1,3 +1,4 @@
+import type { BoundCareerKnowledge } from './career-knowledge.ts';
 import type { CareerApplications } from './career-applications.ts';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
@@ -54,7 +55,7 @@ function request(value: unknown): {
  * endpoint, capability registration, fake profile, knowledge batch, turn,
  * source safety grade, model use, review or execution lease is created here. */
 export class CareerPreparationSources {
-    constructor(private readonly db: Database, private readonly targets: Pick<CareerTargets, 'readForPreparationInTransaction'>, private readonly library: Pick<CareerStories, 'readPreparationIndexInTransaction'>, private readonly resumeVersions?: Pick<ResumeOriginalReview, 'readForPreparationInTransaction'>, private readonly journey?: Pick<CareerApplications, 'readForPreparationInTransaction'>) { }
+    constructor(private readonly db: Database, private readonly targets: Pick<CareerTargets, 'readForPreparationInTransaction'>, private readonly library: Pick<CareerStories, 'readPreparationIndexInTransaction'>, private readonly resumeVersions?: Pick<ResumeOriginalReview, 'readForPreparationInTransaction'>, private readonly journey?: Pick<CareerApplications, 'readForPreparationInTransaction'>, private readonly knowledge?: Pick<BoundCareerKnowledge, 'readKnowledgeAccessInTransaction'>) { }
     async readInTransaction(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal): Promise<Readonly<CareerPreparationSourceIndex>> {
         const context = fixed(value);
         await authorizeFixedSession(client, context, signal);
@@ -89,6 +90,7 @@ export class CareerPreparationSources {
             throw new ApiError(404, 'NOT_FOUND', 'The preparation source was not found.'); signal?.throwIfAborted(); };
         const built = await buildCareerRunContext({ ownerId: context.userId, skillId: r.skillId, selection: r.selection, signal, tools, ports: {
                 listTargets: async (scope) => { assertScope(scope); return sourceIndex.targets; },
+                ...(this.knowledge ? { readKnowledgeAccess: async (scope: {ownerId:string;signal?:AbortSignal}) => { assertScope(scope); return this.knowledge!.readKnowledgeAccessInTransaction(client,context,scope.signal); } } : {}),
                 ...(sourceIndex.applications === null ? {} : { listApplications: async (scope: {
                         ownerId: string;
                     }) => { assertScope(scope); return sourceIndex.applications!; } }),

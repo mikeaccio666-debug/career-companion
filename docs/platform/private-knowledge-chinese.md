@@ -26,6 +26,6 @@
 
 ## 后续接入
 
-统一 CareerKnowledgePort、知识批次冻结、entitlement 撤销后的运行准入、专家技能加载及真实聊天 citation 持久化继续按产品规格实现。中文检索通过不代表这些能力或完整学生 engine 已接通。
+统一 CareerKnowledgePort 已实现内部准备绑定与读取，见 career-knowledge-port.md；知识绑定持久化、entitlement 撤销后的真实运行准入、专家技能加载及真实聊天 citation 持久化继续按产品规格实现。中文检索通过不代表这些能力或完整学生 engine 已接通。
 
 本切片的迁移仅在隔离测试 schema 验证，主开发库和当前预览没有应用迁移。合并与部署前仍需按环境检查迁移和检索；整个 P0 上线门槛保持开放。

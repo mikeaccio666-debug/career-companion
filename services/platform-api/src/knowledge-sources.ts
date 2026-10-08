@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { knowledgeHanBigrams, knowledgeHanSearch } from './knowledge-tokenization.ts';
 import { randomUUID } from 'node:crypto';
 import {
@@ -150,6 +151,13 @@ export class KnowledgeSources {
     });
   }
   async search(ownerId: string, value: unknown, signal?: AbortSignal): Promise<KnowledgeSearchResult> {
+    return this.searchUsing(this.db, ownerId, value, signal);
+  }
+  /** The authenticated consumer supplies its actual bounded transaction. */
+  async searchInTransaction(client: PoolClient, ownerId: string, value: unknown, signal?: AbortSignal): Promise<KnowledgeSearchResult> {
+    return this.searchUsing(client, ownerId, value, signal);
+  }
+  private async searchUsing(client: Pick<Database, 'query'>, ownerId: string, value: unknown, signal?: AbortSignal): Promise<KnowledgeSearchResult> {
     const input = parseKnowledgeSearchInput(value); aborted(signal);
     const queryTerms = input.query.split(/\s+/u);
     // Literal fallback preserves complete long/Chinese queries and escapes wildcard syntax.
@@ -158,7 +166,7 @@ export class KnowledgeSources {
     const fullText = queryTerms.every(term => /^[\p{L}\p{N}\p{M}-]+$/u.test(term));
     const han = knowledgeHanSearch(input.query);
     const requiredPatterns = han.requiredLiteral.map(term => `%${term.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
-    const found = await this.db.query(`WITH owned AS MATERIALIZED (
+    const found = await client.query(`WITH owned AS MATERIALIZED (
       SELECT id,title,source_label,source_url,revision,updated_at FROM platform_knowledge_sources WHERE user_id=$1 AND deleted_at IS NULL AND ($2::uuid[] IS NULL OR id=ANY($2::uuid[]))
     ), query AS (SELECT plainto_tsquery('simple',$3) AS value,
       CASE WHEN $7::text<>'' THEN to_tsquery('simple',$7) ELSE NULL::tsquery END AS han_value,
