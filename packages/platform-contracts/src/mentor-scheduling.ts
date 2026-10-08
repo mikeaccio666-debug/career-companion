@@ -18,15 +18,23 @@ export type MentorSchedulingCommand = Readonly<{
  userConfirmationRef:string;mentorConfirmationRef:string;confirmWithUser:true;confirmWithMentor:true;
 }> | Readonly<{
  action:'cancel_scheduled';operationId:string;sessionId:string;expectedRevision:3;occurredAt:string;evidenceRef:string;confirmRecorded:true;
+}> | Readonly<{
+ action:'complete';operationId:string;sessionId:string;expectedRevision:3;completedAt:string;evidenceRef:string;confirmRecorded:true;
 }>;
 export function parseMentorSchedulingCommand(input:unknown):MentorSchedulingCommand{
- const action=careerRecordObject(input,[],['action','operationId','sessionId','expectedRevision','confirmedAt','meetingUrl','userConfirmationRef','mentorConfirmationRef','confirmWithUser','confirmWithMentor','occurredAt','evidenceRef','confirmRecorded']).action;
+ const action=careerRecordObject(input,[],['action','operationId','sessionId','expectedRevision','confirmedAt','meetingUrl','userConfirmationRef','mentorConfirmationRef','confirmWithUser','confirmWithMentor','occurredAt','completedAt','evidenceRef','confirmRecorded']).action;
  if(action==='schedule'){
   const v=careerRecordObject(input,['action','operationId','sessionId','expectedRevision','confirmedAt','meetingUrl','userConfirmationRef','mentorConfirmationRef','confirmWithUser','confirmWithMentor']);
   if(v.expectedRevision!==2||v.confirmWithUser!==true||v.confirmWithMentor!==true)throw new CareerRecordInputError();
   return Object.freeze({action,operationId:careerRecordId(v.operationId),sessionId:careerRecordId(v.sessionId),expectedRevision:2,
    confirmedAt:mentorServiceTime(v.confirmedAt),meetingUrl:mentorMeetingUrl(v.meetingUrl),userConfirmationRef:careerRecordId(v.userConfirmationRef),
    mentorConfirmationRef:careerRecordId(v.mentorConfirmationRef),confirmWithUser:true,confirmWithMentor:true});
+ }
+ if(action==='complete'){
+  const v=careerRecordObject(input,['action','operationId','sessionId','expectedRevision','completedAt','evidenceRef','confirmRecorded']);
+  if(v.expectedRevision!==3||v.confirmRecorded!==true)throw new CareerRecordInputError();
+  return Object.freeze({action,operationId:careerRecordId(v.operationId),sessionId:careerRecordId(v.sessionId),expectedRevision:3,
+   completedAt:mentorServiceTime(v.completedAt),evidenceRef:careerRecordId(v.evidenceRef),confirmRecorded:true});
  }
  const v=careerRecordObject(input,['action','operationId','sessionId','expectedRevision','occurredAt','evidenceRef','confirmRecorded']);
  if(action!=='cancel_scheduled'||mentorServiceInteger(v.expectedRevision,3,3)!==3||v.confirmRecorded!==true)throw new CareerRecordInputError();

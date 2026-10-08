@@ -330,3 +330,5 @@ export * from './mentor-capacity.ts';
 export * from './mentor-orders.ts';
 
 export * from './mentor-scheduling.ts';
+
+export * from './mentor-ratings.ts';

@@ -39,11 +39,13 @@ export class MentorPayments {
     const evidence=await captureMentorReceiptEvidence(c,this.blobs,context.userId,cmd.evidenceRef,signal);
     let offer:Awaited<ReturnType<MentorServiceOffers['currentForStaffInTransaction']>>|null=null;
     if(cmd.action==='pay'){
-     if(!['matched','scheduled'].includes(r.status)||current.status!=='quoted')throw new ApiError(409,'MENTOR_PAYMENT_UNAVAILABLE','当前预约不可录入收款。');
+     if(!['matched','scheduled','completed'].includes(r.status)||current.status!=='quoted')throw new ApiError(409,'MENTOR_PAYMENT_UNAVAILABLE','当前预约不可录入收款。');
+     if(r.status!=='completed'){
      offer=await this.offers.currentForStaffInTransaction(c,context,org,r.offerId,signal);
      await this.capacity.confirmedInTransaction(c,context,org,r.assignment!.slotId,r.assignment!.slotRevision,signal);
      if(offer.kind!==r.kind||offer.durationMin!==r.durationMin||current.priceCents>offer.priceCents||r.assignment!.startsAt<offer.earliestSlotAt!)
       throw new ApiError(409,'MENTOR_PAYMENT_SOURCE_CHANGED','服务、导师或价格已有变化，请先重新确认。');
+     }
     }
     const order=await this.orders.settleInTransaction(c,context,current,cmd,evidence,policyEvidence,this.days,signal);
     await this.intents.revalidateFinanceOwner(c,r.ownerId,accepted.authVersion,signal);

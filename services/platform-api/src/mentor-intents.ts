@@ -32,9 +32,9 @@ interface SessionRow {
   mentor_id:string|null;order_id:string|null;packet_id:string|null;scheduled_at:Date|null;review_id:string|null;
   revision:number;last_operation_id:string;created_at:Date;updated_at:Date;payload_ciphertext:Buffer;
 }
-interface OperationRow {user_id:string;org_id:string;operation_id:string;session_id:string;action:'create'|'cancel'|'match'|'schedule'|'cancel_scheduled';applied_revision:number;created_at:Date;receipt_ciphertext:Buffer;}
+interface OperationRow {user_id:string;org_id:string;operation_id:string;session_id:string;action:'create'|'cancel'|'match'|'schedule'|'cancel_scheduled'|'complete';applied_revision:number;created_at:Date;receipt_ciphertext:Buffer;}
 interface Receipt {
-  schemaVersion:1|2|3;ownerId:string;orgId:string;operationId:string;sessionId:string;action:'create'|'cancel'|'match'|'schedule'|'cancel_scheduled';appliedRevision:number;
+  schemaVersion:1|2|3;ownerId:string;orgId:string;operationId:string;sessionId:string;action:'create'|'cancel'|'match'|'schedule'|'cancel_scheduled'|'complete';appliedRevision:number;
   command:unknown;commandDigest:string;recordDigest:string;acceptedAuthVersion:string;createdAt:string;acceptedOffer:MentorServiceOffer|null;actorId?:string;actorAuthVersion?:string;acceptedCapacity?:Readonly<ConfirmedMentorCapacity>;confirmationEvidence?:readonly Readonly<MentorReceiptEvidence>[];
 }
 export interface MentorIntentOperation {readonly id:string;readonly sessionId:string;readonly appliedRevision:number;readonly replayed:boolean;}
@@ -57,7 +57,7 @@ export class MentorIntents {
     try {
       const v=careerRecordObject(this.open('mentor_intent_operation',row.operation_id,row.user_id,row.applied_revision,row.receipt_ciphertext),
         ['schemaVersion','ownerId','orgId','operationId','sessionId','action','appliedRevision','command','commandDigest','recordDigest','acceptedAuthVersion','createdAt','acceptedOffer'],['actorId','actorAuthVersion','acceptedCapacity','confirmationEvidence']);
-      const isScheduling=row.action==='schedule'||row.action==='cancel_scheduled';
+      const isScheduling=row.action==='schedule'||row.action==='cancel_scheduled'||row.action==='complete';
       if((isScheduling?v.schemaVersion!==3:row.action==='match'?v.schemaVersion!==2:v.schemaVersion!==1)||v.ownerId!==row.user_id||v.orgId!==row.org_id||v.operationId!==row.operation_id||v.sessionId!==row.session_id||
         v.action!==row.action||v.appliedRevision!==row.applied_revision||v.createdAt!==row.created_at.toISOString()||
         typeof v.acceptedAuthVersion!=='string'||!/^\d+$/.test(v.acceptedAuthVersion)||typeof v.recordDigest!=='string'||!/^[0-9a-f]{64}$/.test(v.recordDigest))throw Error();
@@ -70,7 +70,7 @@ export class MentorIntents {
           !Array.isArray(v.confirmationEvidence)||v.confirmationEvidence.length!==(cmd.action==='schedule'?2:1))throw Error();
         const actorId=careerRecordId(v.actorId),evidence=v.confirmationEvidence.map(parseMentorReceiptEvidence),at=row.created_at.toISOString();
         if(evidence.some(e=>e.ownerId!==actorId)||cmd.action==='schedule'&&(evidence[0].ref!==cmd.userConfirmationRef||evidence[1].ref!==cmd.mentorConfirmationRef||cmd.confirmedAt>at)||
-          cmd.action==='cancel_scheduled'&&(evidence[0].ref!==cmd.evidenceRef||cmd.occurredAt>at||v.acceptedCapacity!==undefined))throw Error();
+          cmd.action!=='schedule'&&(evidence[0].ref!==cmd.evidenceRef||(cmd.action==='complete'?cmd.completedAt:cmd.occurredAt)>at||v.acceptedCapacity!==undefined))throw Error();
         const capacity=cmd.action==='schedule'?parseConfirmedMentorCapacity(v.acceptedCapacity):undefined;
         return {...v,command:cmd,actorId,confirmationEvidence:evidence,...(capacity?{acceptedCapacity:capacity}:{})} as unknown as Receipt;
       }
@@ -109,7 +109,7 @@ export class MentorIntents {
         accepted.kind!==r.kind||accepted.durationMin!==r.durationMin)throw Error();
       const match=proofs.find(p=>p.action==='match');
       if(r.assignment){
-        if(!match||match.appliedRevision!==2||r.status==='matched'&&last.action!=='match'||r.status==='scheduled'&&last.action!=='schedule'||
+        if(!match||match.appliedRevision!==2||r.status==='matched'&&last.action!=='match'||r.status==='scheduled'&&last.action!=='schedule'||r.status==='completed'&&last.action!=='complete'||
           r.status==='cancelled'&&last.action!==(r.scheduled?'cancel_scheduled':'cancel')||!r.orderId||!r.mentorId)throw Error();
         const source=match.acceptedCapacity!,cmd=parseMentorMatchCommand(match.command),a=r.assignment;
         if(source.profile.mentorId!==r.mentorId||source.profile.displayName!==a.mentorDisplayName||source.profile.recordId!==a.profileId||source.profileRevision!==a.profileRevision||
@@ -124,6 +124,8 @@ export class MentorIntents {
             r.scheduled.confirmedAt<a.matchedAt||scheduling.createdAt>=a.startsAt)throw Error();
           if(r.status==='cancelled'){const cancelled=parseMentorSchedulingCommand(last.command);
             if(cancelled.action!=='cancel_scheduled'||cancelled.occurredAt<scheduling.createdAt)throw Error();}
+          if(r.status==='completed'){const completed=parseMentorSchedulingCommand(last.command);
+            if(completed.action!=='complete'||completed.completedAt!==r.completedAt||completed.completedAt<a.endsAt)throw Error();}
         }else if(scheduling)throw Error();
         const order=await this.orders.readInTransaction(c,r.ownerId,r.orderId,match.operationId),reservation=await this.reservations.readInTransaction(c,r.ownerId,r.id);
         if(order.sessionId!==r.id||order.organizationId!==r.organizationId||order.offerId!==r.offerId||order.offerRevision!==r.offerRevision||order.priceCents!==cmd.priceCents||
@@ -133,7 +135,7 @@ export class MentorIntents {
           reservation.slotId!==a.slotId||reservation.slotRevision!==a.slotRevision||reservation.startsAt!==source.slot.startsAt||reservation.endsAt!==source.slot.endsAt||
           reservation.lastOperationId!==(r.status==='cancelled'?r.lastOperationId:match.operationId)||
           reservation.updatedAt!==(r.status==='cancelled'?r.updatedAt:match.createdAt)||(r.status==='cancelled'?reservation.status!=='released':reservation.status!=='held'))throw Error();
-      }else if(match||r.scheduled||r.status==='matched'||r.status==='scheduled'||last.action!==(r.status==='requested'?'create':'cancel'))throw Error();
+      }else if(match||r.scheduled||r.status==='matched'||r.status==='scheduled'||r.status==='completed'||last.action!==(r.status==='requested'?'create':'cancel'))throw Error();
       return r;
     }catch{throw unavailable();}
   }
@@ -301,7 +303,7 @@ export class MentorIntents {
     return this.staff.readWithAccess<Readonly<{sessionId:string;status:MentorIntent['status'];revision:number;appliedRevision:number;replayed:boolean}>>(context,org,
       {roles:['ops','org_admin'],action:'mentor_schedule_recorded',targetId:cmd.sessionId},async c=>{
       await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['mentor_scheduling:'+org+':'+cmd.operationId]);
-      const old=(await c.query<OperationRow>("SELECT * FROM platform_mentor_intent_operations WHERE org_id=$1 AND operation_id=$2 AND action IN ('schedule','cancel_scheduled') FOR SHARE",[org,cmd.operationId])).rows[0];
+      const old=(await c.query<OperationRow>("SELECT * FROM platform_mentor_intent_operations WHERE org_id=$1 AND operation_id=$2 AND action IN ('schedule','cancel_scheduled','complete') FOR SHARE",[org,cmd.operationId])).rows[0];
       if(old){const p=this.receipt(old);
         if(p.sessionId!==cmd.sessionId||p.action!==cmd.action||p.actorId!==context.userId||p.commandDigest!==digest(cmd))throw new ApiError(409,'MENTOR_INTENT_OPERATION_CONFLICT','操作编号已用于其他请求。');
         await this.store.authorizeAccount(c,p.ownerId,undefined,signal);const current=await this.read(c,p.ownerId,p.sessionId);
@@ -318,10 +320,11 @@ export class MentorIntents {
           await captureMentorReceiptEvidence(c,this.blobs,context.userId,cmd.mentorConfirmationRef,signal,'scheduling'));
       }else evidence.push(await captureMentorReceiptEvidence(c,this.blobs,context.userId,cmd.evidenceRef,signal,'scheduling'));
       const at=await this.at(c);
-      if(cmd.action==='schedule'&&(cmd.confirmedAt<current.assignment!.matchedAt||cmd.confirmedAt>at||current.assignment!.startsAt<=at)||
+      if(cmd.action==='complete'&&(cmd.completedAt<current.assignment!.endsAt||cmd.completedAt>at)||
+        cmd.action==='schedule'&&(cmd.confirmedAt<current.assignment!.matchedAt||cmd.confirmedAt>at||current.assignment!.startsAt<=at)||
         cmd.action==='cancel_scheduled'&&(cmd.occurredAt<current.updatedAt||cmd.occurredAt>at))throw new ApiError(409,'MENTOR_SCHEDULING_TIME_INVALID','确认时间与真实预约记录不一致。');
-      const record=parseMentorIntent({...current,status:cmd.action==='schedule'?'scheduled':'cancelled',revision:current.revision+1,updatedAt:at,lastOperationId:cmd.operationId,
-        ...(cmd.action==='schedule'?{scheduled:{confirmedAt:cmd.confirmedAt,meetingUrl:cmd.meetingUrl}}:{})});
+      const record=parseMentorIntent({...current,status:cmd.action==='schedule'?'scheduled':cmd.action==='complete'?'completed':'cancelled',revision:current.revision+1,updatedAt:at,lastOperationId:cmd.operationId,
+        ...(cmd.action==='schedule'?{scheduled:{confirmedAt:cmd.confirmedAt,meetingUrl:cmd.meetingUrl}}:cmd.action==='complete'?{completedAt:cmd.completedAt}:{})});
       if(cmd.action==='cancel_scheduled'){await this.reservations.releaseInTransaction(c,record,signal);await this.orders.voidInTransaction(c,record,signal);}
       const actorAuthVersion=String((await c.query('SELECT auth_version FROM platform_users WHERE id=$1',[context.userId])).rows[0].auth_version);
       const receipt:Receipt={schemaVersion:3,ownerId:record.ownerId,orgId:org,operationId:cmd.operationId,sessionId:record.id,action:cmd.action,appliedRevision:record.revision,
@@ -347,6 +350,11 @@ export class MentorIntents {
     const record=await this.decode(c,row);if(!record.orderId||!record.assignment)throw new ApiError(409,'MENTOR_PAYMENT_UNAVAILABLE','请先完成真实导师匹配和报价。');
     const original=(await c.query<OperationRow>("SELECT * FROM platform_mentor_intent_operations WHERE user_id=$1 AND session_id=$2 AND action='match' FOR SHARE",[record.ownerId,record.id])).rows[0];
     const match=this.receipt(original);return Object.freeze({record,authVersion,capacity:match.acceptedCapacity!,quoteOperationId:match.operationId});
+  }
+  async ownedInTransaction(c:PoolClient,session:FixedSessionContext,id:string,signal?:AbortSignal){
+    const context=fixed(session);await this.store.authorizeSession(c,context,signal);
+    const record=await this.read(c,context.userId,careerRecordId(id));
+    await this.store.authorizeSession(c,context,signal);return record;
   }
   async revalidateFinanceOwner(c:PoolClient,owner:string,version:string,signal?:AbortSignal){await this.store.authorizeAccount(c,owner,version,signal);}
   async getOrder(session:FixedSessionContext,id:string,signal?:AbortSignal){
