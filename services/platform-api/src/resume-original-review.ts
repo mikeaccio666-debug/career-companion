@@ -17,6 +17,7 @@ const changed=()=>new ApiError(409,'PENDING_ITEM_CHANGED','The content changed. 
 const canonical=(value:unknown)=>JSON.stringify(value,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 type Action=ResumeReviewAction|'expire'|'supersede';
 interface Receipt {schemaVersion:1;ownerId:string;operationId:string;itemId:string;action:Action;generation:number;requestDigest:string;recordDigest:string|null;acceptedAuthVersion:string;createdAt:string;}
+interface PreparationProofs {latest:Map<string,any>;resumes:Map<string,any>;payloads:Map<string,any>;decisions:Map<string,any>;approvals:Map<string,any>;}
 /** Owner originals only. Nothing here generates model facts, executes a
  * delivery, registers tools or records a fake expert/model authorization. */
 export class ResumeOriginalReview {
@@ -32,20 +33,20 @@ export class ResumeOriginalReview {
  }
  private async latest(client:PoolClient,context:FixedSessionContext,id:string){const row=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND item_id=$2 ORDER BY generation DESC LIMIT 1 FOR SHARE',[context.userId,id])).rows[0];if(!row)throw unavailable();return this.receipt(client,context,row);}
  private async row(client:PoolClient,context:FixedSessionContext,id:string,byResume=false){return (await client.query(byResume?'SELECT p.* FROM platform_pending_items p JOIN platform_career_resume_versions r ON r.pending_item_id=p.id AND r.user_id=p.user_id WHERE p.user_id=$1 AND r.id=$2 FOR UPDATE OF p':'SELECT * FROM platform_pending_items WHERE user_id=$1 AND id=$2 FOR UPDATE',[context.userId,id])).rows[0];}
- private async payload(client:PoolClient,context:FixedSessionContext,id:string,revision:number):Promise<Readonly<ResumeReviewPayload>>{
-  try{const row=(await client.query('SELECT * FROM platform_pending_item_revisions WHERE user_id=$1 AND item_id=$2 AND revision=$3 FOR SHARE',[context.userId,id,revision])).rows[0];if(!row)throw unavailable();
+ private async payload(client:PoolClient,context:FixedSessionContext,id:string,revision:number,proofs?:PreparationProofs):Promise<Readonly<ResumeReviewPayload>>{
+  try{const row=proofs?proofs.payloads.get(id+':'+revision):(await client.query('SELECT * FROM platform_pending_item_revisions WHERE user_id=$1 AND item_id=$2 AND revision=$3 FOR SHARE',[context.userId,id,revision])).rows[0];if(!row)throw unavailable();
    const raw=this.storage.crypto!.openUtf8(row.ciphertext,{table:'platform_pending_item_revisions',column:'ciphertext',rowId:id,ownerId:context.userId,revision}),payload=validateOwnerResumePayload(JSON.parse(raw));
    if(canonical(payload)!==raw||payload.source_refs[0].id!==id||row.author!=='user'||row.payload_digest!==workflowHash(payload)||row.base_revision!==(revision===1?null:revision-1))throw unavailable();return payload;
   }catch{throw unavailable();}
  }
- private async decode(client:PoolClient,context:FixedSessionContext,row:any):Promise<Readonly<ResumeReviewView>>{
-  try{const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:'platform_pending_items',column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.generation}),item=parseResumeReviewItem(JSON.parse(raw)),latest=await this.latest(client,context,row.id);
+ private async decode(client:PoolClient,context:FixedSessionContext,row:any,proofs?:PreparationProofs):Promise<Readonly<ResumeReviewView>>{
+  try{const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:'platform_pending_items',column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.generation}),item=parseResumeReviewItem(JSON.parse(raw)),latest=proofs?await this.receipt(client,context,proofs.latest.get(row.id)):await this.latest(client,context,row.id);
    if(canonical(item)!==raw||item.id!==row.id||item.ownerId!==context.userId||item.kind!==row.kind||item.status!==row.status||item.finalAction!==row.final_action||item.track!==row.track||item.revision!==row.current_revision||item.generation!==row.generation||item.lastOperationId!==row.last_operation_id||item.createdAt!==row.created_at.toISOString()||item.updatedAt!==row.updated_at.toISOString()||item.expiresAt!==row.expires_at.toISOString()||latest.action==='delete'||latest.generation!==item.generation||latest.operationId!==item.lastOperationId||latest.recordDigest!==workflowHash(item)||latest.createdAt!==item.updatedAt)throw unavailable();
-   const resume=(await client.query('SELECT * FROM platform_career_resume_versions WHERE user_id=$1 AND id=$2 FOR SHARE',[context.userId,item.resumeVersionId])).rows[0];
+   const resume=proofs?proofs.resumes.get(item.resumeVersionId):(await client.query('SELECT * FROM platform_career_resume_versions WHERE user_id=$1 AND id=$2 FOR SHARE',[context.userId,item.resumeVersionId])).rows[0];
    if(!resume||resume.pending_item_id!==item.id||resume.track!==item.track||resume.status!==item.resumeStatus||resume.source!==item.source||resume.upload_id!==null||resume.revision!==item.revision||resume.content_digest!==item.payloadDigest||resume.created_at.toISOString()!==item.createdAt||resume.updated_at.toISOString()!==item.updatedAt)throw unavailable();
-   const payload=await this.payload(client,context,item.id,item.revision);if(workflowHash(payload)!==item.payloadDigest)throw unavailable();await this.payload(client,context,item.id,1);
+   const payload=await this.payload(client,context,item.id,item.revision,proofs);if(workflowHash(payload)!==item.payloadDigest)throw unavailable();await this.payload(client,context,item.id,1,proofs);
    if(item.status==='approved'){
-    const decision=(await client.query('SELECT * FROM platform_pending_item_decisions WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,item.approvalOperationId])).rows[0],receiptRow=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,item.approvalOperationId])).rows[0];
+    const decision=proofs?proofs.decisions.get(item.approvalOperationId!):(await client.query('SELECT * FROM platform_pending_item_decisions WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,item.approvalOperationId])).rows[0],receiptRow=proofs?proofs.approvals.get(item.approvalOperationId!):(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,item.approvalOperationId])).rows[0];
     if(!decision||!receiptRow)throw unavailable();const proof=await this.receipt(client,context,receiptRow);
     if(proof.itemId!==item.id||proof.action!=='approve'||proof.createdAt!==item.approvedAt||decision.item_id!==item.id||decision.generation!==proof.generation||decision.revision!==item.approvedRevision||decision.payload_digest!==item.approvedDigest||decision.decision!=='approved'||decision.channel!=='web'||decision.created_at.toISOString()!==item.approvedAt)throw unavailable();
    }
@@ -78,10 +79,22 @@ export class ResumeOriginalReview {
   const context=this.fixed(value);await this.authorize(client,context,signal);await this.storage.authorizeSession(client,context,signal);
   const rows=(await client.query('SELECT * FROM platform_pending_items WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[context.userId])).rows;
   if(rows.length>500)throw unavailable();
+  const ids=rows.map(r=>r.id);
+  // All proofs come from this real transaction, never caller-provided DTOs.
+  // The latest operation is selected independently of the mutable projection.
+  const latest=(await client.query('SELECT o.* FROM unnest($2::uuid[]) c(id) JOIN LATERAL (SELECT operation_id FROM platform_pending_item_operations WHERE user_id=$1 AND item_id=c.id ORDER BY generation DESC LIMIT 1) chosen ON true JOIN platform_pending_item_operations o ON o.user_id=$1 AND o.operation_id=chosen.operation_id FOR SHARE OF o',[context.userId,ids])).rows;
+  const versions=(await client.query('SELECT * FROM platform_career_resume_versions WHERE user_id=$1 AND pending_item_id=ANY($2::uuid[]) FOR SHARE',[context.userId,ids])).rows;
+  const payloads=(await client.query('SELECT r.* FROM platform_pending_item_revisions r JOIN platform_pending_items p ON p.user_id=r.user_id AND p.id=r.item_id WHERE r.user_id=$1 AND r.item_id=ANY($2::uuid[]) AND (r.revision=1 OR r.revision=p.current_revision) FOR SHARE OF r',[context.userId,ids])).rows;
+  // At most one decision per generation; fetch only the actual first approval
+  // named in the authenticated metadata, not all historical decisions.
+  let approvalIds:string[];try{approvalIds=rows.map(row=>{signal?.throwIfAborted();const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:'platform_pending_items',column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.generation});return parseResumeReviewItem(JSON.parse(raw)).approvalOperationId;}).filter((id):id is string=>id!==null);}catch(error){signal?.throwIfAborted();throw unavailable();}
+  const decisions=(await client.query('SELECT * FROM platform_pending_item_decisions WHERE user_id=$1 AND operation_id=ANY($2::uuid[]) FOR SHARE',[context.userId,approvalIds])).rows;
+  const approvals=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND operation_id=ANY($2::uuid[]) FOR SHARE',[context.userId,approvalIds])).rows;
+  const proofs:PreparationProofs={latest:new Map(latest.map(r=>[r.item_id,r])),resumes:new Map(versions.map(r=>[r.id,r])),payloads:new Map(payloads.map(r=>[r.item_id+':'+r.revision,r])),decisions:new Map(decisions.map(r=>[r.operation_id,r])),approvals:new Map(approvals.map(r=>[r.operation_id,r]))};
   const labels={swe:'软件工程',mle:'机器学习工程',ds:'数据科学',da:'数据分析',de:'数据工程',hw:'硬件等本专业方向',other:'其他方向'};
   const records:Readonly<OwnedCareerResume>[]=[];
   for(const row of rows){
-   signal?.throwIfAborted();const {item}=await this.decode(client,context,row);
+   signal?.throwIfAborted();const {item}=await this.decode(client,context,row,proofs);
    if(item.status!=='approved'||item.resumeStatus!=='active')continue;
    records.push(Object.freeze({ownerId:context.userId,id:item.resumeVersionId,revision:item.revision,state:'current',status:'active',track:item.track,approvedAt:item.approvedAt!,normalSummary:'本人已确认的简历；岗位方向：'+labels[item.track]+'。'}));
   }

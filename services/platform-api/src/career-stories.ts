@@ -16,6 +16,8 @@ const missing=()=>new ApiError(404,'NOT_FOUND','The saved experience was not fou
 const changed=()=>new ApiError(409,'CAREER_LIBRARY_REVISION_CHANGED','Read the current experience before changing it.');
 const canonical=(v:unknown)=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 interface Receipt {schemaVersion:1;ownerId:string;operationId:string;recordKind:CareerLibraryKind;recordId:string;action:CareerLibraryAction;commandDigest:string;appliedRevision:number;acceptedAuthVersion:string;createdAt:string;}
+interface PreparationProofs {latest:Map<string,any>;confirmed:Map<string,any>;withdrawn:Map<string,any>;}
+const proofKey=(kind:CareerLibraryKind,id:string)=>kind+':'+id;
 /** Owner facts and story decisions only. This does not produce expert proposals,
  * source safety classification, model use, mentor review or execution permission. */
 export class CareerStories {
@@ -30,11 +32,11 @@ export class CareerStories {
   if(canonical(r)!==raw||r.schemaVersion!==1||r.ownerId!==context.userId||r.operationId!==row.operation_id||r.recordKind!==row.record_kind||r.recordId!==row.record_id||r.action!==row.action||r.appliedRevision!==row.applied_revision||r.createdAt!==row.created_at.toISOString()||typeof r.commandDigest!=='string'||!/^[0-9a-f]{64}$/.test(r.commandDigest)||typeof r.acceptedAuthVersion!=='string'||!/^(0|[1-9][0-9]*)$/.test(r.acceptedAuthVersion))throw unavailable();return r as unknown as Receipt;
  }catch{throw unavailable();}}
  private async latest(client:PoolClient,context:FixedSessionContext,kind:CareerLibraryKind,id:string){const row=(await client.query('SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND record_kind=$2 AND record_id=$3 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE',[context.userId,kind,id])).rows[0];if(!row)throw unavailable();return this.receipt(client,context,row);}
- private async record(client:PoolClient,context:FixedSessionContext,kind:CareerLibraryKind,row:any):Promise<Readonly<CareerLibraryRecord>>{try{
-  const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:tables[kind],column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.revision}),record=kind==='project'?parseCareerProject(JSON.parse(raw)):parseCareerStory(JSON.parse(raw)),latest=await this.latest(client,context,kind,row.id);
+ private async record(client:PoolClient,context:FixedSessionContext,kind:CareerLibraryKind,row:any,proofs?:PreparationProofs):Promise<Readonly<CareerLibraryRecord>>{try{
+  const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:tables[kind],column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.revision}),record=kind==='project'?parseCareerProject(JSON.parse(raw)):parseCareerStory(JSON.parse(raw)),latest=proofs?await this.receipt(client,context,proofs.latest.get(proofKey(kind,row.id))):await this.latest(client,context,kind,row.id);
   if(canonical(record)!==raw||record.id!==row.id||record.ownerId!==context.userId||record.revision!==row.revision||record.createdAt!==row.created_at.toISOString()||record.updatedAt!==row.updated_at.toISOString()||record.sensitivity!==row.sensitivity||record.lastOperationId!==row.last_operation_id||row.record_kind!==kind||latest.action==='delete'||latest.appliedRevision!==record.revision||latest.operationId!==record.lastOperationId||latest.createdAt!==record.updatedAt)throw unavailable();
-  if(kind==='project'){const p=record as CareerProject;if(p.kind!==row.kind||p.state!==row.state||p.verification!==row.verification||row.mentor_review!==null)throw unavailable();if(p.state==='active'){if(row.withdrawn_at!==null)throw unavailable();}else{const r=(await client.query("SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND record_kind='project' AND record_id=$2 AND action='withdraw' ORDER BY applied_revision DESC LIMIT 1 FOR SHARE",[context.userId,p.id])).rows[0];if(!r)throw unavailable();const withdrawal=await this.receipt(client,context,r);if(withdrawal.appliedRevision>p.revision||withdrawal.createdAt!==row.withdrawn_at?.toISOString())throw unavailable();}}else if((record as CareerStory).status!==row.status)throw unavailable();
-  if(record.confirmedRevision!==null){const row=(await client.query('SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND record_kind=$2 AND record_id=$3 AND applied_revision=$4 FOR SHARE',[context.userId,kind,record.id,record.confirmedRevision])).rows[0];if(!row)throw unavailable();const confirmation=await this.receipt(client,context,row);if(confirmation.action!=='confirm'||confirmation.createdAt!==record.confirmedAt)throw unavailable();}
+  if(kind==='project'){const p=record as CareerProject;if(p.kind!==row.kind||p.state!==row.state||p.verification!==row.verification||row.mentor_review!==null)throw unavailable();if(p.state==='active'){if(row.withdrawn_at!==null)throw unavailable();}else{const r=proofs?proofs.withdrawn.get(p.id):(await client.query("SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND record_kind='project' AND record_id=$2 AND action='withdraw' ORDER BY applied_revision DESC LIMIT 1 FOR SHARE",[context.userId,p.id])).rows[0];if(!r)throw unavailable();const withdrawal=await this.receipt(client,context,r);if(withdrawal.appliedRevision>p.revision||withdrawal.createdAt!==row.withdrawn_at?.toISOString())throw unavailable();}}else if((record as CareerStory).status!==row.status)throw unavailable();
+  if(record.confirmedRevision!==null){const row=proofs?proofs.confirmed.get(proofKey(kind,record.id)):(await client.query('SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND record_kind=$2 AND record_id=$3 AND applied_revision=$4 FOR SHARE',[context.userId,kind,record.id,record.confirmedRevision])).rows[0];if(!row)throw unavailable();const confirmation=await this.receipt(client,context,row);if(confirmation.action!=='confirm'||confirmation.createdAt!==record.confirmedAt)throw unavailable();}
   return record;
  }catch{throw unavailable();}}
  private async row(client:PoolClient,context:FixedSessionContext,kind:CareerLibraryKind,id:string){return (await client.query('SELECT * FROM '+tables[kind]+' WHERE user_id=$1 AND id=$2 FOR UPDATE',[context.userId,id])).rows[0];}
@@ -65,15 +67,27 @@ export class CareerStories {
   const projectRows=(await client.query('SELECT * FROM platform_career_evidence WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[context.userId])).rows;
   const storyRows=(await client.query('SELECT * FROM platform_career_stories WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[context.userId])).rows;
   if(projectRows.length>500||storyRows.length>500)throw unavailable();
+  // Fetch bounded immutable proofs together; each record still authenticates
+  // its own ciphertext, current maximum revision and actual confirmation.
+  const kinds:string[]=[],ids:string[]=[],confirmed:number[]=[];
+  try{for(const [kind,rows] of [['project',projectRows],['story',storyRows]] as const)for(const row of rows){signal?.throwIfAborted();
+   const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:tables[kind],column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.revision});
+   const r=kind==='project'?parseCareerProject(JSON.parse(raw)):parseCareerStory(JSON.parse(raw));kinds.push(kind);ids.push(row.id);confirmed.push(r.confirmedRevision??0);
+  }
+  }catch(error){signal?.throwIfAborted();throw unavailable();}
+  const latest=(await client.query("SELECT o.* FROM unnest($2::text[],$3::uuid[]) c(kind,id) JOIN LATERAL (SELECT operation_id FROM platform_career_library_operations WHERE user_id=$1 AND record_kind=c.kind AND record_id=c.id ORDER BY applied_revision DESC LIMIT 1) chosen ON true JOIN platform_career_library_operations o ON o.user_id=$1 AND o.operation_id=chosen.operation_id FOR SHARE OF o",[context.userId,kinds,ids])).rows;
+  const confirmations=(await client.query("SELECT o.* FROM unnest($2::text[],$3::uuid[],$4::int[]) c(kind,id,revision) JOIN platform_career_library_operations o ON o.user_id=$1 AND o.record_kind=c.kind AND o.record_id=c.id AND o.applied_revision=c.revision FOR SHARE OF o",[context.userId,kinds,ids,confirmed])).rows;
+  const withdrawals=(await client.query("SELECT o.* FROM unnest($2::uuid[]) c(id) JOIN LATERAL (SELECT operation_id FROM platform_career_library_operations WHERE user_id=$1 AND record_kind='project' AND record_id=c.id AND action='withdraw' ORDER BY applied_revision DESC LIMIT 1) chosen ON true JOIN platform_career_library_operations o ON o.user_id=$1 AND o.operation_id=chosen.operation_id FOR SHARE OF o",[context.userId,projectRows.filter(r=>r.state==='withdrawn').map(r=>r.id)])).rows;
+  const proofs:PreparationProofs={latest:new Map(latest.map(r=>[proofKey(r.record_kind,r.record_id),r])),confirmed:new Map(confirmations.map(r=>[proofKey(r.record_kind,r.record_id),r])),withdrawn:new Map(withdrawals.map(r=>[r.record_id,r]))};
   const projects=new Map<string,Readonly<CareerProject>>(),evidence:Readonly<OwnedCareerEvidence>[]=[],stories:Readonly<OwnedCareerInput>[]=[];
   const labels={course_project:'课程项目',independent_project:'独立项目',internship:'实习',employment:'工作经历',volunteering:'志愿经历',other:'其他经历'};
   for(const row of projectRows){
-   signal?.throwIfAborted();const p=await this.record(client,context,'project',row) as Readonly<CareerProject>;projects.set(p.id,p);
+   signal?.throwIfAborted();const p=await this.record(client,context,'project',row,proofs) as Readonly<CareerProject>;projects.set(p.id,p);
    if(p.state!=='active'||p.sensitivity!=='normal')continue;
    evidence.push(Object.freeze({ownerId:context.userId,id:p.id,revision:p.revision,state:'current',kind:'project',normalSummary:'经历类型：'+labels[p.experienceKind]+'；事实状态：'+(p.verification==='user_confirmed'?'本人已确认':'本人填写，待确认')+'。'}));
   }
   for(const row of storyRows){
-   signal?.throwIfAborted();const s=await this.record(client,context,'story',row) as Readonly<CareerStory>;
+   signal?.throwIfAborted();const s=await this.record(client,context,'story',row,proofs) as Readonly<CareerStory>;
    if(s.status!=='confirmed'||s.sensitivity!=='normal')continue;
    if(s.projects.some(ref=>{const p=projects.get(ref.id);return !p||p.state!=='active'||p.revision!==ref.revision||p.verification!=='user_confirmed'||p.sensitivity!=='normal'||p.experienceKind!==s.experienceKind;}))continue;
    stories.push(Object.freeze({ownerId:context.userId,id:s.id,revision:s.revision,state:'current',normalSummary:'经历类型：'+labels[s.experienceKind]+'；故事状态：本人已确认；关联事实为当前确认版本。'}));
