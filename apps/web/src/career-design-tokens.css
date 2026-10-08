@@ -1,0 +1,119 @@
+/* Shared tokens: docs/product/08-design-system.md §§2–4. */
+:is(.career-surface, .onboarding-page, .onboarding-safety, .companion-preview, .companion-naming) {
+  --paper: #F1F3F7;
+  --sheet: #FCFDFE;
+  --tint: #E6EAF1;
+  --ink: #15223A;
+  --ink-2: #46536A;
+  --ink-3: #5D6A80;
+  --ink-4: #7A869C;
+  --rule: #D8DEE8;
+  --stamp: #C0352A;
+  --stamp-tint: #F6E5E2;
+  --air: #28488E;
+  --air-tint: #E4EAF5;
+  --warn: #93600F;
+  --warn-tint: #F5EBD8;
+  --ok: #2C7454;
+  --ok-tint: #E0EEE6;
+  --member-guide: #6A4B96;
+  --member-applier: #555F71;
+  --member-interviewer: #93600F;
+  --member-planner: #28488E;
+  --member-coach: #2C7454;
+  --member-networker: #1B6E7E;
+  --companion-yanzhi: #95425F;
+  --companion-zheshi: #86503A;
+  --companion-ganlan: #53650F;
+  --companion-jiangzi: #8D4572;
+  --companion-dai: #4D635B;
+  --companion-yanzi: #70566E;
+  --companion-hehui: #695B53;
+  --shadow: rgba(21,34,58,.30);
+  --scrim: rgba(13,19,30,.48);
+  --focus: var(--air); --member-companion: var(--companion-dai);
+  --f-ui: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --f-letter: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  --f-num: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--f-ui); color: var(--ink); color-scheme: light; font-synthesis: none; line-break: strict;
+}
+@media (prefers-color-scheme: dark) {
+  :where(:root:not([data-theme="light"])) :is(.career-surface, .onboarding-page, .onboarding-safety, .companion-preview, .companion-naming) {
+  color-scheme: dark;
+  --paper: #0D131E;
+  --sheet: #141C2A;
+  --tint: #1B2437;
+  --ink: #E5E9F0;
+  --ink-2: #A8B2C3;
+  --ink-3: #808CA1;
+  --ink-4: #717D94;
+  --rule: #243049;
+  --stamp: #E2685D;
+  --stamp-tint: #3A2024;
+  --air: #89A5E8;
+  --air-tint: #1A2540;
+  --warn: #E2AE5B;
+  --warn-tint: #3A2E18;
+  --ok: #6BC39A;
+  --ok-tint: #173326;
+  --member-guide: #B597E2;
+  --member-applier: #A0AABB;
+  --member-interviewer: #E2AE5B;
+  --member-planner: #89A5E8;
+  --member-coach: #6BC39A;
+  --member-networker: #5CBBCB;
+  --companion-yanzhi: #F094B0;
+  --companion-zheshi: #DFA187;
+  --companion-ganlan: #A7B760;
+  --companion-jiangzi: #E597C5;
+  --companion-dai: #9CB4AC;
+  --companion-yanzi: #C4A6C1;
+  --companion-hehui: #BCACA3;
+  --shadow: rgba(0,0,0,.55);
+  --scrim: rgba(0,0,0,.60);
+  }
+}
+:where(:root[data-theme="dark"]) :is(.career-surface, .onboarding-page, .onboarding-safety, .companion-preview, .companion-naming) {
+  color-scheme: dark;
+  --paper: #0D131E;
+  --sheet: #141C2A;
+  --tint: #1B2437;
+  --ink: #E5E9F0;
+  --ink-2: #A8B2C3;
+  --ink-3: #808CA1;
+  --ink-4: #717D94;
+  --rule: #243049;
+  --stamp: #E2685D;
+  --stamp-tint: #3A2024;
+  --air: #89A5E8;
+  --air-tint: #1A2540;
+  --warn: #E2AE5B;
+  --warn-tint: #3A2E18;
+  --ok: #6BC39A;
+  --ok-tint: #173326;
+  --member-guide: #B597E2;
+  --member-applier: #A0AABB;
+  --member-interviewer: #E2AE5B;
+  --member-planner: #89A5E8;
+  --member-coach: #6BC39A;
+  --member-networker: #5CBBCB;
+  --companion-yanzhi: #F094B0;
+  --companion-zheshi: #DFA187;
+  --companion-ganlan: #A7B760;
+  --companion-jiangzi: #E597C5;
+  --companion-dai: #9CB4AC;
+  --companion-yanzi: #C4A6C1;
+  --companion-hehui: #BCACA3;
+  --shadow: rgba(0,0,0,.55);
+  --scrim: rgba(0,0,0,.60);
+}
+@media (prefers-contrast: more) {
+  :is(.career-surface, .onboarding-page, .onboarding-safety, .companion-preview, .companion-naming) { --ink-3: var(--ink-2); --rule: var(--ink-4); }
+}
+@media (forced-colors: active) {
+  :is(.career-surface, .onboarding-page, .onboarding-safety, .companion-preview, .companion-naming) {
+    --paper: Canvas; --sheet: Canvas; --tint: Canvas;
+    --ink: CanvasText; --ink-2: CanvasText; --ink-3: CanvasText; --ink-4: CanvasText;
+    --rule: CanvasText; --air: LinkText; --air-tint: Canvas; --focus: Highlight;
+  }
+}
