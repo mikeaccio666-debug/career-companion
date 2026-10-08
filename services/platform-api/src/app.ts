@@ -1,3 +1,5 @@
+import { careerRecordId } from '@companion/platform-contracts';
+import { OrgKnowledge } from './org-knowledge.ts';
 import { CareerInterviews } from './career-interviews.ts';
 import { CareerApplications } from './career-applications.ts';
 import { UploadRemovals } from './upload-removals.ts';
@@ -128,6 +130,7 @@ export async function buildApp(options:AppOptions={}) {
   const accountActions=new AccountActions(db,config.accountEmail);
   const staff=new StaffAccess(db);
   const knowledge=new KnowledgeSources(db);
+  const orgKnowledge=new OrgKnowledge(db,config,bundle,storage,staff);
   const audioTranscriptions=new AudioTranscriptions(db,storage,runtime);
   const goalPlans=new GoalPlans(db,jobs,runtime);
   const goalPlanProposals=new GoalPlanProposals(db,goalPlans);
@@ -640,6 +643,20 @@ export async function buildApp(options:AppOptions={}) {
   app.post(interviewRoot + '/:id/reschedule', limitedAccount, (request, reply) => interviewMutation(request, reply, 'reschedule'));
   app.post(interviewRoot + '/:id/status', limitedAccount, (request, reply) => interviewMutation(request, reply, 'status'));
   app.delete(interviewRoot + '/:id', limitedAccount, (request, reply) => interviewMutation(request, reply, 'delete'));
+  app.get(prefix + '/org-knowledge/passages/:sourceId/:revision/:passageId', secured('org-knowledge'), (request, reply) => {
+    return applicationRead(request, reply, async signal => {
+      let coordinates: { sourceId: string; revision: number; passageId: string };
+      try {
+        careerRecordObject(careerHttpQuery(request.query), []);
+        const v = careerRecordObject(careerHttpQuery(request.params), ['sourceId', 'revision', 'passageId']);
+        if (typeof v.revision !== 'string' || !/^[1-9][0-9]{0,9}$/.test(v.revision)) throw Error();
+        coordinates = { sourceId: careerRecordId(v.sourceId), revision: Number(v.revision), passageId: String(v.passageId) };
+        if (!Number.isSafeInteger(coordinates.revision) || coordinates.revision > 2147483647) throw Error();
+      } catch { throw new ApiError(400, 'ORG_CONTENT_INPUT_INVALID', '请使用支持的来源坐标。'); }
+      return { passage: await orgKnowledge.readPassage(fixedRequestSession(request,userId(request)), coordinates.sourceId,
+        coordinates.revision, coordinates.passageId, signal) };
+    });
+  });
   const applicationRoot = prefix + '/career/applications';
   function applicationQuery(request: FastifyRequest) {
     try { careerRecordObject(careerHttpQuery(request.query), []); }
@@ -878,5 +895,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,resumeReview,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

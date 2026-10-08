@@ -22,3 +22,5 @@ export * from './manual-job-evidence.ts';
 export * from './pending/resume-original.ts';
 
 export * from './application-stage-policy.ts';
+
+export * from './assets/p0-assets.ts';
