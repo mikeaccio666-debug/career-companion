@@ -11,6 +11,7 @@ import { readDataCrypto } from '../src/data-crypto.ts';
 import { OnboardingDrafts } from '../src/onboarding-drafts.ts';
 import { CompanionIntakePreparation } from '../src/companion-intake-preparation.ts';
 import { FICTIONAL_LEGAL, seedFictionalActiveLegal, seedFictionalConsent } from './fixtures/student-entry.ts';
+import { withControlledMissingIntakeSafetySource } from './fixtures/controlled-missing-intake.ts';
 
 // Fictional actors and text in one isolated loopback PostgreSQL schema. The existing
 // classifier port invokes genuine admission with synthetic decisions; no HTTP,
@@ -249,13 +250,14 @@ test('pending TEXT requires safety completion before reporting either an incompl
 
 test('a complete draft and latest full L0 cannot hide a superseded historical TEXT with a missing detection', async () => {
   const who = await actor(), current = await history(who);
-  await db.query('DELETE FROM platform_onboarding_safety_submissions WHERE id=$1', [current.oldClaim.submissionId]);
-  const before = await ledger(who); assert.equal(before.submissions.length, 1);
-  for (const preparer of [service, new CompanionIntakePreparation(db, config, FICTIONAL_LEGAL)]) {
-    await assert.rejects(preparer.prepare(who, { expectedRevision: current.draft.revision }), code('ONBOARDING_SAFETY_REQUIRED', 409));
-    // Recovery inserts are inside the failed preparation transaction, never silently committed.
-    assert.deepEqual(await ledger(who), before);
-  }
+  await withControlledMissingIntakeSafetySource(db, { ownedSchema: schema, userId: who.userId, submissionId: current.oldClaim.submissionId }, async () => {
+    const before = await ledger(who); assert.equal(before.submissions.length, 1);
+    for (const preparer of [service, new CompanionIntakePreparation(db, config, FICTIONAL_LEGAL)]) {
+      await assert.rejects(preparer.prepare(who, { expectedRevision: current.draft.revision }), code('ONBOARDING_SAFETY_REQUIRED', 409));
+      // Recovery inserts are inside the failed preparation transaction, never silently committed.
+      assert.deepEqual(await ledger(who), before);
+    }
+  });
 });
 
 for (const [level, mode] of [['L1', 'full'], ['L2', 'keyword_only']] as const) test(`the latest full L0 cannot erase a genuine superseded ${level}/${mode} barrier`, async () => {

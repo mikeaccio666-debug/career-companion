@@ -10,6 +10,7 @@ import { readDataCrypto } from '../src/data-crypto.ts';
 import { OnboardingDrafts } from '../src/onboarding-drafts.ts';
 import type { OnboardingAction, ProviderRequestAdmission } from '@companion/platform-contracts';
 import { FICTIONAL_LEGAL, seedFictionalActiveLegal, seedFictionalConsent } from './fixtures/student-entry.ts';
+import { assertLegacyIntakeRemainsUnadopted, legacyIntakeRawRows, seedControlledLegacyIntake } from './fixtures/legacy-intake.ts';
 
 // Durable inbox preparation only. All actors/text/classifiers are fictional, with no real provider or HTTP release.
 const base = readConfig(), schema = 'onboarding_safety_'+randomUUID().replaceAll('-', ''), url = new URL(base.databaseUrl);
@@ -302,26 +303,37 @@ test('pre-aborted operations cannot claim, classify or fail a persistent submiss
 });
 
 test('recovery from a pre-inbox database restores every encrypted historical text, including superseded ones', async () => {
-  const who = await actor(), a = await text(who, 'Synthetic pre-inbox older note A.'), b = await text(who, 'Synthetic pre-inbox newer note B.');
-  await db.query('DELETE FROM platform_onboarding_safety_submissions WHERE user_id=$1', [who.userId]);
+  // Controlled old 026 shape: these raw commands predate inbox/enrollment hooks.
+  // This does not delete an already enrolled modern 027 source or relax its FK.
+  const who = await actor(), legacy = await seedControlledLegacyIntake(db, crypto, who.userId,
+    ['Synthetic pre-inbox older note A.', 'Synthetic pre-inbox newer note B.']);
+  const [a, b] = legacy.textCommands, before = await legacyIntakeRawRows(db, who.userId);
   assert.deepEqual(await counts(who), { drafts: 1, operations: 3, submissions: 0 });
+  await assertLegacyIntakeRemainsUnadopted(db, who.userId);
   const fresh = new OnboardingDrafts(db, config, FICTIONAL_LEGAL);
-  assert.deepEqual(await fresh.read(who), b.saved.draft);
+  assert.deepEqual(await fresh.read(who), legacy.draft);
   const restored = (await db.query('SELECT operation_id FROM platform_onboarding_safety_submissions WHERE user_id=$1 ORDER BY submitted_revision', [who.userId])).rows.map(row => row.operation_id);
-  assert.deepEqual(restored, [a.input.operationId, b.input.operationId]);
+  assert.deepEqual(restored, [a.operationId, b.operationId]);
   assert.deepEqual(await fresh.readSafety(who), { status: 'pending', pendingCount: 2, blockedLevel: null });
-  const current = await fresh.claimSafety(who, { detectorRevision: 7 }); assert(current); assert.equal(current.operationId, a.input.operationId);
+  const current = await fresh.claimSafety(who, { detectorRevision: 7 }); assert(current); assert.equal(current.operationId, a.operationId);
   assert.deepEqual(await counts(who), { drafts: 1, operations: 3, submissions: 2 });
+  assert.deepEqual(await legacyIntakeRawRows(db, who.userId), before);
+  await assertLegacyIntakeRemainsUnadopted(db, who.userId);
 });
 
 test('a damaged historical encrypted operation rolls back all inbox recovery rather than dropping older text', async () => {
-  const who = await actor(); await text(who, 'Synthetic valid earlier backfill A.'); const broken = await text(who, 'Synthetic damaged later backfill B.');
-  await db.query('DELETE FROM platform_onboarding_safety_submissions WHERE user_id=$1', [who.userId]);
-  await db.query('UPDATE platform_onboarding_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, broken.input.operationId, Buffer.alloc(29)]);
+  const who = await actor(), legacy = await seedControlledLegacyIntake(db, crypto, who.userId,
+    ['Synthetic valid earlier backfill A.', 'Synthetic damaged later backfill B.']);
+  await db.query('UPDATE platform_onboarding_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, legacy.textCommands[1].operationId, Buffer.alloc(29)]);
+  const before = await legacyIntakeRawRows(db, who.userId);
+  assert.deepEqual(await counts(who), { drafts: 1, operations: 3, submissions: 0 });
+  await assertLegacyIntakeRemainsUnadopted(db, who.userId);
   const fresh = new OnboardingDrafts(db, config, FICTIONAL_LEGAL);
   for (const attempt of [() => fresh.read(who), () => fresh.readSafety(who), () => fresh.claimSafety(who, { detectorRevision: 7 })]) {
     await assert.rejects(attempt(), code('DATA_STORAGE_UNAVAILABLE'));
     assert.deepEqual(await counts(who), { drafts: 1, operations: 3, submissions: 0 });
+    assert.deepEqual(await legacyIntakeRawRows(db, who.userId), before);
+    await assertLegacyIntakeRemainsUnadopted(db, who.userId);
   }
 });
 

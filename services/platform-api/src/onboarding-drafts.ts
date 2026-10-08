@@ -10,6 +10,7 @@ import type { LegalBundle } from './legal-documents.ts';
 import { OnboardingStorage } from './onboarding-storage.ts';
 import { OnboardingSafety, type IntakeClassifier, type IntakeExecutionGuard, type SafetyFailure } from './onboarding-safety.ts';
 import type { OnboardingSafetyClaim } from './onboarding-safety-protocol.ts';
+import { syncPrebirthInventoryInTransaction, verifyPrebirthInventoryInTransaction } from './companion-prebirth-protocol.ts';
 
 interface OperationRow {
   operation_id: string; draft_id: string; applied_revision: number; request_ciphertext: Buffer;
@@ -64,6 +65,7 @@ export class OnboardingDrafts {
     try {
       return await this.db.withBoundedTransaction(async client => {
         await this.storage.authorizeSession(client, fixed, signal);
+        await verifyPrebirthInventoryInTransaction(client, this.crypto, fixed.userId, signal);
         const row = await this.storage.row(client, fixed.userId);
         const previous = row ? this.storage.decode(row) : null;
         const submissions = previous ? await this.storage.recover(client, previous) : [];
@@ -116,6 +118,7 @@ export class OnboardingDrafts {
         await client.query(`INSERT INTO platform_onboarding_operations(user_id,operation_id,draft_id,applied_revision,request_ciphertext)
           VALUES($1,$2,$3,$4,$5)`, [fixed.userId, command.operationId, draft.id, draft.revision, requestCiphertext]);
         if (command.action.kind === 'text') await this.storage.recover(client, draft);
+        await syncPrebirthInventoryInTransaction(client, this.crypto, fixed.userId, signal);
         // Admission is checked after the writes. The transaction helper confirms COMMIT
         // before returning; expiry/cancellation after this check does not undo an accepted write.
         await authorizeFixedSession(client, fixed, signal);

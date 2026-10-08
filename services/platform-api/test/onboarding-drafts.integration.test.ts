@@ -143,7 +143,9 @@ test('row, owner and revision authenticated ciphertext cannot be transplanted or
   const a = await actor(), b = await actor(); const first = await store.save(a, start()); await store.save(b, start());
   const old = (await db.query('SELECT payload_ciphertext FROM platform_onboarding_drafts WHERE user_id=$1', [a.userId])).rows[0].payload_ciphertext;
   await db.query('UPDATE platform_onboarding_drafts SET payload_ciphertext=$2 WHERE user_id=$1', [b.userId, old]);
-  await assert.rejects(store.read(b), code('DATA_STORAGE_UNAVAILABLE')); await assert.rejects(store.save(b, command(1, { kind: 'skip', questionId: 'study' })), code('DATA_STORAGE_UNAVAILABLE'));
+  await assert.rejects(store.read(b), code('DATA_STORAGE_UNAVAILABLE'));
+  // Writes now authenticate the enrolled original history before changing it.
+  await assert.rejects(store.save(b, command(1, { kind: 'skip', questionId: 'study' })), code('COMPANION_PREBIRTH_INVENTORY_UNAVAILABLE'));
   await store.save(a, command(1, { kind: 'skip', questionId: 'study' }));
   await db.query('UPDATE platform_onboarding_drafts SET payload_ciphertext=$2 WHERE user_id=$1', [a.userId, old]);
   await assert.rejects(store.read(a), code('DATA_STORAGE_UNAVAILABLE')); assert.equal(first.draft.revision, 1);
@@ -158,7 +160,7 @@ test('authenticated but invalid state and damaged operation ciphertext return bo
   await assert.rejects(store.read(who), code('DATA_STORAGE_UNAVAILABLE'));
   await db.query('UPDATE platform_onboarding_drafts SET payload_ciphertext=$2 WHERE user_id=$1', [who.userId, crypto.sealUtf8(JSON.stringify(saved.draft), binding)]);
   await db.query('UPDATE platform_onboarding_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, input.operationId, Buffer.alloc(29)]);
-  await assert.rejects(store.save(who, input), code('DATA_STORAGE_UNAVAILABLE'));
+  await assert.rejects(store.save(who, input), code('COMPANION_PREBIRTH_INVENTORY_UNAVAILABLE'));
   // Reads now verify the complete operation history before claiming that all text was accounted for.
   await assert.rejects(store.read(who), code('DATA_STORAGE_UNAVAILABLE'));
   assert.equal((await db.query('SELECT revision FROM platform_onboarding_drafts WHERE user_id=$1', [who.userId])).rows[0].revision, saved.draft.revision);

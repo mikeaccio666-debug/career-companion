@@ -134,10 +134,12 @@ test('damaged, transplanted and canonically re-encrypted false preview captures 
     for (const ciphertext of [Buffer.alloc(29), foreign.request_ciphertext, fixture.crypto.sealUtf8(JSON.stringify(forged), binding)]) {
       await fixture.db.query('UPDATE platform_companion_name_submissions SET request_ciphertext=$2 WHERE id=$1', [row.id, ciphertext]);
       const before = await rows(own.who);
-      for (const action of [() => own.safety.read(own.who, { taskId: own.prepared.taskId }), () => own.safety.submit(own.who, input),
-        () => own.safety.claim(own.who, { taskId: own.prepared.taskId, detectorRevision: 7 }),
-        () => own.safety.claimSubmission(own.who, { taskId: own.prepared.taskId, submissionId: row.id, detectorRevision: 7 })])
-        await assert.rejects(action(), code('COMPANION_NAME_SAFETY_UNAVAILABLE'));
+      for (const [action, expected] of [
+        [() => own.safety.read(own.who, { taskId: own.prepared.taskId }), 'COMPANION_NAME_SAFETY_UNAVAILABLE'],
+        [() => own.safety.submit(own.who, input), 'COMPANION_PREBIRTH_INVENTORY_UNAVAILABLE'],
+        [() => own.safety.claim(own.who, { taskId: own.prepared.taskId, detectorRevision: 7 }), 'COMPANION_NAME_SAFETY_UNAVAILABLE'],
+        [() => own.safety.claimSubmission(own.who, { taskId: own.prepared.taskId, submissionId: row.id, detectorRevision: 7 }), 'COMPANION_NAME_SAFETY_UNAVAILABLE'],
+      ] as const) await assert.rejects(action(), code(expected));
       assert.deepEqual(await rows(own.who), before); assert.deepEqual(await intake(own.who), original);
     }
     await assert.rejects(fixture.db.query('UPDATE platform_companion_name_entries SET latest_submission_id=$2 WHERE user_id=$1', [own.who.userId, foreign.id]), { code: '23503' });
