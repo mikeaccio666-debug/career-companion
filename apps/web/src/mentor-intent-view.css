@@ -50,3 +50,7 @@
 .mentor-feedback legend { font-size:13px; margin-bottom:8px; }
 .mentor-feedback fieldset label { display:flex; align-items:center; gap:4px; }
 .mentor-feedback input[type="radio"] { width:auto; }
+
+.mentor-feedback > form > label { display: grid; gap: 6px; }
+.mentor-feedback input:not([type="radio"]) { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 10px; font: inherit; color: var(--ink); background: var(--sheet); border: 1px solid var(--ink-4); border-radius: 8px; }
+.mentor-feedback fieldset label { min-height: 44px; min-width: 44px; }

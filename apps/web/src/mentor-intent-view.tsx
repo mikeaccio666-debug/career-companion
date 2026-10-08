@@ -1,3 +1,4 @@
+import { MentorRatingProvider } from './mentor-rating-scope-view';
 import { MentorRatingPanel } from './mentor-rating-view';
 import { useEffect, useMemo, useState } from 'react';
 import type { MentorIntent, MentorServiceOffer, MentorOrder } from '@companion/platform-contracts';
@@ -41,8 +42,8 @@ export function MentorIntentPanel() {
     window.addEventListener('beforeunload', protect); return () => window.removeEventListener('beforeunload', protect);
   }, [state?.pending]);
   if (!client.isCurrent()) return null;
-  return <MentorIntentScene state={state} editor={editor} setEditor={setEditor} cancelling={cancelling}
-    setCancelling={setCancelling} inputError={inputError} setInputError={setInputError} controller={controller} />;
+  return <MentorRatingProvider visibleSessions={state?.loaded && !state.suspended ? state.records.filter(r=>r.status==='completed').map(r=>r.id) : []}><MentorIntentScene state={state} editor={editor} setEditor={setEditor} cancelling={cancelling}
+    setCancelling={setCancelling} inputError={inputError} setInputError={setInputError} controller={controller} /></MentorRatingProvider>;
 }
 export function mentorTime(at: string, timeZone?: string): string {
   try { return new Intl.DateTimeFormat('zh-CN', {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',

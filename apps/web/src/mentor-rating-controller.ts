@@ -13,7 +13,7 @@ export class MentorRatingController {
  snapshot(){return this.state;}
  private current(g=this.generation){return this.live&&g===this.generation&&this.client.isCurrent();}
  private publish(patch:Partial<MentorRatingSnapshot>){if(!this.current())return;this.state=Object.freeze({...this.state,...patch});this.changed(this.state);}
- start(){if(this.live)return;this.live=true;this.unsubscribe=this.client.subscribe(()=>{if(!this.client.isCurrent())this.stop();});void this.refresh();}
+ start(suspended=false){if(this.live)return;this.live=true;this.unsubscribe=this.client.subscribe(()=>{if(!this.client.isCurrent())this.stop();});if(suspended)this.publish({suspended:true});else void this.refresh();}
  stop(){this.generation++;this.live=false;this.request?.abort();this.request=null;this.unsubscribe?.();this.unsubscribe=null;this.state=emptyMentorRatingSnapshot();this.changed(this.state);}
  suspend(){if(!this.current())return;this.generation++;this.request?.abort();this.request=null;this.publish({loaded:false,busy:false,suspended:true,rating:null,uncertain:!!this.state.pending,error:''});}
  resume(){if(!this.current())return;this.publish({suspended:false});void this.refresh();}
@@ -32,7 +32,7 @@ export class MentorRatingController {
  retry(){return this.execute(false);}
  observe(){return this.execute(true);}
  private async execute(observe:boolean){const pending=this.state.pending;if(!this.current()||!pending||this.request||this.state.suspended)return;const g=this.generation;this.publish({busy:true,error:''});
-  try{const result=await this.timed(s=>changeMentorRating(this.client,this.id,pending,observe,s));if(this.current(g))this.publish({loaded:true,busy:false,rating:result.rating,pending:null,uncertain:false,error:''});}
+  try{const result=await this.timed(s=>changeMentorRating(this.client,this.id,pending,observe,s));if(this.current(g)){this.publish({loaded:true,busy:false,rating:result.rating,pending:null,uncertain:false,error:''});return result;}}
   catch(e){if(!this.current(g))return;
    if(!observe&&e instanceof ApiError&&[400,401,403,404,409,413,422,429].includes(e.status)&&typeof e.code==='string')this.publish({busy:false,pending:null,uncertain:false,loaded:false,rating:null,error:'这次没有保存，或已有反馈。请重新读取。'});
    else this.publish({busy:false,uncertain:true,error:'反馈结果还没确认。可以核对这次操作，或用原操作重试。'});

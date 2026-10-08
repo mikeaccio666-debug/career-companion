@@ -82,7 +82,7 @@ test('no partner configuration shows a truthful empty state without imaginary pr
 });
 test('anonymous human entry stays distinct from AI; account-bound SSR cannot load or expose private data', () => {
   const human = renderToStaticMarkup(createElement(views.MentorHumanEntry, { current: true }));
-  assert.match(human, /href="\/community\/mentors"/); assert.match(human, /aria-current="page"/); assert.match(human, /付费 · 看不到你的对话/);
+  assert.match(human, /href="\/me\/mentors"/); assert.match(human, /aria-current="page"/); assert.match(human, /付费 · 看不到你的对话/);
   const current = { account: { accountId: owner, generation: 1 }, isCurrent: () => true, subscribe: () => () => {}, request() { throw Error('SSR must not read'); } };
   const html = renderToStaticMarkup(createElement(views.PlatformAccountClientProvider, { value: current }, createElement(views.MentorIntentPage, { onLogout() {} })));
   assert.match(html, /AI 主理人与队伍 · 真人服务入口/); assert.match(html, /真人与社区/); assert(!html.includes('Fictional service'));
@@ -155,4 +155,9 @@ test('completed fulfillment renders its own status without the old meeting link 
  const current={account:{accountId:owner,generation:1},isCurrent:()=>true,subscribe:()=>()=>{},request(){throw Error('SSR must not read');}};
  const html=renderToStaticMarkup(createElement(views.PlatformAccountClientProvider,{value:current},createElement(views.MentorIntentScene,props({state:state({records:[actual],quote:{session:actual,order:{status:'quoted',priceCents:9500,shownOffer:offer()}}})}))));
  assert(html.includes('已完成'));assert(html.includes('尚无收款记录'));assert(html.includes('正在读取会后反馈'));assert(!html.includes('type="radio"'));assert(!html.includes('https://meet.google.com/fictional-completed'));assert(!html.includes('取消这份意向'));assert(!html.includes('已记录线下收款'));
+});
+
+test('uncertain feedback after rereading hides the new-decision form and always explains the pending original operation',()=>{
+ const html=renderToStaticMarkup(createElement(views.MentorRatingScene,{state:{loaded:true,busy:false,suspended:false,rating:null,pending:{operationId:owner},uncertain:true,error:''},onSubmit(){},onRefresh(){},onObserve(){},onRetry(){}}));
+ assert(html.includes('反馈结果还没确认'));assert(html.includes('核对这次反馈'));assert(!html.includes('type="radio"'));assert(!html.includes('一句话反馈'));
 });
