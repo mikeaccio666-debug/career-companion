@@ -39,6 +39,7 @@ test('owned rows show both named zones with distinct offsets, source and neutral
   assert.match(html, /America\/New_York · UTC-04:00/); assert.match(html, /America\/Los_Angeles · UTC-07:00/);
   assert.match(html, /2026-10-31 22:30 ·/); assert.match(html, /已取消/); assert.match(html, /创建时的投递记录/);
   assert.match(html, /\/journey\/interviews\/22222222/);
+  assert.match(html, /href="\/journey\/applications\/22222222-2222-2222-2222-222222222222">查看对应的投递记录/);
   for (const text of ['<img', '通过率', '<progress', '打开作战简报', '开始练习', '已发送提醒']) assert(!html.includes(text));
 });
 test('ambiguous local time presents two unselected radio choices; a gap has no savable instant', () => {
