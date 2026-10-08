@@ -1,3 +1,4 @@
+import { CareerInterviews } from './career-interviews.ts';
 import { CareerApplications } from './career-applications.ts';
 import { UploadRemovals } from './upload-removals.ts';
 import { careerHttpQuery } from './career-http-query.ts';
@@ -114,6 +115,7 @@ export async function buildApp(options:AppOptions={}) {
   const careerIdentity=new CareerIdentityRecords(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerApplications=new CareerApplications(db,config,bundle,manualJobs);
+  const careerInterviews=new CareerInterviews(db,config,bundle,careerApplications);
   const careerStories=new CareerStories(db,config,bundle);
   const storage=options.storage??createStorage(config);
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage);
@@ -610,6 +612,34 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/career/job-observations/duplicates`,limitedAccount,async(request,reply)=>{manualJobQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await manualJobs.duplicates(fixedRequestSession(request,userId(request)),request.body,c.signal);}finally{c.dispose();}});
   app.post(`${prefix}/career/job-observations`,limitedAccount,(request,reply)=>manualJobMutation(request,reply,'create'));
   app.delete(`${prefix}/career/job-observations/:id`,limitedAccount,(request,reply)=>manualJobMutation(request,reply,'delete'));
+  const interviewRoot = prefix + '/career/interviews';
+  function interviewQuery(request: FastifyRequest) {
+    try { careerRecordObject(careerHttpQuery(request.query), []); }
+    catch { throw new ApiError(400, 'CAREER_INTERVIEW_INPUT_INVALID', '请使用支持的面试查询。'); }
+  }
+  app.get(interviewRoot, limitedAccount, (request, reply) => applicationRead(request, reply,
+    signal => careerInterviews.list(fixedRequestSession(request, userId(request)), careerHttpQuery(request.query), signal)));
+  app.get(interviewRoot + '/operations/:id', limitedAccount, (request, reply) => {
+    interviewQuery(request); return applicationRead(request, reply,
+      signal => careerInterviews.observe(fixedRequestSession(request, userId(request)), params(request), signal));
+  });
+  app.get(interviewRoot + '/:id', limitedAccount, (request, reply) => {
+    interviewQuery(request); return applicationRead(request, reply, async signal => ({
+      interview: await careerInterviews.get(fixedRequestSession(request, userId(request)), params(request), signal) }));
+  });
+  async function interviewMutation(request: FastifyRequest, reply: FastifyReply, action: import('@companion/platform-contracts').CareerInterviewAction) {
+    interviewQuery(request); return applicationRead(request, reply, async signal => {
+      const result = await careerInterviews.mutate(fixedRequestSession(request, userId(request)), action,
+        action === 'create' ? null : params(request), request.body, signal);
+      if (action === 'create') reply.code(result.operation.replayed ? 200 : 201);
+      return result;
+    });
+  }
+  app.post(interviewRoot, limitedAccount, (request, reply) => interviewMutation(request, reply, 'create'));
+  app.patch(interviewRoot + '/:id', limitedAccount, (request, reply) => interviewMutation(request, reply, 'edit'));
+  app.post(interviewRoot + '/:id/reschedule', limitedAccount, (request, reply) => interviewMutation(request, reply, 'reschedule'));
+  app.post(interviewRoot + '/:id/status', limitedAccount, (request, reply) => interviewMutation(request, reply, 'status'));
+  app.delete(interviewRoot + '/:id', limitedAccount, (request, reply) => interviewMutation(request, reply, 'delete'));
   const applicationRoot = prefix + '/career/applications';
   function applicationQuery(request: FastifyRequest) {
     try { careerRecordObject(careerHttpQuery(request.query), []); }
@@ -848,5 +878,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerStories,careerPreparationSources,resumeReview,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,resumeReview,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
