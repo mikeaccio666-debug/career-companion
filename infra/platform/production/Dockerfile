@@ -22,6 +22,8 @@ FROM tooling AS runtime-deps
 RUN pnpm --filter @companion/platform-api... install --prod --frozen-lockfile --ignore-scripts
 
 FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
+# Local PDF text extraction; no OCR or provider call is performed.
+RUN apt-get update && apt-get install --no-install-recommends -y poppler-utils util-linux && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PLATFORM_STORAGE_DIR=/app/.runtime
 WORKDIR /app
 COPY --from=runtime-deps /app/node_modules/ node_modules/

@@ -110,11 +110,11 @@ export async function buildApp(options:AppOptions={}) {
   const careerTargets=new CareerTargets(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerStories=new CareerStories(db,config,bundle);
-  const resumeReview=new ResumeOriginalReview(db,config,bundle);
+  const storage=options.storage??createStorage(config);
+  const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
   const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
-  const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
   const accountActions=new AccountActions(db,config.accountEmail);
@@ -607,6 +607,7 @@ export async function buildApp(options:AppOptions={}) {
   function targetQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'CAREER_TARGET_INPUT_INVALID','Unsupported direction query.');}
   const resumeClosedQuery=(request:FastifyRequest)=>{try{careerRecordObject(careerHttpQuery(request.query),[]);}catch{throw invalid('Unsupported resume query.');}};
   const resumeRead=async(request:FastifyRequest,reply:FastifyReply,run:(signal:AbortSignal)=>Promise<unknown>)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await run(cancellation.signal);}finally{cancellation.dispose();}};
+  app.get(prefix+'/career/resume-uploads',limitedAccount,async(request,reply)=>resumeRead(request,reply,signal=>resumeReview.listUploads(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),signal)));
   app.get(`${prefix}/pending-items`,limitedAccount,async(request,reply)=>resumeRead(request,reply,signal=>resumeReview.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),signal)));
   app.get(`${prefix}/career/resume-versions`,limitedAccount,async(request,reply)=>resumeRead(request,reply,signal=>resumeReview.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),signal)));
   app.get(`${prefix}/pending-items/operations/:id`,limitedAccount,async(request,reply)=>{resumeClosedQuery(request);return resumeRead(request,reply,signal=>resumeReview.operation(fixedRequestSession(request,userId(request)),params(request),signal));});
@@ -617,6 +618,8 @@ export async function buildApp(options:AppOptions={}) {
    resumeClosedQuery(request);return resumeRead(request,reply,async signal=>{const saved=await resumeReview.mutate(fixedRequestSession(request,userId(request)),action,action==='create'?null:params(request),input,'web',signal);if(action==='create')reply.code(saved.operation.replayed?200:201);return saved;});
   };
   app.post(`${prefix}/career/resume-versions`,limitedAccount,async(request,reply)=>resumeChange(request,reply,'create'));
+  app.post(`${prefix}/career/resume-versions/from-upload`,limitedAccount,async(request,reply)=>{resumeClosedQuery(request);return resumeRead(request,reply,async signal=>{const result=await resumeReview.createFromUpload(fixedRequestSession(request,userId(request)),request.body,signal);reply.code(result.operation.replayed?200:201);return result;});});
+
   app.post(`${prefix}/pending-items/:id/revisions`,limitedAccount,async(request,reply)=>resumeChange(request,reply,'edit'));
   app.post(`${prefix}/pending-items/:id/decision`,limitedAccount,async(request,reply)=>{
    let r:Record<string,unknown>;try{r=careerRecordObject(request.body,['operationId','revision','payloadDigest','decision']);}catch{throw invalid('Use one version and digest decision.');}
