@@ -15,6 +15,6 @@ export async function changeCareerTarget(client:BoundPlatformClient,action:Caree
  if(op.id!==command.operationId||typeof op.replayed!=='boolean'||op.appliedRevision!==command.expectedRevision+1||key!==null&&op.targetId!==key)fail();
  const target=v.target===null?null:owned(client,v.target);
  if(target&&(target.id!==op.targetId||target.revision<(op.appliedRevision as number)))fail();if(!op.replayed&&(action==='delete'?target!==null:target===null||target.revision!==op.appliedRevision||target.lastOperationId!==op.id))fail();
- if(!op.replayed&&target){if(action==='create'&&target.status!=='exploring'||action==='status'&&target.status!==command.status)fail();for(const key of ['roleFamily','title','locations','priority'] as const)if(Object.hasOwn(command,key)&&JSON.stringify(target[key])!==JSON.stringify(command[key]))fail();}
+ if(!op.replayed&&target){if(action==='create'&&(target.status!=='exploring'||!Object.hasOwn(command,'reviewOn')&&target.reviewOn!=null)||action==='status'&&target.status!==command.status)fail();for(const key of ['roleFamily','title','locations','priority','reviewOn'] as const)if(Object.hasOwn(command,key)&&JSON.stringify(target[key])!==JSON.stringify(command[key]))fail();}
  return Object.freeze({target,operation:Object.freeze({id:op.id as string,targetId:op.targetId as string,appliedRevision:op.appliedRevision as number,replayed:op.replayed as boolean})});
 }
