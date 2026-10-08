@@ -1,3 +1,4 @@
+import { MentorIntentPage } from './mentor-intent-view';
 import { OrgSourcePage } from './org-source-view';
 import { orgSourceReferenceFromPath } from './org-source-api';
 import { CareerInterviewPage } from './career-interview-view';
@@ -771,6 +772,7 @@ function AccountEntryApp() {
   if (window.location.pathname === '/journey/applications' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerApplicationPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/jobs' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <ManualJobPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/targets' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerTargetPage onLogout={() => void logout()} />;
+  if (window.location.pathname === '/community/mentors' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <MentorIntentPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/me/profile' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerIdentityPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/me/memory' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <SharedMemoryPage onLogout={() => void logout()} />;
   if (!accountReady) return <AccountGate key={accountScope.current.revision} user={user} options={authOptions} onVerified={verifiedAccount} onLogout={() => void logout()} serverError={error}  />;

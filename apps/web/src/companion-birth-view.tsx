@@ -1,3 +1,4 @@
+import { MentorHumanEntry } from './mentor-human-entry';
 import { useEffect, useRef, useState } from 'react';
 import { holdPrivateResource, clearPrivateImage } from './private-media';
 import type { BoundPlatformClient } from './api';
@@ -44,6 +45,7 @@ export function CompanionBirthView({ client, observation, name, sealChar, availa
       <p className="companion-birth-event" role="status">—— {new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(active.bornAt))} · {active.identity.name}诞生 ——</p>
       <p>你的主理人已经诞生，名字和印章都保存好了。</p>
       <CompanionWelcomeView client={client} companionId={active.companionId} paused={supportBlocked} />
+      <nav className="mentor-human-group" aria-label="真人与社区"><h2>真人与社区</h2><MentorHumanEntry/></nav>
     </> : <>
       <span className="onboarding-ai">你的主理人 · AI</span><h2>{name ? `${name}——你起的名字` : '正在确认诞生进度'}</h2>
       {sealChar && <p>印章字「{sealChar}」。准备好了，就让它从这里陪你走。</p>}

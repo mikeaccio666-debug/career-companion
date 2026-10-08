@@ -1,3 +1,5 @@
+import { ApiError } from './api-error.ts';
+export { ApiError } from './api-error.ts';
 import { PLATFORM_ACCOUNT_HEADER, platformAccountId } from '@companion/platform-contracts';
 import { createPlatformEndpoints, type PlatformEndpoints, type PrivateFileOptions } from './platform-endpoints.ts';
 import { AccountRequestContext, AccountRequestInvalidated, platformAccountContext, type AccountRequestLease, type CapturedAccount } from './account-context.ts';
@@ -6,12 +8,6 @@ export const apiUrl = endpoints.apiUrl;
 export function privateFileUrl(value: unknown, options: PrivateFileOptions & { account?: CapturedAccount } = {}): string | undefined {
   if (options.account) return platformAccountContext.isCurrent(options.account) ? endpoints.privateFileUrl(value, { ...options, accountId: options.account.accountId }) : undefined;
   return endpoints.privateFileUrl(value, { ...options, accountId: options.accountId ?? platformAccountContext.capture()?.accountId });
-}
-export class ApiError extends Error {
-  status: number;
-  code?: string;
-  retryAfterMs?: number;
-  constructor(message: string, status = 0, code?: string, retryAfterMs?: number) { super(message); this.name = 'ApiError'; this.status = status; this.code = code; this.retryAfterMs = retryAfterMs; }
 }
 export type SuccessfulAuthPath = '/auth/login' | '/auth/register' | '/auth/password-reset/complete';
 export interface SuccessfulAuthResponse { readonly path: SuccessfulAuthPath; }

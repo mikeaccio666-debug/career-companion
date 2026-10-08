@@ -1,3 +1,5 @@
+import { MentorIntentController,type MentorControllerClient } from '../../../apps/web/src/mentor-intent-controller.ts';
+import { ApiError } from '../../../apps/web/src/api-error.ts';
 import { readMentorEntry,readMentorIntents,changeMentorIntent,observeMentorIntent,freezeMentorMutation,type MentorIntentClient } from '../../../apps/web/src/mentor-intent-api.ts';
 import { before,after,test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -251,4 +253,48 @@ test('partner selection is a strict optional server configuration, never a clien
   assert.equal(readConfig({...process.env,PLATFORM_MENTOR_ORG_ID:undefined}).mentorOrganizationId,undefined);
   for(const value of ['',id+' ','fictional-org','https://example.invalid/fictional-org'])
     assert.throws(()=>readConfig({...process.env,PLATFORM_MENTOR_ORG_ID:value}));
+});
+
+test('real Web controller reconciles a lost committed HTTP reply despite catalog outage, cancels once and clears invalidated private state',async()=>{
+  const s=await setup(),system=await buildApp({db:f.db,storage:blobs,legalBundle:FICTIONAL_LEGAL,
+    config:{...readConfig(),...s.config,allowedOrigins:new Set([origin]),workbenchEnabled:false},enableQueue:false,
+    runtime:createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'},fetch:async()=>{calls++;throw Error('No provider calls');}})});
+  let controller:MentorIntentController|undefined;
+  try{
+    const headers=await login(system.app,s.owner);let live=true,loseReply=true,catalogOutage=false,posts=0;
+    const listeners=new Set<()=>void>();
+    const client:MentorControllerClient={account:{accountId:s.owner.userId},isCurrent:()=>live,
+      subscribe:fn=>{listeners.add(fn);return()=>{listeners.delete(fn);};},
+      async request<T>(path:string,init?:RequestInit):Promise<T>{
+        if(init?.method==='POST')posts++;
+        const reply=await system.app.inject({method:(init?.method??'GET') as any,url:'/api/platform'+path,headers,
+          payload:init?.body===undefined?undefined:JSON.parse(String(init.body))});
+        if(reply.statusCode>=400){const e=reply.json();throw new ApiError('Fictional HTTP error',reply.statusCode,e.code);}
+        if(catalogOutage&&path.endsWith('/entry'))throw Error('Fictional lost read reply');
+        if(loseReply&&init?.method==='POST'){loseReply=false;throw Error('Fictional lost committed reply');}
+        return reply.json() as T;
+      }};
+    controller=new MentorIntentController(client,()=>{}, {read:10000,write:10000});
+    const wait=async(check:()=>boolean)=>{for(let i=0;i<1000;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}assert(check());};
+    controller.start();await wait(()=>controller!.snapshot().loaded&&!controller!.snapshot().busy);
+    assert.equal(controller.snapshot().entry!.offers[0].id,s.source.offerId);
+    const original=freezeMentorMutation({action:'create',sessionId:null,body:s.command});
+    controller.begin(original);controller.begin(original);await wait(()=>controller!.snapshot().uncertain);
+    assert.equal(posts,1);assert.equal((await s.service.list(s.owner)).sessions.length,1);
+    assert.equal(controller.snapshot().records.length,0);assert.equal(controller.snapshot().lastResult,null);
+    catalogOutage=true;await controller.refresh();assert.equal(controller.snapshot().entry,null);assert.equal(controller.snapshot().loaded,false);
+    assert.equal(controller.snapshot().pending!.body.operationId,s.command.operationId);
+    await controller.observe();assert.equal(controller.snapshot().pending,null);assert.equal(controller.snapshot().lastResult!.session.intentNote,s.command.intentNote);
+    assert.equal(posts,1);catalogOutage=false;await controller.refresh();
+    const saved=controller.snapshot().records[0];
+    controller.begin(freezeMentorMutation({action:'cancel',sessionId:saved.id,body:{operationId:randomUUID(),expectedRevision:1}}));
+    await wait(()=>controller!.snapshot().lastResult?.session.status==='cancelled');assert.equal(posts,2);
+    assert.equal((await s.service.observe(s.owner,s.command.operationId)).session.status,'cancelled');
+    controller.suspend();assert.equal(controller.snapshot().entry,null);assert.equal(controller.snapshot().records.length,0);
+    controller.resume();await wait(()=>controller!.snapshot().loaded);assert.equal(posts,2);
+    assert.equal(controller.snapshot().records[0].status,'cancelled');
+    live=false;for(const fn of [...listeners])fn();
+    assert.equal(controller.snapshot().entry,null);assert.equal(controller.snapshot().records.length,0);assert.equal(controller.snapshot().pending,null);
+    controller.begin(original);assert.equal(posts,2);assert.equal(calls,0);
+  }finally{controller?.stop();await system.app.close();}
 });
