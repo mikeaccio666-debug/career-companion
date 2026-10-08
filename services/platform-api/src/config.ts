@@ -20,6 +20,7 @@ export interface PlatformConfig {
   dataCrypto?: DataCrypto;
   orgContentBrand?: string;
   mentorOrganizationId?: string;
+  mentorRetentionDays?: number; mentorRetentionEvidenceRef?: string;
   companionSealGlyphs?: Readonly<CompanionSealGlyphConfiguration>;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
@@ -172,6 +173,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   return {
     databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
     mentorOrganizationId: env.PLATFORM_MENTOR_ORG_ID === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_ORG_ID),
+    mentorRetentionDays: env.PLATFORM_MENTOR_RETENTION_DAYS === undefined ? undefined : mentorRetentionDays(env.PLATFORM_MENTOR_RETENTION_DAYS),
+    mentorRetentionEvidenceRef: env.PLATFORM_MENTOR_RETENTION_EVIDENCE_REF === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_RETENTION_EVIDENCE_REF),
     orgContentBrand: orgKnowledgeBrand(env.PLATFORM_ORG_CONTENT_BRAND ?? '蔓藤'),
     storageDir: path.resolve(workspaceRoot,env.PLATFORM_STORAGE_DIR ?? '.local/platform/blobs'),
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
@@ -186,4 +189,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
 function mentorOrganizationId(value:string):string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)) throw Error('Invalid mentor organization configuration.');
   return value;
+}
+
+function mentorRetentionDays(value:string):number {
+ if(!/^[1-9][0-9]{0,4}$/.test(value)||Number(value)>36500)throw Error('Invalid mentor financial retention configuration.');return Number(value);
 }

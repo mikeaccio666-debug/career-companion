@@ -1,3 +1,4 @@
+import { authorizeMentorStaffSource } from './mentor-staff-source.ts';
 import { MentorOrders } from './mentor-orders.ts';
 import { MentorSlotReservations } from './mentor-slot-reservations.ts';
 import type { MentorCapacity } from './mentor-capacity.ts';
@@ -99,10 +100,10 @@ export class MentorIntents {
           source.slot.recordId!==a.slotId||source.slotRevision!==a.slotRevision||source.slot.startsAt!==a.startsAt||source.slot.endsAt<a.endsAt||
           source.slot.timeZone!==a.timeZone||source.slot.service!==r.kind||match.createdAt!==a.matchedAt||cmd.priceCents>accepted.priceCents||
           cmd.priceCents>match.acceptedOffer!.priceCents||match.acceptedOffer!.kind!==r.kind||match.acceptedOffer!.durationMin!==r.durationMin)throw Error();
-        const order=await this.orders.readInTransaction(c,r.ownerId,r.orderId),reservation=await this.reservations.readInTransaction(c,r.ownerId,r.id);
+        const order=await this.orders.readInTransaction(c,r.ownerId,r.orderId,match.operationId),reservation=await this.reservations.readInTransaction(c,r.ownerId,r.id);
         if(order.sessionId!==r.id||order.organizationId!==r.organizationId||order.offerId!==r.offerId||order.offerRevision!==r.offerRevision||order.priceCents!==cmd.priceCents||
-          digest(order.shownOffer)!==digest(accepted)||order.createdAt!==match.createdAt||order.lastOperationId!==r.lastOperationId||order.updatedAt!==r.updatedAt||
-          (r.status==='matched'?order.status!=='quoted':order.status!=='void')||reservation.mentorId!==r.mentorId||reservation.orgId!==r.organizationId||
+          digest(order.shownOffer)!==digest(accepted)||order.createdAt!==match.createdAt||
+          (!order.payment&&(order.lastOperationId!==r.lastOperationId||order.updatedAt!==r.updatedAt||(r.status==='matched'?order.status!=='quoted':order.status!=='void')))||reservation.mentorId!==r.mentorId||reservation.orgId!==r.organizationId||
           reservation.slotId!==a.slotId||reservation.slotRevision!==a.slotRevision||reservation.startsAt!==source.slot.startsAt||reservation.endsAt!==source.slot.endsAt||
           reservation.lastOperationId!==r.lastOperationId||reservation.updatedAt!==r.updatedAt||(r.status==='matched'?reservation.status!=='held':reservation.status!=='released'))throw Error();
       }else if(match||r.status==='matched'||last.action!==(r.status==='requested'?'create':'cancel'))throw Error();
@@ -266,6 +267,18 @@ export class MentorIntents {
       signal?.throwIfAborted();return {value:Object.freeze({sessionId:record.id,status:record.status,revision:record.revision,appliedRevision:2,replayed:false}),recordCount:1};
     },signal);
   }
+  /** Caller-owned audited finance transaction; actual owner lock, not a minted owner login. */
+  async financeInTransaction(c:PoolClient,actor:FixedSessionContext,org:string,id:string,signal?:AbortSignal){
+    await authorizeMentorStaffSource(c,actor,org,signal);
+    if(this.organizationId!==org)throw new ApiError(503,'MENTOR_PAYMENT_UNAVAILABLE','真人账务记录尚未配置。');
+    const target=(await c.query<SessionRow>('SELECT * FROM platform_mentor_sessions WHERE org_id=$1 AND id=$2',[org,id])).rows[0];if(!target)throw missing();
+    const authVersion=await this.store.authorizeAccount(c,target.user_id,undefined,signal);
+    const row=(await c.query<SessionRow>('SELECT * FROM platform_mentor_sessions WHERE org_id=$1 AND id=$2 AND user_id=$3 FOR UPDATE',[org,id,target.user_id])).rows[0];if(!row)throw missing();
+    const record=await this.decode(c,row);if(!record.orderId||!record.assignment)throw new ApiError(409,'MENTOR_PAYMENT_UNAVAILABLE','请先完成真实导师匹配和报价。');
+    const original=(await c.query<OperationRow>("SELECT * FROM platform_mentor_intent_operations WHERE user_id=$1 AND session_id=$2 AND action='match' FOR SHARE",[record.ownerId,record.id])).rows[0];
+    const match=this.receipt(original);return Object.freeze({record,authVersion,capacity:match.acceptedCapacity!,quoteOperationId:match.operationId});
+  }
+  async revalidateFinanceOwner(c:PoolClient,owner:string,version:string,signal?:AbortSignal){await this.store.authorizeAccount(c,owner,version,signal);}
   async getOrder(session:FixedSessionContext,id:string,signal?:AbortSignal){
     const context=fixed(session),key=careerRecordId(id);return this.db.withBoundedTransaction(async c=>{
       await this.store.authorizeSession(c,context,signal);const record=await this.read(c,context.userId,key);if(!record.orderId)throw missing();

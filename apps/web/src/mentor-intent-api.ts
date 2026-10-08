@@ -89,7 +89,7 @@ export async function readMentorOrder(c:MentorIntentClient,sessionId:string,sign
  if(session.id!==key||!session.assignment||order.ownerId!==c.account.accountId||order.sessionId!==session.id||order.id!==session.orderId||
   order.organizationId!==session.organizationId||order.offerId!==session.offerId||order.offerRevision!==session.offerRevision||
   order.shownOffer.kind!==session.kind||order.shownOffer.durationMin!==session.durationMin||order.createdAt!==session.assignment.matchedAt||
-  order.updatedAt!==session.updatedAt||order.lastOperationId!==session.lastOperationId||
-  (session.status==='matched'?order.status!=='quoted':session.status!=='cancelled'||order.status!=='void'))return fail();
+  (!order.payment&&(order.updatedAt!==session.updatedAt||order.lastOperationId!==session.lastOperationId))||
+  (session.status==='matched'?!['quoted','paid','refunded_partial','refunded_full'].includes(order.status):session.status!=='cancelled'||(!order.payment&&order.status!=='void')))return fail();
  current(c);return Object.freeze({session,order});
 }

@@ -22,6 +22,7 @@ export const emptyMentorSnapshot = (): MentorSnapshot => ({
 export class MentorIntentController {
   private state: MentorSnapshot = emptyMentorSnapshot();
   private live = false;
+  private orderVersions = new Map<string, number>();
   private generation = 0;
   private request: AbortController | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -48,11 +49,11 @@ export class MentorIntentController {
   }
   stop() {
     this.generation++; this.live = false; this.request?.abort(); this.request = null;
-    this.unsubscribe?.(); this.unsubscribe = null; this.state = emptyMentorSnapshot(); this.changed(this.state);
+    this.unsubscribe?.(); this.unsubscribe = null; this.orderVersions.clear(); this.state = emptyMentorSnapshot(); this.changed(this.state);
   }
   suspend() {
     if (!this.current()) return;
-    this.generation++; this.request?.abort(); this.request = null;
+    this.generation++; this.request?.abort(); this.request = null; this.orderVersions.clear();
     this.publish({ entry: null, records: [], nextCursor: null, loaded: false, busy: false, suspended: true,
       uncertain: !!this.state.pending, needsRefresh: true, lastResult: null, error: '', quote: null });
   }
@@ -111,7 +112,9 @@ export class MentorIntentController {
     try {
       const quote = await this.timed(signal => readMentorOrder(this.client, sessionId, signal), this.timeouts.read);
       if (!this.current(generation)) return;
-      if (quote.session.revision < known.revision) throw Error('Older quote');
+      if (quote.session.revision < known.revision || quote.order.revision < (this.orderVersions.get(quote.order.id) ?? 0)) throw Error('Older quote');
+      this.orderVersions.set(quote.order.id, quote.order.revision);
+      if (this.orderVersions.size > 100) this.orderVersions.delete(this.orderVersions.keys().next().value!);
       this.publish({ quote, records: Object.freeze(this.state.records.map(r => r.id === sessionId ? quote.session : r)), busy: false });
     } catch {
       if (this.current(generation)) this.publish({ busy: false, quote: null, error: '报价暂时没有读到，可以重新查看。' });
