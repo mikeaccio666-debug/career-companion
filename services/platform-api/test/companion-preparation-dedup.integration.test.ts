@@ -287,7 +287,15 @@ test('actual pre-036 encrypted zero seed survives the new default column unchang
   const before = await snapshot(f, who); await f.db.migrate(); const migrated = await snapshot(f, who);
   assert.equal(migrated.tasks[0].quirk_draw, 0);
   assert.deepEqual(migrated.tasks[0].seed_ciphertext, before.tasks[0].seed_ciphertext);
-  assert.deepEqual(migrated.answers, before.answers); assert.deepEqual(migrated.companions, before.companions);
+  assert.deepEqual(migrated.answers, before.answers);
+  // 051 adds nullable birth columns; every original value must remain exact,
+  // and this pre-036 draft must gain no identity, room or birth authority.
+  assert.deepEqual(migrated.companions, before.companions.map(row => ({ ...row,
+    name: null, name_origin: null, seal_char: null, seal_candidates: null,
+    seal_changed_at: null, ink_token: null, relationship_stage: null,
+    stage_changed_at: null, overlays: null, birth_receipt_id: null,
+    birth_idempotency_key: null, born_at: null, retired_at: null, seal_asset_id: null,
+  })));
   assert.equal(Object.hasOwn(openSeed(migrated.tasks[0], who), 'quirkDraw'), false);
   const watched = observed(f, async () => assert.fail('Legacy pending metadata must not be redrawn.'));
   assert.deepEqual(await watched.service.prepare(who, { expectedRevision: draft.revision }), { companionId, taskId, status: 'pending',
