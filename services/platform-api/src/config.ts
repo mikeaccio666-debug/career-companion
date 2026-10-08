@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { orgKnowledgeBrand } from '@companion/platform-contracts';
 import { fileURLToPath } from 'node:url';
 import { readAccountEmailConfig, type AccountEmailConfig } from './account-mail.ts';
 import { readMcpConfig, type McpCatalogConfig } from './mcp-config.ts';
@@ -17,6 +18,7 @@ export interface PlatformConfig {
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
   requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyResponseBundlePath?: string; safetyDeliveryReviewPath?: string; companionIdentityBundlePath?: string; companionIdentityReviewPath?: string; safetyDailyModelCallLimit: number;
   dataCrypto?: DataCrypto;
+  orgContentBrand?: string;
   companionSealGlyphs?: Readonly<CompanionSealGlyphConfiguration>;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
@@ -168,6 +170,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   if (env.PLATFORM_WEB_STATIC_DIR !== undefined && !env.PLATFORM_WEB_STATIC_DIR.trim()) throw new Error('PLATFORM_WEB_STATIC_DIR must name the built web directory');
   return {
     databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
+    orgContentBrand: orgKnowledgeBrand(env.PLATFORM_ORG_CONTENT_BRAND ?? '蔓藤'),
     storageDir: path.resolve(workspaceRoot,env.PLATFORM_STORAGE_DIR ?? '.local/platform/blobs'),
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),

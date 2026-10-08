@@ -1,3 +1,8 @@
+import { parseStudentOrgKnowledgePassage } from '@companion/platform-contracts';
+import { parseOrgP0Asset, orgAssetLegacyBody } from '@companion/career-core';
+import { orgDigest } from '../src/org-knowledge-values.ts';
+import { readOrgSource, orgSourcePath, orgSourceReferenceFromPath, type OrgSourceClient } from '../../../apps/web/src/org-source-api.ts';
+import { OrgSourceController } from '../../../apps/web/src/org-source-controller.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -205,7 +210,10 @@ test('method cards require a real mentor author, preserve counterexamples and on
     bound_speakers: ['interviewer'], effective_from: '2025-01-01T00:00:00.000Z', superseded_by: null };
   const batch = await service.importBundle(s.operator, s.org, s.bundle([s.row(method)]));
   await service.publishBatch(s.operator, s.org, batch.batchId, { operationId: randomUUID() });
-  assert.equal((await service.search(s.owner, { assetClass: 'method_card' }, 'interviewer')).length, 1);
+  const methods = await service.search(s.owner, { assetClass: 'method_card' }, 'interviewer');
+  assert.equal(methods.length, 1); assert.equal(methods[0].provenanceLabel, '蔓藤方法 · v1');
+  assert.equal(parseStudentOrgKnowledgePassage(methods[0]).assetRevision, 1);
+  assert(!methods[0].text.includes(s.editor.userId)); assert(!methods[0].text.includes(s.reviewer.userId));
   assert.deepEqual(await service.search(s.owner, { assetClass: 'method_card' }, 'guide'), []);
   const bad = await service.importBundle(s.operator, s.org, s.bundle([s.row({ ...method, method_id: 'fictional.bad-author', author_id: s.owner.userId })]));
   await assert.rejects(service.publishBatch(s.operator, s.org, bad.batchId, { operationId: randomUUID() }), rejected('NOT_ENTITLED'));
@@ -243,4 +251,81 @@ test('operator CLI uses a real database session and private files; receipts omit
       PLATFORM_ALLOW_PROVIDER_CALLS: '0' }, timeout: 10000, maxBuffer: 4096 }), (e: any) => {
       assert.equal(e.code, 1); assert.equal(e.stdout, ''); assert(!e.stderr.includes(token)); return true;
     });
+});
+
+async function sourceWebClient(who: Awaited<ReturnType<typeof f.actor>>) {
+  const password = 'Fictional-source-web-password-123';
+  await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1', [who.userId, await hashPassword(password)]);
+  const login = await system.app.inject({ method: 'POST', url: '/api/platform/auth/login', headers: { origin },
+    payload: { email: who.userId + '@example.invalid', password } });
+  assert.equal(login.statusCode, 200, login.body);
+  const raw = login.headers['set-cookie'], cookie = (Array.isArray(raw) ? raw[0] : raw)!.split(';')[0],
+    headers = { origin, cookie, [PLATFORM_ACCOUNT_HEADER]: who.userId };
+  let current = true; const listeners = new Set<() => void>();
+  const client: OrgSourceClient = { account: { accountId: who.userId }, isCurrent: () => current,
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    async request<T>(path: string, init: RequestInit = {}) {
+      assert.equal(init.cache, 'no-store'); assert.equal(init.method, undefined);
+      const r = await system.app.inject({ url: '/api/platform' + path, headers });
+      const data = r.json(); if (r.statusCode !== 200) throw Object.assign(Error('Source request failed.'), { status: r.statusCode, code: data.error?.code });
+      return data as T;
+    } };
+  return { client, headers, invalidate() { current = false; for (const fn of [...listeners]) fn(); } };
+}
+async function sourceStateReady(controller: OrgSourceController) {
+  for (let i = 0; i < 1200; i++) { if (controller.snapshot().state !== 'loading') return; await new Promise(r => setTimeout(r, 2)); }
+  assert.notEqual(controller.snapshot().state, 'loading');
+}
+test('actual Web client and controller read the same published SQL source through real password HTTP; revocation clears the next view', async () => {
+  const s = await setup(), p = await s.published(), web = await sourceWebClient(s.owner),
+    reference = { sourceId: p.source, revision: 2, passageId: '2:0' }, snapshots: unknown[] = [],
+    controller = new OrgSourceController(web.client, reference, v => snapshots.push(v));
+  controller.start(); await sourceStateReady(controller);
+  assert.equal(controller.snapshot().state, 'ready'); assert(controller.snapshot().passage?.text.startsWith(q().prompt_en));
+  assert.equal(controller.snapshot().passage?.provenanceLabel, '蔓藤题库');
+  const referencePath = orgSourcePath(reference); assert.deepEqual(orgSourceReferenceFromPath(referencePath), reference);
+  await service.revokeLicense(s.operator, s.org, s.license.licenseId, { operationId: randomUUID(), expectedRevision: 1, reason: 'Fictional withdrawal' });
+  await controller.refresh(); assert.equal(controller.snapshot().state, 'denied'); assert.equal(controller.snapshot().passage, null);
+  web.invalidate(); assert.equal(controller.snapshot().state, 'idle'); controller.stop();
+});
+test('actual controller keeps the original revision after withdrawal and clears content after a real session reset', async () => {
+  const s = await setup(), p = await s.published(), web = await sourceWebClient(s.owner),
+    reference = { sourceId: p.source, revision: 2, passageId: '2:0' }, controller = new OrgSourceController(web.client, reference, () => {});
+  controller.start(); await sourceStateReady(controller); assert.equal(controller.snapshot().state, 'ready');
+  await service.withdrawSource(s.operator, s.org, p.source, { operationId: randomUUID(), expectedRevision: 2, reason: 'Fictional source change' });
+  await controller.refresh(); assert.equal(controller.snapshot().state, 'stale'); assert.equal(controller.snapshot().passage, null);
+  await f.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1', [s.owner.userId]);
+  await controller.refresh(); assert.equal(controller.snapshot().state, 'account_inactive'); assert.equal(controller.snapshot().passage, null); controller.stop();
+});
+test('real foreign account has no source entitlement; malformed citation coordinates fail closed before response parsing', async () => {
+  const s = await setup(), p = await s.published(), foreign = await sourceWebClient(await f.actor());
+  await assert.rejects(readOrgSource(foreign.client, { sourceId: p.source, revision: 2, passageId: '2:0' }), (e: any) => e.status === 403 && e.code === 'NOT_ENTITLED');
+  const own = await sourceWebClient(s.owner);
+  for (const suffix of ['/2/2%3A128', '/2/2%3A00', '/2/1%3A0', '/2147483648/2147483648%3A0']) {
+    const r = await system.app.inject({ url: '/api/platform/org-knowledge/passages/' + p.source + suffix, headers: own.headers });
+    assert.equal(r.statusCode, 400, r.body); assert.equal(r.json().error.code, 'ORG_CONTENT_INPUT_INVALID');
+  }
+  await assert.rejects(readOrgSource(own.client, { sourceId: randomUUID(), revision: 2, passageId: '2:0' }), (e: any) => e.status === 404 && e.code === 'NOT_FOUND');
+  const checked = await readOrgSource(own.client, { sourceId: p.source, revision: 2, passageId: '2:0' });
+  assert.equal(parseStudentOrgKnowledgePassage(checked).scope, 'org');
+});
+test('genuine pre-readable-format source and its immutable proof remain publishable without rewriting its original citation words', async () => {
+  const s = await setup(), b = await service.importBundle(s.operator, s.org, s.bundle()), current = (await f.db.query('SELECT * FROM platform_org_knowledge_sources WHERE id=$1', [b.sourceIds[0]])).rows[0];
+  const id = randomUUID(), body = orgAssetLegacyBody(parseOrgP0Asset('question', current.structured)),
+    hash = orgDigest({ assetClass: current.asset_class, title: current.title, body, structured: current.structured, language: current.language, roleFamilies: current.role_families, tags: current.tags });
+  const state = { id, orgId: s.org, licenseId: current.license_id, revision: 1, reviewStatus: 'in_review', contentHash: hash,
+    publishBatch: null, reviewedAt: null, validUntil: current.valid_until.toISOString(), createdAt: current.created_at.toISOString(),
+    updatedAt: current.updated_at.toISOString(), withdrawnAt: null, deidVersion: current.deid_version };
+  // Explicit historical fixture in an isolated schema. Uses the actual data
+  // crypto and immutable proof table; this is not a production signing route.
+  const receipt = f.crypto.sealUtf8(JSON.stringify(state), { table: 'org_source', column: 'payload', rowId: id, ownerId: s.org, revision: 1 });
+  await f.db.query("INSERT INTO platform_org_knowledge_sources(id,org_id,batch_id,asset_class,title,body,structured,language,role_families,tags,license_id,deid_status,deid_version,review_status,editor_id,reviewer_id,valid_until,revision,content_hash,created_at,updated_at,receipt_ciphertext) SELECT $2,org_id,batch_id,asset_class,title,$3,structured,language,role_families,tags,license_id,deid_status,deid_version,review_status,editor_id,reviewer_id,valid_until,revision,$4,created_at,updated_at,$5 FROM platform_org_knowledge_sources WHERE id=$1",
+    [current.id, id, body, hash, receipt]);
+  const proof = { orgId: s.org, kind: 'source', id, revision: 1, digest: orgDigest(state) };
+  await f.db.query('INSERT INTO platform_org_content_state_proofs(org_id,kind,object_id,revision,proof_ciphertext) VALUES($1,\'source\',$2,1,$3)',
+    [s.org, id, f.crypto.sealUtf8(JSON.stringify(proof), { table: 'org_state_source', column: 'payload', rowId: id, ownerId: s.org, revision: 1 })]);
+  await service.publishBatch(s.operator, s.org, b.batchId, { operationId: randomUUID() });
+  const web = await sourceWebClient(s.owner), old = await readOrgSource(web.client, { sourceId: id, revision: 2, passageId: '2:0' });
+  assert.equal(old.text, body.slice(0, 1200));
+  assert.equal((await f.db.query('SELECT body FROM platform_org_knowledge_sources WHERE id=$1', [id])).rows[0].body, body);
 });
