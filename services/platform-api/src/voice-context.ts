@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { VOICE_CONTEXT_LIMITS, type VoiceContextSnapshot } from '@companion/platform-contracts';
 import { notFound } from './errors.ts';
+import { assertLegacyConversationRow } from './companion-room-boundary.ts';
 
 // Match String.trim(), including non-ASCII whitespace. PostgreSQL's locale-dependent
 // [:space:] does not consistently cover the same characters as the web client.
@@ -11,8 +12,9 @@ export async function assertVoiceConversation(client: PoolClient, userId: string
   // Chat takes a conversation NO KEY UPDATE lock before its user lock. KEY SHARE
   // protects deletion without creating the opposite user -> conversation wait cycle.
   // Conversation ownership is immutable through the public API.
-  const owned = await client.query('SELECT id FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR KEY SHARE', [conversationId, userId]);
+  const owned = await client.query('SELECT id,kind FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR KEY SHARE', [conversationId, userId]);
   if (!owned.rowCount) throw notFound();
+  assertLegacyConversationRow(owned.rows[0]);
 }
 
 /** Call inside the same transaction as the owned runtime lease, before contacting an issuer. */

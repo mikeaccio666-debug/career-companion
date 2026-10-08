@@ -4,6 +4,7 @@ import { readAccountEmailConfig, type AccountEmailConfig } from './account-mail.
 import { readMcpConfig, type McpCatalogConfig } from './mcp-config.ts';
 import { readDataCrypto, type DataCrypto } from './data-crypto.ts';
 import type { ModelRoutePurpose } from './model-routing.ts';
+import { readCompanionSealGlyphConfiguration, type CompanionSealGlyphConfiguration } from './companion-seal-glyphs.ts';
 
 export const workspaceRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 
@@ -16,6 +17,7 @@ export interface PlatformConfig {
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
   requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyResponseBundlePath?: string; safetyDeliveryReviewPath?: string; companionIdentityBundlePath?: string; companionIdentityReviewPath?: string; safetyDailyModelCallLimit: number;
   dataCrypto?: DataCrypto;
+  companionSealGlyphs?: Readonly<CompanionSealGlyphConfiguration>;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
   exposeProviderDetails: boolean;
@@ -87,6 +89,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   if (production && env.PLATFORM_REQUIRE_INVITE === '0') throw new Error('Production requires invitations');
   const requireInvite = production || env.PLATFORM_REQUIRE_INVITE !== '0';
   const dataCrypto = readDataCrypto(env);
+  const companionSealGlyphs = readCompanionSealGlyphConfiguration(env, workspaceRoot);
   if (env.PLATFORM_LEGAL_BUNDLE_FILE !== undefined && (!env.PLATFORM_LEGAL_BUNDLE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_LEGAL_BUNDLE_FILE))) throw new Error('PLATFORM_LEGAL_BUNDLE_FILE must name a server-controlled file');
   const legalBundlePath = env.PLATFORM_LEGAL_BUNDLE_FILE === undefined ? undefined : path.resolve(workspaceRoot,env.PLATFORM_LEGAL_BUNDLE_FILE);
   if (env.PLATFORM_SAFETY_PROFILE_FILE !== undefined && (!env.PLATFORM_SAFETY_PROFILE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_SAFETY_PROFILE_FILE))) throw new Error('PLATFORM_SAFETY_PROFILE_FILE must name a server-controlled file');
@@ -170,7 +173,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
     sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, safetyDetectorProfilePath, safetyResponseBundlePath, safetyDeliveryReviewPath, companionIdentityBundlePath, companionIdentityReviewPath, safetyDailyModelCallLimit, workbenchEnabled,
-    modelRoutes: configuredModelRoutes, exposeProviderDetails, dataCrypto,
+    modelRoutes: configuredModelRoutes, exposeProviderDetails, dataCrypto, companionSealGlyphs,
     queueName, s3, mcp: readMcpConfig(env),
   };
 }

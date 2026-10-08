@@ -391,6 +391,16 @@ keepErrorCodes(['ONBOARDING_SAFETY_RESPONSE_EXPIRED'], 'A current reviewed suppo
 keepErrorCodes(['COMPANION_NAME_ENTRY_REVISION_CHANGED'], 'Read the current naming progress before submitting another name.');
 keepErrorCodes(['COMPANION_IDENTITY_REVISION_CHANGED', 'COMPANION_SEAL_SELECTION_REVISION_CHANGED'], 'Read the current name and seal selection before choosing again.');
 keepErrorCodes(['COMPANION_JOURNEY_CHANGED'], 'Read the current companion preparation again.');
+keepErrorCodes(['COMPANION_BIRTH_SOURCE_CHANGED'], 'Read the current saved name and seal before continuing.');
+keepErrorCodes(['COMPANION_BIRTH_OPERATION_CONFLICT'], 'Use the original birth request or a new operation key for a different request.');
+keepErrorCodes(['COMPANION_EXISTS'], 'This account already has a companion. Read its saved profile.');
+keepErrorCodes(['PERSONA_NOT_ACCEPTED'], 'Accept the companion preview before continuing.');
+keepErrorCodes(['COMPANION_IDENTITY_REQUIRED', 'COMPANION_SEAL_SELECTION_REQUIRED'], 'Save a name and explicitly choose its current seal before continuing.');
+keepErrorCodes(['NAME_REJECTED'], 'Choose another name for your companion.');
+keepErrorCodes(['SEAL_REJECTED'], 'Choose a seal from the current saved candidates.');
+keepErrorCodes(['COMPANION_BIRTH_STORAGE_UNAVAILABLE', 'COMPANION_BIRTH_ASSETS_UNAVAILABLE'], 'The saved companion birth could not be confirmed.');
+keepErrorCodes(['COMPANION_SEAL_GLYPH_UNAVAILABLE', 'COMPANION_SEAL_GLYPH_INVALID', 'COMPANION_SEAL_RENDER_INVALID_INPUT', 'COMPANION_SEAL_RENDER_BUSY', 'COMPANION_SEAL_RENDER_TIMEOUT', 'COMPANION_SEAL_RENDER_WORKER_FAILED', 'COMPANION_SEAL_RENDER_INVALID_PNG'], 'The companion seal could not be rendered. Try again later.');
+keepErrorCodes(['COMPANION_ROOM_REQUIRED'], 'Use the companion room for this action.');
 keepErrorCodes(['COMPANION_NAME_OPERATION_CONFLICT'], 'Use the saved naming request or a new operation identifier for different text.');
 keepErrorCodes(['COMPANION_PREVIEW_REQUIRED'], 'Wait for the completed companion preview before submitting a name.');
 keepErrorCodes(['COMPANION_NAMING_UNAVAILABLE', 'COMPANION_PREBIRTH_INVENTORY_UNAVAILABLE', 'COMPANION_NAME_SAFETY_UNAVAILABLE'], 'Saved naming progress is temporarily unavailable. No new result has been inferred.');

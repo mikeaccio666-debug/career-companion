@@ -6,6 +6,7 @@ import type { KnowledgeSources } from './knowledge-sources.ts';
 import { ApiError, attachments, identifier, invalid, notFound, string } from './errors.ts';
 import { JobService, parseJob, providerAvailable, publicError, verifyAttachments } from './jobs.ts';
 import { acquireRuntimeLease } from './runtime-leases.ts';
+import { assertLegacyConversation, assertLegacyConversationRow } from './companion-room-boundary.ts';
 import { ARTIFACT_TEXT_PAGE_BYTES, ARTIFACT_TEXT_SOURCE_BYTES } from './artifact-text.ts';
 import { chatAccounting, validTokenCount } from './chat-usage.ts';
 import { mcpJobInput } from './mcp-connections.ts';
@@ -69,6 +70,7 @@ export class ConversationTurns {
     const {db,runtime,jobs,knowledge,audioTranscriptions,goalPlans,goalPlanProposals,goalPlanReaders}=this.services;
     const goalContinuation=data.goalPlanStep===undefined?undefined:parseGoalPlanContinuation(data.goalPlanStep,id);
     if(goalContinuation&&Object.keys(data).some(key=>key!=='goalPlanStep'))throw invalid('The goal-plan analysis provider, model and checkpoint are fixed by the server.');
+    if(goalContinuation)await assertLegacyConversation(db,uid,id);
     const planAnalysis=goalContinuation?await goalPlans.prepareAgent(uid,goalContinuation):undefined;
     const content=planAnalysis?.content??string(data.content,'content',20_000);
     const provider=planAnalysis?.provider??string(data.provider,'provider',80),requestedMode=planAnalysis?'agent':mode(data.mode);
@@ -83,6 +85,7 @@ export class ConversationTurns {
     if(audioReferences.length)await access.assertAccount(preparation.signal);
     conversation=await db.transaction(async client=>{
       const result=await client.query('SELECT * FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR NO KEY UPDATE',[id,uid]);if(!result.rowCount)throw notFound();
+      assertLegacyConversationRow(result.rows[0]);
       await verifyAttachments(client,uid,attachmentIds);
       if(attachmentIds.length||audioReferences.length)await audioTranscriptions.validateMessage(uid,selected!,attachmentIds,audioReferences,preparation.signal,client,false);
       const streaming=await client.query("SELECT id FROM platform_messages WHERE conversation_id=$1 AND status='streaming'",[id]);if(streaming.rowCount)throw new ApiError(409,'CONVERSATION_BUSY','Wait for the current response to finish.');
