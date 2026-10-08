@@ -537,6 +537,8 @@ export interface TurnSink { emit(event: TurnEvent): void | Promise<void> }
 
 `platform_memories` 在 02 §7.2 之外新增：`confidence`（§8.3）；`revision`（修改带 `expectedRevision`，不一致返回 409）；`valid_until`（如「这两周只投 DS」）；`content_fingerprint`（「不用」后 30 天不再提议同一内容）；`review_due_at`（到期问「这条还成立吗？」）；`speaker_scope`（可空，只用于 `communication` 类；对某位队员的纠正只对它生效，§1.3）。
 
+旧记忆缺少类别和敏感度，先作为仅本人可见的待复核内容保留，不自动标为 `confirmed` 或 `normal`，不进入上下文和 `search_memories`，也不视作会在 14 天后删除的模型提议。本人逐条检查内容、选择类别与敏感度并明确确认后，才纳入共享记忆（产品负责人 2026-10-08 决定；迁移见 09 第 3B 步）。
+
 新建 `platform_memory_events`（`memory_id`、`user_id`、`action`：`proposed` / `confirmed` / `edited` / `dismissed` / `deleted` / `sensitivity_changed` / `expired`；`actor`：`user` / `companion` / `expert:<key>` / `system`；`channel`、`revision`、`created_at`；**不存内容**）和 `platform_memory_uses`（`memory_id`、`conversation_id`、`message_id`、`speaker`、`channel`、`purpose`：`chat` / `morning_brief` / `handoff_note` / …、`created_at`）。
 
 ### 8.3 置信度

@@ -734,7 +734,7 @@ P0 不选声线；P1-12 起在 05 O9（可跳过）或「我 → 主理人 → �
 
 **`platform_companion_answers`**：`id`、`user_id`、`answers` jsonb（题号到选项）、`fast_track` bool、`pending_questions` jsonb（快速通道待补问的题号）、`free_text`（用 `services/platform-api/src/data-crypto.ts` 加密）、`created_at`。
 
-**`platform_memories`**：按第 7.2 节和 03 §8.2 加列；已有数据迁移为 `goal_preference`、`user_saved`、`confirmed`、`normal`，并在「它记得的你」中提示用户检查分类。
+**`platform_memories`**：按第 7.2 节和 03 §8.2 加列。已有数据先保留为本人可查看的待复核内容，不自动赋予类别、敏感度或已确认状态，也不进入任何发言者的注入或 `search_memories`。本人检查内容、选择类别与敏感度并明确确认后，才纳入共享记忆；「它记得的你」需提供这条复核路径（产品负责人 2026-10-08 决定；同步见 09 第 3B 步）。
 
 **`platform_safety_events`**：`id`、`user_id`、`conversation_id`、`message_id`、`level`、`detector_version`、`detector_mode`（`full` / `keyword_only`）、`clarified_at`、`created_at`、`reviewed_at`、`reviewer_id`、`retention_until`；只存引用，权限隔离。复核访问日志 `platform_safety_event_access`：`event_id`、`reviewer_id`、`accessed_at`、`message_range`。
 
