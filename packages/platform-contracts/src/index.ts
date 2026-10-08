@@ -300,3 +300,5 @@ export * from './companion-birth.ts';
 export * from './companion-welcome.ts';
 
 export * from './shared-memory.ts';
+
+export * from './career-targets.ts';
