@@ -169,7 +169,7 @@ export function CareerApplicationPage({ onLogout }: {
   {a.submittedVia === 'user_sends' && <small>由你记录已投</small>}
   <button type="button" disabled={busy} onClick={() => open(a.id)}>查看与改阶段</button>
  </article>;
-    return <main className="career-target-page application-page"><nav><a href="/">回到对话</a><a href="/journey/jobs">收藏的岗位</a><a href="/journey/targets">目标方向</a><button type="button" onClick={onLogout}>退出登录</button></nav>
+    return <main className="career-target-page application-page"><nav><a href="/">回到对话</a><a href="/journey/interviews">面试安排</a><a href="/journey/jobs">收藏的岗位</a><a href="/journey/targets">目标方向</a><button type="button" onClick={onLogout}>退出登录</button></nav>
   <section className="career-target-panel"><header><h1>你的投递旅程</h1><p>从收藏的岗位开始，按你的实际进展更新。</p></header>
    <div className="career-target-actions"><button type="button" disabled={disabled} onClick={() => loadJobs()}>从收藏建立记录</button><button type="button" disabled={busy} onClick={() => void load()}>重新读取看板</button></div>
    {busy && <p role="status">正在读取或保存…</p>}{notice && <p role="status">{notice}</p>}{error && <p role="alert" className="career-target-notice">{error}</p>}
