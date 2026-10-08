@@ -24,3 +24,6 @@ export * from './pending/resume-original.ts';
 export * from './application-stage-policy.ts';
 
 export * from './assets/p0-assets.ts';
+
+export * from './team/members.ts';
+export * from './team/name-call.ts';
