@@ -105,11 +105,23 @@ test('withdrawn current admission preserves owner reads, original-operation obse
 });
 test('actual late session reset rolls back private data and its receipt in the same transaction', async () => {
     const who = await f.actor(), command = create(), original = f.db.withBoundedTransaction.bind(f.db);
-    f.db.withBoundedTransaction = async (run, options) => original(async (client) => { const query = client.query.bind(client); let reset = false; const guarded = new Proxy(client, { get(target, key) { if (key === 'query')
-            return async (...args: any[]) => { const result = await (query as any)(...args); if (!reset && typeof args[0] === 'string' && args[0].startsWith('INSERT INTO platform_career_identity_dates')) {
-                reset = true;
-                await query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1', [who.userId]);
-            } return result; }; return Reflect.get(target, key); } }); return run(guarded); }, options);
+    f.db.withBoundedTransaction = async (run, options) => original(async (client) => {
+        const query = client.query.bind(client);
+        let reset = false;
+        const guarded = new Proxy(client, { get(target, key) {
+                if (key === 'query')
+                    return async (...args: any[]) => {
+                        const result = await (query as any)(...args);
+                        if (!reset && typeof args[0] === 'string' && args[0].startsWith('INSERT INTO platform_career_identity_dates')) {
+                            reset = true;
+                            await query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1', [who.userId]);
+                        }
+                        return result;
+                    };
+                return Reflect.get(target, key);
+            } });
+        return run(guarded);
+    }, options);
     try {
         await assert.rejects(records.mutate(who, 'create', null, command), bad(401));
     }
@@ -137,4 +149,63 @@ test('account deletion cascades actual encrypted records and immutable receipts;
     for (const table of ['platform_career_identity_dates', 'platform_career_identity_operations'])
         assert.equal((await f.db.query('SELECT user_id FROM ' + table + ' WHERE user_id=$1', [who.userId])).rowCount, 0);
     await f.db.migrate();
+});
+async function actualIntake(who: Awaited<ReturnType<typeof f.actor>>, stage: string | null) {
+    let draft = (await f.store.save(who, { operationId: randomUUID(), expectedRevision: 0, action: { kind: 'start', mode: 'fast_track' } })).draft;
+    while (draft.currentQuestion)
+        draft = (await f.store.save(who, { operationId: randomUUID(), expectedRevision: draft.revision, action: draft.currentQuestion === 'identity_stage' && stage !== null ? { kind: 'answer', questionId: 'identity_stage', value: stage } : { kind: 'skip', questionId: draft.currentQuestion } })).draft;
+    assert.equal(draft.state, 'intake_ready');
+    return draft;
+}
+test('actual intake entry stays hidden for missing/skipped/declined answers even when real private dates exist; structured answers carry genuine proof', async () => {
+    for (const stage of [null, 'other', 'prefer_not_say']) {
+        const who = await f.actor();
+        await actualIntake(who, stage);
+        await records.mutate(who, 'create', null, create());
+        assert.deepEqual(await records.entry(who), { kind: 'hidden', ownerId: who.userId });
+    }
+    const missing = await f.actor();
+    assert.deepEqual(await records.entry(missing), { kind: 'hidden', ownerId: missing.userId });
+    for (const stage of ['f1_student', 'opt', 'stem_opt']) {
+        const who = await f.actor(), draft = await actualIntake(who, stage);
+        assert.deepEqual(await records.entry(who), { kind: 'available', ownerId: who.userId, stage, source: { draftId: draft.id, revision: draft.revision } });
+        const before = (await f.db.query('SELECT count(*)::int count FROM platform_onboarding_operations WHERE user_id=$1', [who.userId])).rows[0].count;
+        await records.entry(who);
+        assert.equal((await f.db.query('SELECT count(*)::int count FROM platform_onboarding_operations WHERE user_id=$1', [who.userId])).rows[0].count, before);
+        await f.db.query('DELETE FROM platform_terms_consents WHERE user_id=$1', [who.userId]);
+        await f.db.query('UPDATE platform_users SET email_verified_at=NULL WHERE id=$1', [who.userId]);
+        assert.equal((await records.entry(who)).kind, 'available');
+    }
+});
+test('intake entry rejects authentic older snapshot rollback and a current encrypted selection without its independent original operation', async () => {
+    const who = await f.actor();
+    let d = (await f.store.save(who, { operationId: randomUUID(), expectedRevision: 0, action: { kind: 'start', mode: 'fast_track' } })).draft;
+    const old = (await f.db.query('SELECT * FROM platform_onboarding_drafts WHERE user_id=$1', [who.userId])).rows[0];
+    while (d.currentQuestion)
+        d = (await f.store.save(who, { operationId: randomUUID(), expectedRevision: d.revision, action: d.currentQuestion === 'identity_stage' ? { kind: 'answer', questionId: 'identity_stage', value: 'opt' } : { kind: 'skip', questionId: d.currentQuestion } })).draft;
+    await f.db.query('UPDATE platform_onboarding_drafts SET revision=$2,payload_ciphertext=$3,updated_at=$4 WHERE user_id=$1', [who.userId, old.revision, old.payload_ciphertext, old.updated_at]);
+    await assert.rejects(records.entry(who), bad(503));
+    const other = await f.actor(), draft = await actualIntake(other, 'other'), answer = draft.answersPartial.identity_stage;
+    assert(answer?.kind === 'answered');
+    answer.value = 'opt';
+    const encrypted = f.crypto.sealUtf8(JSON.stringify(draft), { table: 'platform_onboarding_drafts', column: 'payload_ciphertext', rowId: draft.id, ownerId: other.userId, revision: draft.revision });
+    await f.db.query('UPDATE platform_onboarding_drafts SET payload_ciphertext=$2 WHERE user_id=$1', [other.userId, encrypted]);
+    await assert.rejects(records.entry(other), bad(503));
+});
+test('a genuinely classified identity text uses its actual detected resolution, never raw owner wording or an invented safety decision', async () => {
+    const who = await f.actor();
+    let d = (await f.store.save(who, { operationId: randomUUID(), expectedRevision: 0, action: { kind: 'start', mode: 'fast_track' } })).draft;
+    while (d.currentQuestion !== 'identity_stage')
+        d = (await f.store.save(who, { operationId: randomUUID(), expectedRevision: d.revision, action: { kind: 'skip', questionId: d.currentQuestion } })).draft;
+    d = (await f.store.save(who, { operationId: randomUUID(), expectedRevision: d.revision, action: { kind: 'text', questionId: 'identity_stage', text: 'Fictional owner says they are on OPT.' } })).draft;
+    assert.equal((await records.entry(who)).kind, 'hidden');
+    const claim = await f.store.claimSafety(who, { detectorRevision: 7 });
+    assert(claim);
+    await f.store.processSafety(claim, async (input, admit) => { assert.equal(input.questionId, 'identity_stage'); return admit(async () => ({ level: 'L0', mode: 'full', resolution: { kind: 'answer', questionId: 'identity_stage', value: 'opt' } })); });
+    d = (await f.store.read(who))!;
+    while (d.currentQuestion)
+        d = (await f.store.save(who, { operationId: randomUUID(), expectedRevision: d.revision, action: { kind: 'skip', questionId: d.currentQuestion } })).draft;
+    assert.equal((await records.entry(who)).kind, 'available');
+    await f.db.query("UPDATE platform_onboarding_safety_submissions SET level='L1' WHERE id=$1", [claim.submissionId]);
+    await assert.rejects(records.entry(who), bad(503));
 });

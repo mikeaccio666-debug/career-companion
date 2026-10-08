@@ -1,3 +1,4 @@
+import { CareerIdentityPage } from './career-identity-view';
 import { CareerApplicationPage } from './career-application-view';
 import { ResumeReviewPage } from './resume-review-view';
 import { CareerStoryPage } from './career-story-view';
@@ -764,6 +765,7 @@ function AccountEntryApp() {
   if (window.location.pathname === '/journey/applications' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerApplicationPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/jobs' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <ManualJobPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/targets' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerTargetPage onLogout={() => void logout()} />;
+  if (window.location.pathname === '/me/profile' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerIdentityPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/me/memory' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <SharedMemoryPage onLogout={() => void logout()} />;
   if (!accountReady) return <AccountGate key={accountScope.current.revision} user={user} options={authOptions} onVerified={verifiedAccount} onLogout={() => void logout()} serverError={error}  />;
   if (!consentCurrent) return <AccountConsentView key={`consent-${accountScope.current.revision}`} user={user} options={authOptions} consent={consent} checking={checkingConsent} serverError={error} onRetry={() => void connectWorkspace(true)} onConsented={(status) => { if (accountClient?.isCurrent() && accountScope.current.isCurrent(renderSession) && isCurrentStudentConsent(authOptions, user.id, status)) setConsent(status); }} onLogout={() => void logout()} />;

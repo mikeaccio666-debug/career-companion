@@ -41,12 +41,21 @@ export interface CareerIdentityCommand {
 }
 const fail = (): never => { throw new CareerRecordInputError(); };
 export function careerIdentitySensitivity(field: CareerIdentityField) { return field === 'program_end_date' || field === 'stem_designated' ? 'sensitive' as const : 'restricted' as const; }
-function integer(v: unknown, min: number, max = 2147483647) { if (typeof v !== 'number' || !Number.isSafeInteger(v) || Object.is(v, -0) || v < min || v > max)
-    return fail(); return v; }
-function text(v: unknown, max: number) { if (typeof v !== 'string' || v.trim() !== v || !v || Array.from(v).length > max || /[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069\ud800-\udfff]/u.test(v))
-    return fail(); return v; }
-function at(v: unknown) { if (typeof v !== 'string' || !Number.isFinite(Date.parse(v)) || new Date(v).toISOString() !== v)
-    return fail(); return v; }
+function integer(v: unknown, min: number, max = 2147483647) {
+    if (typeof v !== 'number' || !Number.isSafeInteger(v) || Object.is(v, -0) || v < min || v > max)
+        return fail();
+    return v;
+}
+function text(v: unknown, max: number) {
+    if (typeof v !== 'string' || v.trim() !== v || !v || Array.from(v).length > max || /[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069\ud800-\udfff]/u.test(v))
+        return fail();
+    return v;
+}
+function at(v: unknown) {
+    if (typeof v !== 'string' || !Number.isFinite(Date.parse(v)) || new Date(v).toISOString() !== v)
+        return fail();
+    return v;
+}
 export function careerIdentityCalendarDate(v: unknown): string {
     if (typeof v !== 'string' || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v))
         return fail();
@@ -55,8 +64,11 @@ export function careerIdentityCalendarDate(v: unknown): string {
         return fail();
     return v;
 }
-function field(v: unknown): CareerIdentityField { if (typeof v !== 'string' || !CAREER_IDENTITY_FIELDS.includes(v as CareerIdentityField))
-    return fail(); return v as CareerIdentityField; }
+function field(v: unknown): CareerIdentityField {
+    if (typeof v !== 'string' || !CAREER_IDENTITY_FIELDS.includes(v as CareerIdentityField))
+        return fail();
+    return v as CareerIdentityField;
+}
 function valueFor(key: CareerIdentityField, v: unknown, saved: boolean): CareerIdentityValue | CareerIdentityInputValue {
     if (['program_end_date', 'opt_start_date', 'opt_end_date', 'stem_opt_start_date', 'stem_opt_end_date', 'custom_status_date'].includes(key))
         return careerIdentityCalendarDate(v);
@@ -76,9 +88,13 @@ function valueFor(key: CareerIdentityField, v: unknown, saved: boolean): CareerI
     const x = careerRecordObject(v, saved ? ['days', 'reportedAt'] : ['days']);
     return Object.freeze({ days: integer(x.days, 0), ...(saved ? { reportedAt: at(x.reportedAt) } : {}) });
 }
-function labelFor(key: CareerIdentityField, v: unknown): string | null { if (key === 'custom_status_date')
-    return text(v, 120); if (v !== null)
-    return fail(); return null; }
+function labelFor(key: CareerIdentityField, v: unknown): string | null {
+    if (key === 'custom_status_date')
+        return text(v, 120);
+    if (v !== null)
+        return fail();
+    return null;
+}
 export function parseCareerIdentityCommand(action: CareerIdentityAction, input: unknown): Readonly<CareerIdentityCommand> {
     if (!['create', 'edit', 'delete'].includes(action))
         return fail();
@@ -101,4 +117,29 @@ export function parseCareerIdentityRecord(input: unknown): Readonly<CareerIdenti
     }).reportedAt !== record.confirmedAt)
         return fail();
     return Object.freeze(record);
+}
+/** Actual intake selection for the explicit personal-record management page.
+ * This is not a C5 completion, StatusClock preference or execution grant. */
+export type CareerIdentityEntry = Readonly<{
+    kind: 'hidden';
+    ownerId: string;
+}> | Readonly<{
+    kind: 'available';
+    ownerId: string;
+    stage: 'f1_student' | 'opt' | 'stem_opt';
+    source: Readonly<{
+        draftId: string;
+        revision: number;
+    }>;
+}>;
+export function parseCareerIdentityEntry(input: unknown): CareerIdentityEntry {
+    const base = careerRecordObject(input, ['kind', 'ownerId'], ['stage', 'source']), ownerId = careerRecordId(base.ownerId);
+    if (base.kind === 'hidden') {
+        careerRecordObject(input, ['kind', 'ownerId']);
+        return Object.freeze({ kind: 'hidden', ownerId });
+    }
+    if (base.kind !== 'available' || !['f1_student', 'opt', 'stem_opt'].includes(base.stage as string))
+        return fail();
+    const source = careerRecordObject(base.source, ['draftId', 'revision']);
+    return Object.freeze({ kind: 'available', ownerId, stage: base.stage as 'f1_student' | 'opt' | 'stem_opt', source: Object.freeze({ draftId: careerRecordId(source.draftId), revision: integer(source.revision, 1) }) });
 }
