@@ -71,11 +71,22 @@ export function MentorServiceCard({offer, disabled, onChoose}: {
     <button type="button" className="mentor-primary" disabled={disabled || offer.availability !== 'available'} onClick={onChoose}>我想约一次</button>
   </article>;
 }
-export function MentorQuoteCard({order}: {order: Readonly<MentorOrder>}) {
+function mentorOrderNotice(order:Readonly<MentorOrder>,session?:Readonly<MentorIntent>):string {
+  if(order.status==='void')return '这份报价已作废。';
+  if(order.status==='refunded_partial')return '已记录部分退款。';
+  if(order.status==='refunded_full')return '已记录全额退款。';
+  if(order.status==='paid'){
+    if(session?.status==='scheduled')return '已记录线下收款，预约时间已确认。';
+    if(session?.status==='cancelled')return '已记录线下收款，预约已取消；退款情况请以此处订单记录为准。';
+    return '已记录线下收款，排期待确认。';
+  }
+  return session?.status==='scheduled'?'报价已记录，预约时间已确认；付款记录请以此处订单状态为准。':'报价已记录，付款安排和排期待运营确认。';
+}
+export function MentorQuoteCard({order,session}: {order: Readonly<MentorOrder>;session?:Readonly<MentorIntent>}) {
   const offer = order.shownOffer;
   return <article className="mentor-service-card" aria-label="这份请求的报价">
     <header><span className="mentor-human-tag">真人 · 蔓藤导师</span><h2>{offer.title} · 报价</h2></header>
-    <p className="mentor-system-notice" role="status">系统 · {order.status === 'quoted' ? '报价已记录，付款安排和排期待运营确认。' : order.status === 'paid' ? '已记录线下收款，排期待确认。' : order.status === 'refunded_partial' ? '已记录部分退款。' : order.status === 'refunded_full' ? '已记录全额退款。' : '这份报价已作废。'}</p>
+    <p className="mentor-system-notice" role="status">系统 · {mentorOrderNotice(order,session)}</p>
     <section><h3>你付的是什么</h3><p>{offer.description}</p></section>
     <section><h3>不包含什么</h3><p>{offer.exclusions}</p><p>不承诺面试或 offer，不包含内推服务。</p></section>
     <section><h3>报价、时长与收款方</h3><dl className="mentor-service-facts">
@@ -104,7 +115,7 @@ function MentorOperationStatus({state,controller}: {state: MentorSnapshot; contr
       </div>
     </div>}
     {state.lastResult && <p className="mentor-notice" role="status">{state.lastResult.session.status === 'cancelled'
-      ? '这份意向已取消。' : state.lastResult.session.status === 'matched' ? '已匹配蔓藤导师（真人），请查看报价；排期仍待确认。' : '收到了，预计 48 小时内由运营为你匹配蔓藤导师（真人）。'}</p>}
+      ? '这份意向已取消。' : state.lastResult.session.status === 'scheduled' ? '已约好，请查看确认时间与会议链接。' : state.lastResult.session.status === 'matched' ? '已匹配蔓藤导师（真人），请查看报价；排期仍待确认。' : '收到了，预计 48 小时内由运营为你匹配蔓藤导师（真人）。'}</p>}
   </>;
 }
 export function MentorIntentScene({state,editor,setEditor,cancelling,setCancelling,inputError,setInputError,controller}: SceneProps) {
@@ -159,18 +170,19 @@ export function MentorIntentScene({state,editor,setEditor,cancelling,setCancelli
         action:'cancel',sessionId:cancelling.id,body:{operationId:crypto.randomUUID(),expectedRevision:cancelling.revision},
       }))}>确认取消这份意向</button><button type="button" disabled={state.busy || !!state.pending} onClick={() => setCancelling(null)}>保留</button></div>
     </section>}
-    {state.quote && <MentorQuoteCard order={state.quote.order} />}
+    {state.quote && <MentorQuoteCard order={state.quote.order} session={state.quote.session} />}
     <section className="mentor-history" aria-labelledby="mentor-history-title"><h2 id="mentor-history-title">我的请求</h2>
       {!state.records.length && <p>你还没有提交真人服务意向。</p>}
       <ul>{state.records.map(record => <li key={record.id}>
         <div className="mentor-record-heading"><h3>{serviceLabels[record.kind]}</h3>
-          <span className={'mentor-session-status '+record.status}>{record.status === 'requested' ? '已提交意向' : record.status === 'matched' ? '已匹配 · 排期待确认' : '已取消'}</span></div>
+          <span className={'mentor-session-status '+record.status}>{record.status === 'requested' ? '已提交意向' : record.status === 'matched' ? '已匹配 · 排期待确认' : record.status === 'scheduled' ? '已约好' : '已取消'}</span></div>
         <p className="mentor-private-note">{record.intentNote}</p>
         <p className="mentor-record-contact">称呼：{record.contactName} · 邮箱：{record.contactEmail}</p>
         <time className="mentor-num" dateTime={record.createdAt}>{mentorTime(record.createdAt)}</time>
         {record.status === 'requested' && <p>等待人工匹配与报价。</p>}
-        {record.assignment && <p>匹配导师：{record.assignment.mentorDisplayName}（真人）<br />建议时段：<time className="mentor-num" dateTime={record.assignment.startsAt}>{mentorTime(record.assignment.startsAt,record.assignment.timeZone)}</time> · {record.assignment.timeZone}</p>}
+        {record.assignment && <p>匹配导师：{record.assignment.mentorDisplayName}（真人）<br />{record.scheduled?'确认时间：':'建议时段：'}<time className="mentor-num" dateTime={record.assignment.startsAt}>{mentorTime(record.assignment.startsAt,record.assignment.timeZone)}</time> · {record.assignment.timeZone}</p>}
         {record.status === 'matched' && <p>报价已记录，付款安排和排期待运营确认。</p>}
+        {record.status==='scheduled'&&record.scheduled&&<p className="mentor-system-notice">系统 · 已约好。<a href={record.scheduled.meetingUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">打开会议链接</a><br />需要取消或改期时，请联系为你确认预约的运营；退款按原服务说明人工处理。</p>}
         {record.orderId && <button type="button" disabled={locked} onClick={() => void controller.loadOrder(record.id)}>查看报价</button>}
         {['requested','matched'].includes(record.status) && <button type="button" disabled={locked || !!editor}
           onClick={() => setCancelling(record)}>取消这份意向</button>}
