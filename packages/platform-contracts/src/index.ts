@@ -316,3 +316,5 @@ export * from './upload-removals.ts';
 export * from './application-stages.ts';
 
 export * from './career-applications.ts';
+
+export * from './career-identity.ts';
