@@ -1,3 +1,5 @@
+import { careerHttpQuery } from './career-http-query.ts';
+import { ResumeOriginalReview } from './resume-original-review.ts';
 import { CareerPreparationSources } from './career-preparation-sources.ts';
 import { CareerStories } from './career-stories.ts';
 import { ManualJobs } from './manual-jobs.ts';
@@ -16,7 +18,7 @@ import multipart from '@fastify/multipart';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { Conversation, PlatformProviderRuntime, ProviderAttachment, User, VoiceContextSnapshot, VoiceSessionResponse } from '@companion/platform-contracts';
-import { PLATFORM_ACCOUNT_HEADER, parseCompanionSafetyQuestionReserveCommand } from '@companion/platform-contracts';
+import { careerRecordObject,PLATFORM_ACCOUNT_HEADER, parseCompanionSafetyQuestionReserveCommand } from '@companion/platform-contracts';
 import { createProviderRuntime } from '@companion/ai-core';
 import { Database } from './database.ts';
 import { readConfig, type PlatformConfig } from './config.ts';
@@ -109,6 +111,7 @@ export async function buildApp(options:AppOptions={}) {
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerStories=new CareerStories(db,config,bundle);
   const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories);
+  const resumeReview=new ResumeOriginalReview(db,config,bundle);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const storage=options.storage??createStorage(config);
@@ -584,7 +587,7 @@ export async function buildApp(options:AppOptions={}) {
   function libraryQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'CAREER_LIBRARY_INPUT_INVALID','Unsupported experience query.');}
   for(const [kind,path] of [['project','projects'],['story','stories']] as const){
     const root=prefix+'/career/'+path;
-    app.get(root,limitedAccount,async(request,reply)=>{const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerStories.list(fixedRequestSession(request,userId(request)),kind,request.query,c.signal);}finally{c.dispose();}});
+    app.get(root,limitedAccount,async(request,reply)=>{const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerStories.list(fixedRequestSession(request,userId(request)),kind,careerHttpQuery(request.query),c.signal);}finally{c.dispose();}});
     app.get(root+'/:id',limitedAccount,async(request,reply)=>{libraryQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerStories.get(fixedRequestSession(request,userId(request)),kind,params(request),c.signal);}finally{c.dispose();}});
     async function mutateLibrary(request:FastifyRequest,reply:FastifyReply,action:'create'|'edit'|'confirm'|'withdraw'|'delete'){libraryQuery(request);const c=requestSignal(request,reply);try{const result=await careerStories.mutate(fixedRequestSession(request,userId(request)),kind,action,action==='create'?null:params(request),request.body,c.signal);reply.header('Cache-Control','private, no-store');if(action==='create')reply.code(result.operation.replayed?200:201);return result;}finally{c.dispose();}}
     app.post(root,limitedAccount,(request,reply)=>mutateLibrary(request,reply,'create'));
@@ -595,14 +598,36 @@ export async function buildApp(options:AppOptions={}) {
   }
   app.get(prefix+'/career/progress',limitedAccount,async(request,reply)=>{libraryQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerStories.progress(fixedRequestSession(request,userId(request)),c.signal);}finally{c.dispose();}});
   function manualJobQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'MANUAL_JOB_INPUT_INVALID','Unsupported saved-job query.');}
-  app.get(`${prefix}/career/job-observations`,limitedAccount,async(request,reply)=>{const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await manualJobs.list(fixedRequestSession(request,userId(request)),request.query,c.signal);}finally{c.dispose();}});
+  app.get(`${prefix}/career/job-observations`,limitedAccount,async(request,reply)=>{const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await manualJobs.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),c.signal);}finally{c.dispose();}});
   app.get(`${prefix}/career/job-observations/:id`,limitedAccount,async(request,reply)=>{manualJobQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {job:await manualJobs.get(fixedRequestSession(request,userId(request)),params(request),c.signal)};}finally{c.dispose();}});
   async function manualJobMutation(request:FastifyRequest,reply:FastifyReply,action:'create'|'delete'){manualJobQuery(request);const c=requestSignal(request,reply);try{const result=await manualJobs.mutate(fixedRequestSession(request,userId(request)),action,action==='create'?null:params(request),request.body,c.signal);reply.header('Cache-Control','private, no-store');if(action==='create')reply.code(result.operation.replayed?200:201);return result;}finally{c.dispose();}}
   app.post(`${prefix}/career/job-observations/duplicates`,limitedAccount,async(request,reply)=>{manualJobQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await manualJobs.duplicates(fixedRequestSession(request,userId(request)),request.body,c.signal);}finally{c.dispose();}});
   app.post(`${prefix}/career/job-observations`,limitedAccount,(request,reply)=>manualJobMutation(request,reply,'create'));
   app.delete(`${prefix}/career/job-observations/:id`,limitedAccount,(request,reply)=>manualJobMutation(request,reply,'delete'));
   function targetQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'CAREER_TARGET_INPUT_INVALID','Unsupported direction query.');}
-  app.get(`${prefix}/career/targets`,limitedAccount,async(request,reply)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerTargets.list(fixedRequestSession(request,userId(request)),request.query,cancellation.signal);}finally{cancellation.dispose();}});
+  const resumeClosedQuery=(request:FastifyRequest)=>{try{careerRecordObject(careerHttpQuery(request.query),[]);}catch{throw invalid('Unsupported resume query.');}};
+  const resumeRead=async(request:FastifyRequest,reply:FastifyReply,run:(signal:AbortSignal)=>Promise<unknown>)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await run(cancellation.signal);}finally{cancellation.dispose();}};
+  app.get(`${prefix}/pending-items`,limitedAccount,async(request,reply)=>resumeRead(request,reply,signal=>resumeReview.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),signal)));
+  app.get(`${prefix}/career/resume-versions`,limitedAccount,async(request,reply)=>resumeRead(request,reply,signal=>resumeReview.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),signal)));
+  app.get(`${prefix}/pending-items/operations/:id`,limitedAccount,async(request,reply)=>{resumeClosedQuery(request);return resumeRead(request,reply,signal=>resumeReview.operation(fixedRequestSession(request,userId(request)),params(request),signal));});
+  app.get(`${prefix}/pending-items/:id`,limitedAccount,async(request,reply)=>{resumeClosedQuery(request);return resumeRead(request,reply,signal=>resumeReview.get(fixedRequestSession(request,userId(request)),params(request),false,signal));});
+  app.get(`${prefix}/career/resume-versions/:id`,limitedAccount,async(request,reply)=>{resumeClosedQuery(request);return resumeRead(request,reply,signal=>resumeReview.get(fixedRequestSession(request,userId(request)),params(request),true,signal));});
+  app.get(`${prefix}/pending-items/:id/revisions/:revision`,limitedAccount,async(request,reply)=>{resumeClosedQuery(request);const r=(request.params as any).revision;if(typeof r!=='string'||!/^[1-9][0-9]{0,9}$/.test(r))throw invalid('Use an actual revision.');return resumeRead(request,reply,signal=>resumeReview.revision(fixedRequestSession(request,userId(request)),params(request),Number(r),signal));});
+  const resumeChange=async(request:FastifyRequest,reply:FastifyReply,action:import('@companion/platform-contracts').ResumeReviewAction,input:unknown=request.body)=>{
+   resumeClosedQuery(request);return resumeRead(request,reply,async signal=>{const saved=await resumeReview.mutate(fixedRequestSession(request,userId(request)),action,action==='create'?null:params(request),input,'web',signal);if(action==='create')reply.code(saved.operation.replayed?200:201);return saved;});
+  };
+  app.post(`${prefix}/career/resume-versions`,limitedAccount,async(request,reply)=>resumeChange(request,reply,'create'));
+  app.post(`${prefix}/pending-items/:id/revisions`,limitedAccount,async(request,reply)=>resumeChange(request,reply,'edit'));
+  app.post(`${prefix}/pending-items/:id/decision`,limitedAccount,async(request,reply)=>{
+   let r:Record<string,unknown>;try{r=careerRecordObject(request.body,['operationId','revision','payloadDigest','decision']);}catch{throw invalid('Use one version and digest decision.');}
+   if(r.decision==='request_changes')throw new ApiError(503,'PENDING_REVISION_EXECUTOR_UNAVAILABLE','Expert revision is not available yet.');
+   if(r.decision!=='approve'&&r.decision!=='decline')throw invalid('Use one supported decision.');
+   return resumeChange(request,reply,r.decision,{operationId:r.operationId,expectedRevision:r.revision,payloadDigest:r.payloadDigest});
+  });
+  app.post(`${prefix}/pending-items/:id/reopen`,limitedAccount,async(request,reply)=>resumeChange(request,reply,'reopen'));
+  app.post(`${prefix}/pending-items/:id/archive`,limitedAccount,async(request,reply)=>resumeChange(request,reply,'archive'));
+  app.delete(`${prefix}/pending-items/:id`,limitedAccount,async(request,reply)=>resumeChange(request,reply,'delete'));
+  app.get(`${prefix}/career/targets`,limitedAccount,async(request,reply)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerTargets.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {target:await careerTargets.get(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}finally{cancellation.dispose();}});
   async function targetMutation(request:FastifyRequest,reply:FastifyReply,kind:'create'|'edit'|'status'|'delete'){
     targetQuery(request);const cancellation=requestSignal(request,reply);try{const result=await careerTargets.mutate(fixedRequestSession(request,userId(request)),kind,kind==='create'?null:params(request),request.body,cancellation.signal);reply.header('Cache-Control','private, no-store');if(kind==='create')reply.code(result.operation.replayed?200:201);return result;}finally{cancellation.dispose();}
@@ -612,7 +637,7 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/career/targets/:id/status`,limitedAccount,(request,reply)=>targetMutation(request,reply,'status'));
   app.delete(`${prefix}/career/targets/:id`,limitedAccount,(request,reply)=>targetMutation(request,reply,'delete'));
   app.get(`${prefix}/memories`,limitedAccount,async(request,reply)=>{
-    const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await sharedMemories.list(fixedRequestSession(request,userId(request)),request.query,cancellation.signal);}finally{cancellation.dispose();}
+    const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await sharedMemories.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),cancellation.signal);}finally{cancellation.dispose();}
   });
   app.get(`${prefix}/memories/:id`,limitedAccount,async(request,reply)=>{
     if(Object.keys(object(request.query)).length)throw new ApiError(400,'MEMORY_INPUT_INVALID','Unsupported memory query.');
@@ -761,5 +786,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,manualJobs,careerStories,careerPreparationSources,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,manualJobs,careerStories,careerPreparationSources,resumeReview,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
