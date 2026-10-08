@@ -6,7 +6,8 @@ import { authorizeFixedSession,type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { CareerTargets } from './career-targets.ts';
 import type { CareerStories } from './career-stories.ts';
-import { buildCareerRunContext,type OwnedCareerTarget,type OwnedCareerEvidence,type OwnedCareerInput,type CareerInputSelection } from './career-run-context.ts';
+import type { ResumeOriginalReview } from './resume-original-review.ts';
+import { buildCareerRunContext,type OwnedCareerTarget,type OwnedCareerResume,type OwnedCareerEvidence,type OwnedCareerInput,type CareerInputSelection } from './career-run-context.ts';
 import { ApiError } from './errors.ts';
 
 export interface CareerPreparationSourceIndex {
@@ -16,6 +17,8 @@ export interface CareerPreparationSourceIndex {
  readonly targets:readonly Readonly<OwnedCareerTarget>[];
  readonly projects:readonly Readonly<OwnedCareerEvidence>[];
  readonly stories:readonly Readonly<OwnedCareerInput>[];
+ /** null means no actual adapter, not an invented empty collection. */
+ readonly resumes:readonly Readonly<OwnedCareerResume>[]|null;
 }
 const bad=()=>new ApiError(400,'CAREER_PREPARATION_INPUT_INVALID','Use saved preparation coordinates.');
 function fixed(value:FixedSessionContext){
@@ -28,8 +31,8 @@ function request(value:unknown):{skillId:CareerSkillId;selection:CareerInputSele
   const r=careerRecordObject(value,['skillId'],['selection']);if(!CAREER_SKILLS.some(s=>s.id===r.skillId))throw bad();
   const selection:CareerInputSelection={};
   if(Object.hasOwn(r,'selection')){
-   const s=careerRecordObject(r.selection,[],['targetId','projectId']);
-   for(const key of ['targetId','projectId'] as const)if(Object.hasOwn(s,key))selection[key]=careerRecordId(s[key]);
+   const s=careerRecordObject(r.selection,[],['targetId','projectId','resumeId']);
+   for(const key of ['targetId','projectId','resumeId'] as const)if(Object.hasOwn(s,key))selection[key]=careerRecordId(s[key]);
   }
   return {skillId:r.skillId as CareerSkillId,selection:Object.freeze(selection)};
  }catch{throw bad();}
@@ -39,14 +42,16 @@ function request(value:unknown):{skillId:CareerSkillId;selection:CareerInputSele
  * source safety grade, model use, review or execution lease is created here. */
 export class CareerPreparationSources {
  constructor(private readonly db:Database,private readonly targets:Pick<CareerTargets,'readForPreparationInTransaction'>,
-  private readonly library:Pick<CareerStories,'readPreparationIndexInTransaction'>){}
+  private readonly library:Pick<CareerStories,'readPreparationIndexInTransaction'>,
+  private readonly resumeVersions?:Pick<ResumeOriginalReview,'readForPreparationInTransaction'>){}
  async readInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal):Promise<Readonly<CareerPreparationSourceIndex>>{
   const context=fixed(value);await authorizeFixedSession(client,context,signal);
   // Sequential reads share this exact bounded transaction and owner lock.
   const targets=await this.targets.readForPreparationInTransaction(client,context,signal);
   const {projects,stories}=await this.library.readPreparationIndexInTransaction(client,context,signal);
+  const resumes=this.resumeVersions?await this.resumeVersions.readForPreparationInTransaction(client,context,signal):null;
   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
-  const content={kind:'owned_career_preparation_source_index' as const,ownerId:context.userId,targets,projects,stories};
+  const content={kind:'owned_career_preparation_source_index' as const,ownerId:context.userId,targets,projects,stories,resumes};
   return Object.freeze({...content,indexId:'career_index_'+createHash('sha256').update(canonical(content)).digest('hex')});
  }
  async read(value:FixedSessionContext,signal?:AbortSignal){
@@ -69,6 +74,7 @@ export class CareerPreparationSources {
   const built=await buildCareerRunContext({ownerId:context.userId,skillId:r.skillId,selection:r.selection,signal,tools,ports:{
    listTargets:async scope=>{assertScope(scope);return sourceIndex.targets;},
    listEvidence:async scope=>{assertScope(scope);return sourceIndex.projects;},
+   ...(sourceIndex.resumes===null?{}:{listResumeVersions:async (scope:{ownerId:string})=>{assertScope(scope);return sourceIndex.resumes!;}}),
   }});
   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
   return Object.freeze({sourceIndex,built});

@@ -11,7 +11,10 @@ export interface OwnedCareerProfile extends OwnedCareerInput { confirmed: { degr
 export interface OwnedCareerTarget extends OwnedCareerInput { status: 'active' | 'exploring' | 'archived'; }
 export interface OwnedCareerApplication extends OwnedCareerInput { stage: 'saved' | 'applied' | 'oa' | 'interview' | 'offer' | 'closed'; track: string; }
 export interface OwnedCareerEvidence extends OwnedCareerInput { kind: 'project' | 'practice_review' | 'other'; }
-export interface OwnedCareerResume extends OwnedCareerInput { status: 'active' | 'draft' | 'archived'; track: string; }
+export interface OwnedCareerResume extends OwnedCareerInput { status: 'active' | 'draft' | 'archived'; track: string;
+  /** Actual immutable owner approval time, never inferred from list order or revision. */
+  approvedAt?: string;
+}
 export interface OwnedKnowledgeAccess extends OwnedCareerInput { empty: boolean; }
 /** Authenticated server dependencies. No endpoint accepts this structure from a request. Missing ports remain unavailable. */
 export interface CareerRunPorts {
@@ -97,13 +100,24 @@ export async function buildCareerRunContext(input: { ownerId: string; skillId: C
   if (needs.has('project-facts')) selection.projectId ? addOne('project-facts', projects, selection.projectId) : aggregate('project-facts', projects);
   if (needs.has('skill-gaps')) aggregate('skill-gaps', (evidence ?? []).filter(row => row.kind === 'practice_review'), 3);
   const activeResumes = (resumes ?? []).filter(row => row.status === 'active');
+  function selectResume(rows: readonly OwnedCareerResume[], selectedId?: string): readonly OwnedCareerResume[] {
+    const current = rows.filter(row => valid(row, input.ownerId) && (!selectedId || row.id === selectedId));
+    if (selectedId || current.length <= 1) return current;
+    // Product 03 §3.4 selects the latest active original. Only actual approval
+    // times can establish recency; old ports without that evidence stay ambiguous.
+    const timed = current.every(row => typeof row.approvedAt === 'string' && Number.isFinite(Date.parse(row.approvedAt)) && new Date(row.approvedAt).toISOString() === row.approvedAt);
+    if (!timed) return current;
+    const latest = current.map(row => row.approvedAt!).sort().at(-1)!;
+    // Same-time approvals still require an explicit choice, never array order.
+    return current.filter(row => row.approvedAt === latest);
+  }
   if (needs.has('resume-source')) {
     if (selection.uploadedResumeId) { if (upload) addOne('resume-source', [upload], selection.uploadedResumeId); }
-    else addOne('resume-source', activeResumes, selection.resumeId);
+    else addOne('resume-source', selectResume(activeResumes, selection.resumeId));
   }
   if (needs.has('reviewed-resume')) {
     const selectedJobs = liveJobs.filter(row => valid(row, input.ownerId) && (!selection.targetJobId || row.id === selection.targetJobId));
-    if (selectedJobs.length === 1) addOne('reviewed-resume', activeResumes.filter(row => row.track === selectedJobs[0]!.track), selection.resumeId);
+    if (selectedJobs.length === 1) addOne('reviewed-resume', selectResume(activeResumes.filter(row => row.track === selectedJobs[0]!.track), selection.resumeId));
   }
   if (needs.has('knowledge') && knowledge) addOne('knowledge', [knowledge], undefined, knowledge.empty ? '通用' : 'knowledge');
   if (needs.has('conversation-goal') && goal) addOne('conversation-goal', [goal], selection.goalMessageId);
