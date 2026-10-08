@@ -197,6 +197,18 @@ export class CareerApplications {
         signal?.throwIfAborted();
         return Object.freeze({ applications: Object.freeze(applications), savedJobs });
     }
+    /** Current owned source verified within its actual consuming transaction. */
+    async readInTransaction(client: PoolClient, value: FixedSessionContext, key: unknown, signal?: AbortSignal) {
+        const context = this.fixed(value);
+        let id: string;
+        try { id = careerRecordId(key); } catch { throw bad(); }
+        await this.authorize(client, context, signal);
+        const row = await this.row(client, context, id);
+        if (!row) throw missing();
+        const result = careerApplicationSummary(await this.record(client, context, row));
+        await authorizeFixedSession(client, context, signal);
+        return result;
+    }
     async get(value: FixedSessionContext, key: unknown, signal?: AbortSignal) {
         const context = this.fixed(value);
         let id: string;
