@@ -14,6 +14,7 @@ import { ApiError } from '../src/errors.ts';
 import { OnboardingDrafts } from '../src/onboarding-drafts.ts';
 import { CompanionDraftPreparation } from '../src/companion-draft-preparation.ts';
 import { BackgroundGeneration } from '../src/background-generation.ts';
+import { CostGuard } from '../src/cost-guard.ts';
 import { requireModelConsent } from '../src/model-consent.ts';
 import { FICTIONAL_LEGAL, seedFictionalActiveLegal, seedFictionalConsent } from './fixtures/student-entry.ts';
 import { withControlledMissingIntakeSafetySource } from './fixtures/controlled-missing-intake.ts';
@@ -338,18 +339,37 @@ test('disabled paid switch and absent dedicated generation model create no previ
 
 test('budget rejection and unavailable prices never create a model or deterministic preview', async () => {
   await loopback((_body, _reply) => assert.fail('No admitted HTTP is authorized.'), async (runtime, bodies) => {
-    for (const mode of ['missing_policy', 'hard_limit', 'missing_price'] as const) {
+    for (const mode of ['missing_policy', 'hard_limit', 'missing_price', 'soft_limit'] as const) {
       const who = await actor(); if (mode !== 'missing_policy') await policy(who, mode === 'hard_limit' ? '1' : '100000000');
+      if (mode === 'soft_limit') {
+        // A fictional earlier accounting source is settled through the actual
+        // guard. Changing a fresh user's policy alone cannot hit a soft cap.
+        const guard = new CostGuard(db);
+        const prior = await guard.reserve({ userId: who.userId, sourceKind: 'job', sourceId: randomUUID(), capability: 'background',
+          purpose: 'fictional-prior-budget-settlement', provider: 'openai', model: 'fictional-companion-model',
+          maxInputTokens: 1, maxOutputTokens: 1, ttlSeconds: 60 });
+        assert.equal(prior.decision, 'ok');
+        await db.withBoundedTransaction(client => guard.admitInTransaction(client, prior.reservation.binding));
+        await guard.commit(prior.reservation.binding, { status: 'reported', inputTokens: 1, outputTokens: 1 });
+        await db.query("UPDATE platform_cost_user_policy SET soft_behavior='degrade' WHERE user_id=$1", [who.userId]);
+      }
       const { prepared } = await pending(who, runtime), service = generator(runtime);
+      const before = await stored(who);
+      const originalPrefix = (await db.query('SELECT * FROM platform_companion_source_prefixes WHERE user_id=$1', [who.userId])).rows;
       let price: any;
       if (mode === 'missing_price') {
         price = (await db.query("SELECT * FROM platform_model_prices WHERE unit='output_token'")).rows[0];
         await db.query('UPDATE platform_model_prices SET effective_to=clock_timestamp() WHERE id=$1', [price.id]);
       }
       try {
-        await assert.rejects(service.generate(who, { taskId: prepared.taskId }), error => error instanceof Error);
-        const current = await stored(who); assert.equal(current.revisions.length, 0); assert.equal(current.costs.length, 0);
+        await assert.rejects(service.generate(who, { taskId: prepared.taskId }), code('COMPANION_GENERATION_BUDGET_UNAVAILABLE'));
+        const current = await stored(who); assert.equal(current.revisions.length, 0);
+        assert.deepEqual(current.costs, before.costs); assert.deepEqual(current.reservations, before.reservations);
+        if (mode !== 'soft_limit') { assert.equal(current.costs.length, 0); assert.equal(current.reservations.length, 0); }
         assert.equal(current.calls.length, 0); assert.equal(current.leases.length, 0);
+        assert.equal(current.tasks[0].status, 'failed'); assert.equal(current.tasks[0].error_code, 'COMPANION_GENERATION_BUDGET_UNAVAILABLE');
+        assert.deepEqual(current.tasks[0].seed_ciphertext, before.tasks[0].seed_ciphertext); assert.deepEqual(current.answers, before.answers);
+        assert.deepEqual((await db.query('SELECT * FROM platform_companion_source_prefixes WHERE user_id=$1', [who.userId])).rows, originalPrefix);
         assert.equal(await service.read(who, { taskId: prepared.taskId }), null); assert.deepEqual(current.effects, noConversation);
       } finally { if (price) await db.query('UPDATE platform_model_prices SET effective_to=$2 WHERE id=$1', [price.id, price.effective_to]); }
     }
@@ -532,9 +552,10 @@ test('actual task and runtime lease expiry fence late HTTP completion while pres
 
 test('nonconforming server ports cannot substitute deltas for actual admission and terminal settlement', async () => {
   const available = requireModelConsent(createProviderRuntime({ env: providerEnv, fetch: () => { assert.fail('This counterexample has no HTTP adapter.'); } }));
-  for (const mode of ['no_start', 'no_admission', 'unadmitted_format', 'no_finish'] as const) {
+  for (const mode of ['no_start', 'no_admission', 'unadmitted_format', 'no_finish', 'invented_budget_error'] as const) {
     const who = await actor(); await policy(who); const { prepared } = await pending(who, available);
     const runtime: PlatformProviderRuntime = { ...available, async *streamChat(input, context) {
+      if (mode === 'invented_budget_error') throw new ApiError(503, 'COMPANION_GENERATION_BUDGET_UNAVAILABLE', 'An invented provider budget error is not a CostGuard decision.');
       const callId = randomUUID();
       if (mode !== 'no_start') await context!.onModelCall!({ type: 'started', callId, index: 1, provider: input.provider,
         model: input.model!, purpose: 'companion_generation' });
@@ -553,7 +574,10 @@ test('nonconforming server ports cannot substitute deltas for actual admission a
     const current = await stored(who);
     assert.equal(current.revisions.length, 0); assert.equal(current.costs.length, 0); assert.equal(current.tasks[0].status, 'failed');
     assert.equal(current.companions[0].status, 'drafting'); assert.equal(current.leases.length, 0);
-    assert.equal(current.calls.length, mode === 'no_start' ? 0 : 1);
+    assert.equal(current.calls.length, mode === 'no_start' || mode === 'invented_budget_error' ? 0 : 1);
+    if (mode === 'invented_budget_error') {
+      assert.equal(current.tasks[0].error_code, 'COMPANION_GENERATION_UNAVAILABLE'); assert.equal(current.reservations.length, 0);
+    }
     if (current.calls.length) {
       assert.notEqual(current.calls[0].status, 'complete'); assert.equal(current.calls[0].finished_at, null);
       assert.equal(current.calls[0].admitted_at !== null, mode === 'no_finish');

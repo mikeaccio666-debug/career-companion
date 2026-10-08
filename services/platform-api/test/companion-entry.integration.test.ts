@@ -330,6 +330,53 @@ test('lost accepted HTTP response and a cancelled observation cannot cancel the 
     } finally { release.resolve(); }
   }, async (_body, reply) => { entered.resolve(); await release.promise; respond(reply); });
 });
+test('genuine initial budget denial reaches the actual worker as configuration without a provider call or lost accepted source', async () => {
+  await fixture(async f => {
+    const { who, revision } = await f.ready();
+    await db.query('UPDATE platform_cost_user_policy SET effective_to=clock_timestamp() WHERE user_id=$1', [who.userId]);
+    assert.equal((await db.query('SELECT 1 FROM platform_cost_user_policy WHERE user_id=$1 AND effective_from<=clock_timestamp() AND (effective_to IS NULL OR effective_to>clock_timestamp())', [who.userId])).rowCount, 0);
+    const accepted = await accept(f, who, revision);
+    const sources = async () => {
+      const request = await db.query('SELECT * FROM platform_companion_generation_requests WHERE id=$1 AND user_id=$2', [accepted.operationId, who.userId]);
+      const answers = await db.query('SELECT * FROM platform_companion_answers WHERE user_id=$1 ORDER BY id', [who.userId]);
+      const prefix = await db.query('SELECT * FROM platform_companion_source_prefixes WHERE user_id=$1 ORDER BY id', [who.userId]);
+      const task = await db.query(`SELECT id,user_id,companion_id,answers_id,source_draft_id,source_revision,auth_version,
+        questionnaire_revision,rules_revision,generator_version,purpose,seed_ciphertext,source_receipt_version
+        FROM platform_companion_generation_tasks WHERE id=$1 AND user_id=$2`, [accepted.taskId, who.userId]);
+      return { request: request.rows, answers: answers.rows, prefix: prefix.rows, task: task.rows };
+    };
+    const original = await sources(); assert.equal(original.request.length, 1); assert.equal(original.answers.length, 1);
+    assert.equal(original.prefix.length, 1); assert.equal(original.task.length, 1);
+    assert.deepEqual(await counts(who), { tasks: 1, requests: 1, outbox: 1, calls: 0, revisions: 0 });
+    await f.queue.dispatch(); const job = await f.queue.queue.getJob(accepted.operationId); assert(job);
+    assert.deepEqual(job.data, { requestId: accepted.operationId, taskId: accepted.taskId });
+    await f.worker(); assert.equal(await (await f.done(accepted.operationId)).getState(), 'completed');
+    const task = (await db.query('SELECT * FROM platform_companion_generation_tasks WHERE id=$1', [accepted.taskId])).rows[0];
+    assert.equal(task.status, 'failed'); assert.equal(task.error_code, 'COMPANION_GENERATION_BUDGET_UNAVAILABLE');
+    assert.equal(task.generation, 1); assert.equal(task.lease_token, null); assert.equal(task.lease_until, null); assert.equal(task.runtime_lease_id, null);
+    const outbox = (await db.query('SELECT * FROM platform_companion_generation_outbox WHERE request_id=$1', [accepted.operationId])).rows[0];
+    assert.equal(outbox.held_reason, 'configuration'); assert.equal(f.bodies.length, 0);
+    const effects = (await db.query(`SELECT
+      (SELECT count(*)::int FROM platform_cost_reservations WHERE user_id=$1) AS reservations,
+      (SELECT count(*)::int FROM platform_cost_ledger WHERE user_id=$1) AS ledger,
+      (SELECT count(*)::int FROM platform_runtime_leases WHERE user_id=$1) AS leases,
+      (SELECT count(*)::int FROM platform_conversations WHERE user_id=$1) AS rooms,
+      (SELECT count(*)::int FROM platform_memories WHERE user_id=$1) AS memories,
+      (SELECT count(*)::int FROM platform_jobs WHERE user_id=$1) AS jobs,
+      (SELECT count(*)::int FROM platform_chat_calls WHERE user_id=$1) AS chat_calls,
+      (SELECT count(*)::int FROM platform_usage WHERE user_id=$1) AS usage`, [who.userId])).rows[0];
+    assert.deepEqual(effects, { reservations: 0, ledger: 0, leases: 0, rooms: 0, memories: 0, jobs: 0, chat_calls: 0, usage: 0 });
+    for (let i = 0; i < 2; i++) {
+      const read = await f.system.app.inject({ method: 'GET', url: prefix + '/companion/drafts/current', headers: headers(who) });
+      assert.equal(read.statusCode, 200, read.body);
+      assert.equal(read.json().entry.kind, 'generation'); assert.equal(read.json().entry.status, 'failed');
+      assert.equal(read.json().entry.generation, 1); assert.equal(read.json().entry.hold, 'configuration_unavailable');
+    }
+    assert.deepEqual(await sources(), original); assert.deepEqual(await counts(who), { tasks: 1, requests: 1, outbox: 1, calls: 0, revisions: 0 });
+    assert.deepEqual((await db.query('SELECT * FROM platform_companion_generation_outbox WHERE request_id=$1', [accepted.operationId])).rows[0], outbox);
+    assert.equal(f.bodies.length, 0);
+  }, () => { assert.fail('An initial budget rejection must never launch provider HTTP.'); });
+});
 test('actual Redis notification loss is restored from the accepted DB outbox into the same task', async () => {
   await fixture(async f => {
     const { who, revision } = await f.ready(), accepted = await accept(f, who, revision);
