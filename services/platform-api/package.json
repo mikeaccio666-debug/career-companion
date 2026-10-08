@@ -16,7 +16,8 @@
     "check": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 test/*.test.ts",
     "org-content": "tsx src/org-content-import.ts",
-    "mentor-services": "tsx src/mentor-service-main.ts"
+    "mentor-services": "tsx src/mentor-service-main.ts",
+    "mentor-capacity": "tsx src/mentor-capacity-main.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.922.0",
