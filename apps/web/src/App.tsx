@@ -1,3 +1,4 @@
+import { applicationRoute } from './career-application-route';
 import { MentorIntentPage } from './mentor-intent-view';
 import { OrgSourcePage } from './org-source-view';
 import { orgSourceReferenceFromPath } from './org-source-api';
@@ -769,7 +770,8 @@ function AccountEntryApp() {
   const interviewPath = /^\/journey\/interviews\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(window.location.pathname);
   if ((window.location.pathname === '/journey/interviews' || interviewPath) && accountClient?.isCurrent() && accountClient.account.accountId === user.id) return <CareerInterviewPage initialInterviewId={interviewPath?.[1].toLowerCase()} onLogout={() => void logout()} />;
   if (window.location.pathname.startsWith('/sources/org/') && accountClient?.isCurrent() && accountClient.account.accountId === user.id) return <OrgSourcePage reference={orgSourceReferenceFromPath(window.location.pathname)} onLogout={() => void logout()} />;
-  if (window.location.pathname === '/journey/applications' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerApplicationPage onLogout={() => void logout()} />;
+  const applicationPath = applicationRoute(window.location.pathname);
+  if (applicationPath && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerApplicationPage key={`${user.id}:${accountClient.account.generation}:${window.location.pathname}`} initialApplicationId={applicationPath.kind === 'detail' ? applicationPath.id : undefined} invalidLink={applicationPath.kind === 'missing'} onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/jobs' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <ManualJobPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/targets' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerTargetPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/community/mentors' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <MentorIntentPage onLogout={() => void logout()} />;

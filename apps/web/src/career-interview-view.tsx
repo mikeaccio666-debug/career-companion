@@ -1,3 +1,4 @@
+import { applicationHref } from './career-application-route';
 import { useEffect, useMemo, useState } from 'react';
 import { CAREER_INTERVIEW_ROUND_TYPES, type CareerInterview } from '@companion/platform-contracts';
 import { useRequiredPlatformAccountClient } from './account-client';
@@ -138,6 +139,7 @@ export function CareerInterviewScene({ state, initialInterviewId, editor, setEdi
       <small>你录入的 · 公司和岗位来自创建时的投递记录</small>
       <div className="interview-actions">
         {!initialInterviewId && <a href={'/journey/interviews/' + record.id}>查看这场面试</a>}
+        <a href={applicationHref(record.application.id)}>查看对应的投递记录</a>
         <button type="button" disabled={writeLocked} onClick={() => { setEditor(interviewDraft('edit', record)); setDecision(null); setInputError(''); }}>修改轮次 / 时长</button>
         <button type="button" disabled={writeLocked} onClick={() => { setEditor(interviewDraft('reschedule', record)); setDecision(null); setInputError(''); }}>改期</button>
         <button type="button" disabled={writeLocked} onClick={() => { setDecision({ kind: 'done', record }); setEditor(null); }}>记为已面完</button>
