@@ -738,6 +738,7 @@ export class BackgroundGeneration {
       purpose: 'companion_generation', provider: input.provider, model: input.model!, maxInputTokens, maxOutputTokens: MAX_OUTPUT,
       ttlSeconds: 120, reservationId: reserveId };
     let callId: string | undefined, binding: Readonly<CostReservationBinding> | undefined;
+    let initialBudgetDenial: ApiError | undefined;
     let launched = false, admitted = false, finished: string | undefined, structuredOutcome: string | undefined, timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let removeDeadlineListener: (() => void) | undefined;
@@ -754,7 +755,10 @@ export class BackgroundGeneration {
           await this.current(client, fixed, claim, signal);
           await this.priorAttempts(client, claim, attempt);
           const decision = await this.costs.reserveInTransaction(client, costInput, signal);
-          if (decision.decision === 'block' || decision.decision === 'degrade') throw new ApiError(503, 'COMPANION_GENERATION_BUDGET_UNAVAILABLE', 'The companion generation budget is unavailable.');
+          if (decision.decision === 'block' || decision.decision === 'degrade') {
+            initialBudgetDenial = new ApiError(503, 'COMPANION_GENERATION_BUDGET_UNAVAILABLE', 'The companion generation budget is unavailable.');
+            throw initialBudgetDenial;
+          }
           await client.query(`INSERT INTO platform_companion_generation_calls(call_id,task_id,user_id,companion_id,generation,attempt,
             provider,model,purpose,reservation_id,status,usage_status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'companion_generation',$9,'prepared','pending')`,
           [next, claim.row.id, fixed.userId, claim.row.companion_id, claim.generation, attempt, input.provider, input.model, reserveId]);
@@ -835,6 +839,13 @@ export class BackgroundGeneration {
       }
     } catch (error) { streamError = error; }
     finally { if (timer) clearTimeout(timer); removeDeadlineListener?.(); }
+    // Only our actual first reserve rejection can explain an unstarted call.
+    // A provider error with the same code or later risk evidence cannot do so.
+    if (initialBudgetDenial && streamError === initialBudgetDenial && callId === undefined && binding === undefined
+      && !launched && !admitted && finished === undefined) {
+      signal.throwIfAborted();
+      throw initialBudgetDenial;
+    }
     if (!callId || !binding || !launched || !admitted || !finished) throw unavailable();
     if (parent?.aborted) parent.throwIfAborted();
     if (finished === 'failed' && structuredOutcome === 'invalid_format') {
