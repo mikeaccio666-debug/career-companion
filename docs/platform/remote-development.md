@@ -2,7 +2,7 @@
 
 日期：2026-10-06。用户已授权把开发服务迁到 edaix-dev，保留 Mac 编辑器、浏览器、Chrome 插件和本地回退。此环境只用于开发；商业模型未开启、没有生产部署。[PUBLIC GitHub 仓库](https://github.com/mikeaccio666-debug/career-companion)已公开活跃源码与文档；历史 imports 和私人运行数据未推送。源码发布与开发服务器同步分别验证。
 
-## 当前运行位置
+## 2026-10-06 旧预览的运行位置
 
 | 部分 | 位置与方式 |
 | --- | --- |
@@ -88,3 +88,36 @@ Mac 与远端是两份代码。当前已同步的源码可以运行，但 Mac �
 数据库deadline／probe定向14／14和API类型检查已通过，包括合成TCP黑洞中自有Redis socket关闭；后续独立QA已通过新增真实PG／Redis／HTTP与BullMQ生命周期11组，含worker双Redis连接明确断开与恢复后的唯一合成执行；API427通过／4跳过、网页399通过，类型检查与构建通过。运维CLI实际独立进程在数据ready／执行degraded时退出1且不创建任务或Redis meta。主预览尚未同步这些源码、没有执行021，也不能声称已有这些健康接口或后台监控。后续更新必须先确认用户内存草稿与附件保全、停写、核对本人进程与源码、备份与隔离恢复演练，再按明确授权迁移和成对更新服务；本轮仅操作自有隔离QA服务并完成清理，没有操作主服务。
 
 连接池已支持显式预算，默认原生checkout等待最多5秒，probe／heartbeat借到连接后的操作deadline默认另为2秒，并实际清理自己的超时连接。普通业务`query`／`transaction`没有因此全部获得总deadline。CLI使用自己的max1 pool、标示诊断进程范围，不是远端API或worker的池指标。worker整体close仍没有总deadline；配置中的构建标识也不是正确代码已部署或worker成功执行任务的证明。实现和未完成边界见[运行健康检查](operations-readiness.md)，正式托管服务、HTTPS与容量仍依[部署计划](deployment-plan.md)单独验收。
+
+
+## 2026-10-08：将功能开发与验证迁到远端 Git 工作区
+
+此前 `~/work/personal/chatbot` 是运行用的导出目录，没有 Git 元数据，不能作为分支开发或会话迁移的 Git 项目。该目录、3120/3121 旧预览与私人数据继续保留。新的活跃 Git 工作区位于 `~/work/personal/career-companion`，从已检查并公开推送的 `codex/companion-birth-web` 检出；首次核对的代码提交为 `712f418`。未提交的诞生网页接线在迁移前已保存为独立提交，本地原工作树保留。
+
+新工作区固定 Node 24.21.0、pnpm 11.13.1；Node 来自官方发行包并通过对应 SHA-256 校验，工具仅安装在本人用户目录。`./scripts/project.sh` 已验证能选择这两项版本，不修改系统 Node 或其他项目的 shell 配置。依赖安装、构建和测试在 Linux 运行，本地承担编辑界面与浏览器预览。
+
+| 新开发环境 | 仅监听远端 loopback | Mac 转发 |
+| --- | --- | --- |
+| Web | 3130 | 4331 |
+| API | 3131 | 4330；Web 的同源 `/api` 代理到该服务 |
+| PostgreSQL | 5540，独立开发库 | 不转发 |
+| Redis | 6410，独立队列 | 不转发 |
+
+数据库和队列属于独立 Compose 项目 `companion-mike-career-dev`，使用新凭据和独立卷，没有导入或覆盖旧预览的数据。全部当前迁移在明确核对的新开发库应用；API、worker 与 Web 使用三个本人专属 tmux 会话，普通 SSH 断线后仍可继续运行。私人配置、密钥、附件、日志及设计参考均不进入 Git；设计压缩包 hash 核对一致，并经过路径、大小和符号链接检查后解压为只读参考，未执行其脚本。
+
+新环境商业模型与账户邮件均显式关闭；没有配置真实供应商、邀请码或已审核法律文档。开发配置使用既有的未开启邮箱验证模式，邀请码仍要求，法律文档状态为 unavailable，不能据此声称已满足生产账户门禁或可邀请真实学生。普通工作台保持隐藏。此配置不是生产模板，未部署到公网。
+
+已在相同源码上验证 Linux 网页 627/627 测试、网页类型检查与生产构建、六个平台包的检查，以及诞生 HTTP/真实 PostgreSQL 定向 4/4。新 API 的 `/live`、`/ready`、`/execution-ready` 和网页入口均返回 200；Mac SSH 转发后的同源代理检查也返回 200。完整 API 回归另有私人日志，须看其终态；不能从健康接口推断业务或模型质量。本轮浏览器私有验证页被浏览器安全策略拒绝，未完成新版本的浏览器视觉验收。新界面仍需初见对话与第一封信接入，真实字形包的生产审核与配置尚未完成。
+
+在 Mac 上恢复新预览连接，可在独立终端运行以下命令，保留该终端打开；端口已占用时不要再开第二份：
+
+```sh
+ssh -N -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -L 127.0.0.1:4331:127.0.0.1:3130 \
+  -L 127.0.0.1:4330:127.0.0.1:3131 edaix-dev
+```
+
+之后访问 `http://localhost:4331/`。既有 `scripts/preview-remote.sh` 仍连接 3120/3121 旧预览，不应把它的页面当成最新分支。
+
+代码与开发服务远端运行不等于当前 Codex 会话已换执行主机。需要在 Codex 保存同仓库的上述远端项目，再从当前会话底部的执行位置选择 edaix-dev 并完成 Hand off；核对目的项目与分支后切换。Codex 无法从正在执行的同一会话直接替自己完成主机移交。官方说明：<https://learn.chatgpt.com/docs/remote-connections>。在 GUI 移交前，本会话可以通过 SSH 在明确的新工作区继续构建、测试和编辑。迁移不改变产品 goal、设计依据或所选模型。
