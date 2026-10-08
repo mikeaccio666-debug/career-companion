@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { fieldSignature, readValue } from '../src/fieldIdentity';
-import { createScanRoot } from '../src/scanRoot';
+import { createScanRoot, withScanPass } from '../src/scanRoot';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -23,6 +23,30 @@ function fixture(): { root: ReturnType<typeof createScanRoot>; email: HTMLInputE
 }
 
 describe('C5 · structural field identity', () => {
+  it('rereads control membership and first label during one synchronous scan pass', () => {
+    const { root, email, label } = fixture();
+    const form = document.querySelector('form')!;
+    withScanPass(root, () => {
+      const first = fieldSignature(email, root);
+      const earlierLabel = document.createElement('label');
+      earlierLabel.htmlFor = email.id;
+      earlierLabel.textContent = 'Earlier current label';
+      form.prepend(earlierLabel);
+      expect(fieldSignature(email, root).labelHint).toBe('earlier current label');
+      earlierLabel.htmlFor = 'another-control';
+      label.textContent = 'Changed owner label';
+      expect(fieldSignature(email, root).labelHint).toBe('changed owner label');
+
+      const leading = document.createElement('input');
+      form.prepend(leading);
+      expect(fieldSignature(email, root).core).not.toBe(first.core);
+      leading.setAttribute('aria-hidden', 'true');
+      leading.setAttribute('tabindex', '-1');
+      expect(fieldSignature(email, root).core).toBe(first.core);
+      leading.removeAttribute('tabindex');
+      expect(fieldSignature(email, root).core).not.toBe(first.core);
+    });
+  });
   it('excludes a framework-generated id but keeps label wording as a separate hint', () => {
     const { root, email, label } = fixture();
     const initial = fieldSignature(email, root);
