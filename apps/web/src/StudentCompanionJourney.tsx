@@ -3,19 +3,23 @@ import { useRequiredPlatformAccountClient } from './account-client';
 import { CompanionJourneyController, type CompanionJourneyObservation } from './companion-journey-controller';
 import { CompanionNamingController, type CompanionNamingObservation } from './companion-naming-controller';
 import { CompanionNameView, CompanionSealView } from './companion-naming-view';
+import { CompanionBirthController, emptyCompanionBirth } from './companion-birth-controller';
+import { CompanionBirthView } from './companion-birth-view';
 import StudentCompanionPreview, { CompanionPreviewContent } from './StudentCompanionPreview';
 
 const emptyJourney = (): CompanionJourneyObservation => ({ journey: null, selection: null, acceptance: 'idle', checking: false, submitting: false, error: '' });
 const emptyNaming = (): CompanionNamingObservation => ({ state: null, accepted: null, acceptance: 'idle', checking: false, submitting: false, error: '' });
 
-/** A saved preview/name/choice is preparation. This view cannot claim a birth,
- * create rooms, skip resource followups or authorize an external action. */
+/** Preparation remains distinct from an explicit birth command. Only the
+ * authenticated current-companion read establishes the born UI state. */
 export default function StudentCompanionJourney({ intakeRevision, refreshVersion = 0, supportBlocked = false, onSourcesChanged }: {
   intakeRevision: number; refreshVersion?: number; supportBlocked?: boolean; onSourcesChanged?: () => void;
 }) {
   const client = useRequiredPlatformAccountClient();
   const [journeyView, setJourneyView] = useState({ client, observation: emptyJourney() });
   const [namingView, setNamingView] = useState({ client, observation: emptyNaming() });
+  const [birthView, setBirthView] = useState({ client, observation: emptyCompanionBirth() });
+  const birth = useMemo(() => new CompanionBirthController(client, observation => setBirthView({ client, observation })), [client]);
   const [wantsName, setWantsName] = useState(false), [rawName, setRawName] = useState('');
   const [choice, setChoice] = useState<{ identityRevision: number; char: string } | null>(null);
   const changed = useRef(onSourcesChanged); changed.current = onSourcesChanged;
@@ -23,18 +27,20 @@ export default function StudentCompanionJourney({ intakeRevision, refreshVersion
     observation => setJourneyView({ client, observation })), [client]);
   const naming = useMemo(() => new CompanionNamingController(client,
     observation => setNamingView({ client, observation })), [client]);
-  const refresh = useCallback(() => { journey.refresh(); naming.refresh(); }, [journey, naming]);
+  const refresh = useCallback(() => { journey.refresh(); naming.refresh(); birth.refresh(); }, [journey, naming, birth]);
   useEffect(() => {
     setJourneyView({ client, observation: emptyJourney() }); setNamingView({ client, observation: emptyNaming() });
+    setBirthView({ client, observation: emptyCompanionBirth() }); birth.start();
     setWantsName(false); setRawName(''); setChoice(null); journey.start(); naming.start();
-    const resume = () => { journey.resume(); naming.resume(); };
+    const resume = () => { journey.resume(); naming.resume(); birth.resume(); };
     document.addEventListener('visibilitychange', resume); window.addEventListener('online', resume); window.addEventListener('offline', resume);
-    return () => { journey.stop(); naming.stop(); document.removeEventListener('visibilitychange', resume);
+    return () => { journey.stop(); naming.stop(); birth.stop(); document.removeEventListener('visibilitychange', resume);
       window.removeEventListener('online', resume); window.removeEventListener('offline', resume); };
-  }, [client, journey, naming]);
+  }, [client, journey, naming, birth]);
   useEffect(() => { journey.refresh(); }, [journey, refreshVersion]);
   const observation = journeyView.client === client ? journeyView.observation : emptyJourney();
   const names = namingView.client === client ? namingView.observation : emptyNaming();
+  const born = birthView.client === client ? birthView.observation : emptyCompanionBirth();
   const state = observation.journey;
   const named = names.state?.kind === 'naming' ? names.state : null;
   const progress = names.accepted?.progress ?? named?.latest ?? null;
@@ -44,6 +50,9 @@ export default function StudentCompanionJourney({ intakeRevision, refreshVersion
   useEffect(() => { if (cursor && client.isCurrent()) { journey.refresh(); changed.current?.(); } }, [cursor, client, journey]);
   useEffect(() => client.subscribe(() => { if (!client.isCurrent()) { setRawName(''); setWantsName(false); setChoice(null); } }), [client]);
   if (!client.isCurrent()) return null;
+  if (born.viewer?.kind === 'active') return <CompanionBirthView client={client} observation={born} available={false}
+    onConfirm={() => {}} onRetry={() => {}} onRefresh={() => birth.refresh()} />;
+
   if (!state || state.kind === 'not_started') return <>
     {state?.kind === 'not_started' && <StudentCompanionPreview intakeRevision={intakeRevision} onPreviewReady={refresh} />}
     {observation.error && <p className="onboarding-notice" role="alert">{observation.error}</p>}
@@ -100,7 +109,10 @@ export default function StudentCompanionJourney({ intakeRevision, refreshVersion
     {currentIdentity && identity && state.stage === 'seal_saved' && selection?.selectedSeal && <section className="companion-naming" aria-label="已保存的名字与印章">
       <span className="companion-naming-ai">你的主理人 · AI</span><h2>{identity.name}</h2>
       <span className="companion-naming-seal" data-ink={identity.inkToken} aria-hidden="true"><span>{selection.selectedSeal}</span></span>
-      <p role="status">名字和印章字已经保存。诞生这一步尚未开放，之后可以从这里继续。</p>
+      <p role="status">名字和印章字已经保存。</p>
+      <CompanionBirthView client={client} observation={born} name={identity.name} sealChar={selection.selectedSeal}
+        available={!supportBlocked} onConfirm={() => birth.submit({ name: identity.name, sealChar: selection.selectedSeal! })}
+        onRetry={() => birth.retry({ name: identity.name, sealChar: selection.selectedSeal! })} onRefresh={() => birth.refresh()} />
     </section>}
     {observation.error && state.stage !== 'seal_ready' && <p role="alert" className="onboarding-notice">{observation.error}</p>}
     <button type="button" className="onboarding-link" disabled={observation.checking || observation.submitting || names.submitting}
