@@ -20,7 +20,7 @@ ResumeOriginalReview 的内部读取器在同一个有界事务和 owner 锁内�
 
 已确认旧版保持 active；新草稿不进入索引，不改变最近可用版本。新版确认后索引成员增加，默认选择它；旧版独立重复确认只增加操作 generation，保留首次真实确认时间，不会把旧版重新排成最新。明确归档或物理删除移除相应成员，让旧集合坐标失效；其他已确认版本保持原对象与版本。集合复核只要求准备索引重读，不改写既有简历或材料包的确认；未来材料包须对自己的冻结引用另核。
 
-未安装真实简历适配器时 resumes 为 null，listResumeVersions 保持 unavailable；已经装配但没有可用版本时才是空数组。没有上传抽取适配器，不接受 uploadedResumeId 等字段伪装一份可用文件。本人原稿路径见 [简历原稿](resume-original-review.md)。
+未安装真实简历适配器时 resumes 为 null，listResumeVersions 保持 unavailable；已经装配但没有可用版本时才是空数组。上传抽取经真实文件归属核验，保存为待确认原稿；只有本人真实确认后，才能经同一原稿读取器进入版本索引。准备构造器仍不接受 uploadedResumeId 等字段伪装一份可用文件。本人原稿路径见 [简历原稿](resume-original-review.md)。
 
 ## 当前版本复核
 

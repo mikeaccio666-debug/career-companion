@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { fictionalResumePdf } from './fixtures/resume-pdf.ts';
 import { before,after,test } from 'node:test';import assert from 'node:assert/strict';import { randomUUID } from 'node:crypto';
 import { PLATFORM_ACCOUNT_HEADER,parseResumeReviewView } from '@companion/platform-contracts';import { createProviderRuntime } from '@companion/ai-core';import { buildApp } from '../src/app.ts';import { readConfig } from '../src/config.ts';import { hashPassword } from '../src/auth.ts';import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safety.ts';import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
 const origin='https://fictional-resume-review.example.invalid',password='Fictional-original-password-123',root='/api/platform/';
@@ -84,4 +86,22 @@ test('actual buildApp assembly feeds an HTTP-confirmed original into the real so
  const confirmed=await system.app.inject({method:'POST',url:root+'pending-items/'+v.item.id+'/decision',headers:a.headers,payload:{operationId:randomUUID(),revision:1,payloadDigest:v.item.payloadDigest,decision:'approve'}});assert.equal(confirmed.statusCode,200,confirmed.body);
  const index=await system.careerPreparationSources.read(a.context);assert.equal(index.resumes!.length,1);assert.equal(index.resumes![0].id,v.item.resumeVersionId);assert.equal(index.resumes![0].revision,1);assert(!JSON.stringify(index).includes(body.text));assert(!JSON.stringify(index).includes(body.label));
  const prepared=await system.careerPreparationSources.prepare(a.context,{skillId:'resume-revision',selection:{resumeId:v.item.resumeVersionId}});assert.equal(prepared.built.context.inputs.find(r=>r.input==='resume-source')!.id,v.item.resumeVersionId);assert.deepEqual(prepared.built.context.tools,{});assert(prepared.built.unavailableSources.includes('readProfile'));assert.equal(calls,0);
+});
+
+test('actual multipart upload to original review preserves owned file provenance and leaves text unconfirmed until one full Web decision',async()=>{
+ const a=await actor(),other=await actor(),bytes=fictionalResumePdf(),boundary='FictionalBoundary'+randomUUID().replaceAll('-',''),payload=Buffer.concat([Buffer.from('--'+boundary+'\r\nContent-Disposition: form-data; name="file"; filename="Fictional CV.pdf"\r\nContent-Type: application/pdf\r\n\r\n'),bytes,Buffer.from('\r\n--'+boundary+'--\r\n')]);
+ const uploaded=await system.app.inject({method:'POST',url:root+'uploads',headers:{...a.headers,'content-type':'multipart/form-data; boundary='+boundary},payload});assert.equal(uploaded.statusCode,201,uploaded.body);const id=uploaded.json().attachment.id;
+ const key=(await f.db.query('SELECT storage_key FROM platform_uploads WHERE id=$1 AND user_id=$2',[id,a.id])).rows[0].storage_key;
+ try{
+  const list=await system.app.inject({url:root+'career/resume-uploads',headers:a.headers});assert.equal(list.statusCode,200,list.body);assert.equal(list.json().files[0].id,id);assert(!list.body.includes('storage_key'));
+  const command={operationId:randomUUID(),expectedRevision:0,track:'da',label:'Fictional uploaded original',uploadId:id,sha256:createHash('sha256').update(bytes).digest('hex')};
+  assert.equal((await system.app.inject({method:'POST',url:root+'career/resume-versions/from-upload',headers:other.headers,payload:command})).statusCode,404);
+  const saved=await system.app.inject({method:'POST',url:root+'career/resume-versions/from-upload',headers:a.headers,payload:command});assert.equal(saved.statusCode,201,saved.body);assert.equal(saved.headers['cache-control'],'private, no-store');const v=parseResumeReviewView(saved.json().view);assert.equal(v.item.source,'upload');assert.equal(v.item.uploadId,id);assert.equal(v.item.status,'pending');assert(v.payload.text.includes('Fictional CV'));assert.equal(v.payload.source_refs[1]!.sha256,command.sha256);
+  assert.deepEqual((await system.careerPreparationSources.read(a.context)).resumes,[]);
+  const decision=await system.app.inject({method:'POST',url:root+'pending-items/'+v.item.id+'/decision',headers:a.headers,payload:{operationId:randomUUID(),revision:1,payloadDigest:v.item.payloadDigest,decision:'approve'}});assert.equal(decision.statusCode,200,decision.body);assert.equal((await system.careerPreparationSources.read(a.context)).resumes![0].id,v.item.resumeVersionId);
+  const replay=await system.app.inject({method:'POST',url:root+'career/resume-versions/from-upload',headers:a.headers,payload:command});assert.equal(replay.statusCode,200,replay.body);assert.equal(replay.json().operation.replayed,true);assert.equal(replay.json().view.item.status,'approved');
+  assert.equal((await system.app.inject({method:'POST',url:root+'career/resume-versions/from-upload',headers:{...a.headers,origin:'https://evil.invalid'},payload:command})).statusCode,403);
+  assert.equal((await system.app.inject({url:root+'career/resume-uploads?after='+id,headers:other.headers})).statusCode,404);
+  assert.equal(calls,0);
+ }finally{const {LocalBlobStorage}=await import('../src/storage.ts');await new LocalBlobStorage(readConfig().storageDir).delete(key);}
 });

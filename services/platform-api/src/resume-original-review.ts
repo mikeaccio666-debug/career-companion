@@ -1,9 +1,11 @@
+import type { BlobStorage } from './storage.ts';
+import { readResumeFileText,type OwnedResumeFile } from './resume-file-text.ts';
 import type { OwnedCareerResume } from './career-run-context.ts';
-import { randomUUID } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { workflowHash } from '@companion/ai-core';
 import { ownerResumeActionAllowed,validateOwnerResumePayload } from '@companion/career-core';
-import { careerRecordObject,careerRecordId,parseResumeReviewCommand,parseResumeReviewItem,resumeReviewInteger,type ResumeReviewItem,type ResumeReviewPayload,type ResumeReviewAction,type ResumeReviewView } from '@companion/platform-contracts';
+import { careerRecordObject,careerRecordId,parseResumeReviewCommand,parseResumeReviewItem,parseResumeUploadCommand,resumeReviewInteger,type ResumeReviewItem,type ResumeReviewPayload,type ResumeReviewAction,type ResumeUploadSnapshot,type ResumeReviewCommand,type ResumeReviewView } from '@companion/platform-contracts';
 import { authorizeFixedSession,type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
@@ -22,7 +24,7 @@ interface PreparationProofs {latest:Map<string,any>;resumes:Map<string,any>;payl
  * delivery, registers tools or records a fake expert/model authorization. */
 export class ResumeOriginalReview {
  private readonly storage:OnboardingStorage;
- constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null){this.storage=new OnboardingStorage(config,legal);}
+ constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null,private readonly uploads?:BlobStorage){this.storage=new OnboardingStorage(config,legal);}
  private fixed(value:FixedSessionContext){try{const v=careerRecordObject(value,['userId','tokenHash']);if(typeof v.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(v.tokenHash))throw bad();return Object.freeze({userId:careerRecordId(v.userId),tokenHash:v.tokenHash});}catch{throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');}}
  private async authorize(client:PoolClient,context:FixedSessionContext,signal?:AbortSignal){await authorizeFixedSession(client,context,signal);const row=(await client.query('SELECT account_kind,auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[context.userId])).rows[0];if(row?.account_kind!=='student')throw new ApiError(403,'STUDENT_ACCOUNT_REQUIRED','Use a student account.');if(!this.storage.crypto)throw unavailable();signal?.throwIfAborted();return String(row.auth_version);}
  private async receipt(client:PoolClient,context:FixedSessionContext,row:any):Promise<Receipt>{
@@ -43,8 +45,8 @@ export class ResumeOriginalReview {
   try{const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:'platform_pending_items',column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.generation}),item=parseResumeReviewItem(JSON.parse(raw)),latest=proofs?await this.receipt(client,context,proofs.latest.get(row.id)):await this.latest(client,context,row.id);
    if(canonical(item)!==raw||item.id!==row.id||item.ownerId!==context.userId||item.kind!==row.kind||item.status!==row.status||item.finalAction!==row.final_action||item.track!==row.track||item.revision!==row.current_revision||item.generation!==row.generation||item.lastOperationId!==row.last_operation_id||item.createdAt!==row.created_at.toISOString()||item.updatedAt!==row.updated_at.toISOString()||item.expiresAt!==row.expires_at.toISOString()||latest.action==='delete'||latest.generation!==item.generation||latest.operationId!==item.lastOperationId||latest.recordDigest!==workflowHash(item)||latest.createdAt!==item.updatedAt)throw unavailable();
    const resume=proofs?proofs.resumes.get(item.resumeVersionId):(await client.query('SELECT * FROM platform_career_resume_versions WHERE user_id=$1 AND id=$2 FOR SHARE',[context.userId,item.resumeVersionId])).rows[0];
-   if(!resume||resume.pending_item_id!==item.id||resume.track!==item.track||resume.status!==item.resumeStatus||resume.source!==item.source||resume.upload_id!==null||resume.revision!==item.revision||resume.content_digest!==item.payloadDigest||resume.created_at.toISOString()!==item.createdAt||resume.updated_at.toISOString()!==item.updatedAt)throw unavailable();
-   const payload=await this.payload(client,context,item.id,item.revision,proofs);if(workflowHash(payload)!==item.payloadDigest)throw unavailable();await this.payload(client,context,item.id,1,proofs);
+   if(!resume||resume.pending_item_id!==item.id||resume.track!==item.track||resume.status!==item.resumeStatus||resume.source!==item.source||resume.upload_id!==item.uploadId||resume.revision!==item.revision||resume.content_digest!==item.payloadDigest||resume.created_at.toISOString()!==item.createdAt||resume.updated_at.toISOString()!==item.updatedAt)throw unavailable();
+   const payload=await this.payload(client,context,item.id,item.revision,proofs);if(workflowHash(payload)!==item.payloadDigest)throw unavailable();const original=await this.payload(client,context,item.id,1,proofs);if(item.uploadSource){const ref=payload.source_refs[1];if(ref?.id!==item.uploadId||ref?.sha256!==item.uploadSource.sha256||ref?.storageVersion!==item.uploadSource.storageVersion||createHash('sha256').update(original.text).digest('hex')!==item.uploadSource.textSha256)throw unavailable();}else if(payload.source_refs[1])throw unavailable();
    if(item.status==='approved'){
     const decision=proofs?proofs.decisions.get(item.approvalOperationId!):(await client.query('SELECT * FROM platform_pending_item_decisions WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,item.approvalOperationId])).rows[0],receiptRow=proofs?proofs.approvals.get(item.approvalOperationId!):(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,item.approvalOperationId])).rows[0];
     if(!decision||!receiptRow)throw unavailable();const proof=await this.receipt(client,context,receiptRow);
@@ -61,7 +63,7 @@ export class ResumeOriginalReview {
   if(newPayload){const cipher=this.storage.crypto!.sealUtf8(canonical(payload),{table:'platform_pending_item_revisions',column:'ciphertext',rowId:item.id,ownerId:context.userId,revision:item.revision});
    await client.query("INSERT INTO platform_pending_item_revisions(user_id,item_id,revision,ciphertext,payload_digest,author,base_revision,created_at) VALUES($1,$2,$3,$4,$5,'user',$6,$7)",[context.userId,item.id,item.revision,cipher,item.payloadDigest,item.revision===1?null:item.revision-1,item.updatedAt]);
   }
-  await client.query('INSERT INTO platform_career_resume_versions(id,user_id,pending_item_id,track,status,source,revision,content_digest,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,revision=EXCLUDED.revision,content_digest=EXCLUDED.content_digest,updated_at=EXCLUDED.updated_at',[item.resumeVersionId,context.userId,item.id,item.track,item.resumeStatus,item.source,item.revision,item.payloadDigest,item.createdAt,item.updatedAt]);
+  await client.query('INSERT INTO platform_career_resume_versions(id,user_id,pending_item_id,track,status,source,upload_id,revision,content_digest,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,revision=EXCLUDED.revision,content_digest=EXCLUDED.content_digest,updated_at=EXCLUDED.updated_at',[item.resumeVersionId,context.userId,item.id,item.track,item.resumeStatus,item.source,item.uploadId,item.revision,item.payloadDigest,item.createdAt,item.updatedAt]);
  }
  private async transition(client:PoolClient,context:FixedSessionContext,base:Readonly<ResumeReviewView>,action:'expire'|'supersede',at:string,auth:string,supersededBy:string|null=null){
   const operationId=randomUUID(),item=parseResumeReviewItem({...base.item,status:action==='expire'?'expired':'superseded',resumeStatus:'archived',supersededBy,generation:base.item.generation+1,lastOperationId:operationId,updatedAt:at});
@@ -124,23 +126,55 @@ export class ResumeOriginalReview {
   const context=this.fixed(value);let id:string;try{id=careerRecordId(key);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{const auth=await this.authorize(client,context,signal),row=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,id])).rows[0];if(!row)throw missing();const proof=await this.receipt(client,context,row),current=await this.row(client,context,proof.itemId);let view:Readonly<ResumeReviewView>|null=null;if(current)view=await this.current(client,context,current,auth,signal);else if((await this.latest(client,context,proof.itemId)).action!=='delete')throw unavailable();await authorizeFixedSession(client,context,signal);return Object.freeze({view,operation:Object.freeze({id,itemId:proof.itemId,action:proof.action,replayed:true})});});
  }
+ private async replay(client:PoolClient,context:FixedSessionContext,auth:string,action:ResumeReviewAction,requested:string|null,operationId:string,digest:string,signal?:AbortSignal){
+  const prior=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,operationId])).rows[0];
+   if(prior){const proof=await this.receipt(client,context,prior);if(proof.requestDigest!==digest||proof.action!==action||requested!==null&&proof.itemId!==requested)throw new ApiError(409,'PENDING_OPERATION_CONFLICT','The saved operation has different content.');
+    const row=await this.row(client,context,proof.itemId);let view:Readonly<ResumeReviewView>|null=null;if(row)view=await this.current(client,context,row,auth,signal);else if((await this.latest(client,context,proof.itemId)).action!=='delete')throw unavailable();
+    await authorizeFixedSession(client,context,signal);return Object.freeze({view,operation:Object.freeze({id:operationId,itemId:proof.itemId,replayed:true})});
+   }
+
+  return null;
+ }
+ private async ownedUpload(client:PoolClient,context:FixedSessionContext,id:string):Promise<Readonly<OwnedResumeFile>>{
+  const row=(await client.query('SELECT * FROM platform_uploads WHERE id=$1 AND user_id=$2 FOR SHARE',[id,context.userId])).rows[0];if(!row)throw missing();
+  const size=Number(row.byte_size);if(!['application/pdf','text/plain','text/markdown'].includes(row.mime)||!Number.isSafeInteger(size)||size<1||size>20*1024*1024||typeof row.filename!=='string'||!row.filename.length||row.filename.length>200||/[\x00-\x1f\x7f]/.test(row.filename)||typeof row.storage_key!=='string'||!row.storage_key.length||row.storage_key.length>240)throw new ApiError(415,'RESUME_UPLOAD_UNSUPPORTED','请使用 PDF、TXT 或 Markdown，也可以直接粘贴。');
+  return Object.freeze({id:row.id,userId:context.userId,storageKey:row.storage_key,filename:row.filename,mime:row.mime,size,createdAt:row.created_at.toISOString()});
+ }
+ async listUploads(value:FixedSessionContext,input:unknown={},signal?:AbortSignal){
+  const context=this.fixed(value);let after:string|null;try{const q=careerRecordObject(input,[],['after']);after=Object.hasOwn(q,'after')?careerRecordId(q.after):null;}catch{throw bad();}
+  return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);if(after)await this.ownedUpload(client,context,after);
+   const rows=(await client.query("SELECT u.id FROM platform_uploads u WHERE u.user_id=$1 AND u.mime IN ('application/pdf','text/plain','text/markdown') AND ($2::uuid IS NULL OR (u.created_at,u.id)<(SELECT c.created_at,c.id FROM platform_uploads c WHERE c.user_id=$1 AND c.id=$2)) ORDER BY u.created_at DESC,u.id DESC LIMIT 51",[context.userId,after])).rows,files=[];
+   for(const row of rows.slice(0,50)){signal?.throwIfAborted();const f=await this.ownedUpload(client,context,row.id);files.push(Object.freeze({id:f.id,name:f.filename,mime:f.mime,size:f.size,createdAt:f.createdAt}));}
+   await authorizeFixedSession(client,context,signal);return Object.freeze({files:Object.freeze(files),nextAfter:rows.length>50?files.at(-1)!.id:null});
+  });
+ }
+ async createFromUpload(value:FixedSessionContext,input:unknown,signal?:AbortSignal){
+  const context=this.fixed(value);let command:ReturnType<typeof parseResumeUploadCommand>;try{command=parseResumeUploadCommand(input);}catch{throw bad();}
+  const digest=workflowHash({action:'create',itemId:null,command});
+  const initial=await this.db.withBoundedTransaction(async client=>{const auth=await this.authorize(client,context,signal),replay=await this.replay(client,context,auth,'create',null,command.operationId,digest,signal);if(replay)return {replay,file:null};await this.storage.authorizeSession(client,context,signal);return {replay:null,file:await this.ownedUpload(client,context,command.uploadId)};});
+  if(initial.replay)return initial.replay;if(!this.uploads)throw new ApiError(503,'RESUME_FILE_READER_UNAVAILABLE','文件读取尚未配置，请直接粘贴原稿。');
+  const captured=await readResumeFileText(this.uploads,initial.file!,command.sha256,signal);
+  const prepared=parseResumeReviewCommand('create',{operationId:command.operationId,expectedRevision:0,track:command.track,label:command.label,text:captured.text});
+  return this.write(context,'create',null,prepared,digest,signal,{file:initial.file!,source:captured.source});
+ }
  async mutate(value:FixedSessionContext,action:ResumeReviewAction,key:unknown,input:unknown,channel:'web'|'discord'|'extension',signal?:AbortSignal){
   const context=this.fixed(value);let command:ReturnType<typeof parseResumeReviewCommand>,requested:string|null;
   try{command=parseResumeReviewCommand(action,input);requested=action==='create'?null:careerRecordId(key);}catch{throw bad();}
   if(channel!=='web')throw new ApiError(403,'WEB_CONFIRMATION_REQUIRED','Review this version on the website.');
   const digest=workflowHash({action,itemId:requested,command});
+  return this.write(context,action,requested,command,digest,signal);
+ }
+ private async write(context:FixedSessionContext,action:ResumeReviewAction,requested:string|null,command:Readonly<ResumeReviewCommand>,digest:string,signal?:AbortSignal,upload?:{file:Readonly<OwnedResumeFile>;source:Readonly<ResumeUploadSnapshot>}){
   return this.db.withBoundedTransaction(async client=>{
-   const auth=await this.authorize(client,context,signal),prior=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,command.operationId])).rows[0];
-   if(prior){const proof=await this.receipt(client,context,prior);if(proof.requestDigest!==digest||proof.action!==action||requested!==null&&proof.itemId!==requested)throw new ApiError(409,'PENDING_OPERATION_CONFLICT','The saved operation has different content.');
-    const row=await this.row(client,context,proof.itemId);let view:Readonly<ResumeReviewView>|null=null;if(row)view=await this.current(client,context,row,auth,signal);else if((await this.latest(client,context,proof.itemId)).action!=='delete')throw unavailable();
-    await authorizeFixedSession(client,context,signal);return Object.freeze({view,operation:Object.freeze({id:command.operationId,itemId:proof.itemId,replayed:true})});
-   }
+   const auth=await this.authorize(client,context,signal);
+   const replay=await this.replay(client,context,auth,action,requested,command.operationId,digest,signal);if(replay)return replay;
    let base:Readonly<ResumeReviewView>|null=null;
    if(action!=='create'){const row=await this.row(client,context,requested!);if(!row)throw missing();base=await this.current(client,context,row,auth,signal);
     if(base.item.revision!==command.expectedRevision||base.item.payloadDigest!==command.payloadDigest)throw changed();
     if(!ownerResumeActionAllowed(base.item,action))throw new ApiError(409,'PENDING_STATE_CHANGED','Use the current review action. Confirmed originals require a new draft object.');
    }
    if(action!=='delete'&&action!=='decline'&&action!=='archive')await this.storage.authorizeSession(client,context,signal);
+   if(upload){const current=await this.ownedUpload(client,context,upload.file.id);if(canonical(current)!==canonical(upload.file))throw new ApiError(409,'RESUME_UPLOAD_CHANGED','文件信息已变化，请重新读取。');}
    const at=(await client.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
    if(action==='approve'&&base?.item.status==='pending'&&base.item.expiresAt<=at)throw new ApiError(409,'PENDING_ITEM_EXPIRED','This version expired. Reopen it before confirming.');
    let view:Readonly<ResumeReviewView>|null=null;
@@ -163,10 +197,10 @@ export class ResumeOriginalReview {
      for(const prior of same)await this.transition(client,context,prior,'supersede',at,auth,id);
     }
     const revision=(base?.item.revision??0)+(action==='create'||action==='edit'||action==='reopen'?1:0),generation=(base?.item.generation??0)+1;
-    const payload=action==='create'?validateOwnerResumePayload({text:command.text,claims:[],source_refs:[{kind:'owner_resume_input',id,revision:1}]}):action==='edit'?validateOwnerResumePayload({...base!.payload,text:command.text}):base!.payload;
+    const payload=action==='create'?validateOwnerResumePayload({text:command.text,claims:[],source_refs:[{kind:'owner_resume_input',id,revision:1},...(upload?[{kind:'resume_upload',id:upload.source.uploadId,sha256:upload.source.sha256,storageVersion:upload.source.storageVersion}]:[])]}):action==='edit'?validateOwnerResumePayload({...base!.payload,text:command.text}):base!.payload;
     const approving=action==='approve',already=base?.item.status==='approved',status=approving?'approved':action==='decline'?'declined':action==='reopen'?'pending':base?.item.status??'pending';
     const expiresAt=action==='create'||action==='reopen'?new Date(Date.parse(at)+7*24*60*60*1000).toISOString():base!.item.expiresAt;
-    const item=parseResumeReviewItem({id,ownerId:context.userId,resumeVersionId,kind:'resume_version',finalAction:'none',draftedBy:null,title:'简历版本',label:command.label??base!.item.label,track,sequence,source:derivedFrom?'derived':'paste',uploadId:null,derivedFrom,status,resumeStatus:action==='archive'||status!=='pending'&&status!=='approved'?'archived':status==='approved'?(already?base!.item.resumeStatus:'active'):'draft',revision,generation,payloadDigest:workflowHash(payload),sensitivity:'sensitive',
+    const item=parseResumeReviewItem({id,ownerId:context.userId,resumeVersionId,kind:'resume_version',finalAction:'none',draftedBy:null,title:'简历版本',label:command.label??base!.item.label,track,sequence,source:derivedFrom?'derived':upload?'upload':base?.item.source??'paste',uploadId:upload?.source.uploadId??base?.item.uploadId??null,...(upload?{uploadSource:upload.source}:base?.item.uploadSource?{uploadSource:base.item.uploadSource}:{}),derivedFrom,status,resumeStatus:action==='archive'||status!=='pending'&&status!=='approved'?'archived':status==='approved'?(already?base!.item.resumeStatus:'active'):'draft',revision,generation,payloadDigest:workflowHash(payload),sensitivity:'sensitive',
      approvedRevision:approving?revision:base?.item.approvedRevision??null,approvedDigest:approving?workflowHash(payload):base?.item.approvedDigest??null,approvedAt:approving?(already?base!.item.approvedAt:at):base?.item.approvedAt??null,approvedChannel:approving?'web':base?.item.approvedChannel??null,approvalOperationId:approving?(already?base!.item.approvalOperationId:command.operationId):base?.item.approvalOperationId??null,
      supersededBy:null,expiresAt,createdAt:base?.item.createdAt??at,updatedAt:at,lastOperationId:command.operationId});
     // Provenance must still resolve at confirmation. A missing original after
