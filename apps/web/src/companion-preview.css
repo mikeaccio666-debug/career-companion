@@ -1,4 +1,5 @@
-.companion-preview { margin-top: 24px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); padding: 24px; color: var(--ink); --companion-yanzhi: #95425F; --companion-zheshi: #86503A; --companion-ganlan: #53650F; --companion-jiangzi: #8D4572; --companion-dai: #4D635B; --companion-yanzi: #70566E; --companion-hehui: #695B53; }
+@import "./career-design-tokens.css";
+.companion-preview { margin-top: 24px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); padding: 24px; color: var(--ink); }
 .companion-preview-heading { display: flex; align-items: center; gap: 20px; }
 .companion-preview h2 { font-size: 18px; line-height: 28px; font-weight: 600; margin: 0 0 4px; }
 .companion-preview-seal { display: block; flex: 0 0 64px; width: 64px; height: 64px; background: var(--ink-2); border-radius: 50%; transform: rotate(-3deg); position: relative; transition: background-color 400ms; }
@@ -20,6 +21,5 @@
 .companion-preview-seal-generating { animation: companion-preview-ink 2.4s ease-in-out infinite; }
 @keyframes companion-preview-ink { 0%, 100% { opacity: .15; } 50% { opacity: .6; } }
 @media (max-width: 639px) { .companion-preview { padding: 20px 16px; } .companion-preview-heading { gap: 16px; align-items: flex-start; } .companion-preview h2 { font-size: 16px; line-height: 26px; } }
-@media (prefers-color-scheme: dark) { .companion-preview { --companion-yanzhi: #F094B0; --companion-zheshi: #DFA187; --companion-ganlan: #A7B760; --companion-jiangzi: #E597C5; --companion-dai: #9CB4AC; --companion-yanzi: #C4A6C1; --companion-hehui: #BCACA3; } }
 @media (prefers-reduced-motion: reduce) { .companion-preview-seal { transform: none; transition: none; } .companion-preview-seal-generating { animation: none; opacity: 1; } }
 @media (forced-colors: active) { .companion-preview-seal { background: CanvasText; forced-color-adjust: none; } .companion-preview-seal::after { border-color: Canvas; } .companion-preview-seal-generating { animation: none; opacity: 1; } }

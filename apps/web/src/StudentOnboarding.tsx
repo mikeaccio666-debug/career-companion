@@ -197,8 +197,13 @@ export default function StudentOnboarding({ user, onLogout, refreshVersion = 0, 
   }
   const draft = entry?.draft, collecting = !!entry && (!draft || draft.state === 'collecting') && entry.safety.status === 'clear';
   if (!client.isCurrent()) return null;
-  return <main className="onboarding-page"><header className="onboarding-room-header"><div className="onboarding-empty-seal" aria-hidden="true" /><div><h1>{name}</h1><span className="onboarding-ai">AI</span></div><button type="button" className="onboarding-link" onClick={onLogout}>退出</button></header>
+  return <main className="onboarding-page"><header className="onboarding-room-header"><div className="onboarding-empty-seal" aria-hidden="true" /><div className="onboarding-room-title"><h1>{name}</h1><span className="onboarding-ai">AI</span></div><button type="button" className="onboarding-link" onClick={onLogout}>退出</button></header>
     <section className="onboarding-conversation" aria-label="初见对话">
+      {entry && (!draft || draft.step === 'O1') && <div className="onboarding-introduction">
+        <span>先认识你，再一起往前走</span>
+        <h2>求职这件事，不用一个人扛。</h2>
+        <p>一个由你起名的主理人，背后一支求职队伍。先聊聊你的处境，接下来的步子我们一起排；你可以跳过不想回答的问题。</p>
+      </div>}
       {entry && (!draft || draft.step === 'O1') && <><p className="onboarding-bubble">你好，{user.name || '你'}。我会是你的求职主理人，现在还没有名字和性格。先说清楚：我是 AI。你确认过的事，我才会记住。</p><div className="onboarding-choices"><button type="button" disabled={pending || !collecting} onClick={() => void save({ kind: 'start', mode: 'standard' })}>花 3 分钟认识一下</button><button type="button" disabled={pending || !collecting} onClick={() => void save({ kind: 'start', mode: 'fast_track' })}>赶时间，先开始</button><button type="button" onClick={() => setAbout(!about)} aria-expanded={about}>先说说这是什么</button></div>{about && <p className="onboarding-bubble">我们会从你的处境开始，陪你整理方向、准备材料、练习表达。只有你确认过的内容才会作为经历记下来，对外发出前也会请你确认。</p>}</>}
       {entry && <OnboardingAnsweredHistory summaries={entry.answerSummaries} />}
       {draft?.step === 'O3' && <p className="onboarding-question-progress">情境题 {Number(draft.currentQuestion?.slice(1))} / 7</p>}

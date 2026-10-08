@@ -1,13 +1,7 @@
+@import "./career-design-tokens.css";
 .companion-naming {
-  --paper: #F1F3F7; --sheet: #FCFDFE; --tint: #E6EAF1;
-  --ink: #15223A; --ink-2: #46536A; --ink-3: #5D6A80; --ink-4: #7A869C; --rule: #D8DEE8;
-  --air: #28488E; --air-tint: #E4EAF5;
-  --companion-yanzhi: #95425F; --companion-zheshi: #86503A; --companion-ganlan: #53650F;
-  --companion-jiangzi: #8D4572; --companion-dai: #4D635B; --companion-yanzi: #70566E; --companion-hehui: #695B53;
-  --f-ui: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-  --f-letter: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
   margin-top: 24px; padding: 24px; border: 1px solid var(--rule); border-radius: 8px;
-  background: var(--sheet); color: var(--ink); font: 15px/24px var(--f-ui); line-break: strict; color-scheme: light;
+  background: var(--sheet); color: var(--ink); font: 15px/24px var(--f-ui); line-break: strict;
 }
 .companion-naming, .companion-naming * { box-sizing: border-box; }
 .companion-naming-heading { display: flex; align-items: center; gap: 20px; }
@@ -52,10 +46,6 @@
   .companion-naming-option { flex-direction: row; align-items: center; }
   .companion-naming-option input { flex: 0 0 20px; }
 }
-@media (prefers-color-scheme: dark) {
-  :where(:root:not([data-theme="light"])) .companion-naming { color-scheme: dark; --paper: #0D131E; --sheet: #141C2A; --tint: #1B2437; --ink: #E5E9F0; --ink-2: #A8B2C3; --ink-3: #808CA1; --ink-4: #717D94; --rule: #243049; --air: #89A5E8; --air-tint: #1A2540; --companion-yanzhi: #F094B0; --companion-zheshi: #DFA187; --companion-ganlan: #A7B760; --companion-jiangzi: #E597C5; --companion-dai: #9CB4AC; --companion-yanzi: #C4A6C1; --companion-hehui: #BCACA3; }
-}
-:where(:root[data-theme="dark"]) .companion-naming { color-scheme: dark; --paper: #0D131E; --sheet: #141C2A; --tint: #1B2437; --ink: #E5E9F0; --ink-2: #A8B2C3; --ink-3: #808CA1; --ink-4: #717D94; --rule: #243049; --air: #89A5E8; --air-tint: #1A2540; --companion-yanzhi: #F094B0; --companion-zheshi: #DFA187; --companion-ganlan: #A7B760; --companion-jiangzi: #E597C5; --companion-dai: #9CB4AC; --companion-yanzi: #C4A6C1; --companion-hehui: #BCACA3; }
 @media (prefers-contrast: more) { .companion-naming { --ink-3: var(--ink-2); --rule: var(--ink-4); } }
 @media (prefers-reduced-motion: reduce) { .companion-naming-seal { transform: none; } }
 @media (forced-colors: active) {
