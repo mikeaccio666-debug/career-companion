@@ -1,3 +1,4 @@
+import { CareerPreparationSources } from './career-preparation-sources.ts';
 import { CareerStories } from './career-stories.ts';
 import { ManualJobs } from './manual-jobs.ts';
 import { CareerTargets } from './career-targets.ts';
@@ -107,6 +108,7 @@ export async function buildApp(options:AppOptions={}) {
   const careerTargets=new CareerTargets(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerStories=new CareerStories(db,config,bundle);
+  const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const storage=options.storage??createStorage(config);
@@ -759,5 +761,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,manualJobs,careerStories,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,manualJobs,careerStories,careerPreparationSources,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
