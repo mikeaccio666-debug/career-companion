@@ -14,3 +14,5 @@ export * from './companion/identity.ts';
 export * from './companion/style.ts';
 export * from './companion/preview.ts';
 export * from './companion/output-check.ts';
+export * from './companion/memory-policy.ts';
+export * from './team/handoff.ts';
