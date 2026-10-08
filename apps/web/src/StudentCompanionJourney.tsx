@@ -50,7 +50,7 @@ export default function StudentCompanionJourney({ intakeRevision, refreshVersion
   useEffect(() => { if (cursor && client.isCurrent()) { journey.refresh(); changed.current?.(); } }, [cursor, client, journey]);
   useEffect(() => client.subscribe(() => { if (!client.isCurrent()) { setRawName(''); setWantsName(false); setChoice(null); } }), [client]);
   if (!client.isCurrent()) return null;
-  if (born.viewer?.kind === 'active') return <CompanionBirthView client={client} observation={born} available={false}
+  if (born.viewer?.kind === 'active') return <CompanionBirthView client={client} observation={born} available={false} supportBlocked={supportBlocked}
     onConfirm={() => {}} onRetry={() => {}} onRefresh={() => birth.refresh()} />;
 
   if (!state || state.kind === 'not_started') return <>
@@ -111,7 +111,7 @@ export default function StudentCompanionJourney({ intakeRevision, refreshVersion
       <span className="companion-naming-seal" data-ink={identity.inkToken} aria-hidden="true"><span>{selection.selectedSeal}</span></span>
       <p role="status">名字和印章字已经保存。</p>
       <CompanionBirthView client={client} observation={born} name={identity.name} sealChar={selection.selectedSeal}
-        available={!supportBlocked} onConfirm={() => birth.submit({ name: identity.name, sealChar: selection.selectedSeal! })}
+        available={!supportBlocked} supportBlocked={supportBlocked} onConfirm={() => birth.submit({ name: identity.name, sealChar: selection.selectedSeal! })}
         onRetry={() => birth.retry({ name: identity.name, sealChar: selection.selectedSeal! })} onRefresh={() => birth.refresh()} />
     </section>}
     {observation.error && state.stage !== 'seal_ready' && <p role="alert" className="onboarding-notice">{observation.error}</p>}

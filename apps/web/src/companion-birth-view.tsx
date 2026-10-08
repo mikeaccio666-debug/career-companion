@@ -3,6 +3,7 @@ import { holdPrivateResource, clearPrivateImage } from './private-media';
 import type { BoundPlatformClient } from './api';
 import type { CompanionBirthObservation } from './companion-birth-controller';
 import './companion-birth-view.css';
+import CompanionWelcomeView from './companion-welcome-view';
 
 function SavedSeal({ client, assetId, name }: { client: BoundPlatformClient; assetId: string; name: string }) {
   const [version, setVersion] = useState(0);
@@ -29,9 +30,9 @@ function SavedSeal({ client, assetId, name }: { client: BoundPlatformClient; ass
   </div>;
 }
 
-export function CompanionBirthView({ client, observation, name, sealChar, available, onConfirm, onRetry, onRefresh }: {
+export function CompanionBirthView({ client, observation, name, sealChar, available, onConfirm, onRetry, onRefresh, supportBlocked=false }: {
   client: BoundPlatformClient; observation: CompanionBirthObservation; name?: string; sealChar?: string;
-  available: boolean; onConfirm: () => void; onRetry: () => void; onRefresh: () => void;
+  available: boolean; supportBlocked?: boolean; onConfirm: () => void; onRetry: () => void; onRefresh: () => void;
 }) {
   const active = observation.viewer?.kind === 'active' ? observation.viewer.companion : null;
   const pending = observation.submitting || observation.checking;
@@ -42,7 +43,7 @@ export function CompanionBirthView({ client, observation, name, sealChar, availa
         <div><span className="onboarding-ai">你的主理人 · AI</span><h2>{active.identity.name}</h2></div></header>
       <p className="companion-birth-event" role="status">—— {new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(active.bornAt))} · {active.identity.name}诞生 ——</p>
       <p>你的主理人已经诞生，名字和印章都保存好了。</p>
-      <p className="companion-birth-next">初见对话正在接入。之后我们从你的处境开始，再写第一封信。</p>
+      <CompanionWelcomeView client={client} companionId={active.companionId} paused={supportBlocked} />
     </> : <>
       <span className="onboarding-ai">你的主理人 · AI</span><h2>{name ? `${name}——你起的名字` : '正在确认诞生进度'}</h2>
       {sealChar && <p>印章字「{sealChar}」。准备好了，就让它从这里陪你走。</p>}
