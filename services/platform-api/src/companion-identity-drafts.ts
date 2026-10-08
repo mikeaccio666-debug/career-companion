@@ -63,7 +63,7 @@ function command(value: unknown): Readonly<Command> {
 function taskInput(value: unknown): string {
   const data = record(value, ['taskId']); if (!uuid(data.taskId)) throw invalid(); return data.taskId;
 }
-function selectionCommand(value: unknown): Readonly<CompanionSealSelectionRequest> {
+export function selectionCommand(value: unknown): Readonly<CompanionSealSelectionRequest> {
   const data = record(value, ['taskId', 'expectedIdentityRevision', 'expectedRevision', 'operationId', 'sealChar']);
   if (!uuid(data.taskId) || !uuid(data.operationId)
     || !Number.isSafeInteger(data.expectedIdentityRevision) || Object.is(data.expectedIdentityRevision, -0)
@@ -304,8 +304,12 @@ export class CompanionIdentityDrafts {
    * implicit first choice, generation call or birth side effect is permitted. */
   async saveSelection(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionSealSelectionSaved>> {
     const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), input = selectionCommand(value), canonical = JSON.stringify(input);
+    return this.db.withBoundedTransaction(client => this.saveSelectionInTransaction(client, fixed, JSON.parse(canonical), signal));
+  }
+  /** Selection composition shares the actual owner/source/identity transaction. */
+  async saveSelectionInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionSealSelectionSaved>> {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), input = selectionCommand(value), canonical = JSON.stringify(input);
     try {
-      return await this.db.withBoundedTransaction(async client => {
         const verified = await this.source(client, fixed, input.taskId, signal), draftRow = await this.row(client, fixed, verified.source.companionId);
         if (!draftRow) throw new ApiError(409, 'COMPANION_IDENTITY_REQUIRED', 'Save a companion name before choosing its seal.');
         const draft = await this.decode(client, draftRow, fixed, verified), previous = await this.selectionRow(client, fixed, draftRow.id);
@@ -364,7 +368,6 @@ export class CompanionIdentityDrafts {
         await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
         return Object.freeze({ selection: this.selectionView(draft, row, input.sealChar),
           operation: Object.freeze({ id: input.operationId, appliedRevision: row.revision, replayed: false }) });
-      });
     } catch (error) { if (error instanceof DataCryptoError) throw unavailable(); throw error; }
   }
   async save(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionIdentitySaveResult>> {

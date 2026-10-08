@@ -12,6 +12,8 @@ import { CompanionIdentityDrafts, CompanionIdentityNameRejected } from './compan
 import { ApiError } from './errors.ts';
 import { enqueueNameSafetyResponse } from './companion-name-safety-response-outbox.ts';
 import type { CompanionNameSafetyDelivery } from './companion-name-safety-delivery.ts';
+import { readNameRawSourceInTransaction } from './companion-name-resource-source.ts';
+import { syncPrebirthInventoryInTransaction, verifyPrebirthInventoryInTransaction } from './companion-prebirth-protocol.ts';
 import { parseCompanionNameApplication, parseCompanionNameSafetyClaim, parseCompanionNameSafetyDecision, parseCompanionNameSubmissionRequest,
   parseCompanionNameSubmissionClaimRequest, parseCompanionNameTask, type CompanionNameSafetyClaim, type CompanionNameSafetyDecision,
   type CompanionNameSubmissionClaimRequest, type CompanionNameSubmissionRequest } from './companion-name-safety-protocol.ts';
@@ -198,6 +200,7 @@ export class CompanionNameSafety {
     const fixed = captureFixed(context), request = parseCompanionNameSubmissionRequest(value), canonical = JSON.stringify(request);
     return this.db.withBoundedTransaction(async client => {
       const { verified, version } = await this.source(client, fixed, request.taskId, signal), previous = await this.entry(client, fixed, request.taskId);
+      await verifyPrebirthInventoryInTransaction(client, this.storage.crypto, fixed.userId, signal);
       const rows = previous ? await this.history(client, previous, verified, fixed) : [];
       const old = (await client.query<CompanionNameSubmissionRow>('SELECT * FROM platform_companion_name_submissions WHERE user_id=$1 AND operation_id=$2 FOR UPDATE', [fixed.userId, request.operationId])).rows[0];
       if (old) {
@@ -225,6 +228,7 @@ export class CompanionNameSafety {
         [entry.id, fixed.userId, entry.task_id, entry.companion_id, entry.revision, row.id, entry.payload_ciphertext]);
       await client.query('INSERT INTO platform_companion_name_submissions(id,user_id,operation_id,entry_id,task_id,companion_id,preview_revision,submitted_revision,expected_identity_revision,submitted_auth_version,application_operation_id,request_ciphertext) VALUES($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11)',
         [row.id, row.user_id, row.operation_id, row.entry_id, row.task_id, row.companion_id, row.submitted_revision, row.expected_identity_revision, version, row.application_operation_id, row.request_ciphertext]);
+      await syncPrebirthInventoryInTransaction(client, this.storage.crypto, fixed.userId, signal);
       await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
       return Object.freeze({ entry: this.view(entry, [...rows, row]), submissionId: row.id, operation: Object.freeze({ id: row.operation_id, appliedRevision: row.submitted_revision, replayed: false }) });
     });
@@ -377,7 +381,7 @@ export class CompanionNameSafety {
     return { schemaVersion: 1, userId: row.user_id, operationId: row.application_operation_id, draftId, identityRevision: revision,
       submissionId: row.id, generation: row.generation, identityCapture };
   }
-  private async decodeApplication(client: PoolClient, row: CompanionNameSubmissionRow, sourceCapture: ReturnType<CompanionNameSafety['requestPayload']>, resultCapture: ReturnType<CompanionNameSafety['resultPayload']>, fixed: FixedSessionContext) {
+  private async decodeApplication(client: PoolClient, row: CompanionNameSubmissionRow, sourceCapture: ReturnType<CompanionNameSafety['requestPayload']>, resultCapture: ReturnType<CompanionNameSafety['resultPayload']>, fixed: FixedSessionContext, validateCurrentIdentity = true) {
     try {
       const text = this.storage.crypto!.openUtf8(row.application_ciphertext!, { table: 'platform_companion_name_submissions', column: 'application_ciphertext', rowId: row.id, ownerId: row.user_id, revision: row.generation });
       const data = JSON.parse(text);
@@ -397,17 +401,74 @@ export class CompanionNameSafety {
           || this.storage.crypto!.openUtf8(receipt.payload_ciphertext, { table: 'platform_companion_name_identity_receipts', column: 'payload_ciphertext',
             rowId: row.application_operation_id, ownerId: row.user_id, revision: receipt.identity_revision })
               !== JSON.stringify(this.identityReceiptPayload(row, receipt.draft_id, receipt.identity_revision, data.identityCapture))) throw companionNameSafetyUnavailable();
-        await this.identities.validateCapturedInTransaction(client, fixed, { taskId: row.task_id,
+        if (validateCurrentIdentity) await this.identities.validateCapturedInTransaction(client, fixed, { taskId: row.task_id,
           operationId: row.application_operation_id, payload: JSON.stringify(data.identityCapture) });
       } else if (data.identityCapture !== null) throw companionNameSafetyUnavailable();
       return data;
     } catch { throw companionNameSafetyUnavailable(); }
   }
+  /** All genuine owner entries, using each original sealed source. Historical
+   * observation imports neither current-intake/045 nor a later identity gate. */
+  async assertPrebirthNamesInTransaction(client: PoolClient, context: FixedSessionContext, signal?: AbortSignal): Promise<void> {
+    const fixed=captureFixed(context); signal?.throwIfAborted();
+    if (!this.storage.crypto) throw companionNameSafetyUnavailable();
+    const entries=(await client.query<EntryRow>('SELECT * FROM platform_companion_name_entries WHERE user_id=$1 ORDER BY task_id,id FOR UPDATE',[fixed.userId])).rows;
+    const all=(await client.query<CompanionNameSubmissionRow>('SELECT * FROM platform_companion_name_submissions WHERE user_id=$1 ORDER BY entry_id,submitted_revision,id FOR UPDATE',[fixed.userId])).rows;
+    let observed=0, needsReview=false;
+    for (const entry of entries) {
+      const rows=all.filter(row=>row.entry_id===entry.id);
+      if (entry.preview_revision!==1 || rows.length!==entry.revision || rows.at(-1)?.id!==entry.latest_submission_id) throw companionNameSafetyUnavailable();
+      let original:VerifiedCompanionPreviewEnvelope|undefined;
+      for (let index=0;index<rows.length;index++) {
+        const row=rows[index]; if(row.submitted_revision!==index+1) throw companionNameSafetyUnavailable();
+        const raw=await readNameRawSourceInTransaction(client,this.storage.crypto,row.id,signal);
+        // This cast carries original bytes only; source()/savedSource() remain
+        // the separate authentic admission paths for every actual writer.
+        const historical=raw.sourceCapture.previewCapture as VerifiedCompanionPreviewEnvelope;
+        if (index===0) original=historical;
+        else if (JSON.stringify(original)!==JSON.stringify(historical)) throw companionNameSafetyUnavailable();
+        const capture=this.decodeRequest(row,entry,historical);
+        if (row.status!=='pending') this.decodeClaim(row,capture.payload);
+        if (row.status==='detected') {
+          const result=await this.decodeResult(client,row,capture.payload);
+          if(row.application_status!=='pending') await this.decodeApplication(client,row,capture.payload,result.payload,fixed,false);
+          if(result.decision.level!=='L0' && (!this.resources || !await this.resources.verifyHandledInTransaction(client,fixed.userId,row.id,signal))) needsReview=true;
+        } else needsReview=true;
+        observed++;
+      }
+      const text=this.storage.crypto.openUtf8(entry.payload_ciphertext,{table:'platform_companion_name_entries',column:'payload_ciphertext',rowId:entry.id,ownerId:fixed.userId,revision:entry.revision});
+      if (!original || text!==JSON.stringify(this.entryPayload(entry,original))) throw companionNameSafetyUnavailable();
+    }
+    if(observed!==all.length) throw companionNameSafetyUnavailable();
+    if(needsReview) throw new ApiError(409,'COMPANION_NAME_SAFETY_REVIEW_REQUIRED','All saved name sources must be explicitly handled before continuing.');
+    signal?.throwIfAborted();
+  }
+  /** Current selection provenance is stricter than old resource observation:
+   * only the latest genuine full L0 applied source can prove the current name. */
+  async assertCurrentIdentityProvenanceInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal):Promise<void> {
+    const fixed=captureFixed(context), taskId=parseCompanionNameTask(value);
+    const {verified}=await this.source(client,fixed,taskId,signal), entry=await this.entry(client,fixed,taskId);
+    if(!entry) throw companionNameSafetyUnavailable();
+    const rows=await this.history(client,entry,verified,fixed), row=rows.at(-1);
+    if(!row || row.id!==entry.latest_submission_id || row.status!=='detected' || row.level!=='L0' || row.detector_mode!=='full'
+      || row.application_status!=='applied' || row.applied_identity_revision===null) throw companionNameSafetyUnavailable();
+    const source=this.decodeRequest(row,entry,verified), result=await this.decodeResult(client,row,source.payload);
+    const application=await this.decodeApplication(client,row,source.payload,result.payload,fixed);
+    const identity=(await client.query<{id:string;revision:number;payload_ciphertext:Buffer}>('SELECT id,revision,payload_ciphertext FROM platform_companion_identity_drafts WHERE user_id=$1 AND companion_id=$2 FOR UPDATE',[fixed.userId,row.companion_id])).rows[0];
+    if(!identity || identity.revision!==row.applied_identity_revision || application.identityCapture?.id!==identity.id
+      || this.storage.crypto!.openUtf8(identity.payload_ciphertext,{table:'platform_companion_identity_drafts',column:'payload_ciphertext',rowId:identity.id,ownerId:fixed.userId,revision:identity.revision})!==JSON.stringify(application.identityCapture)) throw companionNameSafetyUnavailable();
+    await authorizeFixedSession(client,fixed,signal); signal?.throwIfAborted();
+  }
   /** Classification was already committed. Semantic rejection and availability
    * failures cannot erase it or launch the detector again. */
   async apply(context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
     const fixed = captureFixed(context), input = parseCompanionNameApplication(value);
-    return this.db.withBoundedTransaction(async client => {
+    return this.db.withBoundedTransaction(client => this.applyInTransaction(client, fixed, input, signal));
+  }
+  /** The caller owns the COMMIT. Public composition must run its complete
+   * intake/all-entry barrier on this same client before entering this writer. */
+  async applyInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
+      const fixed = captureFixed(context), input = parseCompanionNameApplication(value);
       const { verified } = await this.source(client, fixed, input.taskId, signal), entry = await this.entry(client, fixed, input.taskId);
       if (!entry) throw companionNameSafetyUnavailable();
       const rows = await this.history(client, entry, verified, fixed), row = rows.find(item => item.id === input.submissionId);
@@ -460,6 +521,5 @@ export class CompanionNameSafety {
       }
       await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
       return Object.freeze({ submissionId: row.id, status, rejectedCategory, appliedIdentityRevision: identityRevision, replayed: false });
-    });
   }
 }

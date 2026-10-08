@@ -11,6 +11,7 @@ import { readDataCrypto } from '../src/data-crypto.ts';
 import { OnboardingDrafts } from '../src/onboarding-drafts.ts';
 import { CompanionDraftPreparation } from '../src/companion-draft-preparation.ts';
 import { FICTIONAL_LEGAL, seedFictionalActiveLegal, seedFictionalConsent } from './fixtures/student-entry.ts';
+import { withControlledMissingIntakeSafetySource } from './fixtures/controlled-missing-intake.ts';
 
 // Every account, legal document, input and provider catalogue is fictional. The
 // isolated PostgreSQL schema exercises actual source checks, transactions and
@@ -315,10 +316,12 @@ test('pending TEXT blocks preparation before an incomplete-state or stale-revisi
 
 test('latest full L0 and an existing task cannot hide a missing superseded TEXT detection', async () => {
   const who = await actor(), current = await history(who); await service.prepare(who, { expectedRevision: current.draft.revision });
-  await db.query('DELETE FROM platform_onboarding_safety_submissions WHERE id=$1', [current.oldClaim.submissionId]); const before = await ledger(who);
-  assert.equal(before.submissions.length, 1);
-  await assert.rejects(service.prepare(who, { expectedRevision: current.draft.revision }), code('ONBOARDING_SAFETY_REQUIRED', 409));
-  assert.deepEqual(await ledger(who), before, 'Recovery and any generation writes must roll back together.');
+  await withControlledMissingIntakeSafetySource(db, { ownedSchema: schema, userId: who.userId, submissionId: current.oldClaim.submissionId }, async () => {
+    const before = await ledger(who);
+    assert.equal(before.submissions.length, 1);
+    await assert.rejects(service.prepare(who, { expectedRevision: current.draft.revision }), code('ONBOARDING_SAFETY_REQUIRED', 409));
+    assert.deepEqual(await ledger(who), before, 'Recovery and any generation writes must roll back together.');
+  });
 });
 
 for (const [level, mode] of [['L1', 'full'], ['L2', 'keyword_only']] as const) test(`superseded ${level}/${mode} is an independent barrier to drafting`, async () => {

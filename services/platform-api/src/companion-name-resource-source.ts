@@ -85,6 +85,30 @@ function authenticateClaim(crypto: DataCrypto, row: CompanionNameSubmissionRow, 
     return claim;
   } catch { throw nameResourceSourceUnavailable(); }
 }
+
+/** Authentic raw coordinates only, including pending sources. This is an
+ * observation proof, never a current preview or a classification/apply grant. */
+export async function readNameRawSourceInTransaction(client: PoolClient, crypto: DataCrypto | undefined,
+  actualSubmissionId: string, signal?: AbortSignal) {
+  const id = companionNameUuid(actualSubmissionId); signal?.throwIfAborted();
+  if (!crypto) throw nameResourceSourceUnavailable();
+  const reference = (await client.query<{user_id:string}>('SELECT user_id FROM platform_companion_name_submissions WHERE id=$1',[id])).rows[0];
+  if (!reference) throw nameResourceSourceUnavailable();
+  const owner = (await client.query<{account_kind:string}>('SELECT account_kind FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[reference.user_id])).rows[0];
+  if (!owner || owner.account_kind !== 'student') throw nameResourceSourceUnavailable();
+  const row = (await client.query<CompanionNameSubmissionRow>('SELECT * FROM platform_companion_name_submissions WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,reference.user_id])).rows[0];
+  if (!row) throw nameResourceSourceUnavailable();
+  const entry = (await client.query<EntryBinding>('SELECT id,user_id,task_id,companion_id,preview_revision FROM platform_companion_name_entries WHERE id=$1 FOR SHARE',[row.entry_id])).rows[0];
+  const task = (await client.query<TaskBinding>(`SELECT id,user_id,companion_id,source_draft_id,source_revision,answers_id,
+    questionnaire_revision,rules_revision,generator_version,purpose FROM platform_companion_generation_tasks WHERE id=$1 FOR SHARE`,[row.task_id])).rows[0];
+  const capture = requestCapture(crypto,row), original = capture.original;
+  if (!entry || !task || entry.user_id !== row.user_id || entry.task_id !== row.task_id || entry.companion_id !== row.companion_id
+    || entry.preview_revision !== row.preview_revision || task.user_id !== row.user_id || task.companion_id !== row.companion_id
+    || task.purpose !== 'companion_preview' || original.sourceDraftId !== task.source_draft_id || original.sourceRevision !== task.source_revision
+    || original.answersId !== task.answers_id || original.questionnaireRevision !== task.questionnaire_revision
+    || original.rulesRevision !== task.rules_revision || original.generatorVersion !== task.generator_version) throw nameResourceSourceUnavailable();
+  signal?.throwIfAborted(); return Object.freeze({kind:'raw_name_observation' as const,source:row,sourceCapture:capture.payload});
+}
 async function completedUsage(client: PoolClient, row: CompanionNameSubmissionRow) {
   const found = await client.query(`SELECT call_id,provider,model,usage_status,input_tokens,output_tokens,
     EXTRACT(EPOCH FROM admitted_at)::text AS admitted_exact,EXTRACT(EPOCH FROM finished_at)::text AS finished_exact

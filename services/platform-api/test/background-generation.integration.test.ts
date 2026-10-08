@@ -16,6 +16,7 @@ import { CompanionDraftPreparation } from '../src/companion-draft-preparation.ts
 import { BackgroundGeneration } from '../src/background-generation.ts';
 import { requireModelConsent } from '../src/model-consent.ts';
 import { FICTIONAL_LEGAL, seedFictionalActiveLegal, seedFictionalConsent } from './fixtures/student-entry.ts';
+import { withControlledMissingIntakeSafetySource } from './fixtures/controlled-missing-intake.ts';
 
 // Actual isolated PostgreSQL and the actual ai-core adapter, with every provider
 // request redirected to a fictional loopback SSE server. No external model,
@@ -605,13 +606,14 @@ test('superseded encrypted TEXT and missing safety receipt remain barriers befor
         await assert.rejects(service.generate(who, { taskId: prepared.taskId }), error => error instanceof ApiError);
         assert.deepEqual(await stored(who), damaged);
       } finally { await db.query('UPDATE platform_onboarding_operations SET request_ciphertext=$3 WHERE user_id=$1 AND operation_id=$2', [who.userId, olderId, older.request_ciphertext]); }
-      await db.query('DELETE FROM platform_onboarding_safety_submissions WHERE id=$1', [old.submissionId]);
-      const missing = await stored(who);
-      await assert.rejects(service.read(who, { taskId: prepared.taskId }), error => error instanceof ApiError);
-      await assert.rejects(service.generate(who, { taskId: prepared.taskId }), error => error instanceof ApiError);
-      assert.deepEqual(await stored(who), missing);
-      // Any proposed backfill rolls back together with the denied operation.
-      assert.equal((await db.query('SELECT id FROM platform_onboarding_safety_submissions WHERE operation_id=$1', [olderId])).rowCount, 0);
+      await withControlledMissingIntakeSafetySource(db, { ownedSchema: schema, userId: who.userId, submissionId: old.submissionId }, async () => {
+        const missing = await stored(who);
+        await assert.rejects(service.read(who, { taskId: prepared.taskId }), error => error instanceof ApiError);
+        await assert.rejects(service.generate(who, { taskId: prepared.taskId }), error => error instanceof ApiError);
+        assert.deepEqual(await stored(who), missing);
+        // Any proposed backfill rolls back together with the denied operation.
+        assert.equal((await db.query('SELECT id FROM platform_onboarding_safety_submissions WHERE operation_id=$1', [olderId])).rowCount, 0);
+      });
     }
     assert.equal(bodies.length, 1);
   });
