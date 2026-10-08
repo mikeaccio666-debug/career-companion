@@ -1,7 +1,11 @@
+import { MentorOrders } from './mentor-orders.ts';
+import { MentorSlotReservations } from './mentor-slot-reservations.ts';
+import type { MentorCapacity } from './mentor-capacity.ts';
+import { parseConfirmedMentorCapacity,type ConfirmedMentorCapacity } from './mentor-confirmed-capacity.ts';
 import { randomUUID, createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId,careerRecordObject,parseMentorIntentCommand,parseMentorIntent,parseMentorServiceOffer,
-  mentorServiceInteger,mentorIntentEmail,MENTOR_INTENT_PRIVACY,MENTOR_INTENT_PRIVACY_VERSION,type MentorIntent,type MentorServiceOffer } from '@companion/platform-contracts';
+  mentorServiceInteger,mentorIntentEmail,parseMentorMatchCommand,type MentorMatchCommand,MENTOR_INTENT_PRIVACY,MENTOR_INTENT_PRIVACY_VERSION,type MentorIntent,type MentorServiceOffer } from '@companion/platform-contracts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import type { LegalBundle } from './legal-documents.ts';
@@ -25,18 +29,19 @@ interface SessionRow {
   mentor_id:string|null;order_id:string|null;packet_id:string|null;scheduled_at:Date|null;review_id:string|null;
   revision:number;last_operation_id:string;created_at:Date;updated_at:Date;payload_ciphertext:Buffer;
 }
-interface OperationRow {user_id:string;org_id:string;operation_id:string;session_id:string;action:'create'|'cancel';applied_revision:number;created_at:Date;receipt_ciphertext:Buffer;}
+interface OperationRow {user_id:string;org_id:string;operation_id:string;session_id:string;action:'create'|'cancel'|'match';applied_revision:number;created_at:Date;receipt_ciphertext:Buffer;}
 interface Receipt {
-  schemaVersion:1;ownerId:string;orgId:string;operationId:string;sessionId:string;action:'create'|'cancel';appliedRevision:number;
-  command:unknown;commandDigest:string;recordDigest:string;acceptedAuthVersion:string;createdAt:string;acceptedOffer:MentorServiceOffer|null;
+  schemaVersion:1|2;ownerId:string;orgId:string;operationId:string;sessionId:string;action:'create'|'cancel'|'match';appliedRevision:number;
+  command:unknown;commandDigest:string;recordDigest:string;acceptedAuthVersion:string;createdAt:string;acceptedOffer:MentorServiceOffer|null;actorId?:string;actorAuthVersion?:string;acceptedCapacity?:Readonly<ConfirmedMentorCapacity>;
 }
 export interface MentorIntentOperation {readonly id:string;readonly sessionId:string;readonly appliedRevision:number;readonly replayed:boolean;}
 /** Explicit owner intent, not booking or paid suggestion. Ops see only the fields the owner confirms. */
 export class MentorIntents {
-  private readonly store:OnboardingStorage;private readonly staff:StaffAccess;private readonly organizationId:string|undefined;
+  private readonly store:OnboardingStorage;private readonly staff:StaffAccess;private readonly organizationId:string|undefined;private readonly orders:MentorOrders;private readonly reservations:MentorSlotReservations;
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'|'mentorOrganizationId'>,legal:LegalBundle|null,
-    private readonly offers:Pick<MentorServiceOffers,'listInTransaction'>,staff?:StaffAccess){
-    this.store=new OnboardingStorage(config,legal);this.staff=staff??new StaffAccess(db);
+    private readonly offers:Pick<MentorServiceOffers,'listInTransaction'>&Partial<Pick<MentorServiceOffers,'currentForStaffInTransaction'>>,staff?:StaffAccess,
+    private readonly capacity?:Pick<MentorCapacity,'confirmedInTransaction'>){
+    this.store=new OnboardingStorage(config,legal);this.staff=staff??new StaffAccess(db);this.orders=new MentorOrders(config);this.reservations=new MentorSlotReservations(config);
     this.organizationId=config.mentorOrganizationId===undefined?undefined:careerRecordId(config.mentorOrganizationId);
   }
   private seal(table:string,id:string,owner:string,revision:number,value:unknown) {
@@ -48,19 +53,26 @@ export class MentorIntents {
   private receipt(row:OperationRow):Receipt {
     try {
       const v=careerRecordObject(this.open('mentor_intent_operation',row.operation_id,row.user_id,row.applied_revision,row.receipt_ciphertext),
-        ['schemaVersion','ownerId','orgId','operationId','sessionId','action','appliedRevision','command','commandDigest','recordDigest','acceptedAuthVersion','createdAt','acceptedOffer']);
-      if(v.schemaVersion!==1||v.ownerId!==row.user_id||v.orgId!==row.org_id||v.operationId!==row.operation_id||v.sessionId!==row.session_id||
+        ['schemaVersion','ownerId','orgId','operationId','sessionId','action','appliedRevision','command','commandDigest','recordDigest','acceptedAuthVersion','createdAt','acceptedOffer'],['actorId','actorAuthVersion','acceptedCapacity']);
+      if((row.action==='match'?v.schemaVersion!==2:v.schemaVersion!==1)||v.ownerId!==row.user_id||v.orgId!==row.org_id||v.operationId!==row.operation_id||v.sessionId!==row.session_id||
         v.action!==row.action||v.appliedRevision!==row.applied_revision||v.createdAt!==row.created_at.toISOString()||
         typeof v.acceptedAuthVersion!=='string'||!/^\d+$/.test(v.acceptedAuthVersion)||typeof v.recordDigest!=='string'||!/^[0-9a-f]{64}$/.test(v.recordDigest))throw Error();
-      const command=row.action==='create'?parseMentorIntentCommand(v.command):this.cancelCommand(v.command);
+      const command=row.action==='create'?parseMentorIntentCommand(v.command):row.action==='match'?parseMentorMatchCommand(v.command):this.cancelCommand(v.command);
       if(command.operationId!==row.operation_id||v.commandDigest!==digest(command)||
-        (row.action==='create'?row.applied_revision!==1:row.applied_revision!==2))throw Error();
+        (row.action==='create'?row.applied_revision!==1:row.applied_revision!==('expectedRevision' in command?command.expectedRevision+1:0)))throw Error();
       let acceptedOffer:MentorServiceOffer|null=null;
       if(row.action==='create'){
         const cmd=parseMentorIntentCommand(command);acceptedOffer=parseMentorServiceOffer(v.acceptedOffer);
         if(acceptedOffer.id!==cmd.offerId||acceptedOffer.revision!==cmd.offerRevision||acceptedOffer.organizationId!==row.org_id||acceptedOffer.availability!=='available'||acceptedOffer.validFrom>row.created_at.toISOString()||acceptedOffer.validUntil<=row.created_at.toISOString()||
           !acceptedOffer.earliestSlotAt||acceptedOffer.earliestSlotAt<=row.created_at.toISOString()||acceptedOffer.updatedAt>row.created_at.toISOString())throw Error();
+      }else if(row.action==='match'){
+        acceptedOffer=parseMentorServiceOffer(v.acceptedOffer);
+        if(typeof v.actorAuthVersion!=='string'||!/^\d+$/.test(v.actorAuthVersion)||acceptedOffer.organizationId!==row.org_id)throw Error();
+        const cmd=parseMentorMatchCommand(command),capacity=parseConfirmedMentorCapacity(v.acceptedCapacity);
+        if(cmd.sessionId!==row.session_id||cmd.slotId!==capacity.slot.recordId||cmd.slotRevision!==capacity.slotRevision||capacity.profile.signedAt>(v.createdAt as string)||capacity.slot.confirmedAt>(v.createdAt as string))throw Error();
+        return {...v,command,acceptedOffer,actorId:careerRecordId(v.actorId),acceptedCapacity:capacity} as unknown as Receipt;
       }else if(v.acceptedOffer!==null)throw Error();
+      if(v.actorId!==undefined||v.actorAuthVersion!==undefined||v.acceptedCapacity!==undefined)throw Error();
       return {...v,command,acceptedOffer} as unknown as Receipt;
     }catch{throw unavailable();}
   }
@@ -70,21 +82,36 @@ export class MentorIntents {
       if(r.id!==row.id||r.ownerId!==row.user_id||r.organizationId!==row.org_id||r.offerId!==row.offer_id||r.offerRevision!==row.offer_revision||
         r.kind!==row.kind||r.durationMin!==row.duration_min||r.status!==row.status||r.revision!==row.revision||r.lastOperationId!==row.last_operation_id||
         r.createdAt!==row.created_at.toISOString()||r.updatedAt!==row.updated_at.toISOString()||
-        [row.mentor_id,row.order_id,row.packet_id,row.scheduled_at,row.review_id].some(v=>v!==null))throw Error();
+        row.mentor_id!==r.mentorId||row.order_id!==r.orderId||[row.packet_id,row.scheduled_at,row.review_id].some(v=>v!==null))throw Error();
       const operations=(await c.query<OperationRow>('SELECT * FROM platform_mentor_intent_operations WHERE session_id=$1 AND user_id=$2 ORDER BY applied_revision FOR SHARE',[r.id,r.ownerId])).rows;
-      if(operations.length!==r.revision||operations.some(o=>o.org_id!==r.organizationId))throw Error();
-      const first=this.receipt(operations[0]),last=this.receipt(operations.at(-1)!);
+      if(operations.length!==r.revision||operations.some((o,i)=>o.org_id!==r.organizationId||o.applied_revision!==i+1))throw Error();
+      const proofs=operations.map(o=>this.receipt(o)),first=proofs[0],last=proofs.at(-1)!;
       if(last.recordDigest!==digest(r)||last.operationId!==r.lastOperationId||last.appliedRevision!==r.revision||last.createdAt!==r.updatedAt||
         first.action!=='create'||first.createdAt!==r.createdAt)throw Error();
       const initial=parseMentorIntentCommand(first.command),accepted=first.acceptedOffer!;
       if(initial.offerId!==r.offerId||initial.offerRevision!==r.offerRevision||initial.contactName!==r.contactName||initial.intentNote!==r.intentNote||
         accepted.kind!==r.kind||accepted.durationMin!==r.durationMin)throw Error();
+      const match=proofs.find(p=>p.action==='match');
+      if(r.assignment){
+        if(!match||match.appliedRevision!==2||r.revision===2&&last.action!=='match'||r.revision===3&&last.action!=='cancel'||!r.orderId||!r.mentorId)throw Error();
+        const source=match.acceptedCapacity!,cmd=parseMentorMatchCommand(match.command),a=r.assignment;
+        if(source.profile.mentorId!==r.mentorId||source.profile.displayName!==a.mentorDisplayName||source.profile.recordId!==a.profileId||source.profileRevision!==a.profileRevision||
+          source.slot.recordId!==a.slotId||source.slotRevision!==a.slotRevision||source.slot.startsAt!==a.startsAt||source.slot.endsAt<a.endsAt||
+          source.slot.timeZone!==a.timeZone||source.slot.service!==r.kind||match.createdAt!==a.matchedAt||cmd.priceCents>accepted.priceCents||
+          cmd.priceCents>match.acceptedOffer!.priceCents||match.acceptedOffer!.kind!==r.kind||match.acceptedOffer!.durationMin!==r.durationMin)throw Error();
+        const order=await this.orders.readInTransaction(c,r.ownerId,r.orderId),reservation=await this.reservations.readInTransaction(c,r.ownerId,r.id);
+        if(order.sessionId!==r.id||order.organizationId!==r.organizationId||order.offerId!==r.offerId||order.offerRevision!==r.offerRevision||order.priceCents!==cmd.priceCents||
+          digest(order.shownOffer)!==digest(accepted)||order.createdAt!==match.createdAt||order.lastOperationId!==r.lastOperationId||order.updatedAt!==r.updatedAt||
+          (r.status==='matched'?order.status!=='quoted':order.status!=='void')||reservation.mentorId!==r.mentorId||reservation.orgId!==r.organizationId||
+          reservation.slotId!==a.slotId||reservation.slotRevision!==a.slotRevision||reservation.startsAt!==source.slot.startsAt||reservation.endsAt!==source.slot.endsAt||
+          reservation.lastOperationId!==r.lastOperationId||reservation.updatedAt!==r.updatedAt||(r.status==='matched'?reservation.status!=='held':reservation.status!=='released'))throw Error();
+      }else if(match||r.status==='matched'||last.action!==(r.status==='requested'?'create':'cancel'))throw Error();
       return r;
     }catch{throw unavailable();}
   }
   private cancelCommand(input:unknown) {
     const v=careerRecordObject(input,['operationId','expectedRevision']);
-    return Object.freeze({operationId:careerRecordId(v.operationId),expectedRevision:mentorServiceInteger(v.expectedRevision,1,1)});
+    return Object.freeze({operationId:careerRecordId(v.operationId),expectedRevision:mentorServiceInteger(v.expectedRevision,1,2147483646)});
   }
   private async read(c:PoolClient,owner:string,id:string) {
     const row=(await c.query<SessionRow>('SELECT * FROM platform_mentor_sessions WHERE id=$1 AND user_id=$2 FOR SHARE',[id,owner])).rows[0];
@@ -169,8 +196,9 @@ export class MentorIntents {
       }else{
         const row=(await c.query<SessionRow>('SELECT * FROM platform_mentor_sessions WHERE user_id=$1 AND id=$2 FOR UPDATE',[context.userId,id])).rows[0];
         if(!row)throw missing();const current=await this.decode(c,row),cmd=this.cancelCommand(command);
-        if(current.revision!==cmd.expectedRevision||current.status!=='requested')throw changed();
-        record=parseMentorIntent({...current,status:'cancelled',revision:2,updatedAt:await this.at(c),lastOperationId:command.operationId});
+        if(current.revision!==cmd.expectedRevision||!['requested','matched'].includes(current.status))throw changed();
+        record=parseMentorIntent({...current,status:'cancelled',revision:current.revision+1,updatedAt:await this.at(c),lastOperationId:command.operationId});
+        if(current.assignment){await this.reservations.releaseInTransaction(c,record,signal);await this.orders.voidInTransaction(c,record,signal);}
       }
       const receipt:Receipt={schemaVersion:1,ownerId:context.userId,orgId:record.organizationId,operationId:command.operationId,sessionId:record.id,
         action,appliedRevision:record.revision,command,commandDigest:digest(command),recordDigest:digest(record),acceptedAuthVersion:authVersion,createdAt:record.updatedAt,acceptedOffer};
@@ -182,13 +210,82 @@ export class MentorIntents {
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,[record.id,context.userId,record.organizationId,record.offerId,record.offerRevision,
             record.kind,record.durationMin,record.status,record.revision,record.lastOperationId,record.createdAt,record.updatedAt,this.seal('mentor_intent',record.id,context.userId,record.revision,record)]);
       }else{
-        const saved=await c.query('UPDATE platform_mentor_sessions SET status=$3,revision=$4,last_operation_id=$5,updated_at=$6,payload_ciphertext=$7 WHERE id=$1 AND user_id=$2 AND revision=1',
-          [record.id,context.userId,record.status,record.revision,record.lastOperationId,record.updatedAt,this.seal('mentor_intent',record.id,context.userId,record.revision,record)]);
+        const saved=await c.query('UPDATE platform_mentor_sessions SET status=$3,revision=$4,last_operation_id=$5,updated_at=$6,payload_ciphertext=$7 WHERE id=$1 AND user_id=$2 AND revision=$8',
+          [record.id,context.userId,record.status,record.revision,record.lastOperationId,record.updatedAt,this.seal('mentor_intent',record.id,context.userId,record.revision,record),record.revision-1]);
         if(saved.rowCount!==1)throw changed();
       }
       await this.store.authorizeSession(c,context,signal);signal?.throwIfAborted();
       return Object.freeze({session:record,operation:Object.freeze({id:command.operationId,sessionId:record.id,appliedRevision:record.revision,replayed:false})});
     });
+  }
+  /** P0 explicit operator invocation; no public matching issuer or fabricated owner session. */
+  async match(session:FixedSessionContext,organizationId:string,input:unknown,signal?:AbortSignal){
+    const context=fixed(session),org=careerRecordId(organizationId);let cmd:Readonly<MentorMatchCommand>;
+    try{cmd=parseMentorMatchCommand(input);}catch{throw invalid();}
+    return this.staff.readWithAccess<Readonly<{sessionId:string;status:MentorIntent['status'];revision:number;appliedRevision:number;replayed:boolean}>>(context,org,{roles:['ops','org_admin'],action:'mentor_intent_matched',targetId:cmd.sessionId},async c=>{
+      // SHARE preserves catalog reads while preventing source edits. A separate nonce
+      // lock serializes retries without taking an org UPDATE before the student lock.
+      await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['mentor_match:'+org+':'+cmd.operationId]);
+      const old=(await c.query<OperationRow>("SELECT * FROM platform_mentor_intent_operations WHERE org_id=$1 AND operation_id=$2 AND action='match' FOR SHARE",[org,cmd.operationId])).rows[0];
+      if(old){
+        const p=this.receipt(old);
+        if(p.sessionId!==cmd.sessionId||p.actorId!==context.userId||p.commandDigest!==digest(cmd))throw new ApiError(409,'MENTOR_INTENT_OPERATION_CONFLICT','操作编号已用于其他请求。');
+        await this.store.authorizeAccount(c,p.ownerId,undefined,signal);const current=await this.read(c,p.ownerId,p.sessionId);
+        return {value:Object.freeze({sessionId:current.id,status:current.status,revision:current.revision,appliedRevision:p.appliedRevision,replayed:true}),recordCount:1};
+      }
+      if(this.organizationId!==org||!this.capacity||!this.offers.currentForStaffInTransaction)throw new ApiError(503,'MENTOR_MATCH_UNAVAILABLE','真人匹配尚未配置。');
+      const target=(await c.query<SessionRow>('SELECT * FROM platform_mentor_sessions WHERE org_id=$1 AND id=$2',[org,cmd.sessionId])).rows[0];if(!target)throw missing();
+      // Owner -> session order matches user cancellation, without minting a student login.
+      const authVersion=await this.store.authorizeAccount(c,target.user_id,undefined,signal);
+      const row=(await c.query<SessionRow>('SELECT * FROM platform_mentor_sessions WHERE org_id=$1 AND id=$2 AND user_id=$3 FOR UPDATE',[org,cmd.sessionId,target.user_id])).rows[0];if(!row)throw missing();
+      const current=await this.decode(c,row);if(current.status!=='requested'||current.revision!==cmd.expectedRevision)throw changed();
+      const initial=(await c.query<OperationRow>("SELECT * FROM platform_mentor_intent_operations WHERE user_id=$1 AND session_id=$2 AND action='create' FOR SHARE",[current.ownerId,current.id])).rows[0];
+      const original=this.receipt(initial).acceptedOffer!,offer=await this.offers.currentForStaffInTransaction(c,context,org,current.offerId,signal);
+      const capacity=await this.capacity.confirmedInTransaction(c,context,org,cmd.slotId,cmd.slotRevision,signal),slot=capacity.slot,at=await this.at(c);
+      if(offer.kind!==current.kind||offer.durationMin!==current.durationMin||slot.service!==current.kind||
+        Date.parse(slot.endsAt)-Date.parse(slot.startsAt)<current.durationMin*60000||slot.startsAt<offer.earliestSlotAt!||slot.startsAt<=at||original.validUntil<=at)
+        throw new ApiError(409,'MENTOR_MATCH_SOURCE_CHANGED','导师、服务或时段已有变化，请先重新确认。');
+      if(cmd.priceCents>Math.min(original.priceCents,offer.priceCents))throw new ApiError(409,'MENTOR_QUOTE_TOO_HIGH','报价不能高于用户当时看到的价格或当前公开价格。');
+      const record=parseMentorIntent({...current,status:'matched',mentorId:capacity.profile.mentorId,orderId:randomUUID(),revision:2,lastOperationId:cmd.operationId,updatedAt:at,
+        assignment:{mentorDisplayName:capacity.profile.displayName,slotId:slot.recordId,slotRevision:capacity.slotRevision,profileId:capacity.profile.recordId,profileRevision:capacity.profileRevision,
+          startsAt:slot.startsAt,endsAt:new Date(Date.parse(slot.startsAt)+current.durationMin*60000).toISOString(),timeZone:slot.timeZone,matchedAt:at}});
+      await this.reservations.holdInTransaction(c,context,record,{slotId:slot.recordId,slotRevision:capacity.slotRevision,startsAt:slot.startsAt,endsAt:slot.endsAt},signal);
+      await this.orders.quoteInTransaction(c,context,record,original,cmd.priceCents,signal);
+      const actorAuthVersion=String((await c.query('SELECT auth_version FROM platform_users WHERE id=$1',[context.userId])).rows[0].auth_version);
+      const receipt:Receipt={schemaVersion:2,ownerId:record.ownerId,orgId:org,operationId:cmd.operationId,sessionId:record.id,action:'match',appliedRevision:2,
+        command:cmd,commandDigest:digest(cmd),recordDigest:digest(record),acceptedAuthVersion:authVersion,createdAt:at,acceptedOffer:offer,
+        actorId:context.userId,actorAuthVersion,acceptedCapacity:capacity};
+      await c.query(`INSERT INTO platform_mentor_intent_operations(user_id,org_id,operation_id,session_id,action,applied_revision,created_at,receipt_ciphertext) VALUES($1,$2,$3,$4,'match',2,$5,$6)`,
+        [record.ownerId,org,cmd.operationId,record.id,at,this.seal('mentor_intent_operation',cmd.operationId,record.ownerId,2,receipt)]);
+      const saved=await c.query(`UPDATE platform_mentor_sessions SET status='matched',mentor_id=$3,order_id=$4,revision=2,last_operation_id=$5,updated_at=$6,payload_ciphertext=$7
+        WHERE id=$1 AND user_id=$2 AND status='requested' AND revision=1`,[record.id,record.ownerId,record.mentorId,record.orderId,cmd.operationId,at,this.seal('mentor_intent',record.id,record.ownerId,2,record)]);
+      if(saved.rowCount!==1)throw changed();
+      await this.store.authorizeAccount(c,record.ownerId,authVersion,signal);
+      const finalAt=await this.at(c);if(slot.startsAt<=finalAt||original.validUntil<=finalAt||offer.validUntil<=finalAt||offer.earliestSlotAt!<=finalAt)
+        throw new ApiError(409,'MENTOR_MATCH_SOURCE_CHANGED','导师、服务或时段已有变化，请先重新确认。');
+      signal?.throwIfAborted();return {value:Object.freeze({sessionId:record.id,status:record.status,revision:record.revision,appliedRevision:2,replayed:false}),recordCount:1};
+    },signal);
+  }
+  async getOrder(session:FixedSessionContext,id:string,signal?:AbortSignal){
+    const context=fixed(session),key=careerRecordId(id);return this.db.withBoundedTransaction(async c=>{
+      await this.store.authorizeSession(c,context,signal);const record=await this.read(c,context.userId,key);if(!record.orderId)throw missing();
+      const order=await this.orders.readInTransaction(c,context.userId,record.orderId);
+      await this.store.authorizeSession(c,context,signal);signal?.throwIfAborted();return Object.freeze({session:record,order});
+    });
+  }
+  async opsOrders(session:FixedSessionContext,organizationId:string,input:unknown={},signal?:AbortSignal){
+    const context=fixed(session),org=careerRecordId(organizationId),after=this.after(input);
+    return this.staff.readWithAccess(context,org,{roles:['ops','org_admin'],action:'mentor_orders_viewed'},async c=>{
+      const anchor=after?(await c.query<SessionRow>('SELECT * FROM platform_mentor_sessions WHERE org_id=$1 AND id=$2 AND order_id IS NOT NULL FOR SHARE',[org,after])).rows[0]:null;
+      if(after&&!anchor)throw missing();if(anchor)await this.decode(c,anchor);
+      const rows=(await c.query<SessionRow>(`SELECT * FROM platform_mentor_sessions WHERE org_id=$1 AND order_id IS NOT NULL
+        AND ($2::timestamptz IS NULL OR (created_at,id)<($2::timestamptz,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT 51 FOR SHARE`,[org,anchor?.created_at??null,anchor?.id??null])).rows;
+      const orders=[];for(const row of rows.slice(0,50)){
+        signal?.throwIfAborted();const r=await this.decode(c,row),o=await this.orders.readInTransaction(c,r.ownerId,r.orderId!);
+        orders.push(Object.freeze({id:o.id,sessionId:o.sessionId,status:o.status,priceCents:o.priceCents,currency:o.currency,createdAt:o.createdAt,updatedAt:o.updatedAt}));
+      }
+      signal?.throwIfAborted();return {value:Object.freeze({orders:Object.freeze(orders),nextCursor:rows.length>50?orders.at(-1)!.sessionId:null}),recordCount:orders.length};
+    },signal);
   }
   async opsList(session:FixedSessionContext,organizationId:string,input:unknown={},signal?:AbortSignal) {
     const context=fixed(session),org=careerRecordId(organizationId),after=this.after(input);

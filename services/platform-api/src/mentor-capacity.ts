@@ -1,3 +1,6 @@
+import { authorizeMentorStaffSource } from './mentor-staff-source.ts';
+import { MentorSlotReservations } from './mentor-slot-reservations.ts';
+import { parseConfirmedMentorCapacity } from './mentor-confirmed-capacity.ts';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId,careerRecordObject,mentorServiceInteger,mentorServiceTime,mentorServiceText,
@@ -30,9 +33,9 @@ interface Proof {schemaVersion:1;orgId:string;recordId:string;kind:MentorCapacit
 export interface MentorCapacityReceipt {readonly recordId:string;readonly kind:MentorCapacityKind;readonly revision:number;readonly status:'active'|'withdrawn';readonly appliedRevision:number;readonly replayed:boolean;}
 /** Private operator-confirmed capacity sources, not a booking grant or a public mentor directory. */
 export class MentorCapacity {
-  private readonly store:OnboardingStorage;private readonly staff:StaffAccess;
+  private readonly store:OnboardingStorage;private readonly staff:StaffAccess;private readonly reservations:MentorSlotReservations;
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null,
-    private readonly blobs:Pick<BlobStorage,'stat'>,staff?:StaffAccess){this.store=new OnboardingStorage(config,legal);this.staff=staff??new StaffAccess(db);}
+    private readonly blobs:Pick<BlobStorage,'stat'>,staff?:StaffAccess){this.store=new OnboardingStorage(config,legal);this.staff=staff??new StaffAccess(db);this.reservations=new MentorSlotReservations(config);}
   private seal(table:string,id:string,org:string,revision:number,value:unknown){
     try{if(!this.store.crypto)throw Error();return this.store.crypto.sealUtf8(JSON.stringify(value),{table,column:'payload',rowId:id,ownerId:org,revision});}catch{throw unavailable();}
   }
@@ -152,6 +155,7 @@ export class MentorCapacity {
           // A mentor can belong to several organizations. Serialize their source windows
           // without returning any other organization's private schedule.
           await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",['mentor_capacity:'+mentorId]);
+          if(await this.reservations.overlapInTransaction(c,mentorId,cmd.startsAt,cmd.endsAt,signal))throw new ApiError(409,'MENTOR_SLOT_RESERVED','这个时段已有预约，请重新核对。');
           // Authenticate source projections before comparing windows: a changed
           // SQL status/time must not make an encrypted committed window disappear.
           const windows=(await c.query<Row>(`SELECT * FROM platform_mentor_capacity_records
@@ -188,6 +192,19 @@ export class MentorCapacity {
       return {value:Object.freeze({...this.summary(state),appliedRevision:state.revision,replayed:false}),recordCount:1};
     },signal);
   }
+  /** Staff-authorized source capture in the matching caller's transaction; no standalone issuer. */
+  async confirmedInTransaction(c:PoolClient,session:FixedSessionContext,organizationId:string,slotId:string,revision:number,signal?:AbortSignal){
+    const org=careerRecordId(organizationId),context=Object.freeze({...session});await authorizeMentorStaffSource(c,context,org,signal);
+    const slot=await this.read(c,org,careerRecordId(slotId));
+    if(slot.kind!=='slot'||slot.status!=='active'||slot.revision!==revision)throw changed();
+    const cmd=slot.command as MentorSlotCommand,profile=await this.read(c,org,cmd.profileId);
+    if(profile.revision!==cmd.profileRevision||!await this.eligibleProfile(c,profile,signal)||!await this.validEvidence(c,slot.evidence,signal))
+      throw new ApiError(409,'MENTOR_CAPACITY_PROFILE_UNAVAILABLE','请先确认当前导师与服务资料。');
+    if(cmd.startsAt<=await this.at(c))throw new ApiError(409,'MENTOR_CAPACITY_SLOT_EXPIRED','这个时段已开始，请重新确认。');
+    await authorizeMentorStaffSource(c,context,org,signal);signal?.throwIfAborted();
+    return parseConfirmedMentorCapacity({profile:profile.command,profileRevision:profile.revision,slot:slot.command,slotRevision:slot.revision,
+      profileProofDigest:digest(profile),slotProofDigest:digest(slot),profileEvidence:profile.evidence,slotEvidence:slot.evidence});
+  }
   async observe(session:FixedSessionContext,organizationId:string,operationId:string,signal?:AbortSignal){
     const org=careerRecordId(organizationId),op=careerRecordId(operationId);
     return this.staff.readWithAccess(session,org,{roles:['ops','org_admin'],action:'mentor_capacity_viewed'},async c=>{
@@ -213,7 +230,7 @@ export class MentorCapacity {
         }else{
           const cmd=s.command as MentorSlotCommand,profile=await this.read(c,org,cmd.profileId);
           const eligible=s.status==='active'&&profile.revision===cmd.profileRevision&&await this.eligibleProfile(c,profile,signal)&&
-            await this.validEvidence(c,s.evidence,signal);
+            await this.validEvidence(c,s.evidence,signal)&&!await this.reservations.overlapInTransaction(c,s.mentorId,cmd.startsAt,cmd.endsAt,signal);
           records.push(Object.freeze({...this.summary(s),mentorId:s.mentorId,profileId:cmd.profileId,profileRevision:cmd.profileRevision,service:cmd.service,
             startsAt:cmd.startsAt,endsAt:cmd.endsAt,timeZone:cmd.timeZone,confirmedAt:cmd.confirmedAt,eligible}));
         }

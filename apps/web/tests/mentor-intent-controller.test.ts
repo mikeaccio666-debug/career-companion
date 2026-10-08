@@ -132,3 +132,42 @@ test('actual 50-row cursors append every row, reject duplicates and cancelling p
   await until(() => h.controller.snapshot().lastResult !== null); assert.equal(h.controller.snapshot().records[0].status, 'cancelled');
   assert.equal(h.controller.snapshot().records.length, 51); assert.equal(h.controller.snapshot().records.at(-1)!.id, last.id); h.controller.stop();
 });
+
+const assignment = () => ({mentorDisplayName:'Fictional mentor',slotId:randomUUID(),slotRevision:1,profileId:randomUUID(),profileRevision:1,
+ startsAt:'2027-01-01T10:00:00.000Z',endsAt:'2027-01-01T10:45:00.000Z',timeZone:'America/New_York',matchedAt:at});
+const matched = (patch: object={}) => record({status:'matched',revision:2,mentorId:randomUUID(),orderId:randomUUID(),assignment:assignment(),...patch});
+const quote = (session:any,patch:object={}) => ({id:session.orderId,sessionId:session.id,ownerId:owner,organizationId:org,offerId,offerRevision:1,
+ priceCents:9000,currency:'USD',status:'quoted',paymentRef:null,handoffCode:'a'.repeat(43),origin:'user_request',suggestionId:null,shownOffer:offer(),
+ revision:1,lastOperationId:session.lastOperationId,createdAt:at,updatedAt:at,...patch});
+test('only an owned paired quote can be read; suspension/account change clears financial and assignment data without background writes',async()=>{
+ const actual=matched();let writes=0;
+ const h=harness((path,init)=>{if(init.method)writes++;return path.endsWith('/entry')?entry():path.endsWith('/order')?{session:actual,order:quote(actual)}:{sessions:[actual],nextCursor:null};});
+ await ready(h);await h.controller.loadOrder(id);assert.equal(h.controller.snapshot().quote?.order.priceCents,9000);assert.equal(writes,0);
+ h.controller.suspend();assert.equal(h.controller.snapshot().quote,null);assert.deepEqual(h.controller.snapshot().records,[]);
+ h.controller.resume();await until(()=>h.controller.snapshot().loaded&&!h.controller.snapshot().busy);assert.equal(h.controller.snapshot().quote,null);
+ await h.controller.loadOrder(id);h.invalidate();assert.equal(h.controller.snapshot().quote,null);assert.equal(writes,0);
+});
+test('matched cancellation uses its actual revision, preserves uncertain nonce and clears old quote until a genuine acknowledgement',async()=>{
+ const actual=matched(),operationId=randomUUID();let first=true;const writes:any[]=[];
+ const h=harness((path,init)=>{
+  if(!init.method)return path.endsWith('/entry')?entry():path.endsWith('/order')?{session:actual,order:quote(actual)}:{sessions:[actual],nextCursor:null};
+  const body=JSON.parse(String(init.body));writes.push(body);if(first){first=false;throw Error('Lost acknowledgement');}
+  return {session:{...actual,status:'cancelled',revision:3,lastOperationId:body.operationId},operation:{id:body.operationId,sessionId:id,appliedRevision:3,replayed:true}};
+ });
+ await ready(h);await h.controller.loadOrder(id);h.controller.begin({action:'cancel',sessionId:id,body:{operationId,expectedRevision:2}});
+ await until(()=>h.controller.snapshot().uncertain);assert.equal(h.controller.snapshot().quote,null);assert.equal(h.controller.snapshot().pending?.body.operationId,operationId);
+ await h.controller.loadOrder(id);assert.equal(h.controller.snapshot().quote,null);await h.controller.retry();assert.equal(h.controller.snapshot().records[0].status,'cancelled');
+ assert.deepEqual(writes,[{operationId,expectedRevision:2},{operationId,expectedRevision:2}]);h.controller.stop();
+});
+test('older, foreign or mismatched quote responses cannot replace the actual owned current session',async()=>{
+ const actual=matched();for(const patch of [{ownerId:randomUUID()},{sessionId:randomUUID()},{id:randomUUID()},{status:'void',revision:2,handoffCode:null}]){
+  const h=harness(path=>path.endsWith('/entry')?entry():path.endsWith('/order')?{session:actual,order:quote(actual,patch)}:{sessions:[actual],nextCursor:null});
+  await ready(h);await h.controller.loadOrder(id);assert.equal(h.controller.snapshot().quote,null);assert.equal(h.controller.snapshot().records[0].revision,2);assert(h.controller.snapshot().error);h.controller.stop();
+ }
+});
+test('late quote responses after suspension or account invalidation stay hidden even when transport ignores abort',async()=>{
+ const actual=matched();let resolve!:(value:any)=>void;
+ const h=harness(path=>path.endsWith('/entry')?entry():path.endsWith('/order')?new Promise(r=>{resolve=r;}):{sessions:[actual],nextCursor:null});
+ await ready(h);const read=h.controller.loadOrder(id);await until(()=>h.controller.snapshot().busy);h.controller.suspend();
+ resolve({session:actual,order:quote(actual)});await read;assert.equal(h.controller.snapshot().quote,null);assert.deepEqual(h.controller.snapshot().records,[]);h.controller.stop();
+});

@@ -136,8 +136,8 @@ export async function buildApp(options:AppOptions={}) {
   const knowledge=new KnowledgeSources(db);
   const orgKnowledge=new OrgKnowledge(db,config,bundle,storage,staff);
   const mentorServiceOffers=new MentorServiceOffers(db,config,bundle,storage,staff);
-  const mentorIntents=new MentorIntents(db,config,bundle,mentorServiceOffers,staff);
   const mentorCapacity=new MentorCapacity(db,config,bundle,storage,staff);
+  const mentorIntents=new MentorIntents(db,config,bundle,mentorServiceOffers,staff,mentorCapacity);
   const audioTranscriptions=new AudioTranscriptions(db,storage,runtime);
   const goalPlans=new GoalPlans(db,jobs,runtime);
   const goalPlanProposals=new GoalPlanProposals(db,goalPlans);
@@ -688,6 +688,9 @@ export async function buildApp(options:AppOptions={}) {
   app.get(mentorIntentRoot+'/:id',secure,(request,reply)=>{
     mentorIntentQuery(request);return applicationRead(request,reply,async signal=>({session:await mentorIntents.get(fixedRequestSession(request,userId(request)),params(request),signal)}));
   });
+  app.get(mentorIntentRoot+'/:id/order',secure,(request,reply)=>{
+    mentorIntentQuery(request);return applicationRead(request,reply,signal=>mentorIntents.getOrder(fixedRequestSession(request,userId(request)),params(request),signal));
+  });
   app.post(mentorIntentRoot,secure,(request,reply)=>{
     mentorIntentQuery(request);return applicationRead(request,reply,async signal=>{
       const result=await mentorIntents.create(fixedRequestSession(request,userId(request)),request.body,signal);
@@ -708,6 +711,8 @@ export async function buildApp(options:AppOptions={}) {
     return applicationRead(request,reply,signal=>mentorCapacity.observe(fixedRequestSession(request,userId(request)),params(request).toLowerCase(),
       params(request,'operationId').toLowerCase(),signal));
   });
+  app.get(prefix+'/staff/orgs/:id/mentor-orders',secure,(request,reply)=>applicationRead(request,reply,
+    signal=>mentorIntents.opsOrders(fixedRequestSession(request,userId(request)),params(request),careerHttpQuery(request.query),signal)));
   const applicationRoot = prefix + '/career/applications';
   function applicationQuery(request: FastifyRequest) {
     try { careerRecordObject(careerHttpQuery(request.query), []); }

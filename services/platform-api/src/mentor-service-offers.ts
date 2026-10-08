@@ -1,3 +1,4 @@
+import { authorizeMentorStaffSource } from './mentor-staff-source.ts';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordObject, careerRecordId, MENTOR_INTENT_PRIVACY, parseMentorServiceTerms,
@@ -100,6 +101,19 @@ export class MentorServiceOffers {
     const finalAt = (await c.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
     signal?.throwIfAborted();
     return Object.freeze(states.filter(s => s.terms.validFrom <= finalAt && s.terms.validUntil > finalAt).map(s => this.public(s,finalAt)));
+  }
+  /** Current reviewed offer for manual matching, within an audited staff transaction. */
+  async currentForStaffInTransaction(c:PoolClient,session:FixedSessionContext,organizationId:string,id:string,signal?:AbortSignal){
+    const context=fixed(session),org=careerRecordId(organizationId);await authorizeMentorStaffSource(c,context,org,signal);
+    const row=(await c.query<OfferRow>('SELECT * FROM platform_service_offers WHERE org_id=$1 AND id=$2 FOR SHARE',[org,careerRecordId(id)])).rows[0];
+    if(!row)throw new ApiError(409,'MENTOR_SERVICE_UNAVAILABLE','服务已变更，请重新查看。');const s=await this.decode(c,row);
+    const evidence=(await c.query('SELECT storage_key,byte_size FROM platform_uploads WHERE id=$1 AND user_id=$2 AND byte_size>0 FOR SHARE',[s.reviewEvidenceRef,s.configuredBy])).rows[0];
+    if(!evidence)throw new ApiError(409,'MENTOR_SERVICE_UNAVAILABLE','服务审核材料尚未确认。');
+    const actual=await this.blobs.stat(evidence.storage_key,signal).catch(()=>{throw unavailable();});if(actual.size!==Number(evidence.byte_size))throw unavailable();
+    const at=(await c.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
+    if(s.status!=='active'||s.terms.validFrom>at||s.terms.validUntil<=at||!s.terms.earliestSlotAt||s.terms.earliestSlotAt<=at)
+      throw new ApiError(409,'MENTOR_SERVICE_UNAVAILABLE','目前没有确认的可约时段。');
+    await authorizeMentorStaffSource(c,context,org,signal);signal?.throwIfAborted();return this.public(s,at);
   }
   async staffList(session: FixedSessionContext, organizationId: string, signal?: AbortSignal) {
     const context = fixed(session),org = careerRecordId(organizationId);
