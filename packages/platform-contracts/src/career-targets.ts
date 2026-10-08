@@ -1,6 +1,7 @@
 /** Owner-entered career directions. These records do not grant model or tool execution. */
-export const CAREER_ROLE_FAMILIES = Object.freeze(['swe', 'mle', 'ds', 'da', 'de', 'hw', 'other'] as const);
-export type CareerTargetRoleFamily = typeof CAREER_ROLE_FAMILIES[number];
+import { CAREER_ROLE_FAMILIES,careerRecordObject as careerTargetObject,careerRecordId as careerTargetId,CareerRecordInputError as CareerTargetInputError,type CareerRoleFamily } from './career-record-values.ts';
+export { CAREER_ROLE_FAMILIES,careerTargetObject,careerTargetId,CareerTargetInputError };
+export type CareerTargetRoleFamily=CareerRoleFamily;
 export const CAREER_TARGET_STATUSES = Object.freeze(['exploring', 'active', 'paused', 'dropped'] as const);
 export type CareerTargetStatus = typeof CAREER_TARGET_STATUSES[number];
 export type CareerTargetAction = 'create' | 'edit' | 'status' | 'delete';
@@ -14,17 +15,7 @@ export interface CareerTargetCommand {
  readonly operationId:string; readonly expectedRevision:number; readonly roleFamily?:CareerTargetRoleFamily;
  readonly title?:string; readonly locations?:readonly string[]; readonly priority?:number; readonly status?:CareerTargetStatus;
 }
-export class CareerTargetInputError extends Error {constructor(){super('The career direction could not be confirmed.');}}
 const fail=():never=>{throw new CareerTargetInputError();};
-export function careerTargetObject(value:unknown,required:readonly string[],optional:readonly string[]=[]):Record<string,unknown>{
- if(!value||typeof value!=='object'||![Object.prototype,null].includes(Object.getPrototypeOf(value)))return fail();
- const d=Object.getOwnPropertyDescriptors(value),allowed=[...required,...optional];
- if(Reflect.ownKeys(d).some(k=>typeof k!=='string'||!allowed.includes(k))||required.some(k=>!d[k])||Object.values(d).some(v=>!('value' in v)||!v.enumerable))return fail();
- return Object.fromEntries(Object.keys(d).map(k=>[k,d[k].value]));
-}
-export function careerTargetId(value:unknown):string{
- if(typeof value!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value))return fail();return value;
-}
 function integer(value:unknown,min:number,max=2147483647):number{
  if(typeof value!=='number'||!Number.isSafeInteger(value)||Object.is(value,-0)||value<min||value>max)return fail();return value;
 }

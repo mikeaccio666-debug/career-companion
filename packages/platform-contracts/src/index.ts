@@ -302,3 +302,7 @@ export * from './companion-welcome.ts';
 export * from './shared-memory.ts';
 
 export * from './career-targets.ts';
+
+export * from './manual-jobs.ts';
+
+export * from './career-record-values.ts';

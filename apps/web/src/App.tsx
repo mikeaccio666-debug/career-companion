@@ -1,3 +1,4 @@
+import { ManualJobPage } from './manual-job-view';
 import { CareerTargetPage } from './career-target-view';
 import { SharedMemoryPage } from './shared-memory-view';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -753,6 +754,7 @@ function AccountEntryApp() {
   if (initializing || connectionUnavailable || !authOptions || user && (!accountClient?.isCurrent() || accountClient.account.accountId !== user.id)) return <PublicConnectionView online={online} connecting={initializing} notice={authNotice || undefined} onRetry={() => void connectWorkspace(true)} />;
   if (accountAction && (accountAction.kind !== 'verify-email' || user)) return <AccountActionView key={`${accountScope.current.revision}-${accountAction.kind}`} action={accountAction} user={user} options={authOptions} onVerified={verifiedAccount} onReset={resetCompleted} onBack={leaveAccountAction} onDiscardToken={() => setAccountAction({ kind: 'invalid', purpose: accountAction.kind === 'invalid' ? accountAction.purpose : accountAction.kind })} onLogout={() => void logout()}  />;
   if (!user) return <AuthView key={`auth-${accountScope.current.revision}`} onUser={(next, registered) => { if (accountScope.current.isCurrent(renderSession)) { if (registered) window.history.replaceState(window.history.state, '', '/welcome'); switchAuthentication(next); } }} serverError={error || state.error} options={authOptions} initialLogin={forceLogin || accountAction?.kind === 'verify-email'} onCancelAction={accountAction?.kind === 'verify-email' ? leaveAccountAction : undefined} notice={accountAction?.kind === 'verify-email' ? '请先登录收到验证邮件的账号。登录后还需手动点击完成验证。' : authNotice} />;
+  if (window.location.pathname === '/journey/jobs' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <ManualJobPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/journey/targets' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerTargetPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/me/memory' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <SharedMemoryPage onLogout={() => void logout()} />;
   if (!accountReady) return <AccountGate key={accountScope.current.revision} user={user} options={authOptions} onVerified={verifiedAccount} onLogout={() => void logout()} serverError={error}  />;
