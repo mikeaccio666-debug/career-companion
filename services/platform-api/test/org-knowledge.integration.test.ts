@@ -1,3 +1,9 @@
+import { careerSkill, prepareCareerRun } from '@companion/career-core';
+import { CareerKnowledge } from '../src/career-knowledge.ts';
+import { KnowledgeSources } from '../src/knowledge-sources.ts';
+import { CareerPreparationSources } from '../src/career-preparation-sources.ts';
+import { CareerTargets } from '../src/career-targets.ts';
+import { CareerStories } from '../src/career-stories.ts';
 import { parseStudentOrgKnowledgePassage } from '@companion/platform-contracts';
 import { parseOrgP0Asset, orgAssetLegacyBody } from '@companion/career-core';
 import { orgDigest } from '../src/org-knowledge-values.ts';
@@ -328,4 +334,123 @@ test('genuine pre-readable-format source and its immutable proof remain publisha
   const web = await sourceWebClient(s.owner), old = await readOrgSource(web.client, { sourceId: id, revision: 2, passageId: '2:0' });
   assert.equal(old.text, body.slice(0, 1200));
   assert.equal((await f.db.query('SELECT body FROM platform_org_knowledge_sources WHERE id=$1', [id])).rows[0].body, body);
+});
+
+test('unified preparation port uses an actual password session, both databases, numeric citations and server provenance',async()=>{
+  const s=await setup(), p=await s.published(), web=await sourceWebClient(s.owner),
+    fixed={userId:s.owner.userId,tokenHash:tokenHash(web.headers.cookie.split('=')[1])},
+    privateSources=new KnowledgeSources(f.db), adapter=new CareerKnowledge(f.db,privateSources,service);
+  const own=await privateSources.create(s.owner.userId,{title:'Fictional owned evidence',content:'SQL aggregate fictional personal notes',sourceLabel:'蔓藤题库 fake private label'});
+  const other=await f.actor();const hidden=await privateSources.create(other.userId,{title:'Fictional private secret',content:'SQL aggregate fictional foreign notes'});
+  const bound=await adapter.open(fixed,{speaker:'interviewer',organizationId:s.org,questions:{assetClass:'question',questionType:'sql',topics:['aggregation']}});
+  const scope={ownerId:s.owner.userId,signal:new AbortController().signal};
+  const access=await bound.readKnowledgeAccess(scope);
+  assert.equal(access.id,'knowledge-access:'+s.owner.userId);assert.equal(access.revision,p.receipt.publishBatch);assert.equal(access.empty,false);
+  assert.equal(bound.frozen.entitlementId,s.entitlement.entitlementId);assert.deepEqual(bound.frozen.audienceGrants,['cohort']);
+  const result=await bound.search(scope,'SQL aggregate');
+  assert.deepEqual(result.map(x=>x.scope),['private','org']);
+  assert.equal(result[0].citations[0].sourceId,own.id);assert.equal(result[0].provenanceLabel,'你的资料');
+  assert.equal(result[1].citations[0].sourceId,p.source);assert.equal(result[1].provenanceLabel,'蔓藤题库');
+  assert(result.every(x=>x.provenance==='untrusted_knowledge'&&typeof x.citations[0].revision==='number'));
+  assert(!JSON.stringify(result).includes(hidden.id));assert(Object.isFrozen(result)&&Object.isFrozen(result[0].citations));
+  await assert.rejects(bound.search({...scope,ownerId:other.userId},'SQL aggregate'),rejected('NOT_FOUND'));
+  await assert.rejects(bound.search({ownerId:s.owner.userId} as any,'SQL aggregate'),rejected('CAREER_KNOWLEDGE_INPUT_INVALID'));
+});
+test('knowledge preparation has one real reference; entitlement revocation blocks the frozen reference and a new binding reads private only',async()=>{
+  const s=await setup();await s.published();const privateSources=new KnowledgeSources(f.db),adapter=new CareerKnowledge(f.db,privateSources,service);
+  const own=await privateSources.create(s.owner.userId,{title:'Fictional owned context',content:'SQL aggregate actual private preparation'});
+  const options={speaker:'interviewer',organizationId:s.org,questions:{assetClass:'question'}},scope={ownerId:s.owner.userId,signal:new AbortController().signal};
+  const bound=await adapter.open(s.owner,options);
+  // Other inputs and ready tool flags below are pure domain fixtures, never
+  // actual profile facts, executor registration or grants.
+  const domain=(ref:Awaited<ReturnType<typeof bound.readKnowledgeAccess>>)=>{
+    const skill=careerSkill('role-exploration');
+    return prepareCareerRun(skill.id,{ownerId:s.owner.userId,profileRevision:1,
+      inputs:skill.requiredInputs.map(input=>input==='knowledge'?{input,id:ref.id,ownerId:ref.ownerId,revision:ref.revision,state:ref.state}:{input,id:'fictional-domain:'+input,ownerId:s.owner.userId,revision:1,state:'current'}),
+      tools:Object.fromEntries(skill.tools.map(tool=>[tool,'ready']))});
+  };
+  const initial=await bound.readKnowledgeAccess(scope);assert.equal(domain(initial).state,'ready_for_draft');
+  await service.setEntitlement(s.operator,s.org,{...s.entitlementInput,operationId:randomUUID(),expectedRevision:1,revoke:true});
+  const old=await bound.readKnowledgeAccess(scope);assert.equal(old.state,'withdrawn');assert.equal(domain(old).state,'blocked');
+  await assert.rejects(bound.search(scope,'SQL aggregate'),rejected('NOT_ENTITLED'));
+  const fresh=await adapter.open(s.owner,options);assert.equal(fresh.frozen.entitlementId,null);assert.deepEqual(fresh.frozen.audienceGrants,[]);
+  assert.equal(domain(await fresh.readKnowledgeAccess(scope)).state,'ready_for_draft');
+  const results=await fresh.search(scope,'SQL aggregate');assert.deepEqual(results.map(x=>x.citations[0].sourceId),[own.id]);
+  await service.setEntitlement(s.operator,s.org,{...s.entitlementInput,operationId:randomUUID(),expectedRevision:2,revoke:false});
+  assert.equal((await bound.readKnowledgeAccess(scope)).state,'withdrawn');
+  assert((await fresh.search(scope,'SQL aggregate')).every(x=>x.scope==='private'),'a private-only binding cannot expand after a later grant');
+  assert((await (await adapter.open(s.owner,options)).search(scope,'SQL aggregate')).some(x=>x.scope==='org'));
+});
+test('frozen published batch excludes later questions and an organization bound reader excludes another licensed organization',async()=>{
+  const s=await setup();const first=await s.published(),adapter=new CareerKnowledge(f.db,new KnowledgeSources(f.db),service),
+    bound=await adapter.open(s.owner,{speaker:'guide',organizationId:s.org,questions:{assetClass:'question'}}),scope={ownerId:s.owner.userId,signal:new AbortController().signal};
+  const later=await s.published([s.row(q('fictional.later.question'))]);
+  const second=await setup();const outside=await second.published();
+  await service.setEntitlement(second.operator,second.org,{...second.entitlementInput,operationId:randomUUID(),userId:s.owner.userId,expectedRevision:0});
+  const result=await bound.search(scope,'unmatched-private-query');
+  assert.deepEqual(result.map(x=>x.citations[0].sourceId),[first.source]);assert(!JSON.stringify(result).includes(later.source));assert(!JSON.stringify(result).includes(outside.source));
+  const fresh=await adapter.open(s.owner,{speaker:'guide',organizationId:s.org,questions:{assetClass:'question'}});
+  assert.equal((await fresh.search(scope,'unmatched-private-query')).length,2);
+  assert.equal((await bound.readKnowledgeAccess(scope)).revision,first.receipt.publishBatch);
+});
+test('combined retrieval keeps eight-passage and byte budgets without borrowing methods, patterns or incompatible speaker permissions',async()=>{
+  const s=await setup(),p=await s.published(Array.from({length:8},(_,i)=>s.row(q('fictional.budget.'+i)))),privateSources=new KnowledgeSources(f.db),adapter=new CareerKnowledge(f.db,privateSources,service);
+  for(let i=0;i<8;i++) await privateSources.create(s.owner.userId,{title:'Fictional bounded source '+i,content:'budget '+('🌱'.repeat(1000))});
+  const bound=await adapter.open(s.owner,{speaker:'applier',organizationId:s.org,questions:{assetClass:'question',limit:8}});
+  const result=await bound.search({ownerId:s.owner.userId,signal:new AbortController().signal},'budget');
+  assert.equal(result.length,8);assert(result.some(x=>x.scope==='private')&&result.some(x=>x.scope==='org'));assert(Buffer.byteLength(JSON.stringify(result))<=49152);
+  for(const assetClass of ['method_card','conversation_pattern']) await assert.rejects(adapter.open(s.owner,{speaker:'interviewer',organizationId:s.org,questions:{assetClass}}),rejected('TOOL_NOT_ALLOWED'));
+  await assert.rejects(adapter.open(s.owner,{speaker:'companion',organizationId:s.org,questions:{assetClass:'question'}}),rejected('TOOL_NOT_ALLOWED'));
+  await assert.rejects(adapter.open(s.owner,{speaker:'planner'}),rejected('TOOL_NOT_ALLOWED'));
+  assert(p.source);
+});
+test('real session reset and authenticated entitlement corruption fail closed rather than returning private or organization bodies',async()=>{
+  const s=await setup();await s.published();const adapter=new CareerKnowledge(f.db,new KnowledgeSources(f.db),service),
+    bound=await adapter.open(s.owner,{speaker:'interviewer',organizationId:s.org,questions:{assetClass:'question'}}),
+    scope={ownerId:s.owner.userId,signal:new AbortController().signal};
+  await f.db.query("UPDATE platform_user_entitlements SET audience_grants=ARRAY['entitled']::text[] WHERE id=$1",[s.entitlement.entitlementId]);
+  await assert.rejects(bound.search(scope,'query'),rejected('ORG_CONTENT_STORAGE_UNAVAILABLE'));
+  const other=await f.actor(),clean=await adapter.open(other,{speaker:'guide'});
+  await f.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[other.userId]);
+  await assert.rejects(clean.search({ownerId:other.userId,signal:new AbortController().signal},'query'),rejected('AUTH_REQUIRED'));
+  const abort=new AbortController();abort.abort();await assert.rejects(adapter.open(s.owner,{speaker:'guide'},abort.signal),(e:any)=>e.name==='AbortError');
+});
+test('actual preparation composition consumes the bound knowledge reader in its existing bounded transaction and leaves absent profile/executors blocked',async()=>{
+  const s=await setup();await s.published();
+  const bound=await new CareerKnowledge(f.db,new KnowledgeSources(f.db),service).open(s.owner,{speaker:'interviewer',organizationId:s.org,questions:{assetClass:'question'}});
+  const sources=new CareerPreparationSources(f.db,new CareerTargets(f.db,f.config,FICTIONAL_LEGAL),new CareerStories(f.db,f.config,FICTIONAL_LEGAL),undefined,undefined,bound);
+  const built=await sources.prepare(s.owner,{skillId:'role-exploration'});
+  const refs=built.built.context.inputs.filter(x=>x.input==='knowledge');assert.equal(refs.length,1);assert.equal(refs[0].id,'knowledge-access:'+s.owner.userId);
+  assert.equal(built.built.context.profileRevision,0);assert.deepEqual(built.built.context.tools,{});
+  assert.equal(prepareCareerRun('role-exploration',built.built.context).state,'blocked');
+  const other=await f.actor();await assert.rejects(sources.prepare(other,{skillId:'role-exploration'}),rejected('NOT_FOUND'));
+  await service.setEntitlement(s.operator,s.org,{...s.entitlementInput,operationId:randomUUID(),expectedRevision:1,revoke:true});
+  const changed=await sources.prepare(s.owner,{skillId:'role-exploration'});assert(!changed.built.context.inputs.some(x=>x.input==='knowledge'));
+});
+
+test('authentic expiring entitlement withdraws its binding; empty private access remains current and does not imply content or executor availability',async()=>{
+  const s=await setup();await s.published();const adapter=new CareerKnowledge(f.db,new KnowledgeSources(f.db),service);
+  const at=(await f.db.query("SELECT clock_timestamp()+interval '1 second' AS until")).rows[0].until.toISOString();
+  await service.setEntitlement(s.operator,s.org,{...s.entitlementInput,operationId:randomUUID(),expectedRevision:1,expiresAt:at});
+  const bound=await adapter.open(s.owner,{speaker:'guide',organizationId:s.org,questions:{assetClass:'question'}});
+  assert.deepEqual(bound.frozen.orgScope,['cohort']);
+  await new Promise(r=>setTimeout(r,1100));
+  const scope={ownerId:s.owner.userId,signal:new AbortController().signal};
+  assert.equal((await bound.readKnowledgeAccess(scope)).state,'withdrawn');
+  await assert.rejects(bound.search(scope,'query'),rejected('NOT_ENTITLED'));
+  const fresh=await adapter.open(s.owner,{speaker:'guide',organizationId:s.org,questions:{assetClass:'question'}});
+  assert.equal(fresh.frozen.orgScope,'none');const access=await fresh.readKnowledgeAccess(scope);
+  assert.equal(access.state,'current');assert.equal(access.empty,true);assert.deepEqual(await fresh.search(scope,'query'),[]);
+});
+test('caller scope mutation cannot swap the abort signal during actual SQL retrieval or commit abandoned organization access',async()=>{
+  const s=await setup();await s.published();const privateSources=new KnowledgeSources(f.db);
+  await privateSources.create(s.owner.userId,{title:'Fictional cancellation source',content:'cancellation actual SQL'});
+  const abort=new AbortController(),scope={ownerId:s.owner.userId,signal:abort.signal},original=privateSources.searchInTransaction.bind(privateSources);
+  privateSources.searchInTransaction=async(...args)=>{
+    const result=await original(...args);abort.abort();scope.signal=new AbortController().signal;return result;
+  };
+  const bound=await new CareerKnowledge(f.db,privateSources,service).open(s.owner,{speaker:'interviewer',organizationId:s.org,questions:{assetClass:'question'}});
+  const before=(await f.db.query('SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE user_id=$1',[s.owner.userId])).rows[0].n;
+  await assert.rejects(bound.search(scope,'cancellation'),(e:any)=>e.name==='AbortError');
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE user_id=$1',[s.owner.userId])).rows[0].n,before);
 });

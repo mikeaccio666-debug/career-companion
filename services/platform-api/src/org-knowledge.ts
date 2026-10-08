@@ -234,16 +234,39 @@ export class OrgKnowledge {
       await this.writeSourceProof(c, row.id); return { sourceId: row.id, revision: row.revision + 1, withdrawn: true };
     }, signal);
   }
-  private async audience(c: PoolClient, ownerId: string, orgId: string, license: any, at: string) {
-    const org = (await c.query("SELECT id FROM platform_orgs WHERE id=$1 AND status='active' FOR SHARE", [orgId])).rows[0];
-    const row = (await c.query('SELECT * FROM platform_user_entitlements WHERE user_id=$1 AND org_id=$2 FOR SHARE', [ownerId, orgId])).rows[0];
-    if (!org || !row) throw orgDenied();
+  private async entitlement(c: PoolClient, ownerId: string, orgId: string, row: any) {
     const p = careerRecordObject(this.open('org_entitlement', row.id, ownerId, row.revision, row.payload_ciphertext),
       ['id', 'ownerId', 'orgId', 'audienceGrants', 'grantedAt', 'expiresAt', 'revokedAt', 'revision']);
     if (p.id !== row.id || p.ownerId !== ownerId || p.orgId !== orgId || p.revision !== row.revision ||
         orgDigest(p.audienceGrants) !== orgDigest(row.audience_grants) || p.grantedAt !== row.granted_at.toISOString() ||
         p.expiresAt !== row.expires_at.toISOString() || p.revokedAt !== (row.revoked_at?.toISOString() ?? null)) throw orgUnavailable();
     await this.verify(c, orgId, 'entitlement', row.id, row.revision, p);
+    orgArray(p.audienceGrants, x => orgChoice(x, ['cohort','entitled'] as const), 2, 1);
+    return p;
+  }
+  /** Genuine access metadata for preparation. No task, tool or model permission. */
+  async accessInTransaction(c: PoolClient, session: FixedSessionContext, organizationId: string | null, signal?: AbortSignal) {
+    const s = fixed(session); await this.store.authorizeSession(c, s, signal);
+    const sequence = (await c.query('SELECT last_value,is_called FROM platform_org_publish_sequence')).rows[0];
+    const publishBatch = orgInteger(sequence.is_called ? Number(sequence.last_value) : 1, 1, 2147483647);
+    const none = () => Object.freeze({ publishBatch, orgId: organizationId, entitlementId: null as string | null,
+      entitlementRevision: null as number | null, audienceGrants: Object.freeze([] as string[]) });
+    if (organizationId === null) return none();
+    const orgId = careerRecordId(organizationId), org = (await c.query('SELECT id,status FROM platform_orgs WHERE id=$1 FOR SHARE',[orgId])).rows[0];
+    if (!org || org.status !== 'active') return none();
+    const row = (await c.query('SELECT * FROM platform_user_entitlements WHERE user_id=$1 AND org_id=$2 FOR SHARE',[s.userId,orgId])).rows[0];
+    if (!row) return none();
+    const p = await this.entitlement(c,s.userId,orgId,row), at = await this.at(c);
+    if (p.revokedAt !== null || (p.expiresAt as string) <= at) return none();
+    signal?.throwIfAborted(); await authorizeFixedSession(c,s,signal);
+    return Object.freeze({publishBatch,orgId,entitlementId:row.id as string,entitlementRevision:row.revision as number,
+      audienceGrants:Object.freeze([...(p.audienceGrants as string[])].sort())});
+  }
+  private async audience(c: PoolClient, ownerId: string, orgId: string, license: any, at: string) {
+    const org = (await c.query("SELECT id FROM platform_orgs WHERE id=$1 AND status='active' FOR SHARE", [orgId])).rows[0];
+    const row = (await c.query('SELECT * FROM platform_user_entitlements WHERE user_id=$1 AND org_id=$2 FOR SHARE', [ownerId, orgId])).rows[0];
+    if (!org || !row) throw orgDenied();
+    const p = await this.entitlement(c,ownerId,orgId,row);
     if (p.revokedAt !== null || (p.expiresAt as string) <= at || license.audience === 'staff_only' ||
         license.audience !== 'all_users' && !(p.audienceGrants as string[]).includes(license.audience)) throw orgDenied();
   }
@@ -287,26 +310,30 @@ export class OrgKnowledge {
   /** Internal structured lookup only. Not registered as a student tool or engine
    * permission; callers must still bind actual run leases/admission before model use. */
   async search(session: FixedSessionContext, input: unknown, speaker: AgentSpeakerKey, signal?: AbortSignal) {
+    return this.db.withBoundedTransaction(c => this.searchInTransaction(c,session,input,speaker,signal));
+  }
+  async searchInTransaction(c: PoolClient, session: FixedSessionContext, input: unknown, speaker: AgentSpeakerKey, signal?: AbortSignal,
+    bounds?: Readonly<{orgId:string;publishBatch:number}>) {
     let query: ReturnType<typeof parseOrgSearch>; try { query = parseOrgSearch(input); } catch { throw orgInvalid(); }
     if (!['companion', 'guide', 'applier', 'interviewer'].includes(speaker)) throw orgDenied();
     const s = fixed(session);
-    return this.db.withBoundedTransaction(async c => {
-      await this.store.authorizeSession(c, s, signal);
-      const organizations = (await c.query("SELECT o.id FROM platform_orgs o WHERE o.status='active' AND EXISTS(SELECT 1 FROM platform_user_entitlements e WHERE e.org_id=o.id AND e.user_id=$1) ORDER BY o.id FOR SHARE OF o", [s.userId])).rows;
-      if (!organizations.length) { await authorizeFixedSession(c, s, signal); return Object.freeze([]); }
-      const rows = (await c.query("SELECT s.* FROM platform_org_knowledge_sources s JOIN platform_user_entitlements e ON e.org_id=s.org_id AND e.user_id=$1 JOIN platform_content_licenses l ON l.id=s.license_id AND l.org_id=s.org_id JOIN platform_orgs o ON o.id=s.org_id WHERE o.status='active' AND e.revoked_at IS NULL AND e.expires_at>clock_timestamp() AND l.revoked_at IS NULL AND l.valid_from<=clock_timestamp() AND l.valid_until>clock_timestamp() AND l.allowed_uses @> ARRAY['retrieve','model_context']::text[] AND l.audience<>'staff_only' AND (l.audience='all_users' OR l.audience=ANY(e.audience_grants)) AND s.valid_until>clock_timestamp() AND s.review_status='published' AND s.asset_class=$2 AND (s.asset_class='question' OR (s.asset_class='conversation_pattern' AND $8::text='companion') OR (s.asset_class='method_card' AND s.structured->'bound_speakers' ? $8::text AND (s.structured->>'effective_from')::timestamptz<=clock_timestamp() AND s.structured->'superseded_by'='null'::jsonb)) AND ($3::text IS NULL OR $3=ANY(s.role_families)) AND ($4::text IS NULL OR s.structured->>'type'=$4) AND ($5::integer IS NULL OR (s.structured->>'difficulty')::integer=$5) AND ((s.asset_class='question' AND COALESCE(s.structured->'topics','[]'::jsonb) ?& $6::text[]) OR (s.asset_class<>'question' AND s.tags @> $6::text[])) ORDER BY s.publish_batch DESC,s.id LIMIT $7 FOR SHARE OF s,e,l",
-        [s.userId, query.assetClass, query.roleFamily, query.questionType, query.difficulty, query.topics, query.limit, speaker])).rows;
-      const out: OrgPassage[] = [];
-      for (const row of rows) {
-        signal?.throwIfAborted();
-        if (!orgAssetSpeakers(row.asset_class, parseOrgP0Asset(row.asset_class, row.structured)).includes(speaker)) continue;
-        try {
-          const first = String(row.revision) + ':0';
-          out.push(await this.passage(c, s, row, first, ['retrieve', 'model_context'], speaker, 'preparation_lookup', signal));
-        } catch (e) { if (e instanceof ApiError && ['NOT_ENTITLED', 'STALE_REVISION'].includes(e.code)) continue; throw e; }
-      }
-      if (Buffer.byteLength(JSON.stringify(out)) > 49152) throw orgUnavailable();
-      await authorizeFixedSession(c, s, signal); return Object.freeze(out);
-    });
+    if (bounds) { careerRecordId(bounds.orgId); orgInteger(bounds.publishBatch,1,2147483647); }
+
+    await this.store.authorizeSession(c, s, signal);
+    const organizations = (await c.query("SELECT o.id FROM platform_orgs o WHERE o.status='active' AND EXISTS(SELECT 1 FROM platform_user_entitlements e WHERE e.org_id=o.id AND e.user_id=$1) AND ($2::uuid IS NULL OR o.id=$2) ORDER BY o.id FOR SHARE OF o", [s.userId,bounds?.orgId ?? null])).rows;
+    if (!organizations.length) { await authorizeFixedSession(c, s, signal); return Object.freeze([]); }
+    const rows = (await c.query("SELECT s.* FROM platform_org_knowledge_sources s JOIN platform_user_entitlements e ON e.org_id=s.org_id AND e.user_id=$1 JOIN platform_content_licenses l ON l.id=s.license_id AND l.org_id=s.org_id JOIN platform_orgs o ON o.id=s.org_id WHERE o.status='active' AND e.revoked_at IS NULL AND e.expires_at>clock_timestamp() AND l.revoked_at IS NULL AND l.valid_from<=clock_timestamp() AND l.valid_until>clock_timestamp() AND l.allowed_uses @> ARRAY['retrieve','model_context']::text[] AND l.audience<>'staff_only' AND (l.audience='all_users' OR l.audience=ANY(e.audience_grants)) AND s.valid_until>clock_timestamp() AND s.review_status='published' AND s.asset_class=$2 AND (s.asset_class='question' OR (s.asset_class='conversation_pattern' AND $8::text='companion') OR (s.asset_class='method_card' AND s.structured->'bound_speakers' ? $8::text AND (s.structured->>'effective_from')::timestamptz<=clock_timestamp() AND s.structured->'superseded_by'='null'::jsonb)) AND ($3::text IS NULL OR $3=ANY(s.role_families)) AND ($4::text IS NULL OR s.structured->>'type'=$4) AND ($5::integer IS NULL OR (s.structured->>'difficulty')::integer=$5) AND ((s.asset_class='question' AND COALESCE(s.structured->'topics','[]'::jsonb) ?& $6::text[]) OR (s.asset_class<>'question' AND s.tags @> $6::text[])) AND ($9::uuid IS NULL OR s.org_id=$9) AND ($10::integer IS NULL OR s.publish_batch<=$10) ORDER BY s.publish_batch DESC,s.id LIMIT $7 FOR SHARE OF s,e,l",
+      [s.userId, query.assetClass, query.roleFamily, query.questionType, query.difficulty, query.topics, query.limit, speaker, bounds?.orgId ?? null, bounds?.publishBatch ?? null])).rows;
+    const out: OrgPassage[] = [];
+    for (const row of rows) {
+      signal?.throwIfAborted();
+      if (!orgAssetSpeakers(row.asset_class, parseOrgP0Asset(row.asset_class, row.structured)).includes(speaker)) continue;
+      try {
+        const first = String(row.revision) + ':0';
+        out.push(await this.passage(c, s, row, first, ['retrieve', 'model_context'], speaker, 'preparation_lookup', signal));
+      } catch (e) { if (e instanceof ApiError && ['NOT_ENTITLED', 'STALE_REVISION'].includes(e.code)) continue; throw e; }
+    }
+    if (Buffer.byteLength(JSON.stringify(out)) > 49152) throw orgUnavailable();
+    await authorizeFixedSession(c, s, signal); return Object.freeze(out);
   }
 }
