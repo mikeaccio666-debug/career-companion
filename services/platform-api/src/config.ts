@@ -14,7 +14,7 @@ export interface PlatformConfig {
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
-  requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyResponseBundlePath?: string; companionIdentityBundlePath?: string; companionIdentityReviewPath?: string; safetyDailyModelCallLimit: number;
+  requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyResponseBundlePath?: string; safetyDeliveryReviewPath?: string; companionIdentityBundlePath?: string; companionIdentityReviewPath?: string; safetyDailyModelCallLimit: number;
   dataCrypto?: DataCrypto;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
@@ -93,6 +93,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   const safetyDetectorProfilePath = env.PLATFORM_SAFETY_PROFILE_FILE === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_SAFETY_PROFILE_FILE);
   if (env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE !== undefined && (!env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE))) throw new Error('PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE must name a server-controlled file');
   const safetyResponseBundlePath = env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_SAFETY_RESPONSE_BUNDLE_FILE);
+  if (env.PLATFORM_SAFETY_DELIVERY_REVIEW_FILE !== undefined && (!env.PLATFORM_SAFETY_DELIVERY_REVIEW_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_SAFETY_DELIVERY_REVIEW_FILE))) {
+    throw new Error('PLATFORM_SAFETY_DELIVERY_REVIEW_FILE must name a server-controlled file');
+  }
+  const safetyDeliveryReviewPath = env.PLATFORM_SAFETY_DELIVERY_REVIEW_FILE === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_SAFETY_DELIVERY_REVIEW_FILE);
   if (env.PLATFORM_COMPANION_IDENTITY_BUNDLE_FILE !== undefined && (!env.PLATFORM_COMPANION_IDENTITY_BUNDLE_FILE.trim() || /[\x00-\x1f\x7f]/.test(env.PLATFORM_COMPANION_IDENTITY_BUNDLE_FILE))) {
     throw new Error('PLATFORM_COMPANION_IDENTITY_BUNDLE_FILE must name a server-controlled file');
   }
@@ -165,7 +169,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
     webStaticDir: env.PLATFORM_WEB_STATIC_DIR === undefined ? undefined : path.resolve(workspaceRoot, env.PLATFORM_WEB_STATIC_DIR),
     allowedOrigins,
-    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, safetyDetectorProfilePath, safetyResponseBundlePath, companionIdentityBundlePath, companionIdentityReviewPath, safetyDailyModelCallLimit, workbenchEnabled,
+    sessionDays: 14, maxActiveJobs, secureCookies: production, accountEmail, requireVerifiedEmail, requireInvite, legalBundlePath, safetyDetectorProfilePath, safetyResponseBundlePath, safetyDeliveryReviewPath, companionIdentityBundlePath, companionIdentityReviewPath, safetyDailyModelCallLimit, workbenchEnabled,
     modelRoutes: configuredModelRoutes, exposeProviderDetails, dataCrypto,
     queueName, s3, mcp: readMcpConfig(env),
   };

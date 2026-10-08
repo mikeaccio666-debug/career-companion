@@ -7,6 +7,7 @@ import { publicSafetyResponse, readAuthenticatedSafetyResponsesForSources } from
 import { captureFollowup, followupDigest, type SafetyFollowupRow, type SafetyPublicationRow } from './onboarding-safety-followup-protocol.ts';
 import { parseCapturedCompanionAnswers, type CapturedCompanionAnswers } from './companion-captured-answers.ts';
 import { deriveCapturedCompanionDimensions, type CapturedCompanionSourceProducts } from './companion-historical-intake.ts';
+import { intakeResourcePrefixProofs, intakeResourceProofArray, parseIntakeResourcePrefixProof, type IntakeResourcePrefixProof } from './onboarding-resource-prefix.ts';
 
 const bindingKeys = ['taskId','userId','companionId','answersId','sourceDraftId','sourceRevision','authVersion',
   'questionnaireRevision','rulesRevision','generatorVersion','purpose','canonicalAnswersDigest','canonicalSeedDigest'] as const;
@@ -19,10 +20,11 @@ export interface CompanionSourcePrefixBinding {
 }
 type Entry = Readonly<Record<string, string | number | boolean | null>>;
 export interface CompanionSourcePrefixManifest extends CompanionSourcePrefixBinding {
-  readonly schemaVersion: 1; readonly manifestId: string; readonly capturedAt: string;
+  readonly schemaVersion: 1|2; readonly manifestId: string; readonly capturedAt: string;
   readonly operations: readonly Entry[]; readonly submissions: readonly Entry[]; readonly responses: readonly Entry[];
   readonly events: readonly Entry[]; readonly publications: readonly Entry[]; readonly followups: readonly Entry[];
   readonly handledSubmissionIds: readonly string[];
+  readonly intakeResources?: readonly IntakeResourcePrefixProof[];
 }
 export interface CompanionSourcePrefixCapture { readonly payload: Readonly<CompanionSourcePrefixManifest>; readonly digest: string; }
 export interface CompanionSourcePrefixProof {
@@ -94,9 +96,11 @@ function ids(value: unknown): readonly string[] {
   return Object.freeze(result);
 }
 function parseManifest(value: unknown): Readonly<CompanionSourcePrefixManifest> {
-  const keys=['schemaVersion','manifestId',...bindingKeys,'capturedAt',...Object.keys(entryKeys),'handledSubmissionIds'];
+  const version=value&&typeof value==='object'?Object.getOwnPropertyDescriptor(value,'schemaVersion'):undefined;
+  if(!version||!('value'in version)||![1,2].includes(version.value))throw intakeUnavailable();
+  const keys=['schemaVersion','manifestId',...bindingKeys,'capturedAt',...Object.keys(entryKeys),...(version.value===2?['intakeResources']:[]),'handledSubmissionIds'];
   const data=record(value,keys), binding=parseBinding(Object.fromEntries(bindingKeys.map(key=>[key,data[key]])));
-  if (data.schemaVersion!==1||data.manifestId!==binding.taskId||typeof data.capturedAt!=='string'
+  if (data.manifestId!==binding.taskId||typeof data.capturedAt!=='string'
     || at(new Date(data.capturedAt))!==data.capturedAt) throw intakeUnavailable();
   const groups: Record<string,readonly Entry[]>={};
   for (const [group,keys] of Object.entries(entryKeys)) {
@@ -106,8 +110,11 @@ function parseManifest(value: unknown): Readonly<CompanionSourcePrefixManifest> 
     if (values.some(value=>Object.values(value).some(item=>item!==null&&!['string','number','boolean'].includes(typeof item)))) throw intakeUnavailable();
     groups[group]=frozenEntries(values as Entry[]);
   }
-  return Object.freeze({schemaVersion:1,manifestId:binding.taskId,...binding,capturedAt:data.capturedAt,
-    ...groups,handledSubmissionIds:ids(data.handledSubmissionIds)}) as Readonly<CompanionSourcePrefixManifest>;
+  let modern:readonly IntakeResourcePrefixProof[]|undefined;
+  if(data.schemaVersion===2){const array=intakeResourceProofArray(data.intakeResources);if(!array.length)throw intakeUnavailable();
+    modern=Object.freeze(array.map(parseIntakeResourcePrefixProof));if(new Set(modern.map(p=>p.submissionId)).size!==modern.length)throw intakeUnavailable();}
+  return Object.freeze({schemaVersion:data.schemaVersion,manifestId:binding.taskId,...binding,capturedAt:data.capturedAt,
+    ...groups,...(modern?{intakeResources:modern}:{}),handledSubmissionIds:ids(data.handledSubmissionIds)}) as Readonly<CompanionSourcePrefixManifest>;
 }
 function aad(binding: CompanionSourcePrefixBinding) {
   return {table:'platform_companion_source_prefixes',column:'payload_ciphertext',rowId:binding.taskId,
@@ -232,10 +239,15 @@ async function manifestAt(client: PoolClient, storage: OnboardingStorage, bindin
     if (!row.handled||handled.has(publication.submission_id)) throw intakeUnavailable();
     handled.add(publication.submission_id);
   }
+  // V1 remains its exact original codec and original-only refusal semantics.
+  // New preparation can independently capture genuine050 handling; historical
+  // V2 reconstruction is restricted to its actually captured original IDs.
+  const modern=original?.schemaVersion===1?[]:await intakeResourcePrefixProofs(client,storage,binding.userId,binding.sourceDraftId,submissions,capturedAt,original?.intakeResources);
+  for(const proof of modern)handled.add(proof.submissionId);
   if (submissions.some(row=>!handled.has(row.id)&&(row.level!=='L0'||row.detector_mode!=='full'))) throw intakeUnavailable();
-  const manifest=Object.freeze({schemaVersion:1 as const,manifestId:binding.taskId,...binding,capturedAt,operations:frozenEntries(operationEntries),
+  const manifest=Object.freeze({schemaVersion:modern.length?2 as const:1 as const,manifestId:binding.taskId,...binding,capturedAt,operations:frozenEntries(operationEntries),
     submissions:frozenEntries(submissionEntries),responses:frozenEntries(responseEntries),events:frozenEntries(eventEntries),
-    publications:frozenEntries(publicationEntries),followups:frozenEntries(followupEntries),handledSubmissionIds:Object.freeze([...handled].sort())});
+    publications:frozenEntries(publicationEntries),followups:frozenEntries(followupEntries),...(modern.length?{intakeResources:modern}:{}),handledSubmissionIds:Object.freeze([...handled].sort())});
   // Ephemeral values only. They are not part of the canonical manifest/ciphertext
   // and may be used for dimensions only after the whole manifest matches.
   const products: CapturedCompanionSourceProducts=Object.freeze({
@@ -274,13 +286,13 @@ export async function saveCompanionSourcePrefixInTransaction(client: PoolClient,
     const saved=await client.query(`INSERT INTO platform_companion_source_prefixes
       (id,task_id,user_id,companion_id,answers_id,source_draft_id,source_revision,auth_version,questionnaire_revision,rules_revision,
         generator_version,purpose,schema_version,captured_at,payload_digest,payload_ciphertext)
-      SELECT $1,$1,$2,$3,$4,$5,$6,$7,1,1,1,'companion_preview',1,$8,$9,$10
+      SELECT $1,$1,$2,$3,$4,$5,$6,$7,1,1,1,'companion_preview',$11,$8,$9,$10
       FROM platform_companion_generation_tasks WHERE id=$1 AND user_id=$2 AND companion_id=$3 AND answers_id=$4
-        AND source_draft_id=$5 AND source_revision=$6 AND auth_version=$7 AND source_receipt_version=1
+        AND source_draft_id=$5 AND source_revision=$6 AND auth_version=$7 AND source_receipt_version=$11
         AND questionnaire_revision=1 AND rules_revision=1 AND generator_version=1 AND purpose='companion_preview'
         AND status='pending' AND generation=0 AND created_at>=$8::timestamptz`,
     [payload.taskId,payload.userId,payload.companionId,payload.answersId,payload.sourceDraftId,payload.sourceRevision,payload.authVersion,
-      payload.capturedAt,expectedDigest,ciphertext]);
+      payload.capturedAt,expectedDigest,ciphertext,payload.schemaVersion]);
     if (saved.rowCount!==1) throw intakeUnavailable();
   } catch { throw intakeUnavailable(); }
 }
@@ -305,14 +317,14 @@ export async function verifyCompanionSourcePrefixInTransaction(client: PoolClien
     if (!storage.crypto) throw intakeUnavailable();
     const rows=(await client.query(`SELECT m.* FROM platform_companion_source_prefixes m
       JOIN platform_companion_generation_tasks t ON t.id=m.task_id AND t.user_id=m.user_id AND t.companion_id=m.companion_id
-      WHERE m.task_id=$1 AND m.user_id=$2 AND t.source_receipt_version=1 FOR UPDATE OF m`,[binding.taskId,binding.userId])).rows;
+      WHERE m.task_id=$1 AND m.user_id=$2 AND t.source_receipt_version=m.schema_version AND m.schema_version IN(1,2) FOR UPDATE OF m`,[binding.taskId,binding.userId])).rows;
     const row=rows[0];
     if (rows.length!==1||row.id!==binding.taskId||row.companion_id!==binding.companionId||row.answers_id!==binding.answersId
       ||row.source_draft_id!==binding.sourceDraftId||row.source_revision!==binding.sourceRevision||String(row.auth_version)!==binding.authVersion
       ||row.questionnaire_revision!==1||row.rules_revision!==1||row.generator_version!==1||row.purpose!==binding.purpose
-      ||row.schema_version!==1||row.payload_digest!==expectedDigest) throw intakeUnavailable();
+      ||![1,2].includes(row.schema_version)||row.payload_digest!==expectedDigest) throw intakeUnavailable();
     const text=storage.crypto.openUtf8(row.payload_ciphertext,aad(binding)), original=parseManifest(JSON.parse(text));
-    if (sha(text)!==expectedDigest||JSON.stringify(original)!==text||original.capturedAt!==at(row.captured_at)
+    if (original.schemaVersion!==row.schema_version||sha(text)!==expectedDigest||JSON.stringify(original)!==text||original.capturedAt!==at(row.captured_at)
       ||JSON.stringify(parseBinding(Object.fromEntries(bindingKeys.map(key=>[key,original[key]]))))!==JSON.stringify(binding)) throw intakeUnavailable();
     const current=await manifestAt(client,storage,binding,original.capturedAt,original);
     if (JSON.stringify(current.manifest)!==text) throw intakeUnavailable();

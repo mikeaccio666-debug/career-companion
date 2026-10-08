@@ -26,7 +26,8 @@ test('the saved O6 preview renders its original summary and exactly three exampl
   assert.match(html, /data-ink="dai" aria-hidden="true"/); assert.equal((html.match(/companion-preview-seal"/g) || []).length, 1);
   assert.match(html, /aria-label="说话方式示例"/); assert.equal((html.match(/Fictional (first|second) sample/g) || []).length, 2);
   assert.match(html, /&lt;script&gt;Fictional inert text&lt;\/script&gt;/); assert.doesNotMatch(html, /<script|11000000|leaseToken|styleCard|dimensions|诞生|<textarea|<input/);
-  assert.match(html, /起名、换一种感觉和刻章暂时还没有开放/);
+  assert.match(html, /预览已经保存/);
+  assert.doesNotMatch(html, /正在读取接下来的准备进度|起名、换一种感觉和刻章暂时还没有开放/);
   assert.equal((html.match(/<button/g) || []).length, 1); assert.match(html, />重新读取生成进度<\/button>/);
   assert.doesNotMatch(html, /根据你的回答，用规则生成/);
 });

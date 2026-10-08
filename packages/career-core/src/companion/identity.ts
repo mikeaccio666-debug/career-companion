@@ -135,3 +135,94 @@ export function companionSealCandidates(input: { companionId: string; name: stri
   if (chosen.length !== 3) throw new CompanionIdentityError('SEAL_CANDIDATES_UNAVAILABLE');
   return Object.freeze(chosen.map(candidate => Object.freeze(candidate))) as unknown as CompanionSealCandidates;
 }
+
+/** V2 assets add finite, externally reviewed spelling/phonetic rules. The
+ * Unicode coverage calculation proves only completeness, never pronunciation,
+ * professional review, tier-one membership or permission to use an asset. */
+export interface CompanionEnglishSealRule {
+  readonly spelling: string; readonly sealChar: string; readonly reason: string;
+}
+export interface CompanionEnglishSealRules {
+  readonly normalization: 'latin_nfkd_initial_v1';
+  readonly initials: readonly CompanionEnglishSealRule[];
+  readonly prefixes: readonly CompanionEnglishSealRule[];
+}
+export interface CompanionIdentityPolicyV2 extends CompanionIdentityPolicy {
+  readonly englishSealRules: Readonly<CompanionEnglishSealRules>;
+}
+const latinLetter = /^\p{Script=Latin}$/u, letter = /^\p{L}$/u;
+const ruleKey = (value: string) => Array.from(value).filter(char => char !== ' ' && char !== '-').map(char => {
+  const letters = Array.from(char.normalize('NFKD').toLowerCase()).filter(part => latinLetter.test(part) && letter.test(part)).join('');
+  return letters || char.toLowerCase();
+}).join('');
+let initialDomain: readonly string[] | undefined;
+/** Exposes the finite accepted starter domain, with no characters/mappings or
+ * default approval. Operators must supply a genuine reviewed map for it. */
+export function companionLatinSealInitials(): readonly string[] {
+  if (!initialDomain) {
+    const keys = new Set<string>();
+    for (let scalar = 0; scalar <= 0x10ffff; scalar++) {
+      const char = String.fromCodePoint(scalar);
+      if (latinLetter.test(char) && letter.test(char)) {
+        // canonicalName accepts NFC Latin letters. Compatibility/diacritic
+        // folding is solely a rule lookup; the saved user spelling is intact.
+        const normalized = char.normalize('NFC');
+        if (Array.from(normalized).every(part => latinLetter.test(part) && letter.test(part))) {
+          const first = Array.from(ruleKey(normalized))[0];
+          if (first) keys.add(first);
+        }
+      }
+    }
+    initialDomain = Object.freeze([...keys].sort());
+  }
+  return initialDomain;
+}
+function baseIdentityPolicy(policy: CompanionIdentityPolicyV2): CompanionIdentityPolicy {
+  return { familyOrPartner: policy.familyOrPartner, teamOrOrg: policy.teamOrOrg, abusive: policy.abusive,
+    publicFigures: policy.publicFigures, allowedSealCharacters: policy.allowedSealCharacters, englishSealAliases: policy.englishSealAliases };
+}
+export function parseCompanionIdentityPolicyV2(value: unknown): Readonly<CompanionIdentityPolicyV2> {
+  try {
+    const data = record(value, ['familyOrPartner', 'teamOrOrg', 'abusive', 'publicFigures', 'allowedSealCharacters', 'englishSealAliases', 'englishSealRules'], true);
+    const base = parseCompanionIdentityPolicy(Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'englishSealRules')));
+    const rules = record(data.englishSealRules, ['normalization', 'initials', 'prefixes'], true);
+    if (rules.normalization !== 'latin_nfkd_initial_v1') invalid(true);
+    const parseRules = (value: unknown, initial: boolean) => {
+      const list = array(value, initial ? 10000 : 2000).map(item => {
+        const rule = record(item, ['spelling', 'sealChar', 'reason'], true);
+        if (typeof rule.spelling !== 'string' || !rule.spelling || rule.spelling.length > 64
+          || rule.spelling !== ruleKey(rule.spelling) || (initial && Array.from(rule.spelling).length !== 1)
+          || !Array.from(rule.spelling).every(char => latinLetter.test(char) && letter.test(char))
+          || typeof rule.sealChar !== 'string' || !base.allowedSealCharacters.includes(rule.sealChar)) invalid(true);
+        const reason = policyWord(rule.reason);
+        return Object.freeze({ spelling: rule.spelling, sealChar: rule.sealChar, reason });
+      });
+      if (new Set(list.map(rule => rule.spelling)).size !== list.length) invalid(true);
+      return Object.freeze(list);
+    };
+    const initials = parseRules(rules.initials, true), prefixes = parseRules(rules.prefixes, false), required = companionLatinSealInitials();
+    if (initials.length !== required.length || initials.some(rule => !required.includes(rule.spelling))) invalid(true);
+    return Object.freeze({ ...base, englishSealRules: Object.freeze({ normalization: 'latin_nfkd_initial_v1' as const, initials, prefixes }) });
+  } catch { throw new CompanionIdentityError('COMPANION_IDENTITY_POLICY_INVALID'); }
+}
+export function validateCompanionNameV2(input: { name: string; userName: string; policy: CompanionIdentityPolicyV2 }): string {
+  const data = record(input, ['name', 'userName', 'policy']), policy = parseCompanionIdentityPolicyV2(data.policy);
+  return validateCompanionName({ name: data.name as string, userName: data.userName as string, policy: baseIdentityPolicy(policy) });
+}
+/** Exact aliases retain V1 precedence and reasons. Otherwise one deterministic
+ * reviewed rule supplies the related glyph; the other two keep the V1 draw.
+ * No model, guessed pronunciation or unreviewed generic initial is used. */
+export function companionSealCandidatesV2(input: { companionId: string; name: string; dimensions: CompanionDimensions; policy: CompanionIdentityPolicyV2 }): CompanionSealCandidates {
+  const data = record(input, ['companionId', 'name', 'dimensions', 'policy']), policy = parseCompanionIdentityPolicyV2(data.policy);
+  const base = baseIdentityPolicy(policy), name = canonicalName(data.name);
+  if (han.test(name) || base.englishSealAliases.some(alias => nameKey(alias.name) === nameKey(name))) {
+    return companionSealCandidates({ companionId: data.companionId as string, name, dimensions: data.dimensions as CompanionDimensions, policy: base });
+  }
+  const spelling = ruleKey(name), matching = policy.englishSealRules.prefixes.filter(rule => spelling.startsWith(rule.spelling))
+    .sort((a, b) => Array.from(b.spelling).length - Array.from(a.spelling).length);
+  const rule = matching[0] ?? policy.englishSealRules.initials.find(rule => rule.spelling === Array.from(spelling)[0]);
+  if (!rule) throw new CompanionIdentityError('SEAL_CANDIDATES_UNAVAILABLE');
+  const candidates = companionSealCandidates({ companionId: data.companionId as string, name, dimensions: data.dimensions as CompanionDimensions,
+    policy: { ...base, englishSealAliases: [...base.englishSealAliases, { name, sealChar: rule.sealChar }] } });
+  return Object.freeze([Object.freeze({ char: candidates[0].char, reason: rule.reason }), candidates[1], candidates[2]]) as CompanionSealCandidates;
+}

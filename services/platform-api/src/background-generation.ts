@@ -161,11 +161,11 @@ export class BackgroundGeneration {
     if (rows.length !== 1) throw new ApiError(404, 'NOT_FOUND', 'The companion task was not found.');
     return rows[0];
   }
-  private sourceReceipt(row: TaskRow, data: any): Readonly<{ sourceReceiptVersion?: 1; sourceReceiptDigest?: string }> {
+  private sourceReceipt(row: TaskRow, data: any): Readonly<{ sourceReceiptVersion?: 1 | 2; sourceReceiptDigest?: string }> {
     if (row.source_receipt_version === null) return Object.freeze({});
-    if (row.source_receipt_version !== 1 || data?.sourceReceiptVersion !== 1
+    if (![1, 2].includes(row.source_receipt_version) || data?.sourceReceiptVersion !== row.source_receipt_version
       || typeof data?.sourceReceiptDigest !== 'string' || /^[0-9a-f]{64}$/.exec(data.sourceReceiptDigest)?.[0] !== data.sourceReceiptDigest) throw intakeUnavailable();
-    return Object.freeze({ sourceReceiptVersion: 1 as const, sourceReceiptDigest: data.sourceReceiptDigest });
+    return Object.freeze({ sourceReceiptVersion: row.source_receipt_version as 1 | 2, sourceReceiptDigest: data.sourceReceiptDigest });
   }
   private prefixBinding(row: TaskRow, fixed: FixedSessionContext, canonicalAnswers: string, canonicalSeed: unknown) {
     return { taskId: row.id, userId: fixed.userId, companionId: row.companion_id, answersId: row.answers_id,
@@ -199,7 +199,7 @@ export class BackgroundGeneration {
           ownerId: fixed.userId, revision: source.revision }) !== JSON.stringify(answers)
         || JSON.stringify(data) !== JSON.stringify(expected) || data.provider !== 'openai' || typeof data.model !== 'string' || !data.model.trim()) throw intakeUnavailable();
     } catch { throw intakeUnavailable(); }
-    if (row.source_receipt_version === 1) await verifyCompanionSourcePrefixInTransaction(client, this.storage,
+    if (row.source_receipt_version === 1 || row.source_receipt_version === 2) await verifyCompanionSourcePrefixInTransaction(client, this.storage,
       this.prefixBinding(row, fixed, JSON.stringify(answers), baseSeed), receipt.sourceReceiptDigest!);
     return Object.freeze({ ...ruleStyle, dimensions: Object.freeze(ruleStyle.dimensions), quirks: Object.freeze(ruleStyle.quirks), provider: data.provider, model: data.model });
   }
@@ -215,7 +215,7 @@ export class BackgroundGeneration {
       const text = this.storage.crypto!.openUtf8(row.seed_ciphertext, { table: 'platform_companion_generation_tasks',
         column: 'seed_ciphertext', rowId: row.id, ownerId: fixed.userId, revision: row.source_revision });
       const data = JSON.parse(text), receipt = this.sourceReceipt(row, data);
-      if (row.source_receipt_version !== 1) throw intakeUnavailable();
+      if (row.source_receipt_version !== 1 && row.source_receipt_version !== 2) throw intakeUnavailable();
       const { sourceReceiptVersion: _receiptVersion, sourceReceiptDigest: _receiptDigest, ...capturedSeed } = data;
       const prefix = await verifyCompanionSourcePrefixInTransaction(client, this.storage,
         this.prefixBinding(row, fixed, answerText, capturedSeed), receipt.sourceReceiptDigest!, capture);
@@ -470,7 +470,7 @@ export class BackgroundGeneration {
     if (row.user_id !== fixed.userId) throw intakeUnavailable();
     const taskId = row.id;
     if (row.status !== 'completed') { await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null; }
-    if (row.source_receipt_version !== 1) throw intakeUnavailable();
+    if (row.source_receipt_version !== 1 && row.source_receipt_version !== 2) throw intakeUnavailable();
     if (!Number.isSafeInteger(row.generation) || row.generation < 1 || row.generation > 2147483647
       || !row.finished_at || row.lease_token !== null || row.lease_until !== null || row.runtime_lease_id !== null || row.error_code !== null) throw intakeUnavailable();
     const seed = await this.historicalSeed(client, fixed, row);
@@ -516,7 +516,30 @@ export class BackgroundGeneration {
       const envelope = await this.readInTransaction(client, fixed, { taskId }, signal);
       return envelope ? Object.freeze({ kind: 'current_completed_preview' as const, envelope }) : null;
     }
-    if (row.source_receipt_version !== 1) throw intakeUnavailable();
+    if (row.source_receipt_version !== 1 && row.source_receipt_version !== 2) throw intakeUnavailable();
+    return this.readHistoricalCompletedRowInTransaction(client, fixed, row, signal);
+  }
+  /** Observation of an already completed, genuinely sealed source. This is a
+   * separate owner/session/student viewer, never admission to generation or a
+   * later identity write. Current legal/email/provider/quota availability is
+   * irrelevant to an authenticated historical capsule. Legacy NULL manifests
+   * retain the existing current-source gate and gain no fabricated history. */
+  async readSavedCompletedForViewerInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown,
+    signal?: AbortSignal): Promise<Readonly<SavedCompletedCompanionPreviewProof> | null> {
+    const taskId = taskInput(value), fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
+    await authorizeFixedSession(client, fixed, signal);
+    const owner = (await client.query<{ account_kind: string }>('SELECT account_kind FROM platform_users WHERE id=$1 FOR NO KEY UPDATE', [fixed.userId])).rows[0];
+    if (!owner || owner.account_kind !== 'student') throw new ApiError(403, 'STUDENT_ACCOUNT_REQUIRED', 'Use a student account for the saved companion.');
+    if (!this.storage.crypto) throw intakeUnavailable();
+    const rows = (await client.query<TaskRow>(`SELECT t.*,a.payload_ciphertext AS answers_ciphertext,
+      c.fingerprint,c.status AS companion_status,c.current_revision,c.draft_rerolls
+      FROM platform_companion_generation_tasks t JOIN platform_companion_answers a ON a.id=t.answers_id AND a.user_id=t.user_id
+      JOIN platform_companions c ON c.id=t.companion_id AND c.user_id=t.user_id
+      WHERE t.id=$1 AND t.user_id=$2 FOR UPDATE OF t,a,c`, [taskId, fixed.userId])).rows;
+    if (rows.length !== 1) throw new ApiError(404, 'NOT_FOUND', 'The companion task was not found.');
+    const row = rows[0];
+    if (row.source_receipt_version === null) return this.readSavedCompletedInTransaction(client, fixed, { taskId }, signal);
+    if (row.source_receipt_version !== 1 && row.source_receipt_version !== 2) throw intakeUnavailable();
     return this.readHistoricalCompletedRowInTransaction(client, fixed, row, signal);
   }
   async generate(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionGeneratedPreview>> {

@@ -20,7 +20,7 @@ function text(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 16 * 1024
     || /[\p{Cc}\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ud800-\udfff]/u.test(value)) invalid(); return value;
 }
-function preview(value: unknown): PublicCompanionPreview {
+export function parsePublicCompanionPreview(value: unknown): PublicCompanionPreview {
   const data = record(value, ['taskId', 'companionId', 'revision', 'generatedBy', 'summary', 'samples', 'inkToken']);
   if (data.revision !== 1 || !Array.isArray(data.samples) || Object.getPrototypeOf(data.samples) !== Array.prototype) invalid();
   const descriptors: Record<string, PropertyDescriptor> = Object.getOwnPropertyDescriptors(data.samples);
@@ -49,7 +49,7 @@ export function parseCompanionDraftEntry(value: unknown): CompanionDraftEntrySta
     const hold = data.hold === null ? null : member(data.hold, ['authorization_required', 'configuration_unavailable', 'requires_review']);
     return Object.freeze({ kind: 'generation', taskId: uuid(data.taskId), companionId: uuid(data.companionId), generation, status, hold });
   }
-  if (discriminator.value === 'preview') { const data = record(value, ['kind', 'preview']); return Object.freeze({ kind: 'preview', preview: preview(data.preview) }); }
+  if (discriminator.value === 'preview') { const data = record(value, ['kind', 'preview']); return Object.freeze({ kind: 'preview', preview: parsePublicCompanionPreview(data.preview) }); }
   return invalid();
 }
 export async function readCompanionDraftEntry(client: BoundPlatformClient, signal?: AbortSignal): Promise<CompanionDraftEntryState> {

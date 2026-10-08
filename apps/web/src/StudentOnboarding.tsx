@@ -5,7 +5,7 @@ import { useRequiredPlatformAccountClient } from './account-client';
 import { readOnboardingEntry, readOnboardingFollowup, retryOnboardingSafety, saveOnboardingDraft, saveOnboardingFollowup, onboardingResourceHref } from './onboarding-api';
 import { acknowledgeOnboardingPresentation, onboardingContinuationAvailable, onboardingDraftCommand, replaceOnboardingPresentation, type OnboardingPresentation } from './onboarding-ui';
 import type { User } from './types';
-import StudentCompanionPreview from './StudentCompanionPreview';
+import StudentCompanionJourney from './StudentCompanionJourney';
 import './onboarding.css';
 
 const name = '你的主理人 · 还没有名字';
@@ -119,39 +119,81 @@ function QuestionChoices({ entry, disabled, answer }: { entry: OnboardingEntrySt
   return <div className="onboarding-choices">{question.choices.map(choice => <button type="button" key={choice.value} disabled={disabled} onClick={() => answer({ kind: 'answer', questionId: question.questionId, value: choice.value } as OnboardingAction)}>{choice.label}</button>)}</div>;
 }
 
-export default function StudentOnboarding({ user, onLogout }: { user: User; onLogout: () => void }) {
+export default function StudentOnboarding({ user, onLogout, refreshVersion = 0, supportBlocked = false, onSourcesChanged }: {
+  user: User; onLogout: () => void; refreshVersion?: number; supportBlocked?: boolean; onSourcesChanged?: () => void;
+}) {
   const client = useRequiredPlatformAccountClient();
   const [entry, setEntry] = useState<OnboardingEntryState | null>(null), [pending, setPending] = useState(false), [text, setText] = useState(''), [error, setError] = useState(''), [about, setAbout] = useState(false);
-  const [resourcesVersion, setResourcesVersion] = useState(0);
+  const sourcesChanged = useRef(onSourcesChanged); sourcesChanged.current = onSourcesChanged;
   const live = useRef(true), busy = useRef(false), controller = useRef<AbortController | null>(null), entryRef = useRef(entry); entryRef.current = entry;
+  const refreshSequence = useRef(0), queuedReload = useRef(false);
   const current = (signal: AbortSignal) => live.current && !signal.aborted && client.isCurrent();
-  const reload = useCallback(async () => {
-    if (!live.current || busy.current || !client.isCurrent()) return;
+  // A resource continuation may commit while an ordinary read is in flight.
+  // Retain that read demand; an older response cannot replace its observation.
+  const drainReload = useCallback(async function drainReload(): Promise<void> {
+    if (!live.current || busy.current || !queuedReload.current || !client.isCurrent()) return;
+    queuedReload.current = false; const observedSequence = refreshSequence.current;
     busy.current = true; setPending(true); setError(''); const request = new AbortController(); controller.current = request;
-    try { const next = await readOnboardingEntry(client, request.signal); if (live.current && !request.signal.aborted && client.isCurrent()) setEntry(next); }
-    catch { if (live.current && !request.signal.aborted && client.isCurrent()) setError('初见进度暂时无法读取，请稍后重试。'); }
-    finally { if (controller.current === request) { busy.current = false; controller.current = null; if (live.current && !request.signal.aborted && client.isCurrent()) setPending(false); } }
+    const observable = () => live.current && !request.signal.aborted && client.isCurrent()
+      && controller.current === request && observedSequence === refreshSequence.current;
+    try { const next = await readOnboardingEntry(client, request.signal); if (observable()) setEntry(next); }
+    catch { if (observable()) setError('初见进度暂时无法读取，请稍后重试。'); }
+    finally {
+      if (controller.current === request) {
+        busy.current = false; controller.current = null;
+        if (live.current && !request.signal.aborted && client.isCurrent()) {
+          if (queuedReload.current) void drainReload(); else setPending(false);
+        }
+      }
+    }
   }, [client]);
-  useEffect(() => { live.current = true; void reload(); return () => { live.current = false; controller.current?.abort(); controller.current = null; busy.current = false; }; }, [client, reload]);
-  useEffect(() => client.subscribe(() => { if (!client.isCurrent()) { controller.current?.abort(); setEntry(null); setText(''); } }), [client]);
+  const reload = useCallback(async () => {
+    if (!live.current || !client.isCurrent()) return;
+    ++refreshSequence.current; queuedReload.current = true; await drainReload();
+  }, [client, drainReload]);
+  useEffect(() => { live.current = true; void reload(); return () => {
+    live.current = false; queuedReload.current = false; ++refreshSequence.current;
+    controller.current?.abort(); controller.current = null; busy.current = false;
+  }; }, [client, reload]);
+  useEffect(() => client.subscribe(() => { if (!client.isCurrent()) {
+    queuedReload.current = false; ++refreshSequence.current; controller.current?.abort(); controller.current = null; busy.current = false;
+    setEntry(null); setText(''); setPending(false);
+  } }), [client]);
+  useEffect(() => { void reload(); }, [refreshVersion, reload]);
   async function save(action: OnboardingAction) {
     const state = entryRef.current; if (!state || !state.draft && action.kind !== 'start' || busy.current || !live.current || !client.isCurrent()) return;
     if (action.kind === 'text' && !state.freeTextAvailable) return;
     busy.current = true; setPending(true); setError(''); const request = new AbortController(); controller.current = request;
+    const savedSequence = refreshSequence.current;
     try {
       const result = await saveOnboardingDraft(client, onboardingDraftCommand(state, action, crypto.randomUUID()), request.signal); if (!current(request.signal)) return;
-      setEntry({ ...state, draft: result.draft, question: null }); if (action.kind === 'text') setText('');
+      if (savedSequence === refreshSequence.current) setEntry({ ...state, draft: result.draft, question: null });
+      if (action.kind === 'text') setText('');
+      const observedSequence = refreshSequence.current;
       const next = action.kind === 'text' ? await retryOnboardingSafety(client, request.signal) : await readOnboardingEntry(client, request.signal);
-      if (!current(request.signal)) return; setEntry(next); setResourcesVersion(version => version + 1);
-    } catch { if (current(request.signal)) { setError('这一步暂时没有确认完成。请重新读取进度后继续。'); setResourcesVersion(version => version + 1); } }
-    finally { if (controller.current === request) { busy.current = false; controller.current = null; if (current(request.signal)) setPending(false); } }
+      if (!current(request.signal)) return; if (observedSequence === refreshSequence.current) setEntry(next); sourcesChanged.current?.();
+    } catch { if (current(request.signal)) { setError('这一步暂时没有确认完成。请重新读取进度后继续。'); sourcesChanged.current?.(); } }
+    finally {
+      if (controller.current === request) {
+        busy.current = false; controller.current = null;
+        if (current(request.signal)) { if (queuedReload.current) void drainReload(); else setPending(false); }
+      }
+    }
   }
   async function retry() {
     if (busy.current || !live.current || !client.isCurrent()) return;
     busy.current = true; setPending(true); setError(''); const request = new AbortController(); controller.current = request;
-    try { const next = await retryOnboardingSafety(client, request.signal); if (current(request.signal)) { setEntry(next); setResourcesVersion(version => version + 1); } }
+    const observedSequence = refreshSequence.current;
+    try { const next = await retryOnboardingSafety(client, request.signal); if (current(request.signal)) {
+      if (observedSequence === refreshSequence.current) setEntry(next); sourcesChanged.current?.();
+    } }
     catch { if (current(request.signal)) setError('文字暂时还没有确认，可以稍后再试。'); }
-    finally { if (controller.current === request) { busy.current = false; controller.current = null; if (current(request.signal)) setPending(false); } }
+    finally {
+      if (controller.current === request) {
+        busy.current = false; controller.current = null;
+        if (current(request.signal)) { if (queuedReload.current) void drainReload(); else setPending(false); }
+      }
+    }
   }
   const draft = entry?.draft, collecting = !!entry && (!draft || draft.state === 'collecting') && entry.safety.status === 'clear';
   if (!client.isCurrent()) return null;
@@ -162,8 +204,7 @@ export default function StudentOnboarding({ user, onLogout }: { user: User; onLo
       {draft?.step === 'O3' && <p className="onboarding-question-progress">情境题 {Number(draft.currentQuestion?.slice(1))} / 7</p>}
       {entry?.question && draft?.step !== 'O1' && <section key={`${draft?.id}:${entry.question.questionId}`} aria-label="当前问题"><p className="onboarding-bubble">{entry.question.prompt}</p><QuestionChoices key={entry.question.questionId} entry={entry} disabled={pending || !collecting} answer={action => void save(action)} /><div className="onboarding-choices"><button type="button" disabled={pending || !collecting} onClick={() => void save({ kind: 'skip', questionId: entry.question!.questionId })}>跳过这一问</button>{draft?.step === 'O3' && <button type="button" disabled={pending || !collecting} onClick={() => void save({ kind: 'skip_remaining' })}>剩下的跳过，先用默认</button>}</div></section>}
       {draft?.state === 'safety_pending' && <div className="onboarding-wait"><p role="status">你的文字已保存，正在确认。确认完成后会从刚才的问题继续。</p><button type="button" disabled={pending} onClick={() => void retry()}>重新确认这段文字</button></div>}
-      <OnboardingSafetyResources key={resourcesVersion} onChange={() => void reload()} />
-      {draft?.state === 'intake_ready' && <StudentCompanionPreview intakeRevision={draft.revision} />}
+      {draft?.state === 'intake_ready' && <StudentCompanionJourney intakeRevision={draft.revision} refreshVersion={refreshVersion} supportBlocked={supportBlocked} onSourcesChanged={onSourcesChanged} />}
       {error && <p role="alert" className="onboarding-notice">{error}</p>}{pending && <p role="status">正在确认进度…</p>}
       {collecting && entry?.question && <form className="onboarding-composer" onSubmit={event => { event.preventDefault(); if (text.trim()) void save({ kind: 'text', questionId: entry.question!.questionId, text }); }}><label htmlFor="onboarding-text">也可以用自己的话说</label><textarea id="onboarding-text" value={text} maxLength={4000} disabled={pending || !entry.freeTextAvailable} onChange={event => setText(event.target.value)} placeholder={entry.freeTextAvailable ? '写给还没有名字的主理人…' : '暂时不能发送文字，可以用选项或跳过'} /><button type="submit" disabled={pending || !entry.freeTextAvailable || !text.trim()}>发送</button>{!entry.freeTextAvailable && <p>暂时不能发送文字，可以用选项或跳过。</p>}</form>}
       <button type="button" className="onboarding-link" disabled={pending} onClick={() => void reload()}>重新读取进度</button>

@@ -10,6 +10,7 @@ import type { LegalBundle } from './legal-documents.ts';
 import { OnboardingStorage } from './onboarding-storage.ts';
 import { ApiError } from './errors.ts';
 import { CompanionNameSafetyResponses } from './companion-name-safety-responses.ts';
+import { ensureIntakeResourceCutover } from './onboarding-resource-cutover.ts';
 import { readNameResourceSourceInTransaction } from './companion-name-resource-source.ts';
 import type { AuthenticatedNameResourceSource } from './companion-name-resource-source.ts';
 import { parseSafetyResponseBundle, type SafetyResponseBundle } from './safety-response-bundle.ts';
@@ -108,7 +109,18 @@ export class CompanionNameSafetyDelivery {
     const exists=kind==='publish'&&(await this.db.query('SELECT id FROM platform_companion_name_safety_publications WHERE user_id=$1 AND submission_id=$2 LIMIT 1',[fixed.userId,request.submissionId])).rowCount!==0;
     return this.db.withBoundedTransaction(async client=>{
       if(!exists)await acquireDeliveryReviewCoordinator(client,signal);await this.admission(client,fixed,signal);
+      if(!(await client.query('SELECT id FROM platform_companion_name_submissions WHERE id=$1 AND user_id=$2',[request.submissionId,fixed.userId])).rowCount)throw new ApiError(404,'NOT_FOUND','The resource is not available.');
+      const source=await readNameResourceSourceInTransaction(client,this.storage.crypto,request.submissionId,signal);if(source.decision.level==='L0')return null;
+      const ready=(await client.query<{status:string}>('SELECT status FROM platform_companion_name_safety_responses WHERE submission_id=$1 AND user_id=$2',[request.submissionId,fixed.userId])).rows[0];
+      if(!ready||ready.status==='pending'){
+        // Do not switch an archived retry to preparation while holding an
+        // account lock, or prepare bytes before genuine professional admission.
+        if(exists)throw deliveryStorageUnavailable();
+        await assertActiveDeliveryAssets(client,this.storage.crypto!,this.bundle,this.review,signal);
+        await this.original.prepareSubmissionInTransaction(client,request.submissionId,signal);
+      }
       const original=await this.target(client,fixed.userId,request.submissionId,signal);if(!original)return null;
+      await ensureIntakeResourceCutover(client,this.storage.crypto!,fixed.userId,original.target.previewSource.sourceDraftId);
       const {row:oldHead,publications}=await this.head(client,original),latest=publications.at(-1);
       const previous=(await client.query<PublicationOperation>('SELECT * FROM platform_companion_name_delivery_operations WHERE user_id=$1 AND operation_id=$2 FOR UPDATE',[fixed.userId,request.operationId])).rows[0];
       if(previous){if(previous.kind!==kind||previous.session_hash!==fixed.tokenHash||JSON.stringify(this.decodeRequest(previous))!==JSON.stringify(request))throw conflict();

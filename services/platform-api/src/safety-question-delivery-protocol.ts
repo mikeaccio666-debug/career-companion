@@ -7,6 +7,7 @@ import type { SafetyPublicationRow } from './onboarding-safety-followup-protocol
 
 export interface QuestionScopeRow {user_id:string;draft_id:string;revision:number;latest_operation_id:string|null;journal_digest:string;payload_ciphertext:Buffer;}
 export interface QuestionOccurrenceRow {
+  source_kind?:'onboarding'|'companion_name';
   id:string;user_id:string;draft_id:string;publication_id:string;submission_id:string;source_generation:number;occurrence:number;generation:number;
   phase:'reserved'|'claimed'|'declared';reservation_id:string;reservation_digest:string;session_hash:string;render_owner_id:string;reserved_until:Date;
   display_until:Date|null;evidence_until:Date|null;grant_id:string|null;grant_digest:string|null;question_digest:string;claimed_at:Date|null;receipt_received_at:Date|null;
@@ -15,14 +16,16 @@ export interface QuestionOperationRow {user_id:string;operation_id:string;draft_
   session_hash:string;render_owner_id:string;previous_digest:string;journal_digest:string;payload_ciphertext:Buffer;created_at:Date;}
 const occurrenceKeys=['id','user_id','draft_id','publication_id','submission_id','source_generation','occurrence','generation','phase','reservation_id','reservation_digest','session_hash',
   'render_owner_id','grant_id','grant_digest','question_digest'] as const;
-export type QuestionOccurrenceCapture=Pick<QuestionOccurrenceRow,typeof occurrenceKeys[number]>&{reservedUntil:string;displayUntil:string|null;evidenceUntil:string|null;claimedAt:string|null;receiptReceivedAt:string|null};
+export type QuestionOccurrenceCapture=Pick<QuestionOccurrenceRow,typeof occurrenceKeys[number]>&{reservedUntil:string;displayUntil:string|null;evidenceUntil:string|null;claimedAt:string|null;receiptReceivedAt:string|null;sourceKind?:'onboarding'};
 export function questionOccurrenceCapture(row:QuestionOccurrenceRow):QuestionOccurrenceCapture{return {...Object.fromEntries(occurrenceKeys.map(k=>[k,row[k]])),reservedUntil:row.reserved_until.toISOString(),
-  displayUntil:row.display_until?.toISOString()??null,evidenceUntil:row.evidence_until?.toISOString()??null,claimedAt:row.claimed_at?.toISOString()??null,receiptReceivedAt:row.receipt_received_at?.toISOString()??null} as QuestionOccurrenceCapture;}
+  displayUntil:row.display_until?.toISOString()??null,evidenceUntil:row.evidence_until?.toISOString()??null,claimedAt:row.claimed_at?.toISOString()??null,receiptReceivedAt:row.receipt_received_at?.toISOString()??null,...(row.source_kind==='onboarding'?{sourceKind:'onboarding' as const}:{})} as QuestionOccurrenceCapture;}
 export function occurrenceFromCapture(raw:unknown):QuestionOccurrenceRow {
-  const d=deliveryRecord(raw,[...occurrenceKeys,'reservedUntil','displayUntil','evidenceUntil','claimedAt','receiptReceivedAt']);
+  const hasSource=raw&&typeof raw==='object'&&Object.hasOwn(raw,'sourceKind');
+  const d=deliveryRecord(raw,[...occurrenceKeys,'reservedUntil','displayUntil','evidenceUntil','claimedAt','receiptReceivedAt',...(hasSource?['sourceKind']:[])]);
+  if(hasSource&&d.sourceKind!=='onboarding')throw deliveryStorageUnavailable();
   const date=(v:unknown,nullable=false)=>{if(nullable&&v===null)return null;if(typeof v!=='string'||!Number.isFinite(Date.parse(v))||new Date(v).toISOString()!==v)throw deliveryStorageUnavailable();return new Date(v);};
   return {...Object.fromEntries(occurrenceKeys.map(k=>[k,d[k]])),reserved_until:date(d.reservedUntil),display_until:date(d.displayUntil,true),evidence_until:date(d.evidenceUntil,true),
-    claimed_at:date(d.claimedAt,true),receipt_received_at:date(d.receiptReceivedAt,true)} as QuestionOccurrenceRow;
+    claimed_at:date(d.claimedAt,true),receipt_received_at:date(d.receiptReceivedAt,true),source_kind:hasSource?'onboarding':'companion_name'} as QuestionOccurrenceRow;
 }
 const operationKeys=['user_id','operation_id','draft_id','occurrence_id','kind','expected_revision','applied_revision','session_hash','render_owner_id'] as const;
 export function questionOperationCore(row:QuestionOperationRow,request:unknown,after:QuestionOccurrenceRow,secret:string|null,question:string|null){
@@ -84,9 +87,10 @@ export async function readQuestionJournal(client:PoolClient,crypto:DataCrypto,sc
     const d=deliveryRecord(raw,['schemaVersion',...operationKeys,'at','request','after','secret','question','previousDigest','journalDigest']);
     const after=occurrenceFromCapture(d.after),before=latest.get(op.occurrence_id),request=d.request as Record<string,unknown>;
     if(after.id!==op.occurrence_id||after.user_id!==op.user_id||after.draft_id!==op.draft_id||after.session_hash!==op.session_hash||after.render_owner_id!==op.render_owner_id)throw deliveryStorageUnavailable();
-    if(before&&(after.submission_id!==before.submission_id||after.source_generation!==before.source_generation||after.occurrence!==before.occurrence))throw deliveryStorageUnavailable();
+    if(before&&((after.source_kind??'companion_name')!==(before.source_kind??'companion_name')||after.submission_id!==before.submission_id||after.source_generation!==before.source_generation||after.occurrence!==before.occurrence))throw deliveryStorageUnavailable();
     if(op.kind==='reserve'){
-      const q=deliveryRecord(request,['operationId','publicationId','expectedQuestionScopeRevision','renderOwnerId']);
+      const q=deliveryRecord(request,['operationId','publicationId','expectedQuestionScopeRevision','renderOwnerId',...(after.source_kind==='onboarding'?['sourceKind']:[])]);
+      if(after.source_kind==='onboarding'&&q.sourceKind!=='onboarding')throw deliveryStorageUnavailable();
       if(q.operationId!==op.operation_id||q.publicationId!==after.publication_id||q.expectedQuestionScopeRevision!==op.expected_revision||q.renderOwnerId!==op.render_owner_id
         ||after.phase!=='reserved'||d.secret!==null||d.question!==null||after.reserved_until<=op.created_at
         ||before&&(before.phase!=='reserved'||before.reserved_until>op.created_at||after.generation!==before.generation+1)

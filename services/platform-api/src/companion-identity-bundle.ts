@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { parseCompanionIdentityPolicy, type CompanionIdentityPolicy } from '@companion/career-core';
+import { parseCompanionIdentityPolicy, parseCompanionIdentityPolicyV2, type CompanionIdentityPolicy, type CompanionIdentityPolicyV2 } from '@companion/career-core';
 
 const MAX_BYTES = 256 * 1024;
-export interface CompanionIdentityBundle {
+export interface CompanionIdentityBundleV1 {
   readonly schemaVersion: 1; readonly revision: number; readonly contentDigest: string;
   readonly sourceRefs: Readonly<{ names: string; seals: string; aliases: string }>;
   readonly policy: Readonly<CompanionIdentityPolicy>;
 }
+export interface CompanionIdentityBundleV2 extends Omit<CompanionIdentityBundleV1, 'schemaVersion' | 'policy'> {
+  readonly schemaVersion: 2; readonly policy: Readonly<CompanionIdentityPolicyV2>;
+}
+export type CompanionIdentityBundle = CompanionIdentityBundleV1 | CompanionIdentityBundleV2;
 export class CompanionIdentityBundleError extends Error {
   readonly code = 'COMPANION_IDENTITY_BUNDLE_INVALID';
   constructor() { super('The companion identity bundle is not available.'); this.name = 'CompanionIdentityBundleError'; }
@@ -30,12 +34,15 @@ function reference(value: unknown): string {
 function content(value: unknown, requireDigest: boolean) {
   const required = ['schemaVersion', 'revision', 'sourceRefs', 'policy'];
   const data = record(value, requireDigest ? [...required, 'contentDigest'] : required, requireDigest ? [] : ['contentDigest']);
-  if (data.schemaVersion !== 1 || !Number.isSafeInteger(data.revision) || (data.revision as number) < 1
+  if (![1, 2].includes(data.schemaVersion as number) || !Number.isSafeInteger(data.revision) || (data.revision as number) < 1
     || (data.revision as number) > 2147483647 || Object.is(data.revision, -0)) invalid();
   const refs = record(data.sourceRefs, ['names', 'seals', 'aliases']);
   const sourceRefs = Object.freeze({ names: reference(refs.names), seals: reference(refs.seals), aliases: reference(refs.aliases) });
-  const policy = parseCompanionIdentityPolicy(data.policy);
-  const canonical = { schemaVersion: 1 as const, revision: data.revision as number, sourceRefs, policy };
+  // The V1 canonical object is unchanged; old digests and sealed snapshots do
+  // not acquire rules or a fictional wider review when V2 is enabled.
+  const canonical = data.schemaVersion === 1
+    ? { schemaVersion: 1 as const, revision: data.revision as number, sourceRefs, policy: parseCompanionIdentityPolicy(data.policy) }
+    : { schemaVersion: 2 as const, revision: data.revision as number, sourceRefs, policy: parseCompanionIdentityPolicyV2(data.policy) };
   const bytes = Buffer.from(JSON.stringify(canonical), 'utf8');
   if (bytes.length > MAX_BYTES) invalid();
   return { canonical, digest: createHash('sha256').update(bytes).digest('hex'), supplied: data.contentDigest };

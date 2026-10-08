@@ -4,7 +4,9 @@ import { CompanionPreviewObserver, type CompanionPreviewObservation } from './co
 import './companion-preview.css';
 
 /** A saved preview is an example of its voice, not a companion birth or a delivered chat message. */
-export function CompanionPreviewContent({ observation, refresh }: { observation: CompanionPreviewObservation; refresh: () => void }) {
+export function CompanionPreviewContent({ observation, refresh, onChooseName }: {
+  observation: CompanionPreviewObservation; refresh: () => void; onChooseName?: () => void;
+}) {
   const { entry, checking, error } = observation;
   const working = entry?.kind === 'generation' && entry.hold === null && ['pending', 'running'].includes(entry.status);
   return <section className="companion-preview" aria-label="主理人生成与预览" aria-busy={checking}>
@@ -13,7 +15,8 @@ export function CompanionPreviewContent({ observation, refresh }: { observation:
       <p className="companion-preview-summary">{entry.preview.summary}</p>
       <div className="companion-preview-samples" aria-label="说话方式示例">{entry.preview.samples.map((sample, index) => <p key={index}>{sample}</p>)}</div>
       {entry.preview.generatedBy === 'fallback' && <p className="companion-preview-provenance">根据你的回答，用规则生成。</p>}
-      <p className="companion-preview-next">预览已保存。起名、换一种感觉和刻章暂时还没有开放，你可以稍后回来继续。</p>
+      {onChooseName ? <button type="button" className="companion-naming-primary" onClick={onChooseName}>就是它，起个名字吧</button>
+        : <p className="companion-preview-next">预览已经保存。</p>}
     </> : <div className="companion-preview-status">
       {working && <span className="companion-preview-seal companion-preview-seal-generating" aria-hidden="true" />}
       <p role="status">{!entry ? '正在确认生成进度…' : entry.kind === 'intake_required' ? '请先完成认识你的这几问。'
@@ -33,7 +36,7 @@ export function CompanionPreviewContent({ observation, refresh }: { observation:
   </section>;
 }
 
-export default function StudentCompanionPreview({ intakeRevision }: { intakeRevision: number }) {
+export default function StudentCompanionPreview({ intakeRevision, onPreviewReady }: { intakeRevision: number; onPreviewReady?: () => void }) {
   const client = useRequiredPlatformAccountClient();
   const empty: CompanionPreviewObservation = { entry: null, checking: false, error: '' };
   const [view, setView] = useState({ client, intakeRevision, observation: empty });
@@ -45,6 +48,8 @@ export default function StudentCompanionPreview({ intakeRevision }: { intakeRevi
     document.addEventListener('visibilitychange', resume); window.addEventListener('online', resume); window.addEventListener('offline', resume);
     return () => { observer.stop(); document.removeEventListener('visibilitychange', resume); window.removeEventListener('online', resume); window.removeEventListener('offline', resume); };
   }, [observer, client, intakeRevision]);
+  const previewReady = view.client === client && view.intakeRevision === intakeRevision && view.observation.entry?.kind === 'preview';
+  useEffect(() => { if (previewReady && client.isCurrent()) onPreviewReady?.(); }, [previewReady, client, onPreviewReady]);
   if (!client.isCurrent()) return null;
   const observation = view.client === client && view.intakeRevision === intakeRevision ? view.observation : empty;
   return <CompanionPreviewContent observation={observation} refresh={() => observer.refresh()} />;

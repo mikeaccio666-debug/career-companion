@@ -23,11 +23,12 @@ export class OnboardingEntry {
   private readonly runner: OnboardingSafetyRunner;
   constructor(private readonly db: Database, private readonly config: PlatformConfig,
     private readonly legal: LegalBundle|null, private readonly runtime: PlatformProviderRuntime,
-    private readonly profile: SafetyDetectorProfile|null, private readonly responseBundle: SafetyResponseBundle|null) {
+    private readonly profile: SafetyDetectorProfile|null, private readonly responseBundle: SafetyResponseBundle|null,
+    private readonly prospectiveResources=false) {
     this.storage=new OnboardingStorage(config,legal);
     this.drafts=new OnboardingDrafts(db,config,legal);
     this.responses=new OnboardingSafetyResponses(db,config,legal,responseBundle);
-    this.followup=new OnboardingSafetyFollowup(db,config,legal);
+    this.followup=new OnboardingSafetyFollowup(db,config,legal,prospectiveResources);
     this.runner=new OnboardingSafetyRunner(this.drafts,config,runtime,profile);
   }
   private fixed(context: FixedSessionContext) { return Object.freeze({userId:context.userId,tokenHash:context.tokenHash}); }
@@ -53,6 +54,7 @@ export class OnboardingEntry {
   async resources(context: FixedSessionContext, signal?:AbortSignal) {
     const fixed=this.fixed(context);
     let state=await this.followup.read(fixed,signal);
+    if(this.prospectiveResources)return state;
     for (const pending of state.pendingResponses) {
       if (pending.status!=='pending') continue;
       try { await this.responses.prepareSubmission(pending.submissionId,signal); }
@@ -66,7 +68,10 @@ export class OnboardingEntry {
   }
   async read(context: FixedSessionContext, signal?:AbortSignal):Promise<OnboardingEntryState> {
     const fixed=this.fixed(context);
-    await this.drafts.read(fixed,signal); // Normal intake still requires current student admission.
+    // Prospective GET is observation only. The explicit retry/save drivers keep
+    // legacy recovery; ordinary intake still needs current student admission.
+    if(this.prospectiveResources)await this.db.withBoundedTransaction(client=>this.storage.authorizeSession(client,fixed,signal));
+    else await this.drafts.read(fixed,signal);
     const state=await this.resources(fixed,signal);
     let freeTextAvailable=false;
     try { await this.assertTextAvailable(fixed,signal); freeTextAvailable=true; }
@@ -107,5 +112,5 @@ export async function createOnboardingEntry(db:Database,config:PlatformConfig,le
   if(detector.status==='rejected'&&!(detector.reason instanceof SafetyDetectorProfileError))throw detector.reason;
   if(resources.status==='rejected'&&!(resources.reason instanceof SafetyResponseBundleError))throw resources.reason;
   const profile=detector.status==='fulfilled'?detector.value:null,bundle=resources.status==='fulfilled'?resources.value:null;
-  return new OnboardingEntry(db,config,legal,runtime,profile,bundle);
+  return new OnboardingEntry(db,config,legal,runtime,profile,bundle,true);
 }

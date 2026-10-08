@@ -7,11 +7,13 @@ import multipart from '@fastify/multipart';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { Conversation, PlatformProviderRuntime, ProviderAttachment, User, VoiceContextSnapshot, VoiceSessionResponse } from '@companion/platform-contracts';
+import { PLATFORM_ACCOUNT_HEADER, parseCompanionSafetyQuestionReserveCommand } from '@companion/platform-contracts';
 import { createProviderRuntime } from '@companion/ai-core';
 import { Database } from './database.ts';
 import { readConfig, type PlatformConfig } from './config.ts';
 import { authorizeFixedSession, checkPassword, fixedRequestSession, getUser, hashPassword, logout, setSession, setSessionCookie } from './auth.ts';
 import { AccountActions } from './account-actions.ts';
+import { readResourceSession } from './resource-session.ts';
 import { KnowledgeSources } from './knowledge-sources.ts';
 import { ApiError, identifier, invalid, notFound, object, string } from './errors.ts';
 import { createStorage, type BlobStorage, validateUpload } from './storage.ts';
@@ -43,7 +45,8 @@ import { StudentEntry } from './student-entry.ts';
 import { createOnboardingEntry } from './onboarding-entry.ts';
 import { CompanionEntry } from './companion-entry.ts';
 import { CompanionGenerationQueue } from './companion-generation-queue.ts';
-import { createCompanionNamingEntry } from './companion-naming-entry.ts';
+import { createCompanionStudentOnboarding } from './companion-student-onboarding.ts';
+import { createCompanionSafetyResources, readCompanionSafetyResourceConfiguration } from './companion-safety-resources.ts';
 import { CompanionNameQueue } from './companion-name-queue.ts';
 import { companionNameUuid } from './companion-name-safety-protocol.ts';
 import { ModelConsent, requireModelConsent } from './model-routing.ts';
@@ -77,7 +80,10 @@ export async function buildApp(options:AppOptions={}) {
   const runtime=requireModelConsent(options.runtime??createProviderRuntime());
   const onboarding=await createOnboardingEntry(db,config,bundle,runtime);
   const companion=new CompanionEntry(db,config,bundle,runtime);
-  const naming=await createCompanionNamingEntry(db,config,bundle,runtime,companion.generation);
+  const safetyResourcesConfiguration=await readCompanionSafetyResourceConfiguration(config);
+  const studentOnboarding=await createCompanionStudentOnboarding(db,config,bundle,runtime,companion.generation,safetyResourcesConfiguration.review);
+  const safetyResources=await createCompanionSafetyResources(db,config,bundle,studentOnboarding.nameDelivery,safetyResourcesConfiguration);
+  const naming=studentOnboarding.naming;
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
@@ -259,8 +265,95 @@ export async function buildApp(options:AppOptions={}) {
     try{return {accepted:await naming.readOperation(fixedRequestSession(request,userId(request)),operationId,cancellation.signal)};}
     finally{cancellation.dispose();}
   });
+  app.get(`${prefix}/companion/journey`,namingReadSecure,async(request,reply)=>{
+    namingQuery(request);
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {journey:await studentOnboarding.read(fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/journey/seal`,secure,async(request,reply)=>{
+    namingQuery(request);
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {saved:await studentOnboarding.select(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/journey/seal/:taskId/operations/:operationId`,namingReadSecure,async(request,reply)=>{
+    namingQuery(request);
+    const parameters=request.params as Record<string,unknown>;
+    const input={taskId:companionNameUuid(parameters.taskId),operationId:companionNameUuid(parameters.operationId)};
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {saved:await studentOnboarding.readSelectionOperation(fixedRequestSession(request,userId(request)),input,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/journey/name-preparation`,secure,async(request,reply)=>{
+    namingQuery(request);
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {accepted:await studentOnboarding.resumeNamePreparation(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
   // Fixed resources and receipt declarations do not consume ordinary API quota or depend on current terms/provider availability.
   const resourceAccess={preHandler:[authenticated,accountContext()]};
+  function resourceTarget(request:FastifyRequest){
+    const parameters=request.params as Record<string,unknown>;
+    if(parameters.sourceKind!=='onboarding'&&parameters.sourceKind!=='companion_name')throw invalid('Use an actual support resource source.');
+    return {sourceKind:parameters.sourceKind,publicationId:companionNameUuid(parameters.publicationId)};
+  }
+  app.get(`${prefix}/companion/support`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {index:await safetyResources.resources.readIndex(fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/support/publications`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {publication:await safetyResources.resources.publish(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/support/publications/recovery`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {publication:await safetyResources.resources.recover(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/support/:sourceKind/:publicationId`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const target=resourceTarget(request),cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {state:await safetyResources.resources.read(fixedRequestSession(request,userId(request)),target,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/support/body`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {projection:await safetyResources.resources.readBody(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/support/actions`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {result:await safetyResources.resources.act(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/support/questions/:sourceKind/:publicationId`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const target=resourceTarget(request),cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {state:await safetyResources.questionDelivery.read(fixedRequestSession(request,userId(request)),target,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/support/questions/reservations`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);
+    // The public source-aware contract is mandatory here. The internal 047
+    // service retains its historic name-only input for authenticated replay.
+    let input;
+    try{input=parseCompanionSafetyQuestionReserveCommand(request.body);}
+    catch{throw invalid('Use an actual support source and question reservation.');}
+    const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {reservation:await safetyResources.questionDelivery.reserve(fixedRequestSession(request,userId(request)),input,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/support/questions/claims`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {claim:await safetyResources.questionDelivery.claim(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
+  app.post(`${prefix}/companion/support/questions/presentations`,resourceAccess,async(request,reply)=>{
+    namingQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return {presentation:await safetyResources.questionDelivery.present(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
   app.get(`${prefix}/onboarding/safety`,resourceAccess,async(request,reply)=>{
     const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
     try{return {followup:await onboarding.resources(fixedRequestSession(request,userId(request)),cancellation.signal)};}
@@ -285,6 +378,21 @@ export async function buildApp(options:AppOptions={}) {
   });
   app.post(`${prefix}/auth/logout`,limitedAccount,async(request,reply)=>{await logout(db,request,reply);return {ok:true};});
   app.get(`${prefix}/auth/me`,{preHandler:[authenticated,authenticatedLimit('api')]},async request=>({user:(request as AuthRequest).platformUser}));
+  // A hard refresh must be able to establish the real cookie owner for saved
+  // support resources even when ordinary workspace admission is unavailable.
+  app.get(`${prefix}/auth/resource-session`,{
+    onRequest:async(request,reply)=>{
+      reply.header('Cache-Control','private, no-store');
+      const origin=request.headers.origin;
+      if(origin!==undefined&&!config.allowedOrigins.has(origin))throw new ApiError(403,'ORIGIN_REJECTED','Use this action from the configured application origin.');
+      if(Object.keys(request.query as Record<string,unknown>).length)throw invalid('Resource session observation does not accept query authority.');
+    },preHandler:authenticated,
+  },async(request,reply)=>{
+    if(request.headers[PLATFORM_ACCOUNT_HEADER]!==undefined)requireAccountContext(request,userId(request));
+    const cancellation=requestSignal(request,reply);
+    try{return {scope:'support_resources',user:await readResourceSession(db,fixedRequestSession(request,userId(request)),cancellation.signal)};}
+    finally{cancellation.dispose();}
+  });
   app.post(`${prefix}/auth/password-reset/request`,{preHandler:anonymousLimit('auth-email-request')},async(request,reply)=>{
     const data=accountBody(request.body,['email']),email=string(data.email,'email',254).toLowerCase();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw invalid('Use a valid email.');
@@ -521,5 +629,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,naming,companionNameQueue,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

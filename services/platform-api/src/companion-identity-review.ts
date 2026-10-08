@@ -10,7 +10,7 @@ const DIGEST = /^[0-9a-f]{64}$/;
 const KEYS = ['schemaVersion', 'bundleRevision', 'bundleDigest', 'coverage', 'reviewerUserId',
   'reviewedAt', 'reviewEvidenceRef', 'tierOneSourceRef'] as const;
 
-export interface CompanionIdentityReview {
+export interface CompanionIdentityReviewV1 {
   readonly schemaVersion: 1;
   readonly bundleRevision: number;
   readonly bundleDigest: string;
@@ -24,6 +24,14 @@ export interface CompanionIdentityReview {
   readonly tierOneSourceRef: string;
   readonly reviewDigest: string;
 }
+export interface CompanionIdentityReviewV2 extends Omit<CompanionIdentityReviewV1, 'schemaVersion'> {
+  readonly schemaVersion: 2;
+  /** This attestation is verified against the actual active operator policy.
+   * The label/parser itself does not establish phonetic or semantic quality. */
+  readonly englishRuleCoverage: 'all_accepted_latin_initials_v1';
+  readonly englishRuleReviewRef: string;
+}
+export type CompanionIdentityReview = CompanionIdentityReviewV1 | CompanionIdentityReviewV2;
 export class CompanionIdentityReviewError extends Error {
   readonly code = 'COMPANION_IDENTITY_REVIEW_INVALID';
   constructor() { super('The companion identity review is not available.'); this.name = 'CompanionIdentityReviewError'; }
@@ -35,8 +43,11 @@ function matches(pattern: RegExp, value: unknown): value is string {
 function record(value: unknown, requireDigest: boolean): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalid();
-  const descriptors = Object.getOwnPropertyDescriptors(value), required: readonly string[] = requireDigest ? [...KEYS, 'reviewDigest'] : KEYS;
-  if (Reflect.ownKeys(value).some(key => typeof key !== 'string' || ![...KEYS, 'reviewDigest'].includes(key as typeof KEYS[number]))
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const version = descriptors.schemaVersion && 'value' in descriptors.schemaVersion ? descriptors.schemaVersion.value : undefined;
+  const versionKeys: readonly string[] = version === 2 ? [...KEYS, 'englishRuleCoverage', 'englishRuleReviewRef'] : KEYS;
+  const required: readonly string[] = requireDigest ? [...versionKeys, 'reviewDigest'] : versionKeys;
+  if (Reflect.ownKeys(value).some(key => typeof key !== 'string' || ![...versionKeys, 'reviewDigest'].includes(key))
     || required.some(key => !Object.hasOwn(descriptors, key))
     || Object.values(descriptors).some(descriptor => !('value' in descriptor) || !descriptor.enumerable)) invalid();
   return Object.fromEntries(Object.keys(descriptors).map(key => [key, descriptors[key].value]));
@@ -48,16 +59,19 @@ function reference(value: unknown): string {
 }
 function content(value: unknown, requireDigest: boolean) {
   const data = record(value, requireDigest);
-  if (data.schemaVersion !== 1 || !Number.isSafeInteger(data.bundleRevision) || (data.bundleRevision as number) < 1
+  if (![1, 2].includes(data.schemaVersion as number) || !Number.isSafeInteger(data.bundleRevision) || (data.bundleRevision as number) < 1
     || (data.bundleRevision as number) > 2147483647 || Object.is(data.bundleRevision, -0)
     || !matches(DIGEST, data.bundleDigest) || data.coverage !== 'complete_eligible_level_one'
     || !matches(UUID, data.reviewerUserId)
     || !matches(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, data.reviewedAt)
     || !Number.isFinite(Date.parse(data.reviewedAt)) || new Date(data.reviewedAt).toISOString() !== data.reviewedAt) invalid();
-  const canonical = { schemaVersion: 1 as const, bundleRevision: data.bundleRevision as number,
+  const canonicalV1 = { schemaVersion: 1 as const, bundleRevision: data.bundleRevision as number,
     bundleDigest: data.bundleDigest, coverage: 'complete_eligible_level_one' as const,
     reviewerUserId: data.reviewerUserId, reviewedAt: data.reviewedAt,
     reviewEvidenceRef: reference(data.reviewEvidenceRef), tierOneSourceRef: reference(data.tierOneSourceRef) };
+  if (data.schemaVersion === 2 && data.englishRuleCoverage !== 'all_accepted_latin_initials_v1') invalid();
+  const canonical = data.schemaVersion === 1 ? canonicalV1 : { ...canonicalV1, schemaVersion: 2 as const,
+    englishRuleCoverage: 'all_accepted_latin_initials_v1' as const, englishRuleReviewRef: reference(data.englishRuleReviewRef) };
   const bytes = Buffer.from(JSON.stringify(canonical), 'utf8');
   if (bytes.length > MAX_BYTES) invalid();
   return { canonical, digest: createHash('sha256').update(bytes).digest('hex'), supplied: data.reviewDigest };
@@ -106,7 +120,8 @@ export async function assertActiveCompanionIdentityBundle(client: Pick<PoolClien
     if (!bundle || !review) throw companionIdentityUnavailable();
     // Snapshot before any await; caller mutation cannot change the accepted asset.
     const fixedBundle = parseCompanionIdentityBundle(bundle), fixedReview = parseCompanionIdentityReview(review);
-    if (fixedReview.bundleRevision !== fixedBundle.revision || fixedReview.bundleDigest !== fixedBundle.contentDigest) throw companionIdentityUnavailable();
+    if (fixedReview.bundleRevision !== fixedBundle.revision || fixedReview.bundleDigest !== fixedBundle.contentDigest
+      || fixedReview.schemaVersion !== fixedBundle.schemaVersion) throw companionIdentityUnavailable();
     const found = await client.query(`SELECT revision,content_digest,review_digest,reviewed_by,org_id,activated_by
       FROM platform_companion_identity_policy WHERE singleton=true FOR SHARE`);
     signal?.throwIfAborted();

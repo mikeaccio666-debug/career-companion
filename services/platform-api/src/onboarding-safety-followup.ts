@@ -10,6 +10,7 @@ import { ApiError } from './errors.ts';
 import type { LegalBundle } from './legal-documents.ts';
 import { OnboardingStorage, type SafetySubmissionRow } from './onboarding-storage.ts';
 import { publicSafetyResponse } from './onboarding-safety-responses.ts';
+import { observeIntakeSourcesInTransaction } from './onboarding-resource-source.ts';
 import { captureFollowup, followupConflict, followupDigest, followupUnavailable, parseSafetyFollowupCommand,
   readSafetyFollowupHistory, type SafetyFollowupCapture, type SafetyFollowupCommand,
   type SafetyFollowupRow, type SafetyPublicationCapture, type SafetyResumeStatus } from './onboarding-safety-followup-protocol.ts';
@@ -40,7 +41,7 @@ function capturedInput(value:SafetyFollowupCapture) {
  */
 export class OnboardingSafetyFollowup {
   private readonly storage:OnboardingStorage;
-  constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null) {
+  constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null,private readonly prospective=false) {
     this.storage=new OnboardingStorage(config,legal);
   }
   private async resourceAdmission(client:PoolClient,fixed:FixedSessionContext,signal?:AbortSignal) {
@@ -50,10 +51,10 @@ export class OnboardingSafetyFollowup {
     if(!this.storage.crypto)throw followupUnavailable();
     await authorizeFixedSession(client,fixed,signal);
   }
-  private async history(client:PoolClient,fixed:FixedSessionContext) {
+  private async history(client:PoolClient,fixed:FixedSessionContext,observe=false) {
     const row=await this.storage.row(client,fixed.userId);
     if(!row)return null;
-    const draft=this.storage.decode(row),sources=await this.storage.recover(client,draft);
+    const draft=this.storage.decode(row),sources=observe?await observeIntakeSourcesInTransaction(client,this.storage,draft):await this.storage.recover(client,draft);
     const history=await readSafetyFollowupHistory(client,this.storage,draft,sources);
     return {draft,sources,history};
   }
@@ -79,10 +80,12 @@ export class OnboardingSafetyFollowup {
     try {
       return await this.db.withBoundedTransaction(async client=>{
         await this.resourceAdmission(client,fixed,signal);
-        const current=await this.history(client,fixed);
+        const anchor=(await client.query<{safety_resource_v2_draft_id:string|null}>('SELECT safety_resource_v2_draft_id FROM platform_onboarding_drafts WHERE user_id=$1 FOR SHARE',[fixed.userId])).rows[0];
+        const prospective=this.prospective||anchor?.safety_resource_v2_draft_id!==null&&anchor!==undefined;
+        const current=await this.history(client,fixed,prospective);
         if(!current){await authorizeFixedSession(client,fixed,signal);return {draft:null,publications:[],pendingResponses:[],safety:{status:'clear',pendingCount:0,blockedLevel:null}};}
-        const at=await this.storage.at(client),history=await this.publish(client,current.draft,current.sources,current.history,at),now=new Date(at);
-        const publications=history.publications.filter(row=>row.retention_until>now).map(row=>{
+        const at=await this.storage.at(client),history=prospective?current.history:await this.publish(client,current.draft,current.sources,current.history,at),now=new Date(at);
+        const publications=prospective?[]:history.publications.filter(row=>row.retention_until>now).map(row=>{
           const capture=history.decoded.get(row.id)!,ops=history.operations.filter(item=>item.publication_id===row.id);
           const clarification=ops.find(item=>item.action_kind==='clarify_exaggeration');
           const source=current.sources.find(item=>item.id===row.submission_id)!;
@@ -100,7 +103,8 @@ export class OnboardingSafetyFollowup {
         const pendingResponses=history.captures.filter(item=>item.row.status==='pending'||item.row.retention_until!<=now).map(item=>({
           responseId:item.row.id,submissionId:item.row.submission_id,status:item.row.status==='pending'?'pending' as const:'expired' as const}));
         await authorizeFixedSession(client,fixed,signal);signal?.throwIfAborted();
-        return {draft:current.draft,publications,pendingResponses,safety:this.storage.safetyState(current.sources,history.handled)};
+        const handled=prospective?await this.storage.handledSources(client,current.draft,current.sources):history.handled;
+        return {draft:current.draft,publications,pendingResponses,safety:this.storage.safetyState(current.sources,handled)};
       });
     }catch(error){if(error instanceof DataCryptoError)throw followupUnavailable();throw error;}
   }
@@ -122,6 +126,8 @@ export class OnboardingSafetyFollowup {
           // Only hashes are persisted. A lost presentation handle is recovered by a new actual presentation operation.
           return {draft,operation:{id:old.operation_id,appliedRevision:old.applied_revision,replayed:true},publicationId:old.publication_id,resumeStatus:payload.resumeStatus};
         }
+        const cutover=(await client.query<{safety_resource_v2_draft_id:string|null}>('SELECT safety_resource_v2_draft_id FROM platform_onboarding_drafts WHERE id=$1 AND user_id=$2 FOR SHARE',[draft.id,fixed.userId])).rows[0];
+        if(this.prospective||cutover?.safety_resource_v2_draft_id!==null&&cutover!==undefined)throw new ApiError(409,'SAFETY_DELIVERY_PROTOCOL_CHANGED','Use the current resource body and explicit actions.');
         const namespaceCollision=(await client.query('SELECT operation_id FROM platform_onboarding_operations WHERE user_id=$1 AND operation_id=$2 FOR UPDATE',[fixed.userId,command.operationId])).rowCount;
         if(namespaceCollision)throw followupConflict();
         if(command.expectedDraftRevision!==draft.revision)throw changed();
