@@ -12,7 +12,10 @@ import { CompanionIdentityDrafts, CompanionIdentityNameRejected } from './compan
 import { ApiError } from './errors.ts';
 import { enqueueNameSafetyResponse } from './companion-name-safety-response-outbox.ts';
 import type { CompanionNameSafetyDelivery } from './companion-name-safety-delivery.ts';
-import { readNameRawSourceInTransaction } from './companion-name-resource-source.ts';
+import { readNameRawSourceInTransaction, readNameResourceSourceInTransaction } from './companion-name-resource-source.ts';
+import { assertManagedNameExecution, companionNameNotification, managedNameClaimGate, nameDispatchHeld, readNameDispatchInTransaction,
+  recordManagedNameClaim, recordManagedNameStart, recordNameDispatchStage } from './companion-name-dispatch-protocol.ts';
+import { createHash } from 'node:crypto';
 import { syncPrebirthInventoryInTransaction, verifyPrebirthInventoryInTransaction } from './companion-prebirth-protocol.ts';
 import { parseCompanionNameApplication, parseCompanionNameSafetyClaim, parseCompanionNameSafetyDecision, parseCompanionNameSubmissionRequest,
   parseCompanionNameSubmissionClaimRequest, parseCompanionNameTask, type CompanionNameSafetyClaim, type CompanionNameSafetyDecision,
@@ -42,6 +45,7 @@ export interface CompanionNameSubmissionRow {
   level: 'L0' | 'L1' | 'L2' | null; detector_mode: 'full' | 'keyword_only' | null; failure: CompanionNameSafetyFailure | null;
   application_status: 'pending' | 'applied' | 'name_rejected' | 'superseded' | 'not_eligible'; rejected_category: CompanionNameCategory | null;
   applied_identity_revision: number | null; application_ciphertext: Buffer | null;
+  first_name_dispatch_id?: string | null;
 }
 const captureFixed = (value: FixedSessionContext) => Object.freeze({ userId: value.userId, tokenHash: value.tokenHash });
 const captureClaim = (value: unknown) => { try { return parseCompanionNameSafetyClaim(value); } catch { throw companionNameSafetyClaimChanged(); } };
@@ -197,8 +201,12 @@ export class CompanionNameSafety {
     });
   }
   async submit(context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
+    const fixed=captureFixed(context),request=parseCompanionNameSubmissionRequest(value);
+    return this.db.withBoundedTransaction(client => this.submitInTransaction(client, fixed, request, signal));
+  }
+  /** Raw source and inventory use the caller's one real acceptance COMMIT. */
+  async submitInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
     const fixed = captureFixed(context), request = parseCompanionNameSubmissionRequest(value), canonical = JSON.stringify(request);
-    return this.db.withBoundedTransaction(async client => {
       const { verified, version } = await this.source(client, fixed, request.taskId, signal), previous = await this.entry(client, fixed, request.taskId);
       await verifyPrebirthInventoryInTransaction(client, this.storage.crypto, fixed.userId, signal);
       const rows = previous ? await this.history(client, previous, verified, fixed) : [];
@@ -231,11 +239,21 @@ export class CompanionNameSafety {
       await syncPrebirthInventoryInTransaction(client, this.storage.crypto, fixed.userId, signal);
       await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
       return Object.freeze({ entry: this.view(entry, [...rows, row]), submissionId: row.id, operation: Object.freeze({ id: row.operation_id, appliedRevision: row.submitted_revision, replayed: false }) });
-    });
   }
   async claim(context: FixedSessionContext, value: { taskId: string; detectorRevision: number; leaseMs?: number }, signal?: AbortSignal): Promise<Readonly<CompanionNameSafetyClaim> | null> {
     const fixed = captureFixed(context), options = claimOptions(value);
     return this.claimSavedSource(fixed, options, undefined, signal);
+  }
+  async assertAcceptedDispatch(context: FixedSessionContext, value: unknown, signal?: AbortSignal):Promise<void> {
+    const fixed=captureFixed(context),notice=companionNameNotification(value);
+    await this.db.withBoundedTransaction(async client=>{
+      await authorizeFixedSession(client,fixed,signal);
+      const d=await readNameDispatchInTransaction(client,this.storage.crypto,notice,signal);
+      if(d.row.user_id!==fixed.userId||d.snapshot.originalSessionHash!==fixed.tokenHash)throw nameDispatchHeld();
+      const version=(await client.query<{auth_version:string}>('SELECT auth_version FROM platform_users WHERE id=$1',[fixed.userId])).rows[0];
+      if(String(version?.auth_version)!==d.snapshot.submittedAuthVersion)throw nameDispatchHeld();
+      await authorizeFixedSession(client,fixed,signal);signal?.throwIfAborted();
+    });
   }
   /** Internal exact dispatch after a raw source COMMIT. An active or completed
    * source is observed without stealing its claim or rerunning its detector. */
@@ -259,7 +277,9 @@ export class CompanionNameSafety {
         ORDER BY submitted_revision,id LIMIT 1 FOR UPDATE`, [entry.id, fixed.userId, submissionId ?? null])).rows[0];
       if (!row) { await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null; }
       if (!rows.some(item => item.id === row.id) || row.generation === 2147483647) throw companionNameSafetyUnavailable();
-      const next = { ...row, status: 'running' as const, generation: row.generation + 1, auth_version: version,
+      const managed = await managedNameClaimGate(client, this.storage.crypto, row, fixed, options.detectorRevision, signal);
+      if (managed && version !== managed.dispatch.snapshot.submittedAuthVersion) throw companionNameSafetyClaimChanged();
+      const next = { ...row, status: 'running' as const, generation: managed?.recovery ? row.generation : row.generation + 1, auth_version: version,
         lease_token: randomUUID(), execution_token: null, detector_revision: options.detectorRevision }, claim = this.rowClaim(next);
       const claimCiphertext = this.storage.crypto!.sealUtf8(JSON.stringify(this.claimPayload(claim, fixed.tokenHash, this.decodeRequest(row, entry, verified).payload)),
         { table: 'platform_companion_name_submissions', column: 'claim_ciphertext', rowId: row.id, ownerId: row.user_id, revision: next.generation });
@@ -270,6 +290,7 @@ export class CompanionNameSafety {
           AND (status='pending' OR status='running' AND lease_until<=clock_timestamp()) RETURNING id`,
         [row.id, next.generation, version, next.lease_token, options.leaseMs, options.detectorRevision, claimCiphertext, row.generation, fixed.userId, entry.id]);
       if (!saved.rowCount) throw companionNameSafetyClaimChanged();
+      await recordManagedNameClaim(client, this.storage.crypto, managed, claim, signal);
       await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return claim;
     });
   }
@@ -291,7 +312,8 @@ export class CompanionNameSafety {
     if (actual.fixed.tokenHash !== fixed.tokenHash) throw companionNameSafetyUnavailable();
     const valid = await client.query(`SELECT id FROM platform_companion_name_submissions WHERE id=$1 AND (status='running' AND lease_until>clock_timestamp() ${allowDetected ? "OR status='detected'" : ''})`, [row.id]);
     signal?.throwIfAborted(); if (!valid.rowCount) throw companionNameSafetyClaimChanged();
-    return { row, rows, entry, fixed, verified, capture };
+    const managed = await assertManagedNameExecution(client, this.storage.crypto, row, claim, fixed, executionToken ?? row.execution_token ?? undefined, signal);
+    return { row, rows, entry, fixed, verified, capture, managed };
   }
   private admission(claim: CompanionNameSafetyClaim, executionToken: string, parent: AbortSignal,
     guard: CompanionNameExecutionGuard, onComplete?: () => void): ProviderRequestAdmission {
@@ -321,6 +343,7 @@ export class CompanionNameSafety {
       const saved = await client.query(`UPDATE platform_companion_name_submissions SET execution_token=$2,updated_at=clock_timestamp()
         WHERE id=$1 AND status='running' AND execution_token IS NULL AND lease_until>clock_timestamp() RETURNING id`, [claim.submissionId, executionToken]);
       if (!saved.rowCount) throw companionNameSafetyClaimChanged(); signal?.throwIfAborted();
+      await recordManagedNameStart(client, this.storage.crypto, owned.managed, claim, executionToken, signal);
       return { replay: false as const, text: owned.capture.request.name, executionToken };
     });
     if (input.replay) return Object.freeze({ submissionId: claim.submissionId, status: 'detected' as const, replayed: true });
@@ -357,6 +380,8 @@ export class CompanionNameSafety {
       if (!saved.rowCount) throw companionNameSafetyClaimChanged();
       await enqueueNameSafetyResponse(client, { ...owned.row, status: 'detected', result_ciphertext: ciphertext,
         level: decision.level, detector_mode: decision.mode, failure: null }, decision);
+      if (owned.managed) await recordNameDispatchStage(client, this.storage.crypto, owned.managed, 'detected', {
+        generation: claim.generation, resultDigest: createHash('sha256').update(ciphertext).digest('hex'), level: decision.level, mode: decision.mode }, signal);
       await authorizeFixedSession(client, owned.fixed, signal);
       const current = await client.query('SELECT id FROM platform_companion_name_submissions WHERE id=$1 AND lease_until>clock_timestamp()', [claim.submissionId]);
       signal?.throwIfAborted(); if (!current.rowCount) throw companionNameSafetyClaimChanged();
@@ -371,7 +396,20 @@ export class CompanionNameSafety {
       const saved = await client.query(`UPDATE platform_companion_name_submissions SET status='pending',lease_token=NULL,lease_until=NULL,execution_token=NULL,failure=$2,updated_at=clock_timestamp()
         WHERE id=$1 AND generation=$3 AND lease_token=$4 AND lease_until>clock_timestamp() RETURNING id`, [claim.submissionId, failure, claim.generation, claim.leaseToken]);
       if (!saved.rowCount) throw companionNameSafetyClaimChanged(); await authorizeFixedSession(client, owned.fixed, signal); signal?.throwIfAborted();
+      if (owned.managed) await recordNameDispatchStage(client, this.storage.crypto, owned.managed, 'hold', { reason: 'requires_review' }, signal);
     });
+  }
+  /** Target-only observation of actual saved bytes. No legal/preview/current
+   * identity admission, repair, classification, apply or reusable permission. */
+  async observeSubmissionInTransaction(client: PoolClient, submissionId: string, signal?: AbortSignal) {
+    const raw = await readNameRawSourceInTransaction(client, this.storage.crypto, submissionId, signal), row = raw.source;
+    if (row.status === 'detected') {
+      await readNameResourceSourceInTransaction(client, this.storage.crypto, submissionId, signal);
+      const result = await this.decodeResult(client, row, raw.sourceCapture as ReturnType<CompanionNameSafety['requestPayload']>);
+      if (row.application_status !== 'pending') await this.decodeApplication(client, row, raw.sourceCapture as ReturnType<CompanionNameSafety['requestPayload']>, result.payload,
+        {userId:row.user_id,tokenHash:raw.sourceCapture.submittedSessionHash}, false);
+    } else if (row.application_status !== 'pending' || row.result_ciphertext || row.level !== null || row.detector_mode !== null) throw companionNameSafetyUnavailable();
+    signal?.throwIfAborted(); return row;
   }
   private applicationPayload(row: CompanionNameSubmissionRow, sourceCapture: ReturnType<CompanionNameSafety['requestPayload']>, resultCapture: ReturnType<CompanionNameSafety['resultPayload']>, identityCapture: unknown = null) {
     return { schemaVersion: 1, submissionId: row.id, userId: row.user_id, generation: row.generation, sourceCapture, resultCapture,
@@ -469,7 +507,7 @@ export class CompanionNameSafety {
    * intake/all-entry barrier on this same client before entering this writer. */
   async applyInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
       const fixed = captureFixed(context), input = parseCompanionNameApplication(value);
-      const { verified } = await this.source(client, fixed, input.taskId, signal), entry = await this.entry(client, fixed, input.taskId);
+      const { version, verified } = await this.source(client, fixed, input.taskId, signal), entry = await this.entry(client, fixed, input.taskId);
       if (!entry) throw companionNameSafetyUnavailable();
       const rows = await this.history(client, entry, verified, fixed), row = rows.find(item => item.id === input.submissionId);
       if (!row) throw companionNameSafetyUnavailable();
@@ -478,6 +516,17 @@ export class CompanionNameSafety {
       if (row.application_status !== 'pending') {
         await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
         return Object.freeze({ submissionId: row.id, status: row.application_status, rejectedCategory: row.rejected_category, appliedIdentityRevision: row.applied_identity_revision, replayed: true });
+      }
+      // A managed pending application is still the original accepted intent.
+      // A later genuine login may observe/replay saved outcomes, but cannot
+      // replace the session or account version that authorized this write.
+      if (row.first_name_dispatch_id) {
+        const dispatch = await readNameDispatchInTransaction(client, this.storage.crypto, {
+          dispatchId: row.first_name_dispatch_id, taskId: row.task_id, submissionId: row.id,
+        }, signal);
+        if (dispatch.snapshot.originalSessionHash !== fixed.tokenHash || dispatch.snapshot.userId !== fixed.userId
+          || dispatch.snapshot.submittedAuthVersion !== version)
+          throw new ApiError(401, 'AUTH_REQUIRED', 'The original naming authorization has ended.');
       }
       let status: CompanionNameSubmissionRow['application_status'], rejectedCategory: CompanionNameCategory | null = null, identityCapture: unknown = null, identityRevision: number | null = null;
       if (result.decision.level !== 'L0') status = 'not_eligible';
