@@ -1,5 +1,6 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tokenHash, type FixedSessionContext } from '../src/auth.ts';
 import { ApiError } from '../src/errors.ts';
@@ -84,11 +85,12 @@ test('real second account and different main IDs cannot read or adopt another co
 
 test('revoked and expired genuine sessions stop observation; deleted accounts cannot retain source access', async () => {
   await withPrebirthLoopback(async runtime => {
+    const migration=await readFile(new URL('../migrations/059_companion_message_cascade.sql',import.meta.url),'utf8');await fixture.db.query(migration);await fixture.db.query(migration);
     for (const mutation of ['expire', 'revoke', 'delete']) {
       const f = await readyBirth(fixture, runtime), selected = await born(f);
       if (mutation === 'expire') await fixture.db.query("UPDATE platform_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE token_hash=$1", [f.ready.who.tokenHash]);
       else if (mutation === 'revoke') await fixture.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1', [f.ready.who.userId]);
-      else await fixture.db.query('DELETE FROM platform_users WHERE id=$1', [f.ready.who.userId]);
+      else {assert.equal((await fixture.db.query('SELECT id FROM platform_messages WHERE user_id=$1',[f.ready.who.userId])).rowCount,1);await fixture.db.query('DELETE FROM platform_users WHERE id=$1', [f.ready.who.userId]);for(const table of ['platform_messages','platform_conversations','platform_companions','platform_companion_birth_receipts'])assert.equal((await fixture.db.query('SELECT 1 FROM '+table+' WHERE user_id=$1',[f.ready.who.userId])).rowCount,0);}
       await assert.rejects(reader(f).observe(f.ready.who, selected), denied(401));
     }
   });
