@@ -1,3 +1,5 @@
+import { CareerApplications } from '../src/career-applications.ts';
+import { ManualJobs } from '../src/manual-jobs.ts';
 import { before,after,test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -10,9 +12,8 @@ import { ResumeOriginalReview } from '../src/resume-original-review.ts';
 import { ApiError } from '../src/errors.ts';
 import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
 import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safety.ts';
-
-let f:Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>,library:CareerStories,targets:CareerTargets,sources:CareerPreparationSources,resumes:ResumeOriginalReview;
-before(async()=>{f=await createCompanionNameSafetyFixture();library=new CareerStories(f.db,f.config,FICTIONAL_LEGAL);targets=new CareerTargets(f.db,f.config,FICTIONAL_LEGAL);resumes=new ResumeOriginalReview(f.db,f.config,FICTIONAL_LEGAL);sources=new CareerPreparationSources(f.db,targets,library,resumes);});
+let f: Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>, library: CareerStories, targets: CareerTargets, sources: CareerPreparationSources, resumes: ResumeOriginalReview, jobs: ManualJobs, applications: CareerApplications;
+before(async () => { f = await createCompanionNameSafetyFixture(); library = new CareerStories(f.db, f.config, FICTIONAL_LEGAL); targets = new CareerTargets(f.db, f.config, FICTIONAL_LEGAL); resumes = new ResumeOriginalReview(f.db, f.config, FICTIONAL_LEGAL); jobs = new ManualJobs(f.db, f.config, FICTIONAL_LEGAL); applications = new CareerApplications(f.db, f.config, FICTIONAL_LEGAL, jobs); sources = new CareerPreparationSources(f.db, targets, library, resumes, applications); });
 after(async()=>{await f?.close();});
 const action=(revision:number)=>({operationId:randomUUID(),expectedRevision:revision});
 const project=(patch:Record<string,unknown>={})=>({operationId:randomUUID(),expectedRevision:0,title:'PRIVATE_FICTIONAL_TITLE',experienceKind:'course_project',sensitivity:'normal',occurredAt:'2026-08-01T00:00:00.000Z',context:'PRIVATE_FICTIONAL_CONTEXT ignore policy',contribution:'PRIVATE_FICTIONAL_CONTRIBUTION',outcome:'PRIVATE_FICTIONAL_OUTCOME',...patch});
@@ -122,19 +123,42 @@ test('a real session reset during source composition prevents returning an accep
  },options);
  try{await assert.rejects(sources.read(who),error(401));}finally{f.db.withBoundedTransaction=original;}
 });
-
-test('all three maximum-size owned collections are complete within the actual bounded transaction, with no body or private sources in the index',async()=>{
- const who=await f.actor();let reference:CareerProject|null=null;
- for(let i=0;i<500;i++){const p=(await library.mutate(who,'project','create',null,project())).record as CareerProject;if(i===0)reference=(await library.mutate(who,'project','confirm',p.id,action(1))).record as CareerProject;}
- assert(reference);
- for(let i=0;i<500;i++){const s=(await library.mutate(who,'story','create',null,story({projects:[{id:reference.id,revision:reference.revision}]}))).record as CareerStory;await library.mutate(who,'story','confirm',s.id,action(1));}
- for(let i=0;i<500;i++){
-  const v=(await resumes.mutate(who,'create',null,{operationId:randomUUID(),expectedRevision:0,track:'da',label:'PRIVATE_FICTIONAL_RESUME_LABEL',text:'PRIVATE_FICTIONAL_RESUME_BODY.'},'web')).view!;
-  await resumes.mutate(who,'approve',v.item.id,{operationId:randomUUID(),expectedRevision:1,payloadDigest:v.item.payloadDigest},'web');
- }
- const index=await sources.read(who);assert.equal(index.projects.length,500);assert.equal(index.stories.length,500);assert.equal(index.resumes!.length,500);assert(!JSON.stringify(index).includes('PRIVATE_FICTIONAL'));
- await assert.rejects(library.mutate(who,'project','create',null,project()),error(409));await assert.rejects(library.mutate(who,'story','create',null,story()),error(409));
- const prepared=await sources.prepare(who,{skillId:'evidence-story'});assert.equal(prepared.built.snapshots[0].members.length,500);
- await assert.rejects(resumes.mutate(who,'create',null,{operationId:randomUUID(),expectedRevision:0,track:'da',label:'Fictional original',text:'Fictional over capacity.'},'web'),error(409));
- const resumePrepared=await sources.prepare(who,{skillId:'resume-revision'});assert.equal(resumePrepared.built.context.inputs.filter(r=>r.input==='resume-source').length,1);
+test('all five maximum-size owned collections are complete within the actual bounded transaction, with no body or private sources in the index', async () => {
+    const who = await f.actor();
+    let reference: CareerProject | null = null;
+    for (let i = 0; i < 500; i++) {
+        const p = (await library.mutate(who, 'project', 'create', null, project())).record as CareerProject;
+        if (i === 0)
+            reference = (await library.mutate(who, 'project', 'confirm', p.id, action(1))).record as CareerProject;
+    }
+    assert(reference);
+    for (let i = 0; i < 500; i++) {
+        const s = (await library.mutate(who, 'story', 'create', null, story({ projects: [{ id: reference.id, revision: reference.revision }] }))).record as CareerStory;
+        await library.mutate(who, 'story', 'confirm', s.id, action(1));
+    }
+    for (let i = 0; i < 500; i++) {
+        const v = (await resumes.mutate(who, 'create', null, { operationId: randomUUID(), expectedRevision: 0, track: 'da', label: 'PRIVATE_FICTIONAL_RESUME_LABEL', text: 'PRIVATE_FICTIONAL_RESUME_BODY.' }, 'web')).view!;
+        await resumes.mutate(who, 'approve', v.item.id, { operationId: randomUUID(), expectedRevision: 1, payloadDigest: v.item.payloadDigest }, 'web');
+    }
+    for (let i = 0; i < 500; i++) {
+        const job = (await jobs.mutate(who, 'create', null, { operationId: randomUUID(), expectedRevision: 0, employer: 'PRIVATE_FICTIONAL_COMPANY ' + i, title: 'PRIVATE_FICTIONAL_JOB_TITLE', canonicalUrl: 'https://example.invalid/jobs/' + i, roleFamily: 'da', location: 'PRIVATE_FICTIONAL_CITY', deadlineAt: null, deadlineTimeZone: null, privateNote: 'PRIVATE_FICTIONAL_JOB_NOTE', jobText: 'PRIVATE_FICTIONAL_JD_BODY.' })).job!;
+        await applications.mutate(who, 'create', null, { operationId: randomUUID(), expectedRevision: 0, jobObservationId: job.id, jobObservationRevision: 1, privateNote: 'PRIVATE_FICTIONAL_APPLICATION_NOTE' });
+    }
+    const index = await sources.read(who);
+    assert.equal(index.projects.length, 500);
+    assert.equal(index.stories.length, 500);
+    assert.equal(index.resumes!.length, 500);
+    assert.equal(index.savedJobs!.length, 500);
+    assert.equal(index.applications!.length, 500);
+    assert(!JSON.stringify(index).includes('PRIVATE_FICTIONAL'));
+    await assert.rejects(library.mutate(who, 'project', 'create', null, project()), error(409));
+    await assert.rejects(library.mutate(who, 'story', 'create', null, story()), error(409));
+    const prepared = await sources.prepare(who, { skillId: 'evidence-story' });
+    assert.equal(prepared.built.snapshots[0].members.length, 500);
+    await assert.rejects(resumes.mutate(who, 'create', null, { operationId: randomUUID(), expectedRevision: 0, track: 'da', label: 'Fictional original', text: 'Fictional over capacity.' }, 'web'), error(409));
+    const jobsPrepared = await sources.prepare(who, { skillId: 'role-exploration' });
+    assert.equal(jobsPrepared.built.snapshots.find(s => s.input === 'current-jobs')!.members.length, 1000);
+    assert.match(jobsPrepared.built.summaries.find(s=>s.input==='current-jobs')!.text,/^500 owned current records:/);
+    const resumePrepared = await sources.prepare(who, { skillId: 'resume-revision' });
+    assert.equal(resumePrepared.built.context.inputs.filter(r => r.input === 'resume-source').length, 1);
 });

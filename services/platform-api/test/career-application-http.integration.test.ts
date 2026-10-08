@@ -5,7 +5,7 @@ import { PLATFORM_ACCOUNT_HEADER, parseCareerApplication } from '@companion/plat
 import { createProviderRuntime } from '@companion/ai-core';
 import { buildApp } from '../src/app.ts';
 import { readConfig } from '../src/config.ts';
-import { hashPassword } from '../src/auth.ts';
+import { hashPassword, tokenHash } from '../src/auth.ts';
 import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safety.ts';
 import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
 const origin = 'https://fictional-application.example.invalid', prefix = '/api/platform/career/applications', password = 'Fictional-application-password-123';
@@ -60,4 +60,23 @@ test('foreign owners, CSRF, stale account window, unsupported metadata and repea
         assert.equal((await system.app.inject({ url: prefix + query, headers: a.headers })).statusCode, 400);
     assert.equal((await system.app.inject({ url: prefix })).statusCode, 401);
     assert.equal((await system.app.inject({ method: 'POST', url: prefix + '/' + app.id + '/stage', headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 1, stage: 'closed' } })).statusCode, 400);
+});
+test('buildApp composes actual password-login-created application and JD into preparation with that same cookie session', async () => {
+    const a = await actor(), { app } = await make(a), cookieValue = a.headers.cookie.slice(a.headers.cookie.indexOf('=') + 1);
+    const context = { userId: a.id, tokenHash: tokenHash(decodeURIComponent(cookieValue)) };
+    const index = await system.careerPreparationSources.read(context);
+    assert.equal(index.applications!.length, 1);
+    assert.equal(index.savedJobs!.length, 1);
+    assert.equal(index.applications![0].job!.id, app.job.id);
+    assert(!JSON.stringify(index).includes('Fictional application note'));
+    assert(!JSON.stringify(index).includes('Fictional Company'));
+    const prepared = await system.careerPreparationSources.prepare(context, { skillId: 'application-preparation', selection: { targetJobId: app.id } });
+    assert.equal(prepared.built.context.inputs.find(r => r.input === 'target-job')!.id, app.id);
+    assert.deepEqual(prepared.built.sourceDependencies[0].members, [{ id: app.job.id, revision: 1 }]);
+    const closed = await system.app.inject({ method: 'POST', url: prefix + '/' + app.id + '/stage', headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 1, stage: 'closed', closedReason: 'withdrawn' } });
+    assert.equal(closed.statusCode, 200, closed.body);
+    const after = await system.careerPreparationSources.prepare(context, { skillId: 'application-preparation', selection: { targetJobId: app.id } });
+    assert.equal(after.built.context.inputs.some(r => r.input === 'target-job'), false);
+    assert.notEqual(after.sourceIndex.indexId, index.indexId);
+    assert.equal(calls, 0);
 });

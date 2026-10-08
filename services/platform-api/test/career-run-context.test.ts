@@ -6,39 +6,41 @@ import { buildCareerRunContext, careerInputSnapshot, type CareerRunPorts, type O
 const ownerId = 'fictional-owner';
 const record = (id: string, extra: Partial<OwnedCareerInput> = {}): OwnedCareerInput => ({ id, revision: 3, ownerId, state: 'current', normalSummary: `Fictional summary for ${id}.`, ...extra });
 const profile = (confirmed = true): OwnedCareerProfile => ({ ...record('fictional-profile'), confirmed: { degree: confirmed, graduation: confirmed, roleFamily: confirmed } });
-const job = (id: string, extra: Partial<OwnedCareerApplication> = {}): OwnedCareerApplication => ({ ...record(id), stage: 'saved', track: 'fictional-track-a', ...extra });
+const job = (id: string, extra: Partial<OwnedCareerApplication> = {}): OwnedCareerApplication => ({ ...record(id), stage: 'saved', track: 'fictional-track-a', job: { ...record('source-' + id, { ownerId: extra.ownerId ?? ownerId, state: extra.state ?? 'current' }), source: 'manual', track: 'fictional-track-a', observedAt: '2026-10-01T00:00:00.000Z' }, ...extra });
 const toolsFor = (id: CareerSkillId) => Object.fromEntries(careerSkill(id).tools.map(tool => [tool, 'ready'])) as Parameters<typeof buildCareerRunContext>[0]['tools'];
 const build = (skillId: CareerSkillId, ports: CareerRunPorts, extra: Partial<Parameters<typeof buildCareerRunContext>[0]> = {}) => buildCareerRunContext({ ownerId, skillId, ports, tools: toolsFor(skillId), ...extra });
-
 test('missing ports are unavailable and do not mint an initial profile or empty knowledge batch', async () => {
-  const result = await build('role-exploration', {});
-  assert.equal(result.context.profileRevision, 0);
-  assert.deepEqual(result.context.inputs, []);
-  assert.deepEqual(result.unavailableSources, ['listApplications', 'readKnowledgeAccess', 'readProfile']);
-  const prepared = prepareCareerRun('role-exploration', result.context);
-  assert.equal(prepared.state, 'blocked');
-  if (prepared.state === 'blocked') assert.ok(prepared.reasons.includes('missing_input:knowledge'));
+    const result = await build('role-exploration', {});
+    assert.equal(result.context.profileRevision, 0);
+    assert.deepEqual(result.context.inputs, []);
+    assert.deepEqual(result.unavailableSources, ['listApplications', 'listSavedJobs', 'readKnowledgeAccess', 'readProfile']);
+    const prepared = prepareCareerRun('role-exploration', result.context);
+    assert.equal(prepared.state, 'blocked');
+    if (prepared.state === 'blocked')
+        assert.ok(prepared.reasons.includes('missing_input:knowledge'));
 });
 test('owned collections freeze into one deterministic reference with an actual member list', async () => {
-  const rows = [job('fictional-job-a'), job('fictional-job-b'), job('fictional-job-c')];
-  const ports: CareerRunPorts = { readProfile: async scope => { assert.equal(scope.ownerId, ownerId); return profile(); }, listApplications: async () => rows, readKnowledgeAccess: async () => ({ ...record('fictional-knowledge-access'), empty: true }) };
-  const first = await build('role-exploration', ports), second = await build('role-exploration', { ...ports, listApplications: async () => [...rows].reverse() });
-  const jobs = first.context.inputs.filter(ref => ref.input === 'current-jobs');
-  assert.equal(jobs.length, 1);
-  assert.ok(jobs[0]!.id.startsWith('snap_'));
-  assert.equal(jobs[0]!.id, second.context.inputs.find(ref => ref.input === 'current-jobs')!.id);
-  assert.equal(first.snapshots.find(snapshot => snapshot.input === 'current-jobs')!.members.length, 3);
-  assert.equal(first.summaries.find(summary => summary.input === 'knowledge')!.label, '通用');
-  assert.equal(prepareCareerRun('role-exploration', first.context).state, 'ready_for_draft');
+    const rows = [job('fictional-job-a'), job('fictional-job-b'), job('fictional-job-c')];
+    const ports: CareerRunPorts = { readProfile: async (scope) => { assert.equal(scope.ownerId, ownerId); return profile(); }, listApplications: async () => rows, listSavedJobs: async () => rows.map(r => r.job!), readKnowledgeAccess: async () => ({ ...record('fictional-knowledge-access'), empty: true }) };
+    const first = await build('role-exploration', ports), second = await build('role-exploration', { ...ports, listApplications: async () => [...rows].reverse() });
+    const jobs = first.context.inputs.filter(ref => ref.input === 'current-jobs');
+    assert.equal(jobs.length, 1);
+    assert.ok(jobs[0]!.id.startsWith('snap_'));
+    assert.equal(jobs[0]!.id, second.context.inputs.find(ref => ref.input === 'current-jobs')!.id);
+    assert.equal(first.snapshots.find(snapshot => snapshot.input === 'current-jobs')!.members.length, 6);
+  assert.match(first.summaries.find(summary=>summary.input==='current-jobs')!.text,/^3 owned current records:/);
+    assert.equal(first.summaries.find(summary => summary.input === 'knowledge')!.label, '通用');
+    assert.equal(prepareCareerRun('role-exploration', first.context).state, 'ready_for_draft');
 });
 test('foreign, stale, closed and malformed stages cannot satisfy the three-job threshold', async () => {
-  const badRows = [job('fictional-job-a'), job('fictional-job-b'), job('foreign-job', { ownerId: 'another-owner' }), job('closed-job', { stage: 'closed' }), job('stale-job', { state: 'stale' }), job('bad-stage', { stage: 'rejected' as any })];
-  const result = await build('role-exploration', { readProfile: async () => profile(), listApplications: async () => badRows, readKnowledgeAccess: async () => ({ ...record('fictional-knowledge'), empty: false }) });
-  assert.equal(result.context.inputs.some(ref => ref.input === 'current-jobs'), false);
-  const prepared = prepareCareerRun('role-exploration', result.context);
-  assert.equal(prepared.state, 'blocked');
-  if (prepared.state === 'blocked') assert.ok(prepared.reasons.includes('missing_input:current-jobs'));
-  assert.equal(careerInputSnapshot(ownerId, 'current-jobs', [record('duplicate'), record('duplicate')]), undefined);
+    const badRows = [job('fictional-job-a'), job('fictional-job-b'), job('foreign-job', { ownerId: 'another-owner' }), job('closed-job', { stage: 'closed' }), job('stale-job', { state: 'stale' }), job('bad-stage', { stage: 'rejected' as any })];
+    const result = await build('role-exploration', { readProfile: async () => profile(), listApplications: async () => badRows, listSavedJobs: async () => badRows.map(r => r.job!), readKnowledgeAccess: async () => ({ ...record('fictional-knowledge'), empty: false }) });
+    assert.equal(result.context.inputs.some(ref => ref.input === 'current-jobs'), false);
+    const prepared = prepareCareerRun('role-exploration', result.context);
+    assert.equal(prepared.state, 'blocked');
+    if (prepared.state === 'blocked')
+        assert.ok(prepared.reasons.includes('missing_input:current-jobs'));
+    assert.equal(careerInputSnapshot(ownerId, 'current-jobs', [record('duplicate'), record('duplicate')]), undefined);
 });
 test('confirmed profile requires the three real confirmations, and reviewed resume matches the selected track', async () => {
   const ports: CareerRunPorts = { readProfile: async () => profile(false), listApplications: async () => [job('fictional-job')], listResumeVersions: async () => [
@@ -97,4 +99,32 @@ test('reviewed resume selects the latest actual approval within the selected job
  const result=await build('application-preparation',ports,{selection:{targetJobId:'job-a'}});assert.equal(result.context.inputs.find(r=>r.input==='reviewed-resume')!.id,'latest-a');
  const explicit=await build('application-preparation',ports,{selection:{targetJobId:'job-a',resumeId:'older-a'}});assert.equal(explicit.context.inputs.find(r=>r.input==='reviewed-resume')!.id,'older-a');
  const wrong=await build('application-preparation',ports,{selection:{targetJobId:'job-a',resumeId:'latest-b'}});assert.equal(wrong.context.inputs.some(r=>r.input==='reviewed-resume'),false);
+});
+test('separate saved jobs can meet the threshold without inventing applications, while an absent application port cannot prove the whole collection', async () => {
+    const rows = ['a', 'b', 'c'].map(id => job(id).job!);
+    const ready = await build('role-exploration', { listApplications: async () => [], listSavedJobs: async () => rows });
+    assert.equal(ready.context.inputs.filter(r => r.input === 'current-jobs').length, 1);
+    assert.equal(ready.snapshots[0].members.length, 3);
+    const absent = await build('role-exploration', { listSavedJobs: async () => rows });
+    assert.equal(absent.context.inputs.some(r => r.input === 'current-jobs'), false);
+    assert(absent.unavailableSources.includes('listApplications'));
+});
+test('duplicate JD bindings, invalid observation time and removed sources never become a ready target or double-count sample', async () => {
+    const a = job('a'), b = job('b'), c = job('c'), rows = [a.job!, b.job!, c.job!];
+    const duplicate = { ...a, id: 'duplicate-application' };
+    const invalid = await build('role-exploration', { listApplications: async () => [a, b, c, duplicate], listSavedJobs: async () => rows });
+    assert.equal(invalid.context.inputs.some(r => r.input === 'current-jobs'), false);
+    const bad = await build('role-exploration', { listApplications: async () => [], listSavedJobs: async () => [...rows.slice(0, 2), { ...rows[2], observedAt: 'invented' }] });
+    assert.equal(bad.context.inputs.some(r => r.input === 'current-jobs'), false);
+    const removed = await build('application-preparation', { listApplications: async () => [{ ...a, job: null }] }, { selection: { targetJobId: a.id } });
+    assert.equal(removed.context.inputs.some(r => r.input === 'target-job'), false);
+    assert.deepEqual(removed.sourceDependencies, []);
+});
+test('application and JD revisions both participate in frozen collection coordinates, independently of list order', async () => {
+    const rows = ['a', 'b', 'c'].map(id => job(id));
+    const ports: CareerRunPorts = { listApplications: async () => rows, listSavedJobs: async () => rows.map(r => r.job!) };
+    const first = await build('role-exploration', ports), changed = await build('role-exploration', { ...ports, listApplications: async () => [{ ...rows[0], revision: 4 }, ...rows.slice(1)] });
+    assert.notEqual(first.snapshots[0].id, changed.snapshots[0].id);
+    const selected = await build('application-preparation', ports, { selection: { targetJobId: 'a' } });
+    assert.deepEqual(selected.sourceDependencies, [{ input: 'target-job', referenceId: 'a', members: [{ id: 'source-a', revision: 3 }] }]);
 });
