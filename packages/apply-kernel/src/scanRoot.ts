@@ -116,7 +116,7 @@ export function isAssistiveHiddenControl(element: Element): boolean {
 }
 
 function isIdentityCountedControl(element: Element): boolean {
-  return isScannableControl(element) && !isAssistiveHiddenControl(element);
+  return isScannableControl(element) && !isSiteDeclaredNonInput(element);
 }
 
 /**
@@ -1393,10 +1393,12 @@ export function createScanRoot(
     const grouped = new Set(idGroups.flatMap((group) => group.controls));
     return {
       scopeKey: '',
-      controls: deep(container, CONTROL_SELECTOR)
-        .filter(isIdentityCountedControl)
-        .filter((control) => !grouped.has(control))
-        .filter((control) => !rowElements.some((rowElement) => rowElement.contains(control))),
+      // Read the current controls every time; avoid intermediate arrays while
+      // applying the same membership checks to that live query result.
+      controls: deep(container, CONTROL_SELECTOR).filter((control) =>
+        isIdentityCountedControl(control) &&
+        !grouped.has(control) &&
+        !rowElements.some((rowElement) => rowElement.contains(control))),
       proxyOptions: () => deep(container, ARIA_PROXY_OPTION_SELECTOR)
         .filter(isProxyOptionNode)
         .filter((proxy) => !rowElements.some((rowElement) => rowElement.contains(proxy))),
@@ -1428,9 +1430,14 @@ export function createScanRoot(
         // 诱饵 label（tests/apply-greenhouse-adapter「不向全局逃逸」锁死）。
         const ownRoot = element.getRootNode() as Partial<ShadowRoot> & ParentNode;
         const labelScope: ParentNode = ownRoot.host ? ownRoot : container;
-        const explicit = [...labelScope.querySelectorAll('label')].find(
-          (label) => label.getAttribute('for') === id,
-        );
+        // Preserve the first matching label in current tree order, without
+        // copying the complete label list for each field and identity recheck.
+        let explicit: Element | null = null;
+        for (const label of labelScope.querySelectorAll('label')) {
+          if (label.getAttribute('for') !== id) continue;
+          explicit = label;
+          break;
+        }
         const explicitTexts = labelTextsOfElement(explicit ?? null, readVisibility);
         if (explicitTexts.text) return found(explicitTexts);
       }
