@@ -1,3 +1,4 @@
+import { MentorIntents } from './mentor-intents.ts';
 import { MentorServiceOffers } from './mentor-service-offers.ts';
 import { parseOrgKnowledgeReference } from '@companion/platform-contracts';
 import { careerRecordId } from '@companion/platform-contracts';
@@ -134,6 +135,7 @@ export async function buildApp(options:AppOptions={}) {
   const knowledge=new KnowledgeSources(db);
   const orgKnowledge=new OrgKnowledge(db,config,bundle,storage,staff);
   const mentorServiceOffers=new MentorServiceOffers(db,config,bundle,storage,staff);
+  const mentorIntents=new MentorIntents(db,config,bundle,mentorServiceOffers,staff);
   const audioTranscriptions=new AudioTranscriptions(db,storage,runtime);
   const goalPlans=new GoalPlans(db,jobs,runtime);
   const goalPlanProposals=new GoalPlanProposals(db,goalPlans);
@@ -660,7 +662,7 @@ export async function buildApp(options:AppOptions={}) {
         coordinates.revision, coordinates.passageId, signal) };
     });
   });
-  app.get(prefix + '/career/mentor-services/:orgId', limitedAccount, (request, reply) => applicationRead(request, reply, async signal => {
+  app.get(prefix + '/career/mentor-services/:orgId', secure, (request, reply) => applicationRead(request, reply, async signal => {
     let orgId: string;
     try {
       careerRecordObject(careerHttpQuery(request.query), []);
@@ -668,6 +670,33 @@ export async function buildApp(options:AppOptions={}) {
     } catch { throw new ApiError(400, 'SERVICE_OFFER_INPUT_INVALID', '请使用支持的服务查询。'); }
     return { offers: await mentorServiceOffers.list(fixedRequestSession(request,userId(request)),orgId,signal) };
   }));
+  const mentorIntentRoot=prefix+'/career/mentor-intents';
+  function mentorIntentQuery(request:FastifyRequest) {
+    try { careerRecordObject(careerHttpQuery(request.query),[]); }
+    catch { throw new ApiError(400,'MENTOR_INTENT_INPUT_INVALID','请使用支持的意向查询。'); }
+  }
+  app.get(mentorIntentRoot+'/entry',secure,(request,reply)=>{
+    mentorIntentQuery(request);return applicationRead(request,reply,signal=>mentorIntents.entry(fixedRequestSession(request,userId(request)),signal));
+  });
+  app.get(mentorIntentRoot,secure,(request,reply)=>applicationRead(request,reply,
+    signal=>mentorIntents.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),signal)));
+  app.get(mentorIntentRoot+'/operations/:id',secure,(request,reply)=>{
+    mentorIntentQuery(request);return applicationRead(request,reply,signal=>mentorIntents.observe(fixedRequestSession(request,userId(request)),params(request),signal));
+  });
+  app.get(mentorIntentRoot+'/:id',secure,(request,reply)=>{
+    mentorIntentQuery(request);return applicationRead(request,reply,async signal=>({session:await mentorIntents.get(fixedRequestSession(request,userId(request)),params(request),signal)}));
+  });
+  app.post(mentorIntentRoot,secure,(request,reply)=>{
+    mentorIntentQuery(request);return applicationRead(request,reply,async signal=>{
+      const result=await mentorIntents.create(fixedRequestSession(request,userId(request)),request.body,signal);
+      reply.code(result.operation.replayed?200:201);return result;
+    });
+  });
+  app.post(mentorIntentRoot+'/:id/cancel',secure,(request,reply)=>{
+    mentorIntentQuery(request);return applicationRead(request,reply,signal=>mentorIntents.cancel(fixedRequestSession(request,userId(request)),params(request),request.body,signal));
+  });
+  app.get(prefix+'/staff/orgs/:id/mentor-intents',secure,(request,reply)=>applicationRead(request,reply,
+    signal=>mentorIntents.opsList(fixedRequestSession(request,userId(request)),params(request),careerHttpQuery(request.query),signal)));
   const applicationRoot = prefix + '/career/applications';
   function applicationQuery(request: FastifyRequest) {
     try { careerRecordObject(careerHttpQuery(request.query), []); }

@@ -322,3 +322,5 @@ export * from './career-interviews.ts';
 export * from './org-knowledge.ts';
 
 export * from './mentor-service-offers.ts';
+
+export * from './mentor-intents.ts';

@@ -19,6 +19,7 @@ export interface PlatformConfig {
   requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyResponseBundlePath?: string; safetyDeliveryReviewPath?: string; companionIdentityBundlePath?: string; companionIdentityReviewPath?: string; safetyDailyModelCallLimit: number;
   dataCrypto?: DataCrypto;
   orgContentBrand?: string;
+  mentorOrganizationId?: string;
   companionSealGlyphs?: Readonly<CompanionSealGlyphConfiguration>;
   workbenchEnabled: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
@@ -170,6 +171,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   if (env.PLATFORM_WEB_STATIC_DIR !== undefined && !env.PLATFORM_WEB_STATIC_DIR.trim()) throw new Error('PLATFORM_WEB_STATIC_DIR must name the built web directory');
   return {
     databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
+    mentorOrganizationId: env.PLATFORM_MENTOR_ORG_ID === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_ORG_ID),
     orgContentBrand: orgKnowledgeBrand(env.PLATFORM_ORG_CONTENT_BRAND ?? '蔓藤'),
     storageDir: path.resolve(workspaceRoot,env.PLATFORM_STORAGE_DIR ?? '.local/platform/blobs'),
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
@@ -179,4 +181,9 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     modelRoutes: configuredModelRoutes, exposeProviderDetails, dataCrypto, companionSealGlyphs,
     queueName, s3, mcp: readMcpConfig(env),
   };
+}
+
+function mentorOrganizationId(value:string):string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)) throw Error('Invalid mentor organization configuration.');
+  return value;
 }

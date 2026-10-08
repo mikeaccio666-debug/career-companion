@@ -45,7 +45,9 @@ async function setup(){
 }
 test('migration is repeatable and seeds no real prices, slots, free diagnoses or orders',async()=>{
   await f.db.migrate();assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_service_offers')).rows[0].n,0);
-  assert.equal((await f.db.query("SELECT to_regclass('platform_mentor_orders') AS orders,to_regclass('platform_mentor_sessions') AS sessions")).rows[0].orders,null);
+  const orders=(await f.db.query("SELECT to_regclass('platform_mentor_orders') AS orders")).rows[0].orders;
+  if(orders)assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_mentor_orders')).rows[0].n,0);
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_mentor_sessions')).rows[0].n,0);
   const s=await setup();assert.deepEqual(await service.list(s.owner,s.org),[]);
 });
 test('actual operator configuration, revision changes and replay produce uniform student information without internal review coordinates',async()=>{
