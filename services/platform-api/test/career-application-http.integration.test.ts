@@ -1,0 +1,63 @@
+import { before, after, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { PLATFORM_ACCOUNT_HEADER, parseCareerApplication } from '@companion/platform-contracts';
+import { createProviderRuntime } from '@companion/ai-core';
+import { buildApp } from '../src/app.ts';
+import { readConfig } from '../src/config.ts';
+import { hashPassword } from '../src/auth.ts';
+import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safety.ts';
+import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
+const origin = 'https://fictional-application.example.invalid', prefix = '/api/platform/career/applications', password = 'Fictional-application-password-123';
+let f: Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>, system: Awaited<ReturnType<typeof buildApp>>, calls = 0;
+before(async () => { f = await createCompanionNameSafetyFixture(); system = await buildApp({ db: f.db, legalBundle: FICTIONAL_LEGAL, config: { ...readConfig(), dataCrypto: f.crypto, requireVerifiedEmail: true, allowedOrigins: new Set([origin]) }, enableQueue: false, runtime: createProviderRuntime({ env: { PLATFORM_ALLOW_PROVIDER_CALLS: '0' }, fetch: async () => { calls++; throw Error('No external request is allowed'); } }) }); });
+after(async () => { await system?.app.close(); assert.equal(calls, 0); await f?.close(); });
+async function actor() { const who = await f.actor(); await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1', [who.userId, await hashPassword(password)]); const r = await system.app.inject({ method: 'POST', url: '/api/platform/auth/login', headers: { origin }, payload: { email: who.userId + '@example.invalid', password } }); assert.equal(r.statusCode, 200); const raw = r.headers['set-cookie'], cookie = (Array.isArray(raw) ? raw[0] : raw)!.split(';')[0]; return { id: who.userId, headers: { origin, cookie, [PLATFORM_ACCOUNT_HEADER]: who.userId } }; }
+async function make(a: Awaited<ReturnType<typeof actor>>) {
+    const r = await system.app.inject({ method: 'POST', url: '/api/platform/career/job-observations', headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 0, employer: 'Fictional Company', title: 'Fictional Analyst', canonicalUrl: 'https://example.invalid/jobs/' + randomUUID(), roleFamily: 'da', location: '', deadlineAt: null, deadlineTimeZone: null, privateNote: 'Fictional source note', jobText: 'Fictional position.' } });
+    assert.equal(r.statusCode, 201, r.body);
+    const payload = { operationId: randomUUID(), expectedRevision: 0, jobObservationId: r.json().job.id, jobObservationRevision: 1, privateNote: 'Fictional application note' }, created = await system.app.inject({ method: 'POST', url: prefix, headers: a.headers, payload });
+    assert.equal(created.statusCode, 201, created.body);
+    return { payload, app: parseCareerApplication(created.json().application) };
+}
+test('real login routes save, stage, observe, edit, append history and delete without provider requests', async () => {
+    const a = await actor(), { payload, app } = await make(a);
+    const read = await system.app.inject({ url: prefix + '/' + app.id, headers: a.headers });
+    assert.equal(read.statusCode, 200);
+    assert.equal(read.headers['cache-control'], 'private, no-store');
+    const update = { operationId: randomUUID(), expectedRevision: 1, stage: 'applied' };
+    const staged = await system.app.inject({ method: 'POST', url: prefix + '/' + app.id + '/stage', headers: a.headers, payload: update });
+    assert.equal(staged.statusCode, 200, staged.body);
+    assert.equal(staged.json().application.submittedVia, 'user_sends');
+    const observed = await system.app.inject({ url: prefix + '/operations/' + payload.operationId, headers: a.headers });
+    assert.equal(observed.json().application.revision, 2);
+    assert.equal(observed.json().operation.replayed, true);
+    const list = await system.app.inject({ url: prefix + '?stage=applied', headers: a.headers });
+    assert.equal(list.json().applications.length, 1);
+    assert(!('privateNote' in list.json().applications[0]));
+    const edited = await system.app.inject({ method: 'PATCH', url: prefix + '/' + app.id, headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 2, privateNote: 'Fictional updated' } });
+    assert.equal(edited.statusCode, 200, edited.body);
+    const history = await system.app.inject({ url: prefix + '/' + app.id + '/events', headers: a.headers });
+    assert.deepEqual(history.json().events.map((e: any) => e.action), ['create', 'stage', 'edit']);
+    const removed = await system.app.inject({ method: 'DELETE', url: prefix + '/' + app.id, headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 3 } });
+    assert.equal(removed.statusCode, 200, removed.body);
+    assert.equal(removed.json().application, null);
+    assert.equal((await system.app.inject({ url: prefix + '/operations/' + payload.operationId, headers: a.headers })).json().application, null);
+    assert.equal((await system.app.inject({ method: 'POST', url: prefix, headers: a.headers, payload })).statusCode, 200);
+    assert.equal(calls, 0);
+});
+test('foreign owners, CSRF, stale account window, unsupported metadata and repeated queries are rejected by HTTP', async () => {
+    const a = await actor(), b = await actor(), { app, payload } = await make(a);
+    for (const path of ['/' + app.id, '/' + app.id + '/events', '/operations/' + payload.operationId])
+        assert.equal((await system.app.inject({ url: prefix + path, headers: b.headers })).statusCode, 404);
+    for (const method of ['PATCH', 'DELETE'] as const)
+        assert.equal((await system.app.inject({ method, url: prefix + '/' + app.id, headers: b.headers, payload: { operationId: randomUUID(), expectedRevision: 1, ...(method === 'PATCH' ? { privateNote: '' } : {}) } })).statusCode, 404);
+    assert.equal((await system.app.inject({ url: prefix, headers: { ...b.headers, [PLATFORM_ACCOUNT_HEADER]: a.id } })).statusCode, 409);
+    assert.equal((await system.app.inject({ method: 'POST', url: prefix, headers: { ...a.headers, origin: 'https://evil.invalid' }, payload })).statusCode, 403);
+    for (const extra of [{ ownerId: b.id }, { source: 'extension' }, { packetId: randomUUID() }, { submittedVia: 'extension' }, { actor: 'receipt' }, { careWindow: { kind: 'post_rejection' } }])
+        assert.equal((await system.app.inject({ method: 'POST', url: prefix, headers: a.headers, payload: { ...payload, operationId: randomUUID(), ...extra } })).statusCode, 400);
+    for (const query of ['?ownerId=' + b.id, '?stage=saved&stage=closed', '?stage=unknown', '?after=invalid'])
+        assert.equal((await system.app.inject({ url: prefix + query, headers: a.headers })).statusCode, 400);
+    assert.equal((await system.app.inject({ url: prefix })).statusCode, 401);
+    assert.equal((await system.app.inject({ method: 'POST', url: prefix + '/' + app.id + '/stage', headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 1, stage: 'closed' } })).statusCode, 400);
+});
