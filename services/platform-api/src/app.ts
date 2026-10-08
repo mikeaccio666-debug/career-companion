@@ -1,3 +1,4 @@
+import { CompanionContextSources } from './companion-context-source.ts';
 import { CompanionWelcomeService } from './companion-welcome.ts';
 import { ConversationTurns, mapMessage } from './conversation-turns.ts';
 import { SseTurnSink } from './turn-sinks.ts';
@@ -96,6 +97,7 @@ export async function buildApp(options:AppOptions={}) {
   const birth=new CompanionBirthService(db,config,bundle,studentOnboarding.prebirth,studentOnboarding.names,
     companion.generation,studentOnboarding.identities,new CompanionBirthOriginStore(config.dataCrypto),birthGlyphs);
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
+  const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
@@ -698,5 +700,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

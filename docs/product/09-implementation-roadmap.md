@@ -246,7 +246,7 @@ P0 不做 `read_job_posting`。B2 的公开链接读取走第 3D 步的第一方
 
 ### 3B 共享记忆（`019_memories_v2.sql`）
 
-`platform_memories` 按 02 §7.2、03 §8.2 加列（`confidence`、`revision`、`valid_until`、`content_fingerprint`、`review_due_at` 等），旧数据回填为 `goal_preference / user_saved / confirmed / normal`；新表 `platform_memory_events`、`platform_memory_uses`。接口按 03 §8.6（`PATCH /memories/:id` 带 `expectedRevision`、`confirm`、`dismiss`、`GET /memories/:id/uses`）。注入改为上下文组装按 03 §8.5 挑选，`read_saved_memories` 由注入和 `search_memories` 取代；删除记忆时按 03 §8.8 把原消息标 `excluded_from_context`。埋点 `memory_proposed`、`memory_decided`、`memory_edited`、`memory_deleted`。
+`platform_memories` 按 02 §7.2、03 §8.2 加列（`confidence`、`revision`、`valid_until`、`content_fingerprint`、`review_due_at` 等），旧数据先保留为本人可查看的待复核内容，不自动回填 `category`、`sensitivity` 或 `confirmed`，也不进入任何发言者的注入或 `search_memories`。本人检查内容、选择类别与敏感度并明确确认后，才按真实确认记录纳入共享记忆（产品负责人 2026-10-08 决定）；新表 `platform_memory_events`、`platform_memory_uses`。接口按 03 §8.6（`PATCH /memories/:id` 带 `expectedRevision`、`confirm`、`dismiss`、`GET /memories/:id/uses`）。注入改为上下文组装按 03 §8.5 挑选，`read_saved_memories` 由注入和 `search_memories` 取代；删除记忆时按 03 §8.8 把原消息标 `excluded_from_context`。埋点 `memory_proposed`、`memory_decided`、`memory_edited`、`memory_deleted`。
 
 ### 3C 组织库最小切片（`021_org_knowledge.sql`）
 

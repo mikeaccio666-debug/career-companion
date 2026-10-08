@@ -225,6 +225,26 @@ export class CompanionBirthOriginStore implements BirthOriginStore {
     return sealed.snapshot.receipt;
   }
 
+  /** Internal source projection, not a new birth/admission grant or public HTTP response.
+   * Only the immutable origin supplies identity and generation coordinates.
+   * A future rename/relationship revision requires its own authenticated source. */
+  async readActiveContextOrigin(client: PoolClient, ownerId: string): Promise<null | Readonly<{
+    snapshot: Readonly<CompanionBirthOriginSnapshot>; originalRelationship: 'acquainting' | null;
+  }>> {
+    try {
+      const current = await this.readCurrent(client, ownerId);
+      if (current.kind !== 'active') return null;
+      const companion = current.companion;
+      const row = await one(client, 'SELECT * FROM platform_companion_birth_receipts WHERE companion_id=$1 AND user_id=$2 FOR SHARE', [companion.companionId, ownerId]);
+      const original = await this.decode(client, ownerId, row), receipt = original.receipt;
+      if (receipt.identity.companionId !== companion.companionId || receipt.main.id !== companion.main.id
+        || receipt.bornAt !== companion.bornAt || receipt.identity.name !== companion.identity.name || companion.currentRevision !== 1) throw unavailable();
+      const projection = await one(client, 'SELECT * FROM platform_companions WHERE id=$1 AND user_id=$2 FOR SHARE', [companion.companionId, ownerId]);
+      const originalRelationship = projection.relationship_stage === 'acquainting' && timestamp(projection.stage_changed_at) === receipt.bornAt ? 'acquainting' as const : null;
+      return Object.freeze({ snapshot: original, originalRelationship });
+    } catch { throw unavailable(); }
+  }
+
   async readCurrent(client: PoolClient, ownerId: string): Promise<CompanionBirthViewerState> {
     try {
       birthUUID(ownerId);
