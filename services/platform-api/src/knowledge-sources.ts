@@ -1,3 +1,4 @@
+import { knowledgeHanBigrams, knowledgeHanSearch } from './knowledge-tokenization.ts';
 import { randomUUID } from 'node:crypto';
 import {
   KNOWLEDGE_PASSAGE_MAX_CHARACTERS, KNOWLEDGE_RESULT_MAX_BYTES, KNOWLEDGE_SEARCH_MAX_RESULTS, KNOWLEDGE_SOURCE_LIMIT, KNOWLEDGE_SOURCE_MAX_BYTES,
@@ -116,7 +117,7 @@ export class KnowledgeSources {
       if (count.rows[0].count >= KNOWLEDGE_SOURCE_LIMIT) throw new ApiError(409, 'KNOWLEDGE_SOURCE_LIMIT', 'At most 200 active private knowledge sources are supported. Remove one before adding another.');
       const result = await client.query('INSERT INTO platform_knowledge_sources(id,user_id,title,content,source_label,source_url,revision,passage_count,byte_size) VALUES($1,$2,$3,$4,$5,$6,1,$7,$8) RETURNING *',
         [id, ownerId, input.title, input.content, input.sourceLabel ?? null, input.sourceUrl ?? null, parts.length, Buffer.byteLength(input.content)]);
-      for (const part of parts) await client.query('INSERT INTO platform_knowledge_passages(source_id,revision,passage_id,passage_index,content) VALUES($1,1,$2,$3,$4)', [id, part.passageId, part.passageIndex, part.text]);
+      for (const part of parts) await client.query("INSERT INTO platform_knowledge_passages(source_id,revision,passage_id,passage_index,content,han_search_vector) VALUES($1,1,$2,$3,$4,to_tsvector('simple',$5))", [id, part.passageId, part.passageIndex, part.text, knowledgeHanBigrams(part.text).join(' ')]);
       return { ...summary(result.rows[0]), content: input.content };
     });
   }
@@ -132,7 +133,7 @@ export class KnowledgeSources {
       const result = await client.query('UPDATE platform_knowledge_sources SET title=$3,content=$4,source_label=$5,source_url=$6,revision=$7,passage_count=$8,byte_size=$9,updated_at=clock_timestamp() WHERE id=$1 AND user_id=$2 AND revision=$10 RETURNING *',
         [key, ownerId, input.title, input.content, input.sourceLabel ?? null, input.sourceUrl ?? null, next, parts.length, Buffer.byteLength(input.content), expected]);
       if (!result.rowCount) throw stale();
-      for (const part of parts) await client.query('INSERT INTO platform_knowledge_passages(source_id,revision,passage_id,passage_index,content) VALUES($1,$2,$3,$4,$5)', [key, next, part.passageId, part.passageIndex, part.text]);
+      for (const part of parts) await client.query("INSERT INTO platform_knowledge_passages(source_id,revision,passage_id,passage_index,content,han_search_vector) VALUES($1,$2,$3,$4,$5,to_tsvector('simple',$6))", [key, next, part.passageId, part.passageIndex, part.text, knowledgeHanBigrams(part.text).join(' ')]);
       return { ...summary(result.rows[0]), content: input.content };
     });
   }
@@ -151,18 +152,27 @@ export class KnowledgeSources {
   async search(ownerId: string, value: unknown, signal?: AbortSignal): Promise<KnowledgeSearchResult> {
     const input = parseKnowledgeSearchInput(value); aborted(signal);
     const queryTerms = input.query.split(/\s+/u);
-    // Keep Chinese phrases literal. Longer queries use one complete phrase instead of dropping later words.
+    // Literal fallback preserves complete long/Chinese queries and escapes wildcard syntax.
     const terms = /\p{Script=Han}/u.test(input.query) || queryTerms.length > 8 ? [input.query] : queryTerms;
     const patterns = terms.map(term => `%${term.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
     const fullText = queryTerms.every(term => /^[\p{L}\p{N}\p{M}-]+$/u.test(term));
+    const han = knowledgeHanSearch(input.query);
+    const requiredPatterns = han.requiredLiteral.map(term => `%${term.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
     const found = await this.db.query(`WITH owned AS MATERIALIZED (
       SELECT id,title,source_label,source_url,revision,updated_at FROM platform_knowledge_sources WHERE user_id=$1 AND deleted_at IS NULL AND ($2::uuid[] IS NULL OR id=ANY($2::uuid[]))
-    ), query AS (SELECT plainto_tsquery('simple',$3) AS value)
+    ), query AS (SELECT plainto_tsquery('simple',$3) AS value,
+      CASE WHEN $7::text<>'' THEN to_tsquery('simple',$7) ELSE NULL::tsquery END AS han_value,
+      plainto_tsquery('simple',$8) AS latin_value)
     SELECT s.id AS source_id,s.title,s.source_label,s.source_url,s.updated_at,p.revision,p.passage_id,p.passage_index,p.content AS passage_text,
-      CASE WHEN $4::boolean THEN ts_rank_cd(p.search_vector,q.value) ELSE 0 END AS rank
+      CASE WHEN $7::text<>'' THEN ts_rank_cd(p.han_search_vector,q.han_value)+ts_rank_cd(p.search_vector,q.latin_value)
+        WHEN $4::boolean THEN ts_rank_cd(p.search_vector,q.value) ELSE 0 END AS rank
     FROM owned s JOIN platform_knowledge_passages p ON p.source_id=s.id AND p.revision=s.revision CROSS JOIN query q
-    WHERE ($4::boolean AND p.search_vector @@ q.value) OR NOT EXISTS (SELECT 1 FROM unnest($5::text[]) AS term(pattern) WHERE p.content NOT ILIKE term.pattern ESCAPE '\\')
-    ORDER BY rank DESC,s.updated_at DESC,s.id,p.passage_index LIMIT $6`, [ownerId, input.sourceIds ?? null, input.query, fullText, patterns, input.limit]);
+    WHERE ($7::text<>'' AND p.han_search_vector @@ q.han_value AND
+      NOT EXISTS (SELECT 1 FROM unnest($9::text[]) AS required(pattern) WHERE p.content NOT ILIKE required.pattern ESCAPE '\\'))
+      OR ($7::text='' AND $4::boolean AND p.search_vector @@ q.value)
+      OR NOT EXISTS (SELECT 1 FROM unnest($5::text[]) AS term(pattern) WHERE p.content NOT ILIKE term.pattern ESCAPE '\\')
+    ORDER BY rank DESC,s.updated_at DESC,s.id,p.passage_index LIMIT $6`,
+      [ownerId, input.sourceIds ?? null, input.query, fullText, patterns, input.limit, han.tsquery, han.latin, requiredPatterns]);
     aborted(signal);
     const result: KnowledgeSearchResult = { query: input.query, method: 'lexical', matches: [] };
     for (const row of found.rows) {
