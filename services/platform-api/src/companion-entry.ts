@@ -5,12 +5,18 @@ import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import { BackgroundGeneration, type CompanionGenerationTaskStatus } from './background-generation.ts';
 import { CompanionDraftPreparation } from './companion-draft-preparation.ts';
 import type { PlatformConfig } from './config.ts';
-import type { Database } from './database.ts';
+import { DatabaseOperationTimeout, type Database } from './database.ts';
+import { DatabaseError } from 'pg';
 import { ApiError } from './errors.ts';
 import type { LegalBundle } from './legal-documents.ts';
 import { resolveModelRoute } from './model-routing.ts';
 import { OnboardingStorage, intakeUnavailable } from './onboarding-storage.ts';
 
+/** Delivery may be tried again only after this initial verification failed.
+ * It is not a claim, a replacement session, or proof of a model outcome. */
+export class CompanionNotificationReadUnavailable extends Error {
+  constructor(){super('Companion notification source verification must be tried again.');this.name='CompanionNotificationReadUnavailable';}
+}
 export interface CompanionNotification { readonly requestId: string; readonly taskId: string; }
 interface RequestRow {
   id: string; user_id: string; task_id: string; companion_id: string;
@@ -210,6 +216,12 @@ export class CompanionEntry {
       if (status.source.sourceDraftId !== snapshot.sourceDraftId || status.source.sourceRevision !== snapshot.sourceRevision
         || status.companionId !== snapshot.companionId || status.generation > 1) throw intakeUnavailable();
       return { fixed, status };
+    }).catch(error=>{
+      // This transaction only reads/locks source and status. This invocation
+      // has not entered generate/recover or admitted any provider request.
+      // Retry only the delivery; durable core state decides what may execute.
+      if(error instanceof DatabaseOperationTimeout||error instanceof DatabaseError&&error.code==='57014')throw new CompanionNotificationReadUnavailable();
+      throw error;
     });
     if (accepted.status.status === 'pending') await this.generation.generate(accepted.fixed, { taskId: notification.taskId }, signal);
     else if (accepted.status.status !== 'completed') await this.generation.recover(accepted.fixed,

@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { Job } from 'bullmq';
+import type { PoolClient } from 'pg';
 import { createProviderRuntime } from '@companion/ai-core';
 import { COMPANION_INK_TOKENS, PLATFORM_ACCOUNT_HEADER, type PlatformProviderRuntime } from '@companion/platform-contracts';
 import { buildApp } from '../src/app.ts';
@@ -147,7 +148,13 @@ async function fixture(run: (fixture: Fixture) => Promise<void>, handler: Handle
       async worker() { const worker = createCompanionGenerationWorker(current.companion); workers.push(worker); await worker.waitUntilReady(); },
       async done(id) {
         let job: Job | undefined;
-        await until(async () => { job = await notifications.queue.getJob(id); return !!job && ['completed', 'failed'].includes(await job.getState()); }, 'actual worker terminal notification');
+        await until(async () => {
+          job = await notifications.queue.getJob(id);
+          // getState is a later Redis read. It may see failed/completed while
+          // this Job object still contains pre-completion fields. Require the
+          // actual terminal record before interpreting its failedReason.
+          return !!job && typeof job.finishedOn==='number' && ['completed', 'failed'].includes(await job.getState());
+        }, 'actual worker terminal notification');
         assert(job); return job;
       },
     };
@@ -393,7 +400,16 @@ test('actual Redis notification loss is restored from the accepted DB outbox int
       const entry = read.json().entry;
       if (entry.kind === 'generation') assert.equal(entry.hold, null);
     }
-    assert.equal(f.bodies.length, 1); assert.deepEqual(await counts(who), { tasks: 1, requests: 1, outbox: 1, calls: 1, revisions: 1 });
+    let diagnostics:string|undefined;
+    if(f.bodies.length!==1){
+      const actual=(await db.query(`SELECT t.status,t.generation,o.held_reason FROM platform_companion_generation_tasks t
+        JOIN platform_companion_generation_outbox o ON o.task_id=t.id WHERE t.id=$1`,[accepted.taskId])).rows[0];
+      const job=await f.queue.queue.getJob(accepted.operationId);
+      diagnostics=JSON.stringify({notificationState:await job?.getState(),knownDatabaseRetry:job?.failedReason==='Companion notification is waiting for database contention to clear.',
+        taskStatus:['pending','running','failed','uncertain','interrupted','completed'].includes(actual.status)?actual.status:'unknown',generation:actual.generation,
+        holdReason:[null,'authorization','configuration','source_changed','storage','terminal'].includes(actual.held_reason)?actual.held_reason:'unknown',counts:await counts(who)});
+    }
+    assert.equal(f.bodies.length, 1,diagnostics); assert.deepEqual(await counts(who), { tasks: 1, requests: 1, outbox: 1, calls: 1, revisions: 1 });
   });
 });
 test('a bounded actual account lock does not permanently hold an accepted worker or replay its model call', async () => {
@@ -631,3 +647,55 @@ test('real dispatch uncertainty becomes public uncertainty and a later dispatche
     assert.equal(f.bodies.length, 0); assert.deepEqual(await counts(who), { tasks: 1, requests: 1, outbox: 1, calls: 1, revisions: 0 });
   });
 });
+
+for(const [timeoutKind,revoked] of [['operation_deadline',false],['statement_timeout',false],['operation_deadline',true]] as const){
+ test('actual initial notification read '+timeoutKind+(revoked?' rechecks revoked authority on redelivery':' is redelivered with original authority and one model request'),async()=>{
+  await fixture(async f=>{
+   const {who,revision}=await f.ready(),accepted=await accept(f,who,revision);
+   const source=(await db.query('SELECT payload_ciphertext,payload_digest FROM platform_companion_generation_requests WHERE id=$1',[accepted.operationId])).rows[0];
+   await f.queue.dispatch();
+   const previous=db.withBoundedTransaction,original=previous.bind(db);let delayed=false;
+   db.withBoundedTransaction=<T>(run:(client:PoolClient)=>Promise<T>,options={})=>original<T>(client=>run(new Proxy(client,{get(target,key){
+    if(key==='query')return async(...args:unknown[])=>{
+     if(!delayed&&typeof args[0]==='string'&&/^SELECT \* FROM platform_companion_generation_requests\s+WHERE id=/.test(args[0])){
+      delayed=true;
+      if(timeoutKind==='statement_timeout')await target.query("SET LOCAL statement_timeout='80ms'");
+      await target.query('SELECT pg_sleep(3) /* fictional initial source read latency */');
+     }
+     return Reflect.apply(target.query,target,args);
+    };
+    const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+   }})),options);
+   try{
+    await f.worker();const notification=await f.done(accepted.operationId);
+    assert(delayed,'A real source query must encounter the actual SQL latency.');
+    if(await notification.getState()!=='failed'){
+      const actual=(await db.query(`SELECT t.status,t.generation,o.held_reason FROM platform_companion_generation_tasks t
+        JOIN platform_companion_generation_outbox o ON o.task_id=t.id WHERE t.id=$1`,[accepted.taskId])).rows[0];
+      assert.fail(JSON.stringify({notificationState:await notification.getState(),...actual,modelRequests:f.bodies.length}));
+    }
+    assert.equal(notification.failedReason,'Companion notification is waiting for database contention to clear.');
+   }finally{db.withBoundedTransaction=previous;}
+   assert.equal(f.bodies.length,0);assert.deepEqual(await counts(who),{tasks:1,requests:1,outbox:1,calls:0,revisions:0});
+   assert.deepEqual((await db.query('SELECT status,generation FROM platform_companion_generation_tasks WHERE id=$1',[accepted.taskId])).rows[0],{status:'pending',generation:0});
+   assert.equal((await db.query('SELECT held_reason FROM platform_companion_generation_outbox WHERE request_id=$1',[accepted.operationId])).rows[0].held_reason,null);
+   if(revoked){await db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[who.userId]);await db.query('DELETE FROM platform_sessions WHERE user_id=$1',[who.userId]);await freshSession(who,1);}
+   // Only age the actual accepted notification, as in the Redis loss test.
+   await db.query("UPDATE platform_companion_generation_outbox SET dispatched_at=clock_timestamp()-interval '16 seconds' WHERE request_id=$1",[accepted.operationId]);
+   await f.queue.dispatch();const restored=await f.queue.queue.getJob(accepted.operationId);assert(restored);
+   assert.deepEqual(restored.data,{requestId:accepted.operationId,taskId:accepted.taskId});
+   assert.equal(await (await f.done(accepted.operationId)).getState(),'completed');
+   if(revoked){
+    assert.equal(f.bodies.length,0);assert.deepEqual(await counts(who),{tasks:1,requests:1,outbox:1,calls:0,revisions:0});
+    assert.equal((await db.query('SELECT held_reason FROM platform_companion_generation_outbox WHERE request_id=$1',[accepted.operationId])).rows[0].held_reason,'authorization');
+    assert.deepEqual((await db.query('SELECT payload_ciphertext,payload_digest FROM platform_companion_generation_requests WHERE id=$1',[accepted.operationId])).rows[0],source);
+    return;
+   }
+   const read=await f.system.app.inject({method:'GET',url:prefix+'/companion/drafts/current',headers:headers(who)});
+   assert.equal(read.statusCode,200,read.body);assert.equal(read.json().entry.kind,'preview');assert.equal(read.json().entry.preview.taskId,accepted.taskId);
+   assert.equal(f.bodies.length,1);assert.deepEqual(await counts(who),{tasks:1,requests:1,outbox:1,calls:1,revisions:1});
+   assert.deepEqual((await db.query('SELECT payload_ciphertext,payload_digest FROM platform_companion_generation_requests WHERE id=$1',[accepted.operationId])).rows[0],source);
+   await f.queue.dispatch();assert.equal(f.bodies.length,1);
+  });
+ });
+}
