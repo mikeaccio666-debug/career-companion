@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq';
 import { DatabaseError } from 'pg';
-import { CompanionEntry, companionNotification } from './companion-entry.ts';
+import { CompanionEntry, CompanionNotificationReadUnavailable, companionNotification } from './companion-entry.ts';
 import { CostGuard } from './cost-guard.ts';
 import { ApiError } from './errors.ts';
 import { ProducerQueue, connectionFromUrl, QUEUE_DISPATCH_TIMEOUT_MS, QUEUE_RECONCILE_INTERVAL_MS } from './queue-connection.ts';
@@ -117,8 +117,10 @@ export function createCompanionGenerationWorker(entry: CompanionEntry): Worker {
       // These PostgreSQL failures reject a transaction before it commits. Leave
       // the original outbox eligible, then let its next notification recheck the
       // real accepted source and durable core recovery state. A lost connection,
-      // operation deadline or unknown model outcome is not this evidence.
-      if (error instanceof DatabaseError && ['55P03', '40001', '40P01'].includes(error.code ?? '')) {
+      // operation deadline after this initial read or unknown model outcome is not this evidence.
+      // A typed initial-read deadline cannot have launched this notification's
+      // provider request; the next delivery still runs every real core gate.
+      if (error instanceof CompanionNotificationReadUnavailable||error instanceof DatabaseError && ['55P03', '40001', '40P01'].includes(error.code ?? '')) {
         throw new Error('Companion notification is waiting for database contention to clear.');
       }
       // Hold metadata cannot authorize execution or overwrite a model result.
