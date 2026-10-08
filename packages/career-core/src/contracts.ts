@@ -1,6 +1,6 @@
-import type { AgentSpeakerKey } from '@companion/platform-contracts';
+import { CAREER_ROLE_FAMILIES, type AgentSpeakerKey } from '@companion/platform-contracts';
 
-export const ROLE_FAMILIES = ['swe', 'mle', 'ds', 'da', 'de', 'hw', 'other'] as const;
+export const ROLE_FAMILIES = CAREER_ROLE_FAMILIES;
 export type CareerRoleFamily = typeof ROLE_FAMILIES[number];
 
 /** Domain data carries references; raw CVs, email bodies and OAuth tokens stay in private ports. */

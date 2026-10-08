@@ -1,3 +1,4 @@
+import { CareerTargets } from './career-targets.ts';
 import { SharedMemorySafety } from './shared-memory-safety.ts';
 import { readSafetyDetectorProfile } from './safety-detector-profile.ts';
 import { SharedMemories } from './shared-memories.ts';
@@ -101,6 +102,7 @@ export async function buildApp(options:AppOptions={}) {
     companion.generation,studentOnboarding.identities,new CompanionBirthOriginStore(config.dataCrypto),birthGlyphs);
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
   const sharedMemories=new SharedMemories(db,config,bundle);
+  const careerTargets=new CareerTargets(db,config,bundle);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const storage=options.storage??createStorage(config);
@@ -573,6 +575,16 @@ export async function buildApp(options:AppOptions={}) {
     try{const result=await jobs.mcp.result(userId(request),{jobId:artifactId,...page},cancellation.signal);reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff');return {result};}
     finally{cancellation.dispose();}
   });
+  function targetQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'CAREER_TARGET_INPUT_INVALID','Unsupported direction query.');}
+  app.get(`${prefix}/career/targets`,limitedAccount,async(request,reply)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerTargets.list(fixedRequestSession(request,userId(request)),request.query,cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/career/targets/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {target:await careerTargets.get(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}finally{cancellation.dispose();}});
+  async function targetMutation(request:FastifyRequest,reply:FastifyReply,kind:'create'|'edit'|'status'|'delete'){
+    targetQuery(request);const cancellation=requestSignal(request,reply);try{const result=await careerTargets.mutate(fixedRequestSession(request,userId(request)),kind,kind==='create'?null:params(request),request.body,cancellation.signal);reply.header('Cache-Control','private, no-store');if(kind==='create')reply.code(result.operation.replayed?200:201);return result;}finally{cancellation.dispose();}
+  }
+  app.post(`${prefix}/career/targets`,limitedAccount,(request,reply)=>targetMutation(request,reply,'create'));
+  app.patch(`${prefix}/career/targets/:id`,limitedAccount,(request,reply)=>targetMutation(request,reply,'edit'));
+  app.post(`${prefix}/career/targets/:id/status`,limitedAccount,(request,reply)=>targetMutation(request,reply,'status'));
+  app.delete(`${prefix}/career/targets/:id`,limitedAccount,(request,reply)=>targetMutation(request,reply,'delete'));
   app.get(`${prefix}/memories`,limitedAccount,async(request,reply)=>{
     const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await sharedMemories.list(fixedRequestSession(request,userId(request)),request.query,cancellation.signal);}finally{cancellation.dispose();}
   });
@@ -723,5 +735,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
