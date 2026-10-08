@@ -115,3 +115,24 @@ test('only actual settled order data renders system-labelled payment/refund amou
   assert(html.includes('系统'));assert(html.includes(text));assert(html.includes('$95.00'));assert(!html.includes('Fictional_private_reference'));assert(!html.includes('Fictional_private_code'));assert(!html.includes('已排期'));
  }
 });
+
+test('confirmed schedule shows actual local time and private external meeting with no-referrer; does not offer direct student cancellation or imply payment',()=>{
+ const actual=record({status:'scheduled',revision:3,orderId:owner,mentorId:owner,assignment:{mentorDisplayName:'Fictional confirmed mentor',
+  startsAt:'2027-01-01T10:00:00.000Z',endsAt:'2027-01-01T10:47:00.000Z',timeZone:'America/New_York'},
+  scheduled:{confirmedAt:at,meetingUrl:'https://meet.google.com/fictional-meeting'}});
+ const html=markup({state:state({records:[actual],quote:{session:actual,order:{status:'quoted',priceCents:9500,shownOffer:offer()}}})});
+ assert(html.includes('已约好'));assert(html.includes('确认时间：'));assert(html.includes('America/New_York'));assert(html.includes('打开会议链接'));
+ assert.match(html,/href="https:\/\/meet.google.com\/fictional-meeting"[^>]*rel="noopener noreferrer"[^>]*referrerPolicy="no-referrer"/i);
+ for(const text of ['建议时段：','取消这份意向','已记录线下收款','排期待运营确认','已匹配 · 排期待确认'])assert(!html.includes(text));
+ assert(html.includes('需要取消或改期时，请联系为你确认预约的运营'));
+ const stale=markup({state:state({records:[actual]}),cancelling:record()});assert.match(stale,/<button type="button" disabled="">确认取消这份意向/);
+});
+test('cancelled or suspended scheduled content hides meeting link; settlement notice describes actual cancellation without claiming refund',()=>{
+ const actual=record({status:'cancelled',revision:4,orderId:owner,mentorId:owner,assignment:{mentorDisplayName:'Fictional confirmed mentor',
+  startsAt:'2027-01-01T10:00:00.000Z',endsAt:'2027-01-01T10:47:00.000Z',timeZone:'America/New_York'},
+  scheduled:{confirmedAt:at,meetingUrl:'https://meet.google.com/fictional-meeting'}});
+ const quote={session:actual,order:{status:'paid',priceCents:9500,shownOffer:offer(),payment:{paidAt:at,refundedCents:0}}};
+ const html=markup({state:state({records:[actual],quote})});assert(html.includes('预约已取消'));assert(!html.includes('https://meet.google.com/fictional-meeting'));
+ assert(!html.includes('已记录全额退款'));assert(!html.includes('排期待确认'));assert(!html.includes('打开会议链接'));
+ const hidden=markup({state:state({records:[actual],quote,suspended:true})});assert(!hidden.includes('Fictional confirmed mentor'));assert(!hidden.includes('$95.00'));
+});

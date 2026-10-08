@@ -55,7 +55,7 @@ export interface MentorIntentResult {
 }
 function result(c:MentorIntentClient,value:unknown,operationId:string):Readonly<MentorIntentResult>{
   const v=careerRecordObject(value,['session','operation']),session=owned(c,v.session),p=careerRecordObject(v.operation,['id','sessionId','appliedRevision','replayed']);
-  if(p.id!==operationId||p.sessionId!==session.id||!Number.isSafeInteger(p.appliedRevision)||((p.appliedRevision as number)<1||(p.appliedRevision as number)>3)||
+  if(p.id!==operationId||p.sessionId!==session.id||!Number.isSafeInteger(p.appliedRevision)||((p.appliedRevision as number)<1||(p.appliedRevision as number)>4)||
     (p.appliedRevision as number)>session.revision||typeof p.replayed!=='boolean')return fail();
   return Object.freeze({session,operation:Object.freeze({id:careerRecordId(p.id),sessionId:careerRecordId(p.sessionId),appliedRevision:p.appliedRevision as number,replayed:p.replayed})});
 }
@@ -89,7 +89,8 @@ export async function readMentorOrder(c:MentorIntentClient,sessionId:string,sign
  if(session.id!==key||!session.assignment||order.ownerId!==c.account.accountId||order.sessionId!==session.id||order.id!==session.orderId||
   order.organizationId!==session.organizationId||order.offerId!==session.offerId||order.offerRevision!==session.offerRevision||
   order.shownOffer.kind!==session.kind||order.shownOffer.durationMin!==session.durationMin||order.createdAt!==session.assignment.matchedAt||
-  (!order.payment&&(order.updatedAt!==session.updatedAt||order.lastOperationId!==session.lastOperationId))||
-  (session.status==='matched'?!['quoted','paid','refunded_partial','refunded_full'].includes(order.status):session.status!=='cancelled'||(!order.payment&&order.status!=='void')))return fail();
+  (!order.payment&&(order.updatedAt!==(session.status==='cancelled'?session.updatedAt:session.assignment.matchedAt)||
+    session.status!=='scheduled'&&order.lastOperationId!==session.lastOperationId))||
+  (['matched','scheduled'].includes(session.status)?!['quoted','paid','refunded_partial','refunded_full'].includes(order.status):session.status!=='cancelled'||(!order.payment&&order.status!=='void')))return fail();
  current(c);return Object.freeze({session,order});
 }

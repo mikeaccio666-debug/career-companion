@@ -39,7 +39,7 @@ export class MentorPayments {
     const evidence=await captureMentorReceiptEvidence(c,this.blobs,context.userId,cmd.evidenceRef,signal);
     let offer:Awaited<ReturnType<MentorServiceOffers['currentForStaffInTransaction']>>|null=null;
     if(cmd.action==='pay'){
-     if(r.status!=='matched'||current.status!=='quoted')throw new ApiError(409,'MENTOR_PAYMENT_UNAVAILABLE','当前预约不可录入收款。');
+     if(!['matched','scheduled'].includes(r.status)||current.status!=='quoted')throw new ApiError(409,'MENTOR_PAYMENT_UNAVAILABLE','当前预约不可录入收款。');
      offer=await this.offers.currentForStaffInTransaction(c,context,org,r.offerId,signal);
      await this.capacity.confirmedInTransaction(c,context,org,r.assignment!.slotId,r.assignment!.slotRevision,signal);
      if(offer.kind!==r.kind||offer.durationMin!==r.durationMin||current.priceCents>offer.priceCents||r.assignment!.startsAt<offer.earliestSlotAt!)
