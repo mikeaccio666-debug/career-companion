@@ -1,0 +1,13 @@
+@import "./career-design-tokens.css";
+.companion-birth { margin: 24px 0; padding: 24px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); color: var(--ink); font: 400 15px/24px var(--f-ui); }
+.companion-birth h2 { margin: 4px 0 16px; font: 700 20px/28px var(--f-ui); overflow-wrap: anywhere; }
+.companion-birth p { overflow-wrap: anywhere; }
+.companion-birth-heading { display: flex; gap: 20px; align-items: center; }
+.companion-birth-heading h2 { margin-bottom: 0; }
+.companion-birth-asset { display: flex; flex-direction: column; align-items: center; flex: 0 0 64px; gap: 8px; }
+.companion-birth-asset img { display: block; width: 64px; height: 64px; object-fit: contain; }
+.companion-birth-asset-placeholder { display: block; width: 64px; height: 64px; border: 1px dashed var(--ink-4); border-radius: 50%; }
+.companion-birth-asset > span:not(.companion-birth-asset-placeholder), .companion-birth-asset > button { font: 400 12px/18px var(--f-ui); }
+.companion-birth-event { margin: 24px 0; color: var(--ink-2); text-align: center; font: 400 12px/18px var(--f-ui); }
+.companion-birth-next { color: var(--ink-2); }
+@media (max-width: 639px) { .companion-birth { padding: 20px 16px; } .companion-birth-heading { gap: 16px; } }

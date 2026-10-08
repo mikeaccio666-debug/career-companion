@@ -101,6 +101,7 @@ export interface BoundPlatformClient {
   streamMessage(id: string, body: unknown, signal: AbortSignal, onEvent: (event: StreamEvent) => void): Promise<void>;
   privateFileUrl(value: unknown, options?: { download?: boolean }): string | undefined;
   readPrivateFileText(value: unknown, signal?: AbortSignal): Promise<string>;
+  readCompanionSealPNG(assetId: string, signal?: AbortSignal): Promise<Blob>;
   cleanup(path: '/auth/logout' | '/voice/session/release', init?: RequestInit): Promise<void>;
 }
 
@@ -205,6 +206,34 @@ export function createPlatformClient(target: PlatformEndpoints, transport: typeo
             if (!response.ok) { const error = responseError(response, parsedBody(text)); invalidation(error, fixed); throw error; }
             lease.assertCurrent(); return text;
           } finally { lease.dispose(); }
+        },
+        async readCompanionSealPNG(assetId: string, signal?: AbortSignal): Promise<Blob> {
+          if (typeof assetId !== 'string' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(assetId)?.[0] !== assetId) throw new Error('印章地址无效。');
+          const lease = context.lease(fixed, signal);
+          let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+          let body: ReadableStream<Uint8Array> | null = null;
+          try {
+            const response = await fetchResponse(target.apiUrl('/companion/seals/' + assetId + '/png'), {
+              signal, headers: headersFor({ headers: { Accept: 'image/png' } }, fixed),
+            }, lease);
+            body = response.body;
+            if (!response.ok) {
+              const error = responseError(response, parsedBody(await lease.wait(response.text()))); invalidation(error, fixed); throw error;
+            }
+            if (response.headers.get('Content-Type')?.split(';')[0].trim() !== 'image/png' || !response.body) throw new Error('印章暂时无法读取。');
+            const declared = response.headers.get('Content-Length');
+            if (declared !== null && (!/^[0-9]+$/.test(declared) || Number(declared) > 32768)) throw new Error('印章暂时无法读取。');
+            reader = response.body.getReader(); const chunks: Uint8Array<ArrayBuffer>[] = []; let length = 0;
+            while (true) {
+              const part = await lease.wait(reader.read()); if (part.done) break;
+              length += part.value.byteLength; if (length > 32768) throw new Error('印章暂时无法读取。');
+              chunks.push(Uint8Array.from(part.value));
+            }
+            const bytes = new Uint8Array(length); let offset = 0;
+            for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+            if (length < 33 || ![137,80,78,71,13,10,26,10].every((byte, index) => bytes[index] === byte)) throw new Error('印章暂时无法读取。');
+            lease.assertCurrent(); return new Blob([bytes], { type: 'image/png' });
+          } finally { if (reader) { void reader.cancel().catch(() => {}); reader.releaseLock(); } else if (body) { void body.cancel().catch(() => {}); } lease.dispose(); }
         },
         async cleanup(path: '/auth/logout' | '/voice/session/release', init: RequestInit = {}): Promise<void> {
           if (!['/auth/logout', '/voice/session/release'].includes(path) || init.method && init.method.toUpperCase() !== 'POST') throw new Error('账号清理路径无效。');
