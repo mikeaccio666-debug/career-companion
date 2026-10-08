@@ -134,5 +134,8 @@ export async function readSafetyFollowupHistory(client:PoolClient,storage:Onboar
   return {captures,publications,decoded,operations,opCaptures,handled};
 }
 export async function readHandledOnboardingSources(client:PoolClient,storage:OnboardingStorage,draft:OnboardingDraft,sources:SafetySubmissionRow[]):Promise<ReadonlySet<string>> {
-  return (await readSafetyFollowupHistory(client,storage,draft,sources)).handled;
+  const legacy=(await readSafetyFollowupHistory(client,storage,draft,sources)).handled;
+  const { readHandledIntakeV2Sources } = await import('./onboarding-safety-delivery-protocol.ts');
+  const modern=await readHandledIntakeV2Sources(client,storage,draft,sources);
+  return new Set([...legacy,...modern]);
 }

@@ -121,7 +121,13 @@ export class CompanionNameSafetyResponses {
   }
   async prepareSubmission(value: string, signal?: AbortSignal) {
     const id = companionNameUuid(value); signal?.throwIfAborted();
-    return this.db.withBoundedTransaction(async client => {
+    return this.db.withBoundedTransaction(client => this.prepareSubmissionInTransaction(client,id,signal));
+  }
+  /** Caller-owned real transaction. New public publication takes the review
+   * coordinator and verifies active professional assets before this port.
+   * The original internal wrapper retains its original capture behavior. */
+  async prepareSubmissionInTransaction(client: PoolClient, value: string, signal?: AbortSignal) {
+      const id = companionNameUuid(value); signal?.throwIfAborted();
       const target = await readNameResourceSourceInTransaction(client,this.crypto,id,signal);
       if (target.decision.level === 'L0') return null;
       const row = await enqueueNameSafetyResponse(client,target.source,target.decision);
@@ -161,7 +167,6 @@ export class CompanionNameSafetyResponses {
       [row.id,ciphertext,bundle.revision,bundle.contentDigest,bundle.reviewDigest,locale,selected.proof.kind,times.at,times.until]);
       if (!saved.rowCount) throw nameResponseStorageUnavailable();
       signal?.throwIfAborted(); return Object.freeze({responseId:row.id,submissionId:id,status:'ready' as const,replayed:false});
-    });
   }
   /** Explicit internal recovery driver only; no scheduler or public endpoint is installed. */
   async prepareNext(signal?: AbortSignal) {

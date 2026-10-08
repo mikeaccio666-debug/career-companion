@@ -25,10 +25,11 @@ function EmptySeal() {
 /** Controlled O7 view. It forwards the complete original text to its controller;
  * the server owns classification, name rules, persistence and authority.
  */
-export function CompanionNameView({ value, pending = false, available = true, issue, error = '', onChange, onSubmit }: {
+export function CompanionNameView({ value, pending = false, available = true, unavailableText, issue, error = '', onChange, onSubmit }: {
   readonly value: string;
   readonly pending?: boolean;
   readonly available?: boolean;
+  readonly unavailableText?: string;
   readonly issue?: CompanionNameIssue;
   readonly error?: string;
   readonly onChange: (value: string) => void;
@@ -50,7 +51,7 @@ export function CompanionNameView({ value, pending = false, available = true, is
         onChange={event => { if (!blocked) onChange(event.target.value); }} />
       <p id={`${id}-hint`} className="companion-naming-hint">1–6 个汉字，或 1–16 个拉丁字符；英文名可以有空格和连字符。</p>
       {(issue || error) && <p id={`${id}-error`} className="companion-naming-notice" role="alert">{issue ? nameIssueText(issue) : error}</p>}
-      {!available && <p className="companion-naming-notice" role="status">服务暂时不可用，可以稍后回来继续。</p>}
+      {!available && <p className="companion-naming-notice" role="status">{unavailableText ?? '服务暂时不可用，可以稍后回来继续。'}</p>}
       <button type="submit" className="companion-naming-primary" aria-disabled={blocked || empty}>
         {pending ? '正在确认这个名字…' : '保存名字'}
       </button>
@@ -61,7 +62,7 @@ export function CompanionNameView({ value, pending = false, available = true, is
 /** Controlled O8 view. Candidates and ink come from an authenticated server
  * projection. Selecting or confirming here does not claim a saved choice or birth.
  */
-export function CompanionSealView({ name, candidates, inkToken, selectedChar, pending = false, available = true,
+export function CompanionSealView({ name, candidates, inkToken, selectedChar, pending = false, available = true, unavailableText,
   error = '', onChange, onConfirm }: {
   readonly name: string;
   readonly candidates: PublicCompanionSealCandidates;
@@ -69,6 +70,7 @@ export function CompanionSealView({ name, candidates, inkToken, selectedChar, pe
   readonly selectedChar: string | null;
   readonly pending?: boolean;
   readonly available?: boolean;
+  readonly unavailableText?: string;
   readonly error?: string;
   readonly onChange: (char: string) => void;
   readonly onConfirm: (char: string) => void;
@@ -95,7 +97,7 @@ export function CompanionSealView({ name, candidates, inkToken, selectedChar, pe
       </fieldset>
       <p id={`${id}-hint`} className="companion-naming-hint">选定一个字后，再确认。墨色来自它的性格。</p>
       {error && <p className="companion-naming-notice" role="alert">{error}</p>}
-      {!available && <p className="companion-naming-notice" role="status">服务暂时不可用，可以稍后回来继续。</p>}
+      {!available && <p className="companion-naming-notice" role="status">{unavailableText ?? '服务暂时不可用，可以稍后回来继续。'}</p>}
       <button type="submit" className="companion-naming-primary" aria-disabled={blocked || !choice}>
         {pending ? '正在确认这个字…' : '确认这个字'}
       </button>

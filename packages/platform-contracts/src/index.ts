@@ -292,4 +292,6 @@ export * from './onboarding-followup.ts';
 export * from './companion-entry.ts';
 export * from './companion-identity.ts';
 export * from './companion-name-safety-resources.ts';
+export * from './companion-journey.ts';
+export * from './companion-safety-resource.ts';
 export * from './companion-naming.ts';

@@ -1,0 +1,22 @@
+.student-safety-resources {
+  --paper: #F1F3F7; --sheet: #FCFDFE; --tint: #E6EAF1; --ink: #15223A;
+  --ink-2: #46536A; --ink-3: #5D6A80; --ink-4: #7A869C; --rule: #D8DEE8;
+  --air: #28488E; --air-tint: #E4EAF5;
+  box-sizing: border-box; width: 100%; max-width: 700px; margin: 16px auto;
+  padding: 0 24px; color: var(--ink); background: var(--paper); line-height: 1.6;
+}
+.student-safety-resources .onboarding-resource-card { box-sizing: border-box; width: 100%; }
+.student-safety-resources .onboarding-safety-question:empty { margin: 0; padding: 0; border: 0; }
+@media (max-width: 639px) { .student-safety-resources { padding: 0 16px; } }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .student-safety-resources {
+    --paper: #0D131E; --sheet: #141C2A; --tint: #1B2437; --ink: #E5E9F0;
+    --ink-2: #A8B2C3; --ink-3: #808CA1; --ink-4: #717D94; --rule: #243049;
+    --air: #89A5E8; --air-tint: #1A2540;
+  }
+}
+:root[data-theme="dark"] .student-safety-resources {
+  --paper: #0D131E; --sheet: #141C2A; --tint: #1B2437; --ink: #E5E9F0;
+  --ink-2: #A8B2C3; --ink-3: #808CA1; --ink-4: #717D94; --rule: #243049;
+  --air: #89A5E8; --air-tint: #1A2540;
+}

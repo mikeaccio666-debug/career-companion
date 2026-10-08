@@ -83,6 +83,10 @@ export class CompanionNamingController {
   start(): void {
     if (this.live || !this.client.isCurrent()) return;
     this.live = true; this.epoch++;
+    // StrictMode may restart an observer while its original operation remains
+    // unresolved. An idle snapshot must not let a later journey head replace
+    // that originating intent before its own authenticated GET completes.
+    if (this.intent) this.publish({ acceptance: 'unknown' });
     this.unsubscribe = this.client.subscribe(() => {
       if (!this.client.isCurrent()) { this.intent = null; this.unresolved = false; this.stop(); }
     });

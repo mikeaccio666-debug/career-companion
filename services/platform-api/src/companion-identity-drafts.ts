@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { companionSealCandidates, validateCompanionName, CompanionNameError, CompanionIdentityError } from '@companion/career-core';
+import { companionSealCandidates, companionSealCandidatesV2, validateCompanionName, validateCompanionNameV2, CompanionNameError, CompanionIdentityError } from '@companion/career-core';
 import type { CompanionNameCategory, CompanionSealCandidates } from '@companion/career-core';
-import type { PublicCompanionIdentityDraft, CompanionSealSelection, CompanionSealSelectionRequest, CompanionSealSelectionSaved } from '@companion/platform-contracts';
+import type { PublicCompanionIdentityDraft, CompanionSealSelection, CompanionSealSelectionRequest, CompanionSealSelectionSaved, CompanionIdentityObservation } from '@companion/platform-contracts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { BackgroundGeneration, VerifiedCompanionPreviewEnvelope } from './background-generation.ts';
 import type { PlatformConfig } from './config.ts';
@@ -13,6 +13,8 @@ import { DataCryptoError } from './data-crypto.ts';
 import { OnboardingStorage } from './onboarding-storage.ts';
 import { parseCompanionIdentityBundle, readCompanionIdentityBundle, type CompanionIdentityBundle } from './companion-identity-bundle.ts';
 import { assertActiveCompanionIdentityBundle, parseCompanionIdentityReview, readCompanionIdentityReview, type CompanionIdentityReview } from './companion-identity-review.ts';
+import { verifyPrebirthInventoryInTransaction } from './companion-prebirth-protocol.ts';
+import { readNameRawSourceInTransaction, readNameResourceSourceInTransaction } from './companion-name-resource-source.ts';
 
 interface Command { readonly taskId: string; readonly expectedRevision: number; readonly operationId: string; readonly name: string; }
 interface DraftRow {
@@ -128,6 +130,7 @@ export class CompanionIdentityDrafts {
       if (!saved) throw unavailable();
       const bundle = parseCompanionIdentityBundle(JSON.parse(saved.bundle_json)), review = parseCompanionIdentityReview(JSON.parse(saved.review_json));
       if (saved.revision !== row.bundle_revision || bundle.revision !== row.bundle_revision || review.bundleRevision !== bundle.revision
+        || review.schemaVersion !== bundle.schemaVersion
         || bundle.contentDigest !== row.content_digest || review.bundleDigest !== bundle.contentDigest || review.reviewDigest !== row.review_digest
         || JSON.stringify(bundle) !== saved.bundle_json || JSON.stringify(review) !== saved.review_json) throw unavailable();
       return { bundle, review };
@@ -156,8 +159,12 @@ export class CompanionIdentityDrafts {
         || row.preview_revision !== 1 || !Number.isSafeInteger(row.revision) || row.revision < 1) throw unavailable();
       const assets = await this.assets(client, row);
       const data = JSON.parse(text);
-      const name = validateCompanionName({ name: data?.name, userName: data?.userNameAtSave, policy: assets.bundle.policy });
-      const candidates = companionSealCandidates({ companionId: row.companion_id, name, dimensions: verified.dimensions, policy: assets.bundle.policy });
+      const name = assets.bundle.schemaVersion === 1
+        ? validateCompanionName({ name: data?.name, userName: data?.userNameAtSave, policy: assets.bundle.policy })
+        : validateCompanionNameV2({ name: data?.name, userName: data?.userNameAtSave, policy: assets.bundle.policy });
+      const candidates = assets.bundle.schemaVersion === 1
+        ? companionSealCandidates({ companionId: row.companion_id, name, dimensions: verified.dimensions, policy: assets.bundle.policy })
+        : companionSealCandidatesV2({ companionId: row.companion_id, name, dimensions: verified.dimensions, policy: assets.bundle.policy });
       if (text !== JSON.stringify(this.payload(row, verified, data.userNameAtSave, name, candidates))) throw unavailable();
       return { draft: this.view(row, name, candidates, verified), payload: this.payload(row, verified, data.userNameAtSave, name, candidates) };
     } catch { throw unavailable(); }
@@ -177,6 +184,78 @@ export class CompanionIdentityDrafts {
     const verified = await this.source(client, fixed, taskId, signal), row = await this.row(client, fixed, verified.source.companionId);
     const result = row ? await this.decode(client, row, fixed, verified) : null;
     await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return result;
+  }
+  private async viewer(client: PoolClient, fixed: FixedSessionContext, signal?: AbortSignal) {
+    await authorizeFixedSession(client, fixed, signal);
+    const owner = (await client.query<{ account_kind: string }>('SELECT account_kind FROM platform_users WHERE id=$1 FOR NO KEY UPDATE', [fixed.userId])).rows[0];
+    if (!owner || owner.account_kind !== 'student') throw new ApiError(403, 'STUDENT_ACCOUNT_REQUIRED', 'Use a student account for the saved companion.');
+    if (!this.storage.crypto) throw unavailable();
+    await verifyPrebirthInventoryInTransaction(client, this.storage.crypto, fixed.userId, signal);
+  }
+  /** The current saved identity must be the genuine classified application,
+   * not merely a syntactically valid direct internal identity draft. */
+  private async savedProvenance(client: PoolClient, fixed: FixedSessionContext, row: DraftRow, signal?: AbortSignal) {
+    try {
+      const proof = (await client.query('SELECT * FROM platform_companion_name_identity_provenance WHERE user_id=$1 AND draft_id=$2 AND identity_revision=$3 FOR SHARE',
+        [fixed.userId, row.id, row.revision])).rows;
+      if (proof.length !== 1) throw unavailable();
+      const provenance = proof[0], target = await readNameResourceSourceInTransaction(client, this.storage.crypto, provenance.submission_id, signal);
+      const source = target.source, raw = await readNameRawSourceInTransaction(client, this.storage.crypto, source.id, signal);
+      if (source.user_id !== fixed.userId || source.task_id !== row.task_id || source.companion_id !== row.companion_id
+        || source.level !== 'L0' || source.detector_mode !== 'full' || source.application_status !== 'applied' || source.rejected_category !== null
+        || source.applied_identity_revision !== row.revision || source.expected_identity_revision + 1 !== row.revision
+        || provenance.operation_id !== source.application_operation_id || provenance.generation !== source.generation) throw unavailable();
+      const identityText = this.storage.crypto!.openUtf8(row.payload_ciphertext, { table: 'platform_companion_identity_drafts', column: 'payload_ciphertext',
+        rowId: row.id, ownerId: fixed.userId, revision: row.revision });
+      const resultText = this.storage.crypto!.openUtf8(source.result_ciphertext!, { table: 'platform_companion_name_submissions', column: 'result_ciphertext',
+        rowId: source.id, ownerId: fixed.userId, revision: source.generation });
+      const application = { schemaVersion: 1, submissionId: source.id, userId: fixed.userId, generation: source.generation,
+        sourceCapture: raw.sourceCapture, resultCapture: JSON.parse(resultText), application: { status: 'applied', rejectedCategory: null, appliedIdentityRevision: row.revision },
+        identityCapture: JSON.parse(identityText) };
+      const applicationText = JSON.stringify(application);
+      if (this.storage.crypto!.openUtf8(source.application_ciphertext!, { table: 'platform_companion_name_submissions', column: 'application_ciphertext', rowId: source.id,
+        ownerId: fixed.userId, revision: source.generation }) !== applicationText
+        || this.storage.crypto!.openUtf8(provenance.payload_ciphertext, { table: 'platform_companion_name_identity_provenance', column: 'payload_ciphertext',
+          rowId: row.id, ownerId: fixed.userId, revision: row.revision }) !== applicationText) throw unavailable();
+      const receipt = (await client.query('SELECT * FROM platform_companion_name_identity_receipts WHERE user_id=$1 AND operation_id=$2 FOR SHARE',
+        [fixed.userId, source.application_operation_id])).rows[0];
+      if (!receipt || receipt.draft_id !== row.id || receipt.identity_revision !== row.revision || receipt.submission_id !== source.id
+        || receipt.generation !== source.generation || receipt.level !== 'L0' || receipt.detector_mode !== 'full'
+        || this.storage.crypto!.openUtf8(receipt.payload_ciphertext, { table: 'platform_companion_name_identity_receipts', column: 'payload_ciphertext',
+          rowId: receipt.operation_id, ownerId: fixed.userId, revision: row.revision }) !== JSON.stringify({ schemaVersion: 1, userId: fixed.userId,
+          operationId: source.application_operation_id, draftId: row.id, identityRevision: row.revision,
+          submissionId: source.id, generation: source.generation, identityCapture: JSON.parse(identityText) })) throw unavailable();
+      const operation = (await client.query<OperationRow>('SELECT operation_id,draft_id,applied_revision,request_ciphertext FROM platform_companion_identity_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',
+        [fixed.userId, source.application_operation_id])).rows[0];
+      if (!operation || operation.draft_id !== row.id || operation.applied_revision !== row.revision) throw unavailable();
+      const requestText = this.storage.crypto!.openUtf8(operation.request_ciphertext, { table: 'platform_companion_identity_operations', column: 'request_ciphertext',
+        rowId: operation.operation_id, ownerId: fixed.userId, revision: row.revision });
+      if (requestText !== JSON.stringify(command({ taskId: row.task_id, expectedRevision: row.revision - 1, operationId: operation.operation_id,
+        name: raw.sourceCapture.request.name }))) throw unavailable();
+    } catch { signal?.throwIfAborted(); throw unavailable(); }
+  }
+  /** Independent historical observation: actual viewer + original source,
+   * immutable reviewed assets, classified application and selection receipts.
+   * It neither consults a later intake nor repairs/saves/applies anything. */
+  async readSavedInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionIdentityObservation>> {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), taskId = taskInput(value);
+    await this.viewer(client, fixed, signal);
+    const proof = await this.background.readSavedCompletedForViewerInTransaction(client, fixed, { taskId }, signal);
+    if (!proof) return Object.freeze({ identity: null, selection: null });
+    const verified = proof.envelope, draftRow = await this.row(client, fixed, verified.source.companionId);
+    let result: CompanionIdentityObservation = { identity: null, selection: null };
+    if (draftRow) {
+      const draft = await this.decode(client, draftRow, fixed, verified);
+      await this.savedProvenance(client, fixed, draftRow, signal);
+      const selection = await this.selectionRow(client, fixed, draftRow.id);
+      const sealChar = selection ? await this.decodeSelection(client, selection, draftRow, fixed, verified) : undefined;
+      result = { identity: draft, selection: this.selectionView(draft, selection, sealChar) };
+    }
+    await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return Object.freeze(result);
+  }
+  async readSaved(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionIdentityObservation>> {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), taskId = taskInput(value);
+    return this.db.withBoundedTransaction(client => this.readSavedInTransaction(client, fixed, { taskId }, signal));
   }
   /** Server-owned encrypted history composition only. A capture must match the
    * actual immutable naming operation, historical reviewed assets and source;
@@ -258,15 +337,41 @@ export class CompanionIdentityDrafts {
    * authenticated historical evidence and keeps its independent CAS revision. */
   async readSelection(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionSealSelection> | null> {
     const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), taskId = taskInput(value);
+    return this.db.withBoundedTransaction(client => this.readSelectionInTransaction(client, fixed, { taskId }, signal));
+  }
+  async readSelectionInTransaction(client: PoolClient, context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionSealSelection> | null> {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), taskId = taskInput(value);
+    const verified = await this.source(client, fixed, taskId, signal), draftRow = await this.row(client, fixed, verified.source.companionId);
+    let result: Readonly<CompanionSealSelection> | null = null;
+    if (draftRow) {
+      const draft = await this.decode(client, draftRow, fixed, verified), row = await this.selectionRow(client, fixed, draftRow.id);
+      const sealChar = row ? await this.decodeSelection(client, row, draftRow, fixed, verified) : undefined;
+      result = this.selectionView(draft, row, sealChar);
+    }
+    await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return result;
+  }
+  async readSelectionOperation(context: FixedSessionContext, value: unknown, signal?: AbortSignal): Promise<Readonly<CompanionSealSelectionSaved> | null> {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), input = record(value, ['taskId', 'operationId']);
+    if (!uuid(input.taskId) || !uuid(input.operationId)) throw invalid();
+    const taskId = input.taskId, operationId = input.operationId;
     return this.db.withBoundedTransaction(async client => {
-      const verified = await this.source(client, fixed, taskId, signal), draftRow = await this.row(client, fixed, verified.source.companionId);
-      let result: Readonly<CompanionSealSelection> | null = null;
-      if (draftRow) {
-        const draft = await this.decode(client, draftRow, fixed, verified), row = await this.selectionRow(client, fixed, draftRow.id);
-        const sealChar = row ? await this.decodeSelection(client, row, draftRow, fixed, verified) : undefined;
-        result = this.selectionView(draft, row, sealChar);
-      }
-      await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return result;
+      await this.viewer(client, fixed, signal);
+      const own = (await client.query<SelectionOperationRow>('SELECT * FROM platform_companion_identity_selection_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',
+        [fixed.userId, operationId])).rows[0];
+      if (!own) { await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null; }
+      const proof = await this.background.readSavedCompletedForViewerInTransaction(client, fixed, { taskId }, signal);
+      if (!proof) throw unavailable();
+      const verified = proof.envelope, draftRow = await this.row(client, fixed, verified.source.companionId);
+      if (!draftRow) throw unavailable();
+      const selection = await this.selectionRow(client, fixed, draftRow.id);
+      if (!selection || own.selection_id !== selection.id) { await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted(); return null; }
+      const draft = await this.decode(client, draftRow, fixed, verified);
+      await this.savedProvenance(client, fixed, draftRow, signal);
+      const sealChar = await this.decodeSelection(client, selection, draftRow, fixed, verified);
+      await this.decodeSelectionOperation(client, own, selection, draftRow, fixed, verified);
+      await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
+      return Object.freeze({ selection: this.selectionView(draft, selection, sealChar),
+        operation: Object.freeze({ id: own.operation_id, appliedRevision: own.applied_revision, replayed: true }) });
     });
   }
   private selectionOperationPayload(row: SelectionOperationRow, verified: VerifiedCompanionPreviewEnvelope,
@@ -331,7 +436,8 @@ export class CompanionIdentityDrafts {
         if (bundle.revision !== draftRow.bundle_revision || bundle.contentDigest !== draftRow.content_digest
           || this.review!.reviewDigest !== draftRow.review_digest) throw unavailable();
         const userName = (await client.query<{ name: string }>('SELECT name FROM platform_users WHERE id=$1 FOR SHARE', [fixed.userId])).rows[0]?.name;
-        try { validateCompanionName({ name: draft.name, userName: userName!, policy: bundle.policy }); }
+        try { if (bundle.schemaVersion === 1) validateCompanionName({ name: draft.name, userName: userName!, policy: bundle.policy });
+          else validateCompanionNameV2({ name: draft.name, userName: userName!, policy: bundle.policy }); }
         catch (error) {
           if (error instanceof CompanionNameError) throw new CompanionIdentityNameRejected(error.category);
           throw unavailable();
@@ -402,8 +508,13 @@ export class CompanionIdentityDrafts {
         const userName = (await client.query<{ name: string }>('SELECT name FROM platform_users WHERE id=$1 FOR SHARE', [fixed.userId])).rows[0]?.name;
         let name: string, candidates: CompanionSealCandidates;
         try {
-          name = validateCompanionName({ name: input.name, userName: userName!, policy: bundle.policy });
-          candidates = companionSealCandidates({ companionId: verified.source.companionId, name, dimensions: verified.dimensions, policy: bundle.policy });
+          if (bundle.schemaVersion === 1) {
+            name = validateCompanionName({ name: input.name, userName: userName!, policy: bundle.policy });
+            candidates = companionSealCandidates({ companionId: verified.source.companionId, name, dimensions: verified.dimensions, policy: bundle.policy });
+          } else {
+            name = validateCompanionNameV2({ name: input.name, userName: userName!, policy: bundle.policy });
+            candidates = companionSealCandidatesV2({ companionId: verified.source.companionId, name, dimensions: verified.dimensions, policy: bundle.policy });
+          }
         } catch (error) {
           if (error instanceof CompanionNameError) throw new CompanionIdentityNameRejected(error.category);
           if (error instanceof CompanionIdentityError && error.code === 'SEAL_CANDIDATES_UNAVAILABLE') throw new ApiError(503, error.code, 'The seal candidates are not available for this name.');

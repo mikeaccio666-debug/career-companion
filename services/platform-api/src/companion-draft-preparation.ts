@@ -131,12 +131,12 @@ export class CompanionDraftPreparation {
       try {
         const savedSeedText=this.storage.crypto!.openUtf8(previous.seed_ciphertext,seedBinding);
         let expectedSeed: Record<string,unknown>=baseSeed;
-        if (previous.source_receipt_version===1) {
+        if (previous.source_receipt_version===1||previous.source_receipt_version===2) {
           const saved=JSON.parse(savedSeedText);
-          if (saved?.sourceReceiptVersion!==1||typeof saved.sourceReceiptDigest!=='string'
+          if (saved?.sourceReceiptVersion!==previous.source_receipt_version||typeof saved.sourceReceiptDigest!=='string'
             ||/^[0-9a-f]{64}$/.exec(saved.sourceReceiptDigest)?.[0]!==saved.sourceReceiptDigest) throw intakeUnavailable();
           await verifyCompanionSourcePrefixInTransaction(client,this.storage,sourceBinding,saved.sourceReceiptDigest);
-          expectedSeed={...baseSeed,sourceReceiptVersion:1,sourceReceiptDigest:saved.sourceReceiptDigest};
+          expectedSeed={...baseSeed,sourceReceiptVersion:previous.source_receipt_version,sourceReceiptDigest:saved.sourceReceiptDigest};
         } else if (previous.source_receipt_version!==null) throw intakeUnavailable();
         // Exact canonical snapshots reject swapped owner/row/source ciphertext,
         // changed route and damaged private state. NULL legacy replay preserves
@@ -149,7 +149,7 @@ export class CompanionDraftPreparation {
         throw new ApiError(409, 'COMPANION_EXISTS', 'A companion draft already exists.');
       }
       const captured=await captureCompanionSourcePrefixInTransaction(client,this.storage,sourceBinding,source);
-      const seed={...baseSeed,sourceReceiptVersion:1,sourceReceiptDigest:captured.digest};
+      const seed={...baseSeed,sourceReceiptVersion:captured.payload.schemaVersion,sourceReceiptDigest:captured.digest};
       const answersCiphertext = this.storage.crypto!.sealUtf8(JSON.stringify(answers), answersBinding);
       const seedCiphertext = this.storage.crypto!.sealUtf8(JSON.stringify(seed), seedBinding);
       await client.query(`INSERT INTO platform_companions(id,user_id,status,fingerprint) VALUES($1,$2,'drafting',$3)`,
@@ -158,8 +158,8 @@ export class CompanionDraftPreparation {
         VALUES($1,$2,$3,$4,$5)`, [answersId, fixed.userId, source.id, source.revision, answersCiphertext]);
       await client.query(`INSERT INTO platform_companion_generation_tasks(id,user_id,companion_id,answers_id,source_draft_id,
         source_revision,auth_version,questionnaire_revision,rules_revision,generator_version,purpose,status,seed_ciphertext,quirk_draw,source_receipt_version)
-        VALUES($1,$2,$3,$4,$5,$6,$7,1,1,1,'companion_preview','pending',$8,$9,1)`,
-        [taskId, fixed.userId, companionId, answersId, source.id, source.revision, authVersion, seedCiphertext, quirkDraw]);
+        VALUES($1,$2,$3,$4,$5,$6,$7,1,1,1,'companion_preview','pending',$8,$9,$10)`,
+        [taskId, fixed.userId, companionId, answersId, source.id, source.revision, authVersion, seedCiphertext, quirkDraw,captured.payload.schemaVersion]);
       await saveCompanionSourcePrefixInTransaction(client,this.storage,captured);
     }
     await authorizeFixedSession(client, fixed, signal);

@@ -120,6 +120,33 @@ test('an absent own-operation observation retains uncertainty through restart an
   assert.equal(h.requests.filter(value => value.method === 'POST').length, 1); h.controller.stop();
 });
 
+test('a retained original intent is unknown immediately on restart while its own read is delayed, fails or is throttled', async () => {
+  for (const mode of ['delayed', 'failure', 'quota'] as const) {
+    let restarting = false;
+    const pending = deferred<Response>();
+    const later = acceptance(id(111), 'detected');
+    const newer: CompanionNamingState = { kind: 'naming', entry: { taskId, companionId, revision: 2, latestSubmissionId: id(33) },
+      latest: { ...later.progress, dispatchId: id(34), submissionId: id(33), submittedRevision: 2 } };
+    const h = harness(async (path, init) => {
+      if (init?.method === 'POST') throw new TypeError('Fictional original acceptance response lost');
+      if (path === '/companion/naming') return Response.json({ state: newer });
+      if (!restarting) return Response.json({ accepted: null });
+      if (mode === 'delayed') return pending.promise;
+      if (mode === 'failure') throw new TypeError('Fictional original operation temporarily unreadable');
+      return Response.json({ error: { code: 'RATE_LIMITED', message: 'Fictional observer quota' } }, { status: 429 });
+    });
+    h.controller.start(); await flush(); assert(h.controller.submit(input)); await flush();
+    assert.equal(h.latest().acceptance, 'unknown'); h.controller.stop(); restarting = true;
+    h.controller.start(); assert.equal(h.latest().acceptance, 'unknown'); assert.equal(h.latest().accepted, null);
+    await flush(); assert.equal(h.latest().acceptance, 'unknown'); assert.equal(h.controller.submit(input), false);
+    if (mode === 'delayed') { pending.resolve(Response.json({ accepted: null })); await flush(); assert.deepEqual(h.latest().state, newer); }
+    assert.equal(h.latest().acceptance, 'unknown'); assert.equal(h.latest().accepted, null);
+    assert.equal(h.operations(), 1); assert.equal(h.requests.filter(value => value.method === 'POST').length, 1);
+    assert(h.requests.filter(value => value.path.startsWith('/companion/naming/submissions/')).every(value => value.path.endsWith(id(101))));
+    h.controller.stop();
+  }
+});
+
 test('stopping transport clears local observation while a later start reads the original accepted submission', async () => {
   const pending = deferred<Response>(); let saved = false;
   const h = harness(async (path, init) => {
