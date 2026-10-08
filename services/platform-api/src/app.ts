@@ -1,3 +1,4 @@
+import { MentorServiceOffers } from './mentor-service-offers.ts';
 import { parseOrgKnowledgeReference } from '@companion/platform-contracts';
 import { careerRecordId } from '@companion/platform-contracts';
 import { OrgKnowledge } from './org-knowledge.ts';
@@ -132,6 +133,7 @@ export async function buildApp(options:AppOptions={}) {
   const staff=new StaffAccess(db);
   const knowledge=new KnowledgeSources(db);
   const orgKnowledge=new OrgKnowledge(db,config,bundle,storage,staff);
+  const mentorServiceOffers=new MentorServiceOffers(db,config,bundle,storage,staff);
   const audioTranscriptions=new AudioTranscriptions(db,storage,runtime);
   const goalPlans=new GoalPlans(db,jobs,runtime);
   const goalPlanProposals=new GoalPlanProposals(db,goalPlans);
@@ -658,6 +660,14 @@ export async function buildApp(options:AppOptions={}) {
         coordinates.revision, coordinates.passageId, signal) };
     });
   });
+  app.get(prefix + '/career/mentor-services/:orgId', limitedAccount, (request, reply) => applicationRead(request, reply, async signal => {
+    let orgId: string;
+    try {
+      careerRecordObject(careerHttpQuery(request.query), []);
+      const v = careerRecordObject(careerHttpQuery(request.params), ['orgId']); orgId = careerRecordId(v.orgId);
+    } catch { throw new ApiError(400, 'SERVICE_OFFER_INPUT_INVALID', '请使用支持的服务查询。'); }
+    return { offers: await mentorServiceOffers.list(fixedRequestSession(request,userId(request)),orgId,signal) };
+  }));
   const applicationRoot = prefix + '/career/applications';
   function applicationQuery(request: FastifyRequest) {
     try { careerRecordObject(careerHttpQuery(request.query), []); }
