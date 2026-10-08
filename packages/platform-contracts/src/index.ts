@@ -310,3 +310,5 @@ export * from './career-record-values.ts';
 export * from './career-stories.ts';
 
 export * from './resume-review.ts';
+
+export * from './upload-removals.ts';

@@ -15,9 +15,10 @@ export interface BlobReadOptions {
 export interface BlobReadResult { stream: Readable; length: number; }
 
 export interface BlobStorage {
+  readonly scope?: string;
   put(key: string, bytes: Uint8Array, mime: string): Promise<void>;
   get(key: string): Promise<Uint8Array>;
-  delete(key: string): Promise<void>;
+  delete(key: string, signal?: AbortSignal): Promise<void>;
   stat(key: string, signal?: AbortSignal): Promise<BlobStat>;
   openRead(key: string, options: BlobReadOptions): Promise<BlobReadResult>;
 }
@@ -92,14 +93,15 @@ function checkedStream(source: Readable, length: number, options: {
 }
 
 export class LocalBlobStorage implements BlobStorage {
-  constructor(private directory: string) {}
+  readonly scope:string;
+  constructor(private directory: string) {this.scope='blob_scope_'+createHash('sha256').update(JSON.stringify(['local',path.resolve(directory)])).digest('hex');}
   private file(key: string) {
     if (!/^[a-zA-Z0-9_-]+$/.test(key)) throw new Error('Invalid storage key');
     return path.join(this.directory, key);
   }
   async put(key: string, bytes: Uint8Array) { await fs.mkdir(this.directory, { recursive: true, mode: 0o700 }); await fs.writeFile(this.file(key), bytes, { mode: 0o600, flag: 'wx' }); }
   async get(key: string) { return new Uint8Array(await fs.readFile(this.file(key))); }
-  async delete(key: string) { await fs.rm(this.file(key), { force: true }); }
+  async delete(key: string, signal?: AbortSignal) {checkAbort(signal);await fs.rm(this.file(key), { force: true });checkAbort(signal);}
   async stat(key: string, signal?: AbortSignal): Promise<BlobStat> {
     checkAbort(signal);let file: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
@@ -127,12 +129,14 @@ export class LocalBlobStorage implements BlobStorage {
 }
 export class S3BlobStorage implements BlobStorage {
   private client: Pick<S3Client, 'send'>;
+  readonly scope:string;
   constructor(private config: NonNullable<PlatformConfig['s3']>, client?: Pick<S3Client, 'send'>) {
+    this.scope='blob_scope_'+createHash('sha256').update(JSON.stringify(['s3',config.endpoint??null,config.region,config.bucket])).digest('hex');
     this.client = client ?? new S3Client({ endpoint: config.endpoint, region: config.region, forcePathStyle: Boolean(config.endpoint), credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey } });
   }
   async put(key: string, bytes: Uint8Array, mime: string) { await this.client.send(new PutObjectCommand({ Bucket: this.config.bucket, Key: key, Body: bytes, ContentType: mime })); }
   async get(key: string) { const result = await this.client.send(new GetObjectCommand({ Bucket: this.config.bucket, Key: key })); if (!result.Body) throw new Error('Missing object'); return await result.Body.transformToByteArray(); }
-  async delete(key: string) { await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key })); }
+  async delete(key: string, signal?: AbortSignal) {checkAbort(signal);await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }),{abortSignal:signal});checkAbort(signal);}
   async stat(key: string, signal?: AbortSignal): Promise<BlobStat> {
     checkAbort(signal);
     try {
