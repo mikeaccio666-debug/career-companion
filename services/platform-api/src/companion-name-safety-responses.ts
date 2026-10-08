@@ -175,6 +175,18 @@ export class CompanionNameSafetyResponses {
     },{readOnly:true});
     return source ? this.prepareSubmission(source.id,signal) : null;
   }
+  /** Composition port using the caller's actual transaction. This is historical
+   * resource authenticity only, never current preview, naming or tool authority.
+   * The original encrypted capture/event remains exact, including after expiry. */
+  async readCaptureInTransaction(client: PoolClient, value: string, signal?: AbortSignal) {
+    const target = await readNameResourceSourceInTransaction(client,this.crypto,companionNameUuid(value),signal);
+    if (target.decision.level === 'L0') return null;
+    const row = await this.row(client,target), response = row ? await this.authenticate(client,target,row) : null;
+    if (!row || !response) throw nameSafetyResponseUnavailable();
+    const current = (await client.query<{actual:boolean}>('SELECT $1::timestamptz<=clock_timestamp() AS actual',[row.prepared_at])).rows[0];
+    if (!current.actual) throw nameResponseStorageUnavailable();
+    signal?.throwIfAborted(); return Object.freeze({target,row:Object.freeze(row),response});
+  }
   async readBody(context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
     const fixed = Object.freeze({userId:context.userId,tokenHash:context.tokenHash}), id = readRequest(value);
     return this.db.withBoundedTransaction(async client => {

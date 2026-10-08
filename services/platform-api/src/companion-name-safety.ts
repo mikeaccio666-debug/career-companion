@@ -11,6 +11,7 @@ import { OnboardingStorage } from './onboarding-storage.ts';
 import { CompanionIdentityDrafts, CompanionIdentityNameRejected } from './companion-identity-drafts.ts';
 import { ApiError } from './errors.ts';
 import { enqueueNameSafetyResponse } from './companion-name-safety-response-outbox.ts';
+import type { CompanionNameSafetyDelivery } from './companion-name-safety-delivery.ts';
 import { parseCompanionNameApplication, parseCompanionNameSafetyClaim, parseCompanionNameSafetyDecision, parseCompanionNameSubmissionRequest,
   parseCompanionNameSubmissionClaimRequest, parseCompanionNameTask, type CompanionNameSafetyClaim, type CompanionNameSafetyDecision,
   type CompanionNameSubmissionClaimRequest, type CompanionNameSubmissionRequest } from './companion-name-safety-protocol.ts';
@@ -62,7 +63,8 @@ function claimOptions(value: unknown) {
 export class CompanionNameSafety {
   private readonly storage: OnboardingStorage;
   constructor(readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, legal: LegalBundle | null,
-    private readonly background: BackgroundGeneration, private readonly identities: CompanionIdentityDrafts) {
+    private readonly background: BackgroundGeneration, private readonly identities: CompanionIdentityDrafts,
+    private readonly resources?: CompanionNameSafetyDelivery) {
     this.storage = new OnboardingStorage(config, legal);
   }
   private async source(client: PoolClient, fixed: FixedSessionContext, taskId: string, signal?: AbortSignal) {
@@ -420,7 +422,14 @@ export class CompanionNameSafety {
       if (result.decision.level !== 'L0') status = 'not_eligible';
       else if (entry.latest_submission_id !== row.id) status = 'superseded';
       else {
-        if (rows.some(item => item.status !== 'detected' || item.level !== 'L0')) throw new ApiError(409, 'COMPANION_NAME_SAFETY_REVIEW_REQUIRED', 'All saved name sources must be safely handled before applying a name.');
+        // This internal writer retains its original entry scope. A handled old
+        // risk is an authentic explicit resource operation, never a new L0.
+        // Public selection still needs the whole prebirth intake/name barrier.
+        for(const item of rows){
+          if(item.status!=='detected'||item.level==='L0'&&item.detector_mode!=='full'
+            ||item.level!=='L0'&&(!this.resources||!await this.resources.verifyHandledInTransaction(client,fixed.userId,item.id,signal)))
+            throw new ApiError(409, 'COMPANION_NAME_SAFETY_REVIEW_REQUIRED', 'All saved name sources must be explicitly handled before applying a name.');
+        }
         await client.query('SAVEPOINT companion_name_application');
         try {
           const saved = await this.identities.saveInTransaction(client, fixed, { taskId: row.task_id, expectedRevision: row.expected_identity_revision,
