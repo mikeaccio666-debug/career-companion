@@ -74,29 +74,32 @@ export class MentorServiceOffers {
   }
   async list(session: FixedSessionContext, organizationId: string, signal?: AbortSignal): Promise<readonly MentorServiceOffer[]> {
     const context = fixed(session), org = careerRecordId(organizationId);
-    return this.db.withBoundedTransaction(async c => {
-      await this.store.authorizeSession(c,context,signal);
-      const active = (await c.query("SELECT id FROM platform_orgs WHERE id=$1 AND status='active' FOR SHARE",[org])).rowCount;
-      if (!active) throw new ApiError(404,'NOT_FOUND','服务目录不存在。');
-      const at = (await c.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
-      // Inspect every current row, not only rows SQL claims are valid. Corruption must not hide a service.
-      const rows = (await c.query<OfferRow>('SELECT * FROM platform_service_offers WHERE org_id=$1 ORDER BY service_kind,id LIMIT 101 FOR SHARE',[org])).rows;
-      if (rows.length > 100) throw unavailable();
-      const states: OfferState[] = [];
-      for (const row of rows) {
-        signal?.throwIfAborted(); const s = await this.decode(c,row);
-        if (s.status !== 'active' || s.terms.validFrom > at || s.terms.validUntil <= at) continue;
-        const evidence = (await c.query('SELECT id,storage_key,byte_size FROM platform_uploads WHERE id=$1 AND user_id=$2 AND byte_size>0 FOR SHARE',[s.reviewEvidenceRef,s.configuredBy])).rows[0];
-        if (evidence) {
-          const actual = await this.blobs.stat(evidence.storage_key,signal).catch(() => { throw unavailable(); });
-          if (actual.size !== Number(evidence.byte_size)) throw unavailable(); states.push(s);
-        }
+    return this.db.withBoundedTransaction(c => this.listInTransaction(c,context,org,signal));
+  }
+  /** Internal read shares the caller transaction and holds actual catalog locks. */
+  async listInTransaction(c:PoolClient,session:FixedSessionContext,organizationId:string,signal?:AbortSignal):Promise<readonly MentorServiceOffer[]> {
+    const context=fixed(session),org=careerRecordId(organizationId);
+    await this.store.authorizeSession(c,context,signal);
+    const active = (await c.query("SELECT id FROM platform_orgs WHERE id=$1 AND status='active' FOR SHARE",[org])).rowCount;
+    if (!active) throw new ApiError(404,'NOT_FOUND','服务目录不存在。');
+    const at = (await c.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
+    // Inspect every current row, not only rows SQL claims are valid. Corruption must not hide a service.
+    const rows = (await c.query<OfferRow>('SELECT * FROM platform_service_offers WHERE org_id=$1 ORDER BY service_kind,id LIMIT 101 FOR SHARE',[org])).rows;
+    if (rows.length > 100) throw unavailable();
+    const states: OfferState[] = [];
+    for (const row of rows) {
+      signal?.throwIfAborted(); const s = await this.decode(c,row);
+      if (s.status !== 'active' || s.terms.validFrom > at || s.terms.validUntil <= at) continue;
+      const evidence = (await c.query('SELECT id,storage_key,byte_size FROM platform_uploads WHERE id=$1 AND user_id=$2 AND byte_size>0 FOR SHARE',[s.reviewEvidenceRef,s.configuredBy])).rows[0];
+      if (evidence) {
+        const actual = await this.blobs.stat(evidence.storage_key,signal).catch(() => { throw unavailable(); });
+        if (actual.size !== Number(evidence.byte_size)) throw unavailable(); states.push(s);
       }
-      await this.store.authorizeSession(c,context,signal); signal?.throwIfAborted();
-      const finalAt = (await c.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
-      signal?.throwIfAborted();
-      return Object.freeze(states.filter(s => s.terms.validFrom <= finalAt && s.terms.validUntil > finalAt).map(s => this.public(s,finalAt)));
-    });
+    }
+    await this.store.authorizeSession(c,context,signal); signal?.throwIfAborted();
+    const finalAt = (await c.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
+    signal?.throwIfAborted();
+    return Object.freeze(states.filter(s => s.terms.validFrom <= finalAt && s.terms.validUntil > finalAt).map(s => this.public(s,finalAt)));
   }
   async staffList(session: FixedSessionContext, organizationId: string, signal?: AbortSignal) {
     const context = fixed(session),org = careerRecordId(organizationId);

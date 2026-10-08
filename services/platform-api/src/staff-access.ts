@@ -5,7 +5,7 @@ import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import { ApiError, identifier } from './errors.ts';
 
-export const STAFF_AUDIT_ACTIONS = ['organization_viewed', 'staff_memberships_viewed', 'provider_details_viewed', 'org_license_registered', 'org_license_revoked', 'org_entitlement_changed', 'org_content_imported', 'org_content_published', 'org_content_withdrawn', 'org_sources_viewed', 'service_offer_set', 'service_offer_withdrawn', 'service_offers_viewed'] as const;
+export const STAFF_AUDIT_ACTIONS = ['organization_viewed', 'staff_memberships_viewed', 'provider_details_viewed', 'org_license_registered', 'org_license_revoked', 'org_entitlement_changed', 'org_content_imported', 'org_content_published', 'org_content_withdrawn', 'org_sources_viewed', 'service_offer_set', 'service_offer_withdrawn', 'service_offers_viewed', 'mentor_intents_viewed'] as const;
 export type StaffAuditAction = typeof STAFF_AUDIT_ACTIONS[number];
 export interface StaffReadPolicy {
   readonly roles: readonly StaffRole[];
