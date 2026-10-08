@@ -1,3 +1,4 @@
+import { MentorCapacity } from './mentor-capacity.ts';
 import { MentorIntents } from './mentor-intents.ts';
 import { MentorServiceOffers } from './mentor-service-offers.ts';
 import { parseOrgKnowledgeReference } from '@companion/platform-contracts';
@@ -136,6 +137,7 @@ export async function buildApp(options:AppOptions={}) {
   const orgKnowledge=new OrgKnowledge(db,config,bundle,storage,staff);
   const mentorServiceOffers=new MentorServiceOffers(db,config,bundle,storage,staff);
   const mentorIntents=new MentorIntents(db,config,bundle,mentorServiceOffers,staff);
+  const mentorCapacity=new MentorCapacity(db,config,bundle,storage,staff);
   const audioTranscriptions=new AudioTranscriptions(db,storage,runtime);
   const goalPlans=new GoalPlans(db,jobs,runtime);
   const goalPlanProposals=new GoalPlanProposals(db,goalPlans);
@@ -697,6 +699,15 @@ export async function buildApp(options:AppOptions={}) {
   });
   app.get(prefix+'/staff/orgs/:id/mentor-intents',secure,(request,reply)=>applicationRead(request,reply,
     signal=>mentorIntents.opsList(fixedRequestSession(request,userId(request)),params(request),careerHttpQuery(request.query),signal)));
+  for(const [path,kind] of [['profiles','profile'],['slots','slot']] as const) {
+    app.get(prefix+'/staff/orgs/:id/mentor-capacity/'+path,secure,(request,reply)=>applicationRead(request,reply,
+      signal=>mentorCapacity.list(fixedRequestSession(request,userId(request)),params(request).toLowerCase(),kind,careerHttpQuery(request.query),signal)));
+  }
+  app.get(prefix+'/staff/orgs/:id/mentor-capacity/operations/:operationId',secure,(request,reply)=>{
+    try{careerRecordObject(careerHttpQuery(request.query),[]);}catch{throw new ApiError(400,'MENTOR_CAPACITY_INPUT_INVALID','请使用支持的导师资料查询。');}
+    return applicationRead(request,reply,signal=>mentorCapacity.observe(fixedRequestSession(request,userId(request)),params(request).toLowerCase(),
+      params(request,'operationId').toLowerCase(),signal));
+  });
   const applicationRoot = prefix + '/career/applications';
   function applicationQuery(request: FastifyRequest) {
     try { careerRecordObject(careerHttpQuery(request.query), []); }
