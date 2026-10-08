@@ -1,6 +1,7 @@
 import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId,careerRecordObject,parseManualJob,parseManualJobCommand,manualJobSummary,manualJobsDuplicate,type ManualJob,type ManualJobAction } from '@companion/platform-contracts';
+import type { OwnedCareerSavedJob } from './career-run-context.ts';
 import { manualJobEvidence } from '@companion/career-core';
 import { authorizeFixedSession,type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
@@ -25,14 +26,53 @@ export class ManualJobs {
   if(canonical(r)!==raw||r.schemaVersion!==1||r.ownerId!==context.userId||r.operationId!==row.operation_id||r.observationId!==row.observation_id||r.action!==row.action||r.appliedRevision!==row.applied_revision||r.createdAt!==row.created_at.toISOString()||typeof r.commandDigest!=='string'||!/^[0-9a-f]{64}$/.test(r.commandDigest)||typeof r.acceptedAuthVersion!=='string'||!/^(0|[1-9][0-9]*)$/.test(r.acceptedAuthVersion))throw unavailable();return r as unknown as Receipt;
  }catch{throw unavailable();}}
  private async latest(client:PoolClient,context:FixedSessionContext,id:string){const row=(await client.query('SELECT * FROM platform_career_job_observation_operations WHERE user_id=$1 AND observation_id=$2 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE',[context.userId,id])).rows[0];if(!row)throw unavailable();return this.receipt(client,context,row);}
- private async record(client:PoolClient,context:FixedSessionContext,row:any):Promise<Readonly<ManualJob>>{try{
-  const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:'platform_career_job_observations',column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.revision}),job=parseManualJob(JSON.parse(raw)),latest=await this.latest(client,context,row.id);
-  const evidence=manualJobEvidence(job.jobText);
-  if(canonical(job)!==raw||job.id!==row.id||job.ownerId!==context.userId||job.source!==row.source||job.state!==row.state||job.revision!==row.revision||job.observedAt!==row.observed_at.toISOString()||job.checkedAt!==row.checked_at.toISOString()||job.observedAt!==row.created_at.toISOString()||job.observedAt!==row.updated_at.toISOString()||job.lastOperationId!==row.last_operation_id||latest.action!=='create'||latest.operationId!==job.lastOperationId||latest.appliedRevision!==job.revision||latest.createdAt!==job.observedAt
-    ||canonical(evidence)!==canonical({sponsorship:job.sponsorship,sponsorshipEvidence:job.sponsorshipEvidence,evidenceOverflow:job.evidenceOverflow,ruleRevision:job.ruleRevision}))throw unavailable();return job;
- }catch{throw unavailable();}}
+    private async record(client: PoolClient, context: FixedSessionContext, row: any, known?: Receipt): Promise<Readonly<ManualJob>> {
+        try {
+            const raw = this.storage.crypto!.openUtf8(row.record_ciphertext, { table: 'platform_career_job_observations', column: 'record_ciphertext', rowId: row.id, ownerId: context.userId, revision: row.revision }), job = parseManualJob(JSON.parse(raw)), latest = known ?? await this.latest(client, context, row.id);
+            const evidence = manualJobEvidence(job.jobText);
+            if (canonical(job) !== raw || job.id !== row.id || job.ownerId !== context.userId || job.source !== row.source || job.state !== row.state || job.revision !== row.revision || job.observedAt !== row.observed_at.toISOString() || job.checkedAt !== row.checked_at.toISOString() || job.observedAt !== row.created_at.toISOString() || job.observedAt !== row.updated_at.toISOString() || job.lastOperationId !== row.last_operation_id || latest.action !== 'create' || latest.operationId !== job.lastOperationId || latest.appliedRevision !== job.revision || latest.createdAt !== job.observedAt
+                || canonical(evidence) !== canonical({ sponsorship: job.sponsorship, sponsorshipEvidence: job.sponsorshipEvidence, evidenceOverflow: job.evidenceOverflow, ruleRevision: job.ruleRevision }))
+                throw unavailable();
+            return job;
+        }
+        catch {
+            throw unavailable();
+        }
+    }
  private async row(client:PoolClient,context:FixedSessionContext,id:string){return (await client.query('SELECT * FROM platform_career_job_observations WHERE user_id=$1 AND id=$2 FOR UPDATE',[context.userId,id])).rows[0];}
  async readInTransaction(client:PoolClient,value:FixedSessionContext,key:unknown,signal?:AbortSignal){const context=this.fixed(value);let id:string;try{id=careerRecordId(key);}catch{throw bad();}await this.authorize(client,context,signal);const row=await this.row(client,context,id);if(!row)throw missing();const job=await this.record(client,context,row);await authorizeFixedSession(client,context,signal);return job;}
+    /** Complete authenticated metadata, never a page of user-entered body. */
+    async readForPreparationInTransaction(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal): Promise<readonly Readonly<OwnedCareerSavedJob>[]> {
+        const context = this.fixed(value);
+        await this.authorize(client, context, signal);
+        await this.storage.authorizeSession(client, context, signal);
+        const rows = (await client.query('SELECT * FROM platform_career_job_observations WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE', [context.userId])).rows;
+        if (rows.length > 500)
+            throw unavailable();
+        const latestRows = rows.length ? (await client.query(`SELECT o.* FROM platform_career_job_observation_operations o JOIN
+   (SELECT observation_id,max(applied_revision) AS revision FROM platform_career_job_observation_operations WHERE user_id=$1 AND observation_id=ANY($2::uuid[]) GROUP BY observation_id) latest
+   ON latest.observation_id=o.observation_id AND latest.revision=o.applied_revision WHERE o.user_id=$1 FOR SHARE OF o`, [context.userId, rows.map(r => r.id)])).rows : [];
+        const receipts = new Map<string, Receipt>();
+        for (const row of latestRows) {
+            signal?.throwIfAborted();
+            const r = await this.receipt(client, context, row);
+            if (receipts.has(r.observationId))
+                throw unavailable();
+            receipts.set(r.observationId, r);
+        }
+        const metadata: Readonly<OwnedCareerSavedJob>[] = [];
+        for (const row of rows) {
+            signal?.throwIfAborted();
+            const proof = receipts.get(row.id);
+            if (!proof)
+                throw unavailable();
+            const job = await this.record(client, context, row, proof);
+            metadata.push(Object.freeze({ ownerId: context.userId, id: job.id, revision: job.revision, state: 'current', source: 'manual', track: job.roleFamily, observedAt: job.observedAt,
+                normalSummary: '本人粘贴的岗位 · ' + job.roleFamily + ' · 未核实是否仍开放。' }));
+        }
+        await authorizeFixedSession(client, context, signal);
+        return Object.freeze(metadata);
+    }
  async get(value:FixedSessionContext,key:unknown,signal?:AbortSignal){const context=this.fixed(value);return this.db.withBoundedTransaction(client=>this.readInTransaction(client,context,key,signal));}
  async list(value:FixedSessionContext,query:unknown={},signal?:AbortSignal){const context=this.fixed(value);let after:string|null;try{const q=careerRecordObject(query,[],['after']);after=Object.hasOwn(q,'after')?careerRecordId(q.after):null;}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);let cursor:any=null;if(after){cursor=await this.row(client,context,after);if(!cursor)throw missing();await this.record(client,context,cursor);}

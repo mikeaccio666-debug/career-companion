@@ -1,3 +1,4 @@
+import type { OwnedCareerApplication, OwnedCareerSavedJob } from './career-run-context.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId, careerRecordObject, parseCareerApplication, parseCareerApplicationCommand, parseCareerApplicationEvent, careerApplicationSummary, manualJobSummary, type CareerApplication, type CareerApplicationAction, type CareerApplicationEvent, type ApplicationStageState } from '@companion/platform-contracts';
@@ -28,23 +29,37 @@ interface Receipt {
     acceptedAuthVersion: string;
     createdAt: string;
 }
+interface PreparationProofs {
+    latest: ReadonlyMap<string, Receipt>;
+    operations: ReadonlyMap<string, Receipt>;
+    events: ReadonlyMap<string, any>;
+}
 /** Owner records and restriction sources only. No model, receipt issuer,
  * trusted click, overlay-clearing, notification or execution port. */
 export class CareerApplications {
     private readonly storage: OnboardingStorage;
-    constructor(private readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, legal: LegalBundle | null, private readonly jobs: Pick<ManualJobs, 'readInTransaction'>) { this.storage = new OnboardingStorage(config, legal); }
-    private fixed(value: FixedSessionContext) { try {
-        const v = careerRecordObject(value, ['userId', 'tokenHash']);
-        if (typeof v.tokenHash !== 'string' || !/^[0-9a-f]{64}$/.test(v.tokenHash))
-            throw bad();
-        return Object.freeze({ userId: careerRecordId(v.userId), tokenHash: v.tokenHash });
+    constructor(private readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, legal: LegalBundle | null, private readonly jobs: Pick<ManualJobs, 'readInTransaction' | 'readForPreparationInTransaction'>) { this.storage = new OnboardingStorage(config, legal); }
+    private fixed(value: FixedSessionContext) {
+        try {
+            const v = careerRecordObject(value, ['userId', 'tokenHash']);
+            if (typeof v.tokenHash !== 'string' || !/^[0-9a-f]{64}$/.test(v.tokenHash))
+                throw bad();
+            return Object.freeze({ userId: careerRecordId(v.userId), tokenHash: v.tokenHash });
+        }
+        catch {
+            throw new ApiError(401, 'AUTH_REQUIRED', '请重新登录。');
+        }
     }
-    catch {
-        throw new ApiError(401, 'AUTH_REQUIRED', '请重新登录。');
-    } }
-    private async authorize(client: PoolClient, context: FixedSessionContext, signal?: AbortSignal) { await authorizeFixedSession(client, context, signal); const row = (await client.query('SELECT account_kind,auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE', [context.userId])).rows[0]; if (row?.account_kind !== 'student')
-        throw new ApiError(403, 'STUDENT_ACCOUNT_REQUIRED', '请使用学生账号。'); if (!this.storage.crypto)
-        throw unavailable(); signal?.throwIfAborted(); return String(row.auth_version); }
+    private async authorize(client: PoolClient, context: FixedSessionContext, signal?: AbortSignal) {
+        await authorizeFixedSession(client, context, signal);
+        const row = (await client.query('SELECT account_kind,auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE', [context.userId])).rows[0];
+        if (row?.account_kind !== 'student')
+            throw new ApiError(403, 'STUDENT_ACCOUNT_REQUIRED', '请使用学生账号。');
+        if (!this.storage.crypto)
+            throw unavailable();
+        signal?.throwIfAborted();
+        return String(row.auth_version);
+    }
     private async receipt(context: FixedSessionContext, row: any): Promise<Receipt> {
         try {
             const raw = this.storage.crypto!.openUtf8(row.receipt_ciphertext, { table: 'platform_career_application_operations', column: 'receipt_ciphertext', rowId: row.operation_id, ownerId: context.userId, revision: row.applied_revision });
@@ -58,8 +73,12 @@ export class CareerApplications {
         }
     }
     private async operation(client: PoolClient, context: FixedSessionContext, id: string) { return (await client.query('SELECT * FROM platform_career_application_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE', [context.userId, id])).rows[0]; }
-    private async latest(client: PoolClient, context: FixedSessionContext, id: string) { const row = (await client.query('SELECT * FROM platform_career_application_operations WHERE user_id=$1 AND application_id=$2 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE', [context.userId, id])).rows[0]; if (!row)
-        throw unavailable(); return this.receipt(context, row); }
+    private async latest(client: PoolClient, context: FixedSessionContext, id: string) {
+        const row = (await client.query('SELECT * FROM platform_career_application_operations WHERE user_id=$1 AND application_id=$2 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE', [context.userId, id])).rows[0];
+        if (!row)
+            throw unavailable();
+        return this.receipt(context, row);
+    }
     private async event(client: PoolClient, context: FixedSessionContext, row: any, known?: Receipt): Promise<Readonly<CareerApplicationEvent>> {
         try {
             const r = known ?? await this.receipt(context, await this.operation(client, context, row.id));
@@ -73,22 +92,27 @@ export class CareerApplications {
         }
     }
     private async row(client: PoolClient, context: FixedSessionContext, id: string) { return (await client.query('SELECT * FROM platform_career_applications WHERE user_id=$1 AND id=$2 FOR UPDATE', [context.userId, id])).rows[0]; }
-    private async record(client: PoolClient, context: FixedSessionContext, row: any): Promise<Readonly<CareerApplication>> {
+    private async record(client: PoolClient, context: FixedSessionContext, row: any, proofs?: PreparationProofs): Promise<Readonly<CareerApplication>> {
         try {
-            const raw = this.storage.crypto!.openUtf8(row.record_ciphertext, { table: 'platform_career_applications', column: 'record_ciphertext', rowId: row.id, ownerId: context.userId, revision: row.revision }), v = parseCareerApplication(JSON.parse(raw)), r = await this.latest(client, context, row.id);
+            const raw = this.storage.crypto!.openUtf8(row.record_ciphertext, { table: 'platform_career_applications', column: 'record_ciphertext', rowId: row.id, ownerId: context.userId, revision: row.revision }), v = parseCareerApplication(JSON.parse(raw)), r = proofs ? proofs.latest.get(row.id) : await this.latest(client, context, row.id);
+            if (!r)
+                throw unavailable();
             if (canonical(v) !== raw || hash(v) !== r.recordDigest || v.id !== row.id || v.ownerId !== context.userId || v.job.id !== row.job_observation_id || v.stage !== row.stage || v.revision !== row.revision || v.lastOperationId !== row.last_operation_id || v.createdAt !== row.created_at.toISOString() || v.updatedAt !== row.updated_at.toISOString() || r.action === 'delete' || r.operationId !== v.lastOperationId || r.appliedRevision !== v.revision || r.createdAt !== v.updatedAt)
                 throw unavailable();
-            const current = (await client.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND id=$2 FOR SHARE', [context.userId, v.lastOperationId])).rows[0];
+            const current = proofs ? proofs.events.get(v.lastOperationId) : (await client.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND id=$2 FOR SHARE', [context.userId, v.lastOperationId])).rows[0];
             if (!current)
                 throw unavailable();
             const event = await this.event(client, context, current, r);
             if (canonical(event.next) !== canonical(state(v)))
                 throw unavailable();
             if (v.careWindow) {
-                const source = (await client.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND id=$2 FOR SHARE', [context.userId, v.careWindow.sourceEventId])).rows[0];
+                const source = proofs ? proofs.events.get(v.careWindow.sourceEventId) : (await client.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND id=$2 FOR SHARE', [context.userId, v.careWindow.sourceEventId])).rows[0];
                 if (!source)
                     throw unavailable();
-                const e = await this.event(client, context, source);
+                const sourceReceipt = proofs?.operations.get(v.careWindow.sourceEventId);
+                if (proofs && !sourceReceipt)
+                    throw unavailable();
+                const e = await this.event(client, context, source, sourceReceipt);
                 if (e.applicationId !== v.id || e.revision !== v.careWindow.eventRevision || e.createdAt !== v.careWindow.startedAt || e.careWindowUntil !== v.careWindow.until || !applicationNeedsPostRejection(e.next) || applicationNeedsPostRejection(e.previous))
                     throw unavailable();
             }
@@ -98,25 +122,119 @@ export class CareerApplications {
             throw unavailable();
         }
     }
-    private async result(client: PoolClient, context: FixedSessionContext, r: Receipt) { const row = await this.row(client, context, r.applicationId); if (row)
-        return this.record(client, context, row); const latest = await this.latest(client, context, r.applicationId); if (latest.action !== 'delete' || latest.recordDigest !== hash(null))
-        throw unavailable(); const tombstone = (await client.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND id=$2', [context.userId, latest.operationId])).rows[0]; if (!tombstone || !(await this.event(client, context, tombstone, latest)).previous)
-        throw unavailable(); return null; }
+    private async result(client: PoolClient, context: FixedSessionContext, r: Receipt) {
+        const row = await this.row(client, context, r.applicationId);
+        if (row)
+            return this.record(client, context, row);
+        const latest = await this.latest(client, context, r.applicationId);
+        if (latest.action !== 'delete' || latest.recordDigest !== hash(null))
+            throw unavailable();
+        const tombstone = (await client.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND id=$2', [context.userId, latest.operationId])).rows[0];
+        if (!tombstone || !(await this.event(client, context, tombstone, latest)).previous)
+            throw unavailable();
+        return null;
+    }
     private ack(r: Receipt, replayed: boolean) { return Object.freeze({ id: r.operationId, applicationId: r.applicationId, action: r.action, appliedRevision: r.appliedRevision, replayed }); }
-    async get(value: FixedSessionContext, key: unknown, signal?: AbortSignal) { const context = this.fixed(value); let id: string; try {
-        id = careerRecordId(key);
+    /** Complete, body-free metadata. Source existence and all immutable proofs
+     * are read within the actual consuming transaction, never from UI summaries. */
+    async readForPreparationInTransaction(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal) {
+        const context = this.fixed(value);
+        await this.authorize(client, context, signal);
+        await this.storage.authorizeSession(client, context, signal);
+        const savedJobs = await this.jobs.readForPreparationInTransaction(client, context, signal);
+        const jobById = new Map(savedJobs.map(job => [job.id, job]));
+        const rows = (await client.query('SELECT * FROM platform_career_applications WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE', [context.userId])).rows;
+        if (rows.length > 500)
+            throw unavailable();
+        const latestRows = rows.length ? (await client.query(`SELECT o.* FROM platform_career_application_operations o JOIN
+          (SELECT application_id,max(applied_revision) AS revision FROM platform_career_application_operations WHERE user_id=$1 AND application_id=ANY($2::uuid[]) GROUP BY application_id) latest
+          ON latest.application_id=o.application_id AND latest.revision=o.applied_revision WHERE o.user_id=$1 FOR SHARE OF o`, [context.userId, rows.map(r => r.id)])).rows : [];
+        const latest = new Map<string, Receipt>(), operations = new Map<string, Receipt>();
+        for (const row of latestRows) {
+            signal?.throwIfAborted();
+            const r = await this.receipt(context, row);
+            if (latest.has(r.applicationId))
+                throw unavailable();
+            latest.set(r.applicationId, r);
+            operations.set(r.operationId, r);
+        }
+        const eventIds = new Set<string>();
+        for (const row of rows) {
+            signal?.throwIfAborted();
+            try {
+                const v = parseCareerApplication(JSON.parse(this.storage.crypto!.openUtf8(row.record_ciphertext, { table: 'platform_career_applications', column: 'record_ciphertext', rowId: row.id, ownerId: context.userId, revision: row.revision })));
+                eventIds.add(v.lastOperationId);
+                if (v.careWindow)
+                    eventIds.add(v.careWindow.sourceEventId);
+            }
+            catch {
+                throw unavailable();
+            }
+        }
+        const missingReceipts = [...eventIds].filter(id => !operations.has(id));
+        if (missingReceipts.length) {
+            const historical = (await client.query('SELECT * FROM platform_career_application_operations WHERE user_id=$1 AND operation_id=ANY($2::uuid[]) FOR SHARE', [context.userId, missingReceipts])).rows;
+            for (const row of historical) {
+                signal?.throwIfAborted();
+                const r = await this.receipt(context, row);
+                if (operations.has(r.operationId))
+                    throw unavailable();
+                operations.set(r.operationId, r);
+            }
+        }
+        const eventRows = eventIds.size ? (await client.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND id=ANY($2::uuid[]) FOR SHARE', [context.userId, [...eventIds]])).rows : [];
+        const events = new Map(eventRows.map(row => [row.id, row]));
+        if (events.size !== eventIds.size || [...eventIds].some(id => !operations.has(id)))
+            throw unavailable();
+        const proofs: PreparationProofs = { latest, operations, events }, applications: Readonly<OwnedCareerApplication>[] = [];
+        for (const row of rows) {
+            signal?.throwIfAborted();
+            const v = await this.record(client, context, row, proofs), job = jobById.get(v.job.id) ?? null;
+            applications.push(Object.freeze({ ownerId: context.userId, id: v.id, revision: v.revision, state: 'current', stage: v.stage, track: v.job.roleFamily, job,
+                normalSummary: '本人记录的申请 · ' + v.job.roleFamily + ' · ' + v.stage + ' · ' + (job ? '关联原 JD 存在，未核实是否仍开放。' : '原 JD 已移除。') }));
+        }
+        await authorizeFixedSession(client, context, signal);
+        signal?.throwIfAborted();
+        return Object.freeze({ applications: Object.freeze(applications), savedJobs });
     }
-    catch {
-        throw bad();
-    } return this.db.withBoundedTransaction(async (c) => { await this.authorize(c, context, signal); const row = await this.row(c, context, id); if (!row)
-        throw missing(); const application = await this.record(c, context, row); await authorizeFixedSession(c, context, signal); return application; }); }
-    async observe(value: FixedSessionContext, key: unknown, signal?: AbortSignal) { const context = this.fixed(value); let id: string; try {
-        id = careerRecordId(key);
+    async get(value: FixedSessionContext, key: unknown, signal?: AbortSignal) {
+        const context = this.fixed(value);
+        let id: string;
+        try {
+            id = careerRecordId(key);
+        }
+        catch {
+            throw bad();
+        }
+        return this.db.withBoundedTransaction(async (c) => {
+            await this.authorize(c, context, signal);
+            const row = await this.row(c, context, id);
+            if (!row)
+                throw missing();
+            const application = await this.record(c, context, row);
+            await authorizeFixedSession(c, context, signal);
+            return application;
+        });
     }
-    catch {
-        throw bad();
-    } return this.db.withBoundedTransaction(async (c) => { await this.authorize(c, context, signal); const row = await this.operation(c, context, id); if (!row)
-        throw missing(); const receipt = await this.receipt(context, row), application = await this.result(c, context, receipt); await authorizeFixedSession(c, context, signal); return Object.freeze({ application, operation: this.ack(receipt, true) }); }); }
+    async observe(value: FixedSessionContext, key: unknown, signal?: AbortSignal) {
+        const context = this.fixed(value);
+        let id: string;
+        try {
+            id = careerRecordId(key);
+        }
+        catch {
+            throw bad();
+        }
+        return this.db.withBoundedTransaction(async (c) => {
+            await this.authorize(c, context, signal);
+            const row = await this.operation(c, context, id);
+            if (!row)
+                throw missing();
+            const receipt = await this.receipt(context, row), application = await this.result(c, context, receipt);
+            await authorizeFixedSession(c, context, signal);
+            return Object.freeze({ application, operation: this.ack(receipt, true) });
+        });
+    }
     async list(value: FixedSessionContext, query: unknown = {}, signal?: AbortSignal) {
         const context = this.fixed(value);
         let after: string | null, stage: string | null;
@@ -184,14 +302,23 @@ export class CareerApplications {
     }
     /** Restriction sources from real authenticated immutable events, including
      * a physically removed application's minimal tombstone. Not model input. */
-    async readActiveCareWindowsInTransaction(c: PoolClient, value: FixedSessionContext, signal?: AbortSignal) { const context = this.fixed(value); await this.authorize(c, context, signal); const rows = (await c.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND care_until>clock_timestamp() ORDER BY care_until,id LIMIT 501 FOR SHARE', [context.userId])).rows; if (rows.length > 500)
-        throw unavailable(); const windows = []; for (const row of rows) {
-        signal?.throwIfAborted();
-        const e = await this.event(c, context, row);
-        if (e.careWindowUntil === null || !applicationNeedsPostRejection(e.next) || applicationNeedsPostRejection(e.previous))
+    async readActiveCareWindowsInTransaction(c: PoolClient, value: FixedSessionContext, signal?: AbortSignal) {
+        const context = this.fixed(value);
+        await this.authorize(c, context, signal);
+        const rows = (await c.query('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND care_until>clock_timestamp() ORDER BY care_until,id LIMIT 501 FOR SHARE', [context.userId])).rows;
+        if (rows.length > 500)
             throw unavailable();
-        windows.push(Object.freeze({ kind: 'post_rejection' as const, sourceEventId: e.id, applicationId: e.applicationId, eventRevision: e.revision, startedAt: e.createdAt, until: e.careWindowUntil }));
-    } await authorizeFixedSession(c, context, signal); return Object.freeze(windows); }
+        const windows = [];
+        for (const row of rows) {
+            signal?.throwIfAborted();
+            const e = await this.event(c, context, row);
+            if (e.careWindowUntil === null || !applicationNeedsPostRejection(e.next) || applicationNeedsPostRejection(e.previous))
+                throw unavailable();
+            windows.push(Object.freeze({ kind: 'post_rejection' as const, sourceEventId: e.id, applicationId: e.applicationId, eventRevision: e.revision, startedAt: e.createdAt, until: e.careWindowUntil }));
+        }
+        await authorizeFixedSession(c, context, signal);
+        return Object.freeze(windows);
+    }
     async mutate(value: FixedSessionContext, action: CareerApplicationAction, key: unknown, input: unknown, signal?: AbortSignal) {
         const context = this.fixed(value);
         let command: ReturnType<typeof parseCareerApplicationCommand>, requested: string | null;

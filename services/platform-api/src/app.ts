@@ -116,7 +116,7 @@ export async function buildApp(options:AppOptions={}) {
   const storage=options.storage??createStorage(config);
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
-  const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview);
+  const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview,careerApplications);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
