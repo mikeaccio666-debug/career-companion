@@ -75,7 +75,7 @@ export function MentorQuoteCard({order}: {order: Readonly<MentorOrder>}) {
   const offer = order.shownOffer;
   return <article className="mentor-service-card" aria-label="这份请求的报价">
     <header><span className="mentor-human-tag">真人 · 蔓藤导师</span><h2>{offer.title} · 报价</h2></header>
-    <p role="status">{order.status === 'quoted' ? '报价已记录，付款安排和排期待运营确认。' : '这份报价已作废。'}</p>
+    <p className="mentor-system-notice" role="status">系统 · {order.status === 'quoted' ? '报价已记录，付款安排和排期待运营确认。' : order.status === 'paid' ? '已记录线下收款，排期待确认。' : order.status === 'refunded_partial' ? '已记录部分退款。' : order.status === 'refunded_full' ? '已记录全额退款。' : '这份报价已作废。'}</p>
     <section><h3>你付的是什么</h3><p>{offer.description}</p></section>
     <section><h3>不包含什么</h3><p>{offer.exclusions}</p><p>不承诺面试或 offer，不包含内推服务。</p></section>
     <section><h3>报价、时长与收款方</h3><dl className="mentor-service-facts">
@@ -83,6 +83,7 @@ export function MentorQuoteCard({order}: {order: Readonly<MentorOrder>}) {
       <div><dt>时长</dt><dd className="mentor-num">{offer.durationMin} min</dd></div>
       <div><dt>收款方</dt><dd>{offer.collector}</dd></div>
     </dl></section>
+    {order.payment && <p className="mentor-num">已记录收款：{mentorPrice(order.priceCents)} USD · 累计退款：{mentorPrice(order.payment.refundedCents)} USD</p>}
     <section><h3>退款与申诉</h3><p>{offer.refundRules}</p><p>{offer.appealInstructions}</p></section>
     <section><h3>利益关系</h3><p>{offer.disclosure}</p></section>
     <section><h3>对方能看到什么</h3><p>{offer.intentPrivacy}</p></section>

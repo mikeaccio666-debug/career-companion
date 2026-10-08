@@ -1,3 +1,4 @@
+import { MentorFinancialLedger } from './mentor-financial-ledger.ts';
 import { UploadRemovals } from './upload-removals.ts';
 import { purgeExpiredMemoryDeletions } from './memory-retention.ts';
 import { loadLegalBundle } from './legal-documents.ts';
@@ -25,6 +26,8 @@ const naming=studentOnboarding.naming;
 await db.query('SELECT 1');await recoverInterrupted(jobs);
 await reconcileCompanionAccounting(companion);
 await purgeExpiredMemoryDeletions(db);
+const mentorFinancialRetention=config.dataCrypto?new MentorFinancialLedger(config):null;
+if(mentorFinancialRetention)await mentorFinancialRetention.purgeExpired(db);
 if(config.dataCrypto)await uploadRemovals.recover();
 const worker=createWorker(jobs);
 const companionWorker=createCompanionGenerationWorker(companion),companionQueue=new CompanionGenerationQueue(companion);
@@ -37,7 +40,7 @@ const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeV
 let closing=false,recovering:Promise<void>|undefined,shutdown:Promise<void>|undefined;
 const recovery=setInterval(()=>{
   if(closing||recovering)return;
-  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),...(config.dataCrypto?[uploadRemovals.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
+  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),...(mentorFinancialRetention?[mentorFinancialRetention.purgeExpired(db).catch(()=>{process.stderr.write('Mentor financial retention maintenance failed.\n');})]:[]),...(config.dataCrypto?[uploadRemovals.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
   recovering=current;
 },15_000);recovery.unref();
 process.stdout.write('Platform task worker started.\n');

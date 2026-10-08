@@ -171,3 +171,11 @@ test('late quote responses after suspension or account invalidation stay hidden 
  await ready(h);const read=h.controller.loadOrder(id);await until(()=>h.controller.snapshot().busy);h.controller.suspend();
  resolve({session:actual,order:quote(actual)});await read;assert.equal(h.controller.snapshot().quote,null);assert.deepEqual(h.controller.snapshot().records,[]);h.controller.stop();
 });
+
+test('true paired paid/refunded order revision can advance independently from fulfillment; an older financial reply stays hidden',async()=>{
+ const actual=matched();let revision=2;const h=harness(path=>path.endsWith('/entry')?entry():path.endsWith('/order')?{session:actual,order:quote(actual,{status:revision===2?'paid':'refunded_partial',
+ revision,paymentRef:'Fictional_payment',payment:{paidAt:at,refundedCents:revision===2?0:1000},updatedAt:'2026-10-08T11:00:00.000Z',lastOperationId:randomUUID()})}:{sessions:[actual],nextCursor:null});
+ await ready(h);await h.controller.loadOrder(id);assert.equal(h.controller.snapshot().quote?.order.status,'paid');
+ revision=3;await h.controller.loadOrder(id);assert.equal(h.controller.snapshot().quote?.order.payment?.refundedCents,1000);
+ revision=2;await h.controller.loadOrder(id);assert.equal(h.controller.snapshot().quote,null);assert(h.controller.snapshot().error);h.controller.stop();
+});

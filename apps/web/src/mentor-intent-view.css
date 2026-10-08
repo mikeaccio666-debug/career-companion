@@ -42,3 +42,5 @@
 .mentor-history time { font-size: 12px; color: var(--ink-3); }
 @media(max-width:800px) { .mentor-page { display: block; } .mentor-sidebar { padding: 12px 16px; border-right: 0; border-bottom: 1px solid var(--rule); } .mentor-sidebar nav { display: flex; flex-wrap: wrap; } .mentor-human-group { margin: 8px 0; } .mentor-page main { padding: 0 16px 24px; } }
 @media(prefers-reduced-motion:reduce) { .mentor-page * { scroll-behavior: auto; } }
+
+.mentor-system-notice { background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 12px; color: var(--ink-2); font: 13px/20px var(--f-ui,system-ui,sans-serif); }

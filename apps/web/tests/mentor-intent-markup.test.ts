@@ -108,3 +108,10 @@ test('void quote and suspended quote never imply payment; original unassigned ca
  const html=markup({state:state({quote:{order:{status:'void',priceCents:9500,shownOffer:offer()}}})});assert(html.includes('这份报价已作废。'));assert(!html.includes('已付款'));
  const hidden=markup({state:state({suspended:true,quote:{order:{status:'quoted',priceCents:9500,shownOffer:offer()}}})});assert(!hidden.includes('$95.00'));
 });
+
+test('only actual settled order data renders system-labelled payment/refund amounts; private external references never appear in markup',()=>{
+ for(const [status,refundedCents,text] of [['paid',0,'已记录线下收款'],['refunded_partial',2500,'已记录部分退款'],['refunded_full',9500,'已记录全额退款']] as const){
+  const html=markup({state:state({quote:{order:{status,priceCents:9500,shownOffer:offer(),payment:{paidAt:at,refundedCents},paymentRef:'Fictional_private_reference',handoffCode:'Fictional_private_code'}}})});
+  assert(html.includes('系统'));assert(html.includes(text));assert(html.includes('$95.00'));assert(!html.includes('Fictional_private_reference'));assert(!html.includes('Fictional_private_code'));assert(!html.includes('已排期'));
+ }
+});
