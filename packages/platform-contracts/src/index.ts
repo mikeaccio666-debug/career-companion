@@ -308,3 +308,5 @@ export * from './manual-jobs.ts';
 export * from './career-record-values.ts';
 
 export * from './career-stories.ts';
+
+export * from './resume-review.ts';

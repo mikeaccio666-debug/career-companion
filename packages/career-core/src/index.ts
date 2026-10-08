@@ -18,3 +18,5 @@ export * from './companion/memory-policy.ts';
 export * from './team/handoff.ts';
 
 export * from './manual-job-evidence.ts';
+
+export * from './pending/resume-original.ts';
