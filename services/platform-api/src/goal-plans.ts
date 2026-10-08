@@ -10,6 +10,7 @@ import { assertGoalPlanDependencies, GOAL_PLAN_ROWS_SQL, lockGoalPlan } from './
 import { goalPlanCheckpoint, goalPlanHash, goalPlanStepState, parseGoalPlanContinuation, planBlocked, planChanged, planRevision, planStepIndex } from './goal-plan-core.ts';
 import { parseGoalPlanTaskBindings, validateGoalPlanBindings } from './goal-plan-inputs.ts';
 import { bindingInputDiagnostic, goalPlanInputObject, goalPlanInputString, semanticBindingDiagnostic, taskInputDiagnostic, withGoalPlanDiagnostic } from './goal-plan-input-diagnostics.ts';
+import { assertLegacyConversation, assertLegacyConversationRow } from './companion-room-boundary.ts';
 
 function fields(data: Record<string,unknown>, allowed: string[], path?:string) {
   const check=()=>{if (Object.keys(data).some(key => !allowed.includes(key))) throw invalid('Unsupported goal-plan field.');};
@@ -48,20 +49,21 @@ export interface GoalPlanAgentPreparation {
 export class GoalPlans {
   constructor(readonly db:Database, readonly jobs:JobService, readonly runtime:PlatformProviderRuntime) {}
   private async owner(client:PoolClient, userId:string, conversationId:string) {
-    if(!(await client.query('SELECT id FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR NO KEY UPDATE',[conversationId,userId])).rowCount)throw notFound();
+    const owned=await client.query('SELECT id,kind FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR NO KEY UPDATE',[conversationId,userId]);
+    if(!owned.rowCount)throw notFound();assertLegacyConversationRow(owned.rows[0]);
     await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[userId]);
   }
   private async revisionRow(client:PoolClient,userId:string,planId:string,revision:number) {
     await client.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[userId]);
     const row=(await client.query('SELECT * FROM platform_goal_plans WHERE id=$1 AND user_id=$2 FOR UPDATE',[planId,userId])).rows[0];
-    if(!row)throw notFound();if(row.revision!==revision)throw planChanged();return row;
+    if(!row)throw notFound();await assertLegacyConversation(client,userId,row.conversation_id);if(row.revision!==revision)throw planChanged();return row;
   }
   private async writeDefinition(client:PoolClient,planId:string,revision:number,input:GoalPlanInput) {
     await client.query('INSERT INTO platform_goal_plan_revisions(plan_id,revision,title,goal,definition_hash) VALUES($1,$2,$3,$4,$5)',[planId,revision,input.title,input.goal,goalPlanHash(input)]);
     for(const [index,step] of input.steps.entries())await client.query('INSERT INTO platform_goal_plan_steps(plan_id,revision,step_index,input,input_hash) VALUES($1,$2,$3,$4,$5)',[planId,revision,index,JSON.stringify(step),goalPlanHash(step)]);
   }
   async list(userId:string,conversationId:string):Promise<GoalPlanList> {
-    if(!(await this.db.query('SELECT id FROM platform_conversations WHERE id=$1 AND user_id=$2',[conversationId,userId])).rowCount)throw notFound();
+    await assertLegacyConversation(this.db,userId,conversationId);
     const ids=(await this.db.query('SELECT id FROM platform_goal_plans WHERE user_id=$1 AND conversation_id=$2 ORDER BY created_at DESC,id DESC LIMIT $3',[userId,conversationId,GOAL_PLAN_LIMIT])).rows;
     return {plans:await Promise.all(ids.map(row=>this.get(userId,row.id))),limit:GOAL_PLAN_LIMIT};
   }
@@ -74,6 +76,7 @@ export class GoalPlans {
   }
   /** Internal creation after the caller's user serialization and owned-conversation/turn locks. */
   async createDraftInTransaction(client:PoolClient,userId:string,conversationId:string,input:GoalPlanInput,id:string):Promise<void>{
+    await assertLegacyConversation(client,userId,conversationId);
     const count=(await client.query('SELECT count(*)::integer AS count FROM platform_goal_plans WHERE user_id=$1 AND conversation_id=$2',[userId,conversationId])).rows[0].count;
     if(count>=GOAL_PLAN_LIMIT)throw new ApiError(409,'GOAL_PLAN_LIMIT','This conversation already contains fifty saved goal plans. Use a new conversation for another plan.');
     await client.query('INSERT INTO platform_goal_plans(id,user_id,conversation_id) VALUES($1,$2,$3)',[id,userId,conversationId]);
@@ -128,6 +131,7 @@ export class GoalPlans {
   }
   async get(userId:string,planId:string):Promise<GoalPlan> {
     const rows=(await this.db.query(GOAL_PLAN_ROWS_SQL,[planId,userId])).rows;if(!rows.length)throw notFound();
+    await assertLegacyConversation(this.db,userId,rows[0].conversation_id);
     for(const row of rows)if(row.job?.kind==='mcp'){
       try{await this.jobs.mcp.validateBinding(this.db,row.job);}catch(error){if(!(error instanceof ApiError))throw error;row.mcpInvalid=true;}
     }

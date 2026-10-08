@@ -1,8 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { companionSealCandidates, companionSealCandidatesV2, validateCompanionName, validateCompanionNameV2, CompanionNameError, CompanionIdentityError } from '@companion/career-core';
 import type { CompanionNameCategory, CompanionSealCandidates } from '@companion/career-core';
-import type { PublicCompanionIdentityDraft, CompanionSealSelection, CompanionSealSelectionRequest, CompanionSealSelectionSaved, CompanionIdentityObservation } from '@companion/platform-contracts';
+import { parseCompanionBirthRequest } from '@companion/platform-contracts';
+import type { PublicCompanionIdentityDraft, PublicCompanionSealCandidates, CompanionSealSelection, CompanionSealSelectionRequest, CompanionSealSelectionSaved, CompanionIdentityObservation } from '@companion/platform-contracts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { BackgroundGeneration, VerifiedCompanionPreviewEnvelope } from './background-generation.ts';
 import type { PlatformConfig } from './config.ts';
@@ -15,6 +16,7 @@ import { parseCompanionIdentityBundle, readCompanionIdentityBundle, type Compani
 import { assertActiveCompanionIdentityBundle, parseCompanionIdentityReview, readCompanionIdentityReview, type CompanionIdentityReview } from './companion-identity-review.ts';
 import { verifyPrebirthInventoryInTransaction } from './companion-prebirth-protocol.ts';
 import { readNameRawSourceInTransaction, readNameResourceSourceInTransaction } from './companion-name-resource-source.ts';
+import type { BirthIdentityCapture } from './companion-birth-types.ts';
 
 interface Command { readonly taskId: string; readonly expectedRevision: number; readonly operationId: string; readonly name: string; }
 interface DraftRow {
@@ -233,6 +235,74 @@ export class CompanionIdentityDrafts {
       if (requestText !== JSON.stringify(command({ taskId: row.task_id, expectedRevision: row.revision - 1, operationId: operation.operation_id,
         name: raw.sourceCapture.request.name }))) throw unavailable();
     } catch { signal?.throwIfAborted(); throw unavailable(); }
+  }
+  /** Capture the actual current name and explicit seal inside the caller's
+   * owner-locked transaction. The birth service must additionally establish its
+   * complete prebirth barrier and latest full-L0 name provenance on this client.
+   * This observation does not activate a companion or grant later execution. */
+  async captureBirthSelectionInTransaction(client: PoolClient, context: FixedSessionContext,
+    value: unknown, signal?: AbortSignal): Promise<Readonly<BirthIdentityCapture>> {
+    const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash }), input = record(value, ['taskId', 'request']);
+    if (!uuid(input.taskId)) throw invalid();
+    let request: ReturnType<typeof parseCompanionBirthRequest>;
+    try { request = parseCompanionBirthRequest(input.request); } catch { throw invalid(); }
+    try {
+      const verified = await this.source(client, fixed, input.taskId, signal), row = await this.row(client, fixed, verified.source.companionId);
+      if (!row) throw new ApiError(409, 'COMPANION_IDENTITY_REQUIRED', 'Save a companion name before birth.');
+      const draft = await this.decode(client, row, fixed, verified);
+      await this.savedProvenance(client, fixed, row, signal);
+      if (request.name !== draft.name) throw changed();
+      const selection = await this.selectionRow(client, fixed, row.id);
+      if (!selection) {
+        throw new ApiError(409, 'COMPANION_SEAL_SELECTION_REQUIRED', 'Save a seal for the current name before birth.');
+      }
+      const sealChar = await this.decodeSelection(client, selection, row, fixed, verified);
+      if (selection.identity_revision !== row.revision) {
+        throw new ApiError(409, 'COMPANION_SEAL_SELECTION_REQUIRED', 'Save a seal for the current name before birth.');
+      }
+      if (sealChar !== request.sealChar || !draft.sealCandidates.some(candidate => candidate.char === sealChar)) throw sealRejected();
+      const operation = (await client.query<SelectionOperationRow>('SELECT * FROM platform_companion_identity_selection_operations '
+        + 'WHERE user_id=$1 AND selection_id=$2 AND applied_revision=$3 FOR UPDATE', [fixed.userId, selection.id, selection.revision])).rows[0];
+      if (!operation || operation.identity_revision !== row.revision) throw unavailable();
+      await this.decodeSelectionOperation(client, operation, selection, row, fixed, verified);
+      const provenance = (await client.query<{ operation_id: string; submission_id: string; generation: number }>(
+        'SELECT operation_id,submission_id,generation FROM platform_companion_name_identity_provenance '
+        + 'WHERE user_id=$1 AND draft_id=$2 AND identity_revision=$3 FOR SHARE', [fixed.userId, row.id, row.revision])).rows[0];
+      if (!provenance) throw unavailable();
+
+      // A historical resource snapshot is not current review authority. Reuse
+      // the actual policy, staff roles, organization and database-time gate.
+      const bundle = await assertActiveCompanionIdentityBundle(client, this.bundle, this.review, signal);
+      if (bundle.revision !== row.bundle_revision || bundle.contentDigest !== row.content_digest || this.review!.reviewDigest !== row.review_digest
+        || selection.bundle_revision !== row.bundle_revision || selection.content_digest !== row.content_digest || selection.review_digest !== row.review_digest
+        || operation.bundle_revision !== row.bundle_revision || operation.content_digest !== row.content_digest || operation.review_digest !== row.review_digest) throw unavailable();
+      const userName = (await client.query<{ name: string }>('SELECT name FROM platform_users WHERE id=$1 FOR SHARE', [fixed.userId])).rows[0]?.name;
+      try {
+        if (bundle.schemaVersion === 1) validateCompanionName({ name: draft.name, userName: userName!, policy: bundle.policy });
+        else validateCompanionNameV2({ name: draft.name, userName: userName!, policy: bundle.policy });
+      } catch (error) {
+        if (error instanceof CompanionNameError) throw new CompanionIdentityNameRejected(error.category);
+        throw unavailable();
+      }
+      // Ciphertext is randomized. Compare canonical authenticated plaintext
+      // digests across prepare/render/commit instead of comparing ciphertext.
+      const identityText = this.storage.crypto!.openUtf8(row.payload_ciphertext, { table: 'platform_companion_identity_drafts', column: 'payload_ciphertext',
+        rowId: row.id, ownerId: fixed.userId, revision: row.revision });
+      const selectionText = this.storage.crypto!.openUtf8(selection.payload_ciphertext, { table: 'platform_companion_identity_selections', column: 'payload_ciphertext',
+        rowId: selection.id, ownerId: fixed.userId, revision: selection.revision });
+      const operationText = this.storage.crypto!.openUtf8(operation.request_ciphertext, { table: 'platform_companion_identity_selection_operations', column: 'request_ciphertext',
+        rowId: operation.operation_id, ownerId: fixed.userId, revision: operation.applied_revision });
+      const digest = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
+      await authorizeFixedSession(client, fixed, signal); signal?.throwIfAborted();
+      return Object.freeze({ identityDraftId: row.id, companionId: row.companion_id, taskId: row.task_id,
+        identityRevision: row.revision, name: draft.name, nameOrigin: 'user_typed', sealChar,
+        sealCandidates: Object.freeze(draft.sealCandidates.map(candidate => Object.freeze({ ...candidate }))) as PublicCompanionSealCandidates,
+        inkToken: draft.inkToken, selectionId: selection.id, selectionOperationId: operation.operation_id,
+        selectionRevision: selection.revision, nameApplicationOperationId: provenance.operation_id,
+        nameSubmissionId: provenance.submission_id, nameGeneration: provenance.generation,
+        bundleRevision: row.bundle_revision, contentDigest: row.content_digest, reviewDigest: row.review_digest,
+        identityPayloadDigest: digest(identityText), selectionPayloadDigest: digest(selectionText), selectionOperationPayloadDigest: digest(operationText) });
+    } catch (error) { signal?.throwIfAborted(); if (error instanceof DataCryptoError) throw unavailable(); throw error; }
   }
   /** Independent historical observation: actual viewer + original source,
    * immutable reviewed assets, classified application and selection receipts.

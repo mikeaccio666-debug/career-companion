@@ -273,20 +273,23 @@ test('chat conversation lock remains compatible with a task creator holding the 
 });
 
 test('conversation DELETE waits for the origin commit and then removes only references', async () => {
-  const user = await actor(), conv = await conversation(user), turn = await liveTurn(user, conv.id), originLocked = deferred(), releaseOrigin = deferred(), deleteStarted = deferred();
+  const user = await actor(), conv = await conversation(user), turn = await liveTurn(user, conv.id), originLocked = deferred(), releaseOrigin = deferred();
+  const deletionLockQuery = 'SELECT id,kind FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR UPDATE';
   const restore = interceptTransactions(async (text, _values, run) => {
     const result = await run(); if (text.includes('FROM platform_runtime_leases') && text.includes('FOR KEY SHARE')) { originLocked.resolve(); await releaseOrigin.promise; } return result;
   });
-  const originalQuery = db.query.bind(db);
-  db.query = async (text, values) => { if (text.startsWith('DELETE FROM platform_conversations')) deleteStarted.resolve(); return originalQuery(text, values); };
   const creating = system.jobs.create(user.id, { kind: 'browser', provider: 'browser', prompt: 'Fictional delete race', options: { url: 'https://public-fixture.example.invalid/page' } }, { conversationId: conv.id, messageId: turn.messageId, tool: 'prepare_browser_task' }); creating.catch(() => {});
   let deleting: ReturnType<typeof request> | undefined;
   try {
-    await bounded(originLocked.promise); deleting = request(user, 'DELETE', `/conversations/${conv.id}`); await bounded(deleteStarted.promise); releaseOrigin.resolve();
+    await bounded(originLocked.promise); deleting = request(user, 'DELETE', `/conversations/${conv.id}`);
+    await waitUntil(async () => Boolean((await db.query(
+      "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query=$1 AND wait_event_type='Lock'", [deletionLockQuery],
+    )).rowCount), 'conversation deletion waits for the origin transaction lock');
+    releaseOrigin.resolve();
     const created = await bounded(creating); assert.equal((await bounded(deleting)).statusCode, 200);
     assert.equal((await counts(user)).origins, 0); assert.equal((await system.jobs.get(user.id, created.job.id)).status, 'needs_approval');
     assert.equal((await counts(user)).approvals, 1);
-  } finally { releaseOrigin.resolve(); restore(); db.query = originalQuery; await creating.catch(() => {}); await deleting?.catch(() => {}); await turn.close(); }
+  } finally { releaseOrigin.resolve(); restore(); await creating.catch(() => {}); await deleting?.catch(() => {}); await turn.close(); }
 });
 
 test('stale-stream recovery and final origin expiry serialize without orphaned jobs or deadlock', async () => {

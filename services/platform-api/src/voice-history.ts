@@ -4,6 +4,7 @@ import type { Attachment, VoiceRecord, VoiceRecordInput, VoiceRecordSource } fro
 import type { Database } from './database.ts';
 import { ApiError, identifier, invalid, notFound, object, string } from './errors.ts';
 import { assertVoiceConversation } from './voice-context.ts';
+import { assertLegacyConversationRow } from './companion-room-boundary.ts';
 
 export const VOICE_HISTORY_LIMITS = {
   textCharacters: 8_000,
@@ -80,8 +81,9 @@ export async function releaseVoiceSession(db: Database, userId: string, sessionI
 
 export async function listVoiceRecords(db: Database, userId: string, conversationId: string): Promise<VoiceRecord[]> {
   return db.transaction(async client => {
-    const conversation = await client.query('SELECT id FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR SHARE', [conversationId, userId]);
+    const conversation = await client.query('SELECT id,kind FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR SHARE', [conversationId, userId]);
     if (!conversation.rowCount) throw notFound();
+    assertLegacyConversationRow(conversation.rows[0]);
     const result = await client.query('SELECT * FROM platform_voice_records WHERE conversation_id=$1 AND user_id=$2 ORDER BY ordinal LIMIT $3', [conversationId, userId, VOICE_HISTORY_LIMITS.conversationRecords]);
     const records = [];
     for (const row of result.rows) records.push(mapRecord(row, await readAudioAttachments(client, userId, row.attachment_ids)));
@@ -95,8 +97,9 @@ export async function saveVoiceRecord(db: Database, userId: string, conversation
   return db.transaction(async client => {
     // Serialize this feature's cumulative limits without reversing the chat lease's lock order.
     await client.query("SELECT pg_advisory_xact_lock(hashtext('platform-voice:' || $1::text))", [userId]);
-    const conversation = await client.query('SELECT id FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR UPDATE', [conversationId, userId]);
+    const conversation = await client.query('SELECT id,kind FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR UPDATE', [conversationId, userId]);
     if (!conversation.rowCount) throw notFound();
+    assertLegacyConversationRow(conversation.rows[0]);
     const existing = await client.query('SELECT * FROM platform_voice_records WHERE user_id=$1 AND client_record_id=$2', [userId, input.clientRecordId]);
     if (existing.rowCount) {
       if (existing.rows[0].conversation_id !== conversationId || existing.rows[0].request_hash !== requestHash) throw new ApiError(409, 'VOICE_RECORD_CONFLICT', 'This voice-record identifier was already used for a different excerpt.');

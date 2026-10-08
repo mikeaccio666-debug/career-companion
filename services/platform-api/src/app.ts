@@ -49,6 +49,12 @@ import { createCompanionStudentOnboarding } from './companion-student-onboarding
 import { createCompanionSafetyResources, readCompanionSafetyResourceConfiguration } from './companion-safety-resources.ts';
 import { CompanionNameQueue } from './companion-name-queue.ts';
 import { companionNameUuid } from './companion-name-safety-protocol.ts';
+import { CompanionBirthService } from './companion-birth-service.ts';
+import { CompanionBirthOriginStore } from './companion-birth-origin-store.ts';
+import { loadCompanionSealGlyphLookup } from './companion-seal-glyphs.ts';
+import { assertLegacyConversation, assertLegacyConversationRow } from './companion-room-boundary.ts';
+import { CompanionIdentityNameRejected } from './companion-identity-drafts.ts';
+import type { CompanionSealLoadedGlyphs } from './companion-seal-glyphs.ts';
 import { ModelConsent, requireModelConsent } from './model-routing.ts';
 import {
   projectPlatformFeatures, projectPublicAccountUsage, projectPublicApproval, projectPublicAudioTranscriptionReceipt,
@@ -84,6 +90,10 @@ export async function buildApp(options:AppOptions={}) {
   const studentOnboarding=await createCompanionStudentOnboarding(db,config,bundle,runtime,companion.generation,safetyResourcesConfiguration.review);
   const safetyResources=await createCompanionSafetyResources(db,config,bundle,studentOnboarding.nameDelivery,safetyResourcesConfiguration);
   const naming=studentOnboarding.naming;
+  let birthGlyphs:CompanionSealLoadedGlyphs|null=null;
+  if(config.companionSealGlyphs){try{birthGlyphs=loadCompanionSealGlyphLookup(config.companionSealGlyphs.file,config.companionSealGlyphs.bindings);}catch{/* New seal rendering is unavailable; own saved origins remain readable. */}}
+  const birth=new CompanionBirthService(db,config,bundle,studentOnboarding.prebirth,studentOnboarding.names,
+    companion.generation,studentOnboarding.identities,new CompanionBirthOriginStore(config.dataCrypto),birthGlyphs);
   const storage=options.storage??createStorage(config);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
@@ -107,7 +117,10 @@ export async function buildApp(options:AppOptions={}) {
   app.decorateRequest('platformUser',null);
   app.setErrorHandler((cause,request,reply)=>{
     const error=cause as FastifyError;
-    if(error instanceof ApiError){reply.code(error.status).send({error:present({code:error.code,message:error.publicMessage},projectPublicError)});return;}
+    if(error instanceof ApiError){
+      const projected=present({code:error.code,message:error.publicMessage},projectPublicError);
+      reply.code(error.status).send({error:{...projected,...(error instanceof CompanionIdentityNameRejected?{category:error.category}:{})}});return;
+    }
     if(error.code==='FST_REQ_FILE_TOO_LARGE'){reply.code(413).send({error:{code:'FILE_TOO_LARGE',message:'Files must be at most 20 MB.'}});return;}
     if(error.statusCode && error.statusCode<500){reply.code(error.statusCode).send({error:{code:'INVALID_REQUEST',message:'The request could not be processed.'}});return;}
     const safe=publicError(error);reply.code(safe.status).send({error:present({code:safe.code,message:safe.message},projectPublicError)});
@@ -291,6 +304,42 @@ export async function buildApp(options:AppOptions={}) {
     try{return {accepted:await studentOnboarding.resumeNamePreparation(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
     finally{cancellation.dispose();}
   });
+  // Own-origin observation/replay requires a current genuine account, but does
+  // not require today's model route, asset review or email/legal write admission.
+  const birthReadAccess={preHandler:[authenticated,accountContext(),authenticatedLimit('api')]};
+  function birthQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw invalid('Companion birth is scoped to the current account.');}
+  function birthKey(request:FastifyRequest){
+    let count=0;
+    for(let index=0;index<request.raw.rawHeaders.length;index+=2){if(request.raw.rawHeaders[index].toLowerCase()==='idempotency-key')count++;}
+    if(count!==1||typeof request.headers['idempotency-key']!=='string')throw invalid('Use exactly one birth operation key.');
+    return request.headers['idempotency-key'];
+  }
+  app.post(`${prefix}/companion/birth`,limitedAccount,async(request,reply)=>{
+    birthQuery(request);const key=birthKey(request),cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{const result=await birth.birth(fixedRequestSession(request,userId(request)),request.body,key,cancellation.signal);reply.code(result.replayed?200:201);return result;}
+    finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion`,birthReadAccess,async(request,reply)=>{
+    birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return await birth.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/birth/receipts/:idempotencyKey`,birthReadAccess,async(request,reply)=>{
+    birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return await birth.readReceipt(fixedRequestSession(request,userId(request)),(request.params as Record<string,unknown>).idempotencyKey,cancellation.signal);}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/seals/:assetId/:format`,birthReadAccess,async(request,reply)=>{
+    birthQuery(request);const parameters=request.params as Record<string,unknown>;
+    if(parameters.format!=='png'&&parameters.format!=='svg')throw invalid('Use a saved PNG or SVG seal.');
+    if(request.headers.range!==undefined)throw invalid('Read the complete saved seal.');
+    const cancellation=requestSignal(request,reply);
+    reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff');
+    try{
+      const rendered=await birth.readSealAsset(fixedRequestSession(request,userId(request)),parameters.assetId,cancellation.signal);
+      reply.header('Content-Security-Policy',"default-src 'none'; sandbox");
+      reply.type(parameters.format==='png'?'image/png':'image/svg+xml');
+      return reply.send(Buffer.from(parameters.format==='png'?rendered.png:rendered.svg));
+    }finally{cancellation.dispose();}
+  });
   // Fixed resources and receipt declarations do not consume ordinary API quota or depend on current terms/provider availability.
   const resourceAccess={preHandler:[authenticated,accountContext()]};
   function resourceTarget(request:FastifyRequest){
@@ -422,7 +471,7 @@ export async function buildApp(options:AppOptions={}) {
   app.delete(`${prefix}/workflow-templates/:id`,secure,async request=>{await deleteWorkflowTemplate(db,userId(request),params(request));return {ok:true};});
 
   app.get(`${prefix}/conversations`,secure,async request=>{
-    const result=await db.query('SELECT * FROM platform_conversations WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100',[userId(request)]);return {conversations:result.rows.map(row=>present(mapConversation(row),projectPublicConversation))};
+    const result=await db.query("SELECT * FROM platform_conversations WHERE user_id=$1 AND kind='legacy' ORDER BY updated_at DESC LIMIT 100",[userId(request)]);return {conversations:result.rows.map(row=>present(mapConversation(row),projectPublicConversation))};
   });
   app.post(`${prefix}/conversations`,secure,async(request,reply)=>{
     const data=serverConversationInput(config,request.body),id=randomUUID();
@@ -432,6 +481,7 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/conversations/:id`,secure,async request=>{
     const id=params(request),result=await db.query('SELECT * FROM platform_conversations WHERE id=$1 AND user_id=$2',[id,userId(request)]);
     if(!result.rowCount)throw notFound();
+    assertLegacyConversationRow(result.rows[0]);
     const messages=await db.query("SELECT m.*,coalesce((SELECT jsonb_agg(jsonb_build_object('id',u.id,'name',u.filename,'mime',u.mime,'size',u.byte_size,'url','/api/platform/uploads/'||u.id)) FROM platform_uploads u WHERE u.user_id=$2 AND u.id IN (SELECT jsonb_array_elements_text(m.attachments)::uuid)), '[]'::jsonb) AS attachment_metadata FROM platform_messages m WHERE m.conversation_id=$1 ORDER BY m.ordinal",[id,userId(request)]);
     const mapped=[];
     for(const row of messages.rows){if(!config.workbenchEnabled&&row.role==='tool')continue;row.audio_transcript_metadata=await audioTranscriptions.forMessage(userId(request),row.audio_transcripts);mapped.push(mapMessage(row));}
@@ -449,14 +499,19 @@ export async function buildApp(options:AppOptions={}) {
     const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return present(await goalPlans.continue(userId(request),params(request),request.body,cancellation.signal,()=>assertHttpWorkbench(config)),projectPublicGoalPlanContinueResult);}finally{cancellation.dispose();}
   });
   app.delete(`${prefix}/conversations/:id`,secure,async request=>{
-    const result=await db.query('DELETE FROM platform_conversations WHERE id=$1 AND user_id=$2 RETURNING id',[params(request),userId(request)]);if(!result.rowCount)throw notFound();return {ok:true};
+    await db.withBoundedTransaction(async client=>{
+      const id=params(request),uid=userId(request),owned=await client.query('SELECT id,kind FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,uid]);
+      if(!owned.rowCount)throw notFound();assertLegacyConversationRow(owned.rows[0]);
+      await client.query('DELETE FROM platform_conversations WHERE id=$1 AND user_id=$2',[id,uid]);
+    });return {ok:true};
   });
   app.get(`${prefix}/conversations/:id/voice-records`,secure,async request=>({records:(await listVoiceRecords(db,userId(request),params(request))).map(record=>present(record,projectPublicVoiceRecord))}));
   app.post(`${prefix}/conversations/:id/voice-records`,secure,async(request,reply)=>{
     const result=await saveVoiceRecord(db,userId(request),params(request),request.body);reply.code(result.created?201:200);return {...result,record:present(result.record,projectPublicVoiceRecord)};
   });
   app.post(`${prefix}/conversations/:id/messages`,secured('chat'),async(request,reply)=>{
-    const id=params(request),uid=userId(request),data=serverMessageInput(config,runtime,request.body),sink=new SseTurnSink(request,reply);
+    const id=params(request),uid=userId(request);await assertLegacyConversation(db,uid,id);
+    const data=serverMessageInput(config,runtime,request.body),sink=new SseTurnSink(request,reply);
     await conversationTurns.submit({userId:uid,conversationId:id,data,...(!config.workbenchEnabled?{suppressSavedPersona:true}:{})},config.workbenchEnabled?sink:new ProjectingTurnSink(sink),{
       assertAccount:signal=>assertRequestAccount(request,uid,signal),
       requestAdmission:modelConsent.forSession(fixedRequestSession(request,uid)),
@@ -629,5 +684,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

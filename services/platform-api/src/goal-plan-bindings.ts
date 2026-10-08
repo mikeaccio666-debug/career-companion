@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import type { CreateJobInput, GoalPlanContinuation, GoalPlanInputSource, GoalPlanReceipt } from '@companion/platform-contracts';
 import { ApiError, notFound } from './errors.ts';
 import { goalPlanHash, goalPlanStepState, planBlocked, planChanged } from './goal-plan-core.ts';
+import { assertLegacyConversation } from './companion-room-boundary.ts';
 
 export type GoalPlanTaskOrigin = Pick<GoalPlanContinuation, 'planId' | 'revision' | 'stepIndex'>;
 export const GOAL_PLAN_ROWS_SQL = `SELECT p.*,r.title,r.goal,r.definition_hash,r.confirmed_at,
@@ -27,6 +28,7 @@ export const GOAL_PLAN_ROWS_SQL = `SELECT p.*,r.title,r.goal,r.definition_hash,r
 export async function lockGoalPlan(client: PoolClient, userId: string, origin: GoalPlanTaskOrigin): Promise<{plan:any;rows:any[];step:any}> {
   const row = (await client.query('SELECT * FROM platform_goal_plans WHERE id=$1 AND user_id=$2 FOR UPDATE', [origin.planId,userId])).rows[0];
   if (!row) throw notFound();
+  await assertLegacyConversation(client,userId,row.conversation_id);
   if (row.revision !== origin.revision) throw planChanged();
   if (row.status !== 'active') throw planBlocked('Confirm or resume this plan before continuing a step.');
   const rows = (await client.query(GOAL_PLAN_ROWS_SQL, [origin.planId,userId])).rows;
