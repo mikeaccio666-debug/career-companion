@@ -59,6 +59,13 @@ export async function readAuthenticatedSafetyResponsesForSources(client: PoolCli
   [userId,sources.map(source=>source.id)])).rows;
   return authenticateResponseRows(client,storage,sources,rows);
 }
+/** Target-only archived resource proof, not an intake prefix or write admission.
+ * Caller proves the actual original raw operation and target classified source. */
+export async function readAuthenticatedSafetyResponseForSource(client:PoolClient,storage:OnboardingStorage,source:SafetySubmissionRow){
+  const rows=(await client.query<SafetyResponseRow>('SELECT * FROM platform_onboarding_safety_responses WHERE user_id=$1 AND submission_id=$2 FOR UPDATE',[source.user_id,source.id])).rows;
+  const captures=await authenticateResponseRows(client,storage,[source],rows);
+  if(captures.length!==1||!captures[0].response||captures[0].row.status!=='ready')throw responseStorageUnavailable();return captures[0];
+}
 async function authenticateResponseRows(client: PoolClient, storage: OnboardingStorage,
   sources: SafetySubmissionRow[], rows: SafetyResponseRow[]) {
   if (rows.length!==sources.filter(source=>source.status==='detected'&&source.level!=='L0').length) throw responseStorageUnavailable();
