@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { CAREER_IDENTITY_FIELDS, careerIdentityCalendarDate, parseCareerIdentityCommand, parseCareerIdentityRecord } from '../src/career-identity.ts';
+import { CAREER_IDENTITY_FIELDS, careerIdentityCalendarDate, parseCareerIdentityCommand, parseCareerIdentityRecord, parseCareerIdentityEntry } from '../src/career-identity.ts';
 const command = (field = 'program_end_date', value: unknown = '2028-02-29', label: unknown = null) => ({ operationId: randomUUID(), expectedRevision: 0, field, value, label });
 test('calendar dates preserve the reported day without timezone or legal arithmetic', () => {
     for (const v of ['0001-01-01', '1900-02-28', '2000-02-29', '2028-02-29', '9999-12-31'])
@@ -47,4 +47,12 @@ test('encrypted-record codec requires fixed sensitivity and actual reporting/con
         days: number;
     }).days, 0);
     assert.throws(() => parseCareerIdentityRecord({ ...days, value: { days: 0, reportedAt: '2026-10-07T12:00:00.000Z' } }));
+});
+test('personal-record entry is owner-bound and cannot infer a qualifying stage from hidden data', () => {
+    const ownerId = randomUUID(), source = { draftId: randomUUID(), revision: 10 };
+    assert.deepEqual(parseCareerIdentityEntry({ kind: 'hidden', ownerId }), { kind: 'hidden', ownerId });
+    for (const stage of ['f1_student', 'opt', 'stem_opt'])
+        assert.equal(parseCareerIdentityEntry({ kind: 'available', ownerId, stage, source }).kind, 'available');
+    for (const v of [{ kind: 'hidden', ownerId, stage: 'opt' }, { kind: 'available', ownerId, stage: 'other', source }, { kind: 'available', ownerId, stage: 'prefer_not_say', source }, { kind: 'available', ownerId, stage: 'opt' }, { kind: 'available', ownerId, stage: 'opt', source: { ...source, revision: 0 } }])
+        assert.throws(() => parseCareerIdentityEntry(v));
 });

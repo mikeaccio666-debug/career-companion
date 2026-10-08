@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { careerRecordObject, careerRecordId, parseCareerIdentityCommand, parseCareerIdentityRecord, type CareerIdentityAction, type CareerIdentityRecord } from '@companion/platform-contracts';
+import { careerRecordObject, careerRecordId, parseCareerIdentityCommand, parseCareerIdentityRecord, parseCareerIdentityEntry, type CareerIdentityAction, type CareerIdentityRecord } from '@companion/platform-contracts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
@@ -28,15 +28,17 @@ interface Receipt {
 export class CareerIdentityRecords {
     private readonly storage: OnboardingStorage;
     constructor(private readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, legal: LegalBundle | null) { this.storage = new OnboardingStorage(config, legal); }
-    private fixed(input: FixedSessionContext) { try {
-        const v = careerRecordObject(input, ['userId', 'tokenHash']);
-        if (typeof v.tokenHash !== 'string' || !/^[0-9a-f]{64}$/.test(v.tokenHash))
-            throw bad();
-        return Object.freeze({ userId: careerRecordId(v.userId), tokenHash: v.tokenHash });
+    private fixed(input: FixedSessionContext) {
+        try {
+            const v = careerRecordObject(input, ['userId', 'tokenHash']);
+            if (typeof v.tokenHash !== 'string' || !/^[0-9a-f]{64}$/.test(v.tokenHash))
+                throw bad();
+            return Object.freeze({ userId: careerRecordId(v.userId), tokenHash: v.tokenHash });
+        }
+        catch {
+            throw new ApiError(401, 'AUTH_REQUIRED', 'Sign in to continue.');
+        }
     }
-    catch {
-        throw new ApiError(401, 'AUTH_REQUIRED', 'Sign in to continue.');
-    } }
     private async authorize(client: PoolClient, s: FixedSessionContext, signal?: AbortSignal) {
         await authorizeFixedSession(client, s, signal);
         const user = (await client.query('SELECT account_kind,auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE', [s.userId])).rows[0];
@@ -58,8 +60,12 @@ export class CareerIdentityRecords {
             throw unavailable();
         }
     }
-    private async latest(client: PoolClient, s: FixedSessionContext, id: string) { const row = (await client.query('SELECT * FROM platform_career_identity_operations WHERE user_id=$1 AND record_id=$2 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE', [s.userId, id])).rows[0]; if (!row)
-        throw unavailable(); return this.receipt(s, row); }
+    private async latest(client: PoolClient, s: FixedSessionContext, id: string) {
+        const row = (await client.query('SELECT * FROM platform_career_identity_operations WHERE user_id=$1 AND record_id=$2 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE', [s.userId, id])).rows[0];
+        if (!row)
+            throw unavailable();
+        return this.receipt(s, row);
+    }
     private decode(s: FixedSessionContext, row: any, latest: Receipt | undefined): Readonly<CareerIdentityRecord> {
         try {
             const raw = this.storage.crypto!.openUtf8(row.value_ciphertext, { table: 'platform_career_identity_dates', column: 'value_ciphertext', rowId: row.id, ownerId: s.userId, revision: row.revision }), record = parseCareerIdentityRecord(JSON.parse(raw));
@@ -78,6 +84,50 @@ export class CareerIdentityRecords {
         const ids = rows.map(r => r.id), proofs = (await client.query('SELECT o.* FROM platform_career_identity_operations o JOIN (SELECT record_id,MAX(applied_revision) revision FROM platform_career_identity_operations WHERE user_id=$1 AND record_id=ANY($2::uuid[]) GROUP BY record_id) p ON p.record_id=o.record_id AND p.revision=o.applied_revision WHERE o.user_id=$1 FOR SHARE OF o', [s.userId, ids])).rows;
         const latest = new Map(proofs.map(r => [r.record_id, this.receipt(s, r)]));
         return Object.freeze(rows.map(row => { signal?.throwIfAborted(); return this.decode(s, row, latest.get(row.id)); }));
+    }
+    /** No recovery/adoption, default stage, side-clock selection or C5 completion.
+     * The actual encrypted answer must match its independent original operation. */
+    async entry(value: FixedSessionContext, query: unknown = {}, signal?: AbortSignal) {
+        const s = this.fixed(value);
+        try {
+            careerRecordObject(query, []);
+        }
+        catch {
+            throw bad();
+        }
+        return this.db.withBoundedTransaction(async (client) => {
+            await this.authorize(client, s, signal);
+            const row = await this.storage.row(client, s.userId);
+            let entry = parseCareerIdentityEntry({ kind: 'hidden', ownerId: s.userId });
+            if (row) {
+                const draft = this.storage.decode(row), answer = draft.answersPartial.identity_stage;
+                const latest = (await client.query('SELECT operation_id,draft_id,applied_revision,request_ciphertext FROM platform_onboarding_operations WHERE user_id=$1 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE', [s.userId])).rows[0];
+                if (!latest || latest.draft_id !== draft.id || latest.applied_revision > draft.revision)
+                    throw unavailable();
+                this.storage.decodeOperation(latest, s.userId);
+                if (draft.state === 'intake_ready' && answer?.kind === 'answered' && ['f1_student', 'opt', 'stem_opt'].includes(answer.value)) {
+                    const proof = (await client.query('SELECT operation_id,draft_id,applied_revision,request_ciphertext FROM platform_onboarding_operations WHERE user_id=$1 AND ' + (answer.textId ? 'operation_id=$2' : 'applied_revision=$2') + ' FOR SHARE', [s.userId, answer.textId ?? answer.appliedRevision])).rows[0];
+                    if (!proof || proof.draft_id !== draft.id)
+                        throw unavailable();
+                    const command = this.storage.decodeOperation(proof, s.userId);
+                    if (answer.textId) {
+                        if (command.action.kind !== 'text' || command.action.questionId !== 'identity_stage' || answer.appliedRevision <= proof.applied_revision)
+                            throw unavailable();
+                        const detected = (await client.query('SELECT * FROM platform_onboarding_safety_submissions WHERE user_id=$1 AND operation_id=$2 FOR SHARE', [s.userId, answer.textId])).rows[0];
+                        if (!detected || detected.status !== 'detected' || detected.draft_id !== draft.id || detected.question_id !== 'identity_stage' || detected.submitted_revision !== proof.applied_revision)
+                            throw unavailable();
+                        const result = this.storage.decodeResult(detected);
+                        if (result.level !== 'L0' || result.resolution?.kind !== 'answer' || result.resolution.questionId !== 'identity_stage' || result.resolution.value !== answer.value)
+                            throw unavailable();
+                    }
+                    else if (command.action.kind !== 'answer' || command.action.questionId !== 'identity_stage' || command.action.value !== answer.value)
+                        throw unavailable();
+                    entry = parseCareerIdentityEntry({ kind: 'available', ownerId: s.userId, stage: answer.value, source: { draftId: draft.id, revision: draft.revision } });
+                }
+            }
+            await authorizeFixedSession(client, s, signal);
+            return entry;
+        });
     }
     async list(value: FixedSessionContext, query: unknown = {}, signal?: AbortSignal) {
         const s = this.fixed(value);
@@ -98,8 +148,15 @@ export class CareerIdentityRecords {
         catch {
             throw bad();
         }
-        return this.db.withBoundedTransaction(async (client) => { await this.authorize(client, s, signal); const row = (await client.query('SELECT * FROM platform_career_identity_dates WHERE id=$1 AND user_id=$2 FOR SHARE', [id, s.userId])).rows[0]; if (!row)
-            throw missing(); const record = this.decode(s, row, await this.latest(client, s, id)); await authorizeFixedSession(client, s, signal); return record; });
+        return this.db.withBoundedTransaction(async (client) => {
+            await this.authorize(client, s, signal);
+            const row = (await client.query('SELECT * FROM platform_career_identity_dates WHERE id=$1 AND user_id=$2 FOR SHARE', [id, s.userId])).rows[0];
+            if (!row)
+                throw missing();
+            const record = this.decode(s, row, await this.latest(client, s, id));
+            await authorizeFixedSession(client, s, signal);
+            return record;
+        });
     }
     async operation(value: FixedSessionContext, key: unknown, signal?: AbortSignal) {
         const s = this.fixed(value);
@@ -110,15 +167,22 @@ export class CareerIdentityRecords {
         catch {
             throw bad();
         }
-        return this.db.withBoundedTransaction(async (client) => { await this.authorize(client, s, signal); const row = (await client.query('SELECT * FROM platform_career_identity_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE', [s.userId, id])).rows[0]; if (!row)
-            throw missing(); const receipt = this.receipt(s, row), result = await this.result(client, s, receipt, true); await authorizeFixedSession(client, s, signal); return result; });
+        return this.db.withBoundedTransaction(async (client) => {
+            await this.authorize(client, s, signal);
+            const row = (await client.query('SELECT * FROM platform_career_identity_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE', [s.userId, id])).rows[0];
+            if (!row)
+                throw missing();
+            const receipt = this.receipt(s, row), result = await this.result(client, s, receipt, true);
+            await authorizeFixedSession(client, s, signal);
+            return result;
+        });
     }
     private async result(client: PoolClient, s: FixedSessionContext, r: Receipt, replayed: boolean) {
         const row = (await client.query('SELECT * FROM platform_career_identity_dates WHERE id=$1 AND user_id=$2 FOR SHARE', [r.recordId, s.userId])).rows[0], latest = await this.latest(client, s, r.recordId);
         if (!row && latest.action !== 'delete')
             throw unavailable();
         const record = row ? this.decode(s, row, latest) : null;
-        return Object.freeze({ record, operation: Object.freeze({ id: r.operationId, recordId: r.recordId, appliedRevision: r.appliedRevision, replayed }) });
+        return Object.freeze({ record, operation: Object.freeze({ id: r.operationId, recordId: r.recordId, action: r.action, appliedRevision: r.appliedRevision, replayed }) });
     }
     async mutate(value: FixedSessionContext, action: CareerIdentityAction, key: unknown, input: unknown, signal?: AbortSignal) {
         const s = this.fixed(value);
@@ -189,7 +253,7 @@ export class CareerIdentityRecords {
                 await client.query('DELETE FROM platform_career_identity_dates WHERE id=$1 AND user_id=$2', [id, s.userId]);
             await authorizeFixedSession(client, s, signal);
             signal?.throwIfAborted();
-            return Object.freeze({ record, operation: Object.freeze({ id: command.operationId, recordId: id, appliedRevision: revision, replayed: false }) });
+            return Object.freeze({ record, operation: Object.freeze({ id: command.operationId, recordId: id, action, appliedRevision: revision, replayed: false }) });
         });
     }
 }
