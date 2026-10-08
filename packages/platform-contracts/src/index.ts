@@ -320,3 +320,5 @@ export * from './career-applications.ts';
 export * from './career-identity.ts';
 export * from './career-interviews.ts';
 export * from './org-knowledge.ts';
+
+export * from './mentor-service-offers.ts';
