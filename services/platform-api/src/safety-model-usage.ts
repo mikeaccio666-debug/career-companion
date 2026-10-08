@@ -1,3 +1,4 @@
+import { parseMemorySafetyClaim,type MemorySafetyClaim } from './shared-memory-safety-protocol.ts';
 import type { ModelCallEvent } from '@companion/platform-contracts';
 import type { PoolClient } from 'pg';
 import type { Database } from './database.ts';
@@ -34,7 +35,7 @@ function bounded(value: unknown, maximum: number): string {
 }
 interface UsageRow {
   call_id: string; user_id: string; submission_id: string; operation_id: string; draft_id: string | null; question_id: string | null;
-  source_kind: 'onboarding' | 'companion_name'; entry_id: string | null; task_id: string | null; companion_id: string | null;
+  source_kind: 'onboarding' | 'companion_name' | 'shared_memory'; memory_id:string|null; memory_execution_token:string|null; entry_id: string | null; task_id: string | null; companion_id: string | null;
   preview_revision: number | null; expected_identity_revision: number | null; name_execution_token: string | null;
   submitted_revision: number; generation: number; auth_version: string; detector_revision: number; call_index: number;
   provider: string; model: string; purpose: string; status: string; usage_status: string; input_tokens: number | null; output_tokens: number | null;
@@ -45,8 +46,11 @@ export interface CompanionNameSafetyExecution {
   readonly executionToken: string;
   readonly assertCurrent: (client: PoolClient, signal?: AbortSignal) => Promise<void>;
 }
+export interface MemorySafetyExecution {readonly executionToken:string;readonly assertCurrent:(client:PoolClient,signal?:AbortSignal)=>Promise<void>;}
+
 type Binding = Readonly<{ kind: 'onboarding'; claim: Readonly<OnboardingSafetyClaim> }>
-  | Readonly<{ kind: 'companion_name'; claim: Readonly<CompanionNameSafetyClaim>; execution: Readonly<CompanionNameSafetyExecution> }>;
+  | Readonly<{ kind: 'companion_name'; claim: Readonly<CompanionNameSafetyClaim>; execution: Readonly<CompanionNameSafetyExecution> }>
+  | Readonly<{kind:'shared_memory';claim:Readonly<MemorySafetyClaim>;execution:Readonly<MemorySafetyExecution>}>;
 /** A daily call-count cap plus explicit usage uncertainty. This is not a dollar CostGuard or an approved production budget. */
 export function createSafetyModelUsage(db: Database, value: OnboardingSafetyClaim, route: ResolvedModelRoute, dailyLimit: number): SafetyModelUsage {
   try { return createBoundSafetyModelUsage(db, { kind: 'onboarding', claim: parseOnboardingSafetyClaim(value) }, route, dailyLimit); }
@@ -62,9 +66,13 @@ export function createCompanionNameSafetyModelUsage(db: Database, value: Compani
     return createBoundSafetyModelUsage(db, { kind: 'companion_name', claim: parseCompanionNameSafetyClaim(value), execution: fixed }, route, dailyLimit);
   } catch { throw new ApiError(503, 'COMPANION_NAME_SAFETY_UNAVAILABLE', 'Name detection is not available.'); }
 }
+export function createMemorySafetyModelUsage(db:Database,value:MemorySafetyClaim,route:ResolvedModelRoute,dailyLimit:number,execution:MemorySafetyExecution):SafetyModelUsage {
+ const v=record(execution,['executionToken','assertCurrent']);if(typeof v.assertCurrent!=='function')throw unavailable();
+ return createBoundSafetyModelUsage(db,{kind:'shared_memory',claim:parseMemorySafetyClaim(value),execution:Object.freeze({executionToken:uuid(v.executionToken),assertCurrent:v.assertCurrent as MemorySafetyExecution['assertCurrent']})},route,dailyLimit);
+}
 function createBoundSafetyModelUsage(db: Database, binding: Binding, route: ResolvedModelRoute, dailyLimit: number): SafetyModelUsage {
   const claim = binding.claim;
-  const unavailable = () => binding.kind === 'onboarding'
+  const unavailable = () => binding.kind === 'shared_memory'?new ApiError(503,'MEMORY_SAFETY_UNAVAILABLE','The memory safety model call could not be confirmed.'):binding.kind === 'onboarding'
     ? new ApiError(503, 'ONBOARDING_SAFETY_UNAVAILABLE', 'The safety model call could not be confirmed.')
     : new ApiError(503, 'COMPANION_NAME_SAFETY_UNAVAILABLE', 'The name safety model call could not be confirmed.');
   let provider: string, model: string;
@@ -84,6 +92,14 @@ function createBoundSafetyModelUsage(db: Database, binding: Binding, route: Reso
     if (!found.rowCount || checkVersion && String(found.rows[0].auth_version) !== claim.authVersion) throw unavailable();
   }
   async function current(client: PoolClient, signal?: AbortSignal) {
+    if(binding.kind==='shared_memory'){
+      const memory=binding.claim;await binding.execution.assertCurrent(client,signal);
+      const found=await client.query(`SELECT id FROM platform_memory_safety_sources WHERE id=$1 AND user_id=$2 AND memory_id=$3 AND operation_id=$4 AND submitted_revision=$5
+       AND generation=$6 AND auth_version=$7 AND lease_token=$8 AND detector_revision=$9 AND execution_token=$10 AND status='running' AND lease_until>clock_timestamp() FOR UPDATE`,
+       [memory.submissionId,memory.userId,memory.memoryId,memory.operationId,memory.submittedAtRevision,memory.generation,memory.authVersion,memory.leaseToken,memory.detectorRevision,binding.execution.executionToken]);
+      signal?.throwIfAborted();if(!found.rowCount)throw unavailable();return;
+    }
+
     if (binding.kind === 'companion_name') {
       const name = binding.claim;
       // This closure authenticates the actual generation session and complete encrypted source under the same transaction.
@@ -113,6 +129,9 @@ function createBoundSafetyModelUsage(db: Database, binding: Binding, route: Reso
       || row.source_kind !== binding.kind || row.operation_id !== claim.operationId || row.submitted_revision !== claim.submittedAtRevision
       || row.generation !== claim.generation || String(row.auth_version) !== claim.authVersion || row.detector_revision !== claim.detectorRevision
       || row.call_index !== 1 || row.provider !== provider || row.model !== model || row.purpose !== 'safety_classify') return false;
+    if(binding.kind==='shared_memory')return row.memory_id===binding.claim.memoryId&&row.memory_execution_token===binding.execution.executionToken
+      &&row.draft_id===null&&row.question_id===null&&row.entry_id===null&&row.task_id===null&&row.companion_id===null&&row.preview_revision===null&&row.expected_identity_revision===null&&row.name_execution_token===null;
+    if(row.memory_id!==null||row.memory_execution_token!==null)return false;
     if (binding.kind === 'onboarding') return row.draft_id === binding.claim.draftId && row.question_id === binding.claim.questionId
       && row.entry_id === null && row.task_id === null && row.companion_id === null && row.preview_revision === null && row.expected_identity_revision === null && row.name_execution_token === null;
     const name = binding.claim;
@@ -161,7 +180,11 @@ function createBoundSafetyModelUsage(db: Database, binding: Binding, route: Reso
               FROM platform_safety_model_usage WHERE user_id=$1`, [claim.userId, at]);
             if (coverage.rows[0].unknown || coverage.rows[0].daily >= dailyLimit) throw unavailable();
             await current(client);
-            if (binding.kind === 'onboarding') {
+            if(binding.kind==='shared_memory'){
+              const memory=binding.claim;await client.query(`INSERT INTO platform_safety_model_usage(call_id,user_id,submission_id,operation_id,memory_id,submitted_revision,generation,auth_version,detector_revision,call_index,provider,model,purpose,created_at,source_kind,memory_execution_token)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,'safety_classify',$12,'shared_memory',$13)`,
+               [snapshot.callId,memory.userId,memory.submissionId,memory.operationId,memory.memoryId,memory.submittedAtRevision,memory.generation,memory.authVersion,memory.detectorRevision,provider,model,at,binding.execution.executionToken]);
+            }else if (binding.kind === 'onboarding') {
               const intake = binding.claim;
               await client.query(`INSERT INTO platform_safety_model_usage(call_id,user_id,submission_id,operation_id,draft_id,question_id,
                 submitted_revision,generation,auth_version,detector_revision,call_index,provider,model,purpose,created_at,source_kind)
