@@ -1,3 +1,4 @@
+import { MentorRatings } from './mentor-ratings.ts';
 import { MentorCapacity } from './mentor-capacity.ts';
 import { MentorIntents } from './mentor-intents.ts';
 import { MentorServiceOffers } from './mentor-service-offers.ts';
@@ -138,6 +139,7 @@ export async function buildApp(options:AppOptions={}) {
   const mentorServiceOffers=new MentorServiceOffers(db,config,bundle,storage,staff);
   const mentorCapacity=new MentorCapacity(db,config,bundle,storage,staff);
   const mentorIntents=new MentorIntents(db,config,bundle,mentorServiceOffers,staff,mentorCapacity);
+  const mentorRatings=new MentorRatings(db,config,bundle,mentorIntents);
   const audioTranscriptions=new AudioTranscriptions(db,storage,runtime);
   const goalPlans=new GoalPlans(db,jobs,runtime);
   const goalPlanProposals=new GoalPlanProposals(db,goalPlans);
@@ -690,6 +692,16 @@ export async function buildApp(options:AppOptions={}) {
   });
   app.get(mentorIntentRoot+'/:id/order',secure,(request,reply)=>{
     mentorIntentQuery(request);return applicationRead(request,reply,signal=>mentorIntents.getOrder(fixedRequestSession(request,userId(request)),params(request),signal));
+  });
+  app.get(mentorIntentRoot+'/:id/rating',secure,(request,reply)=>{
+    mentorIntentQuery(request);return applicationRead(request,reply,signal=>mentorRatings.get(fixedRequestSession(request,userId(request)),params(request),signal));
+  });
+  app.post(mentorIntentRoot+'/:id/rating',secure,(request,reply)=>{
+    mentorIntentQuery(request);return applicationRead(request,reply,signal=>mentorRatings.decide(fixedRequestSession(request,userId(request)),params(request),request.body,signal));
+  });
+  app.get(mentorIntentRoot+'/:id/rating/operations/:operationId',secure,(request,reply)=>{
+    mentorIntentQuery(request);
+    return applicationRead(request,reply,signal=>mentorRatings.observe(fixedRequestSession(request,userId(request)),params(request),params(request,'operationId'),signal));
   });
   app.post(mentorIntentRoot,secure,(request,reply)=>{
     mentorIntentQuery(request);return applicationRead(request,reply,async signal=>{

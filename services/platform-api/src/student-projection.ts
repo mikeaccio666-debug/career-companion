@@ -373,6 +373,10 @@ function aliasErrorCodes(codes: readonly string[], code: string, message: string
 
 // Exact, controlled error codes only. Original error text can reflect configuration
 // or third-party details and is never used to classify or rewrite user content.
+keepErrorCodes(['MENTOR_RATING_INPUT_INVALID'], '请选择 1–5 分或跳过；一句话反馈可以留空。');
+keepErrorCodes(['MENTOR_RATING_UNAVAILABLE'], '实际完成服务后才可以留下反馈。');
+keepErrorCodes(['MENTOR_RATING_ALREADY_RECORDED', 'MENTOR_RATING_OPERATION_CONFLICT'], '这次反馈或操作已记录，请重新读取。');
+keepErrorCodes(['MENTOR_RATING_STORAGE_UNAVAILABLE'], '暂时无法确认会后反馈，请重新读取。');
 keepErrorCodes(['AUTH_REQUIRED'], 'Sign in to continue.');
 keepErrorCodes(['LEGAL_DOCUMENTS_UNAVAILABLE'], 'The current legal documents are not available.');
 keepErrorCodes(['TERMS_CONFIRMATION_REQUIRED', 'TERMS_VERSION_CHANGED'], 'Read and confirm the current legal documents before using AI.');

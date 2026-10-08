@@ -44,3 +44,9 @@
 @media(prefers-reduced-motion:reduce) { .mentor-page * { scroll-behavior: auto; } }
 
 .mentor-system-notice { background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 12px; color: var(--ink-2); font: 13px/20px var(--f-ui,system-ui,sans-serif); }
+
+.mentor-feedback { border-top:1px solid var(--rule); margin-top:12px; padding-top:12px; }
+.mentor-feedback fieldset { border:0; padding:0; margin:12px 0; display:flex; flex-wrap:wrap; gap:12px; }
+.mentor-feedback legend { font-size:13px; margin-bottom:8px; }
+.mentor-feedback fieldset label { display:flex; align-items:center; gap:4px; }
+.mentor-feedback input[type="radio"] { width:auto; }

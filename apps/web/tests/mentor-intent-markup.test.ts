@@ -11,7 +11,7 @@ const webRoot = fileURLToPath(new URL('../', import.meta.url));
 await mkdir(path.join(webRoot, '.local'), { recursive: true });
 const directory = await mkdtemp(path.join(webRoot, '.local', 'mentor-markup-test-')); await chmod(directory, 0o700);
 after(() => rm(directory, { recursive: true, force: true }));
-const output = await build({ stdin: { contents: "export { MentorIntentScene, MentorIntentPage } from './src/mentor-intent-view'; export { MentorHumanEntry } from './src/mentor-human-entry'; export { PlatformAccountClientProvider } from './src/account-client';", resolveDir: webRoot, loader: 'ts' },
+const output = await build({ stdin: { contents: "export { MentorIntentScene, MentorIntentPage } from './src/mentor-intent-view'; export { MentorHumanEntry } from './src/mentor-human-entry'; export { MentorRatingScene } from './src/mentor-rating-view'; export { PlatformAccountClientProvider } from './src/account-client';", resolveDir: webRoot, loader: 'ts' },
   bundle: true, write: false, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' }, logLevel: 'silent' });
 const filename = path.join(directory, 'entry.mjs'); await writeFile(filename, output.outputFiles[0].text, { mode: 0o600 });
 const views = await import(pathToFileURL(filename).href);
@@ -135,4 +135,24 @@ test('cancelled or suspended scheduled content hides meeting link; settlement no
  const html=markup({state:state({records:[actual],quote})});assert(html.includes('预约已取消'));assert(!html.includes('https://meet.google.com/fictional-meeting'));
  assert(!html.includes('已记录全额退款'));assert(!html.includes('排期待确认'));assert(!html.includes('打开会议链接'));
  const hidden=markup({state:state({records:[actual],quote,suspended:true})});assert(!hidden.includes('Fictional confirmed mentor'));assert(!hidden.includes('$95.00'));
+});
+
+test('private completed-service feedback requires an actual read, starts with no selected score and supports explicit skip with optional one-line comment',()=>{
+ const feedback={loaded:true,busy:false,suspended:false,rating:null,pending:null,uncertain:false,error:''};
+ const controls={onSubmit(){},onRefresh(){},onObserve(){},onRetry(){}};
+ const html=renderToStaticMarkup(createElement(views.MentorRatingScene,{state:feedback,...controls}));
+ assert(html.includes('这次和蔓藤导师聊得怎么样？'));assert(html.includes('仅内部可见'));assert.equal((html.match(/type="radio"/g)||[]).length,5);assert(!html.includes('checked=""'));
+ assert.match(html,/<button type="submit" disabled="">提交反馈/);assert(html.includes('跳过'));assert(html.includes('一句话反馈（可选）'));
+ for(const state of [{...feedback,loaded:false},{...feedback,suspended:true},{...feedback,rating:{action:'skip'}},{...feedback,rating:{action:'rate',score:4,comment:'Fictional stored'}}]){
+  const x=renderToStaticMarkup(createElement(views.MentorRatingScene,{state,...controls}));assert(!x.includes('type="radio"'));assert(!x.includes('提交反馈'));
+ }
+ const uncertain=renderToStaticMarkup(createElement(views.MentorRatingScene,{state:{...feedback,loaded:false,pending:{operationId:owner},uncertain:true,error:'Fictional unknown outcome'},...controls}));
+ assert(uncertain.includes('核对这次反馈'));assert(uncertain.includes('用原操作重试'));assert(!uncertain.includes('你的反馈已记录'));
+});
+test('completed fulfillment renders its own status without the old meeting link or a false paid claim; feedback SSR does not fetch or assume a score',()=>{
+ const actual=record({status:'completed',revision:4,orderId:owner,mentorId:owner,assignment:{mentorDisplayName:'Fictional completed mentor',startsAt:'2026-10-08T11:00:00.000Z',endsAt:'2026-10-08T11:47:00.000Z',timeZone:'America/New_York'},
+  scheduled:{confirmedAt:at,meetingUrl:'https://meet.google.com/fictional-completed'},completedAt:'2026-10-08T11:47:00.000Z'});
+ const current={account:{accountId:owner,generation:1},isCurrent:()=>true,subscribe:()=>()=>{},request(){throw Error('SSR must not read');}};
+ const html=renderToStaticMarkup(createElement(views.PlatformAccountClientProvider,{value:current},createElement(views.MentorIntentScene,props({state:state({records:[actual],quote:{session:actual,order:{status:'quoted',priceCents:9500,shownOffer:offer()}}})}))));
+ assert(html.includes('已完成'));assert(html.includes('尚无收款记录'));assert(html.includes('正在读取会后反馈'));assert(!html.includes('type="radio"'));assert(!html.includes('https://meet.google.com/fictional-completed'));assert(!html.includes('取消这份意向'));assert(!html.includes('已记录线下收款'));
 });
