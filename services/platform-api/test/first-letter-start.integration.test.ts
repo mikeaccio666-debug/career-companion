@@ -269,3 +269,24 @@ test('SIGTERM waits for the real in-flight letter, finishes its review and relea
   assert.equal((await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason,'terminal');
  }finally{release();await processes.close();}
 });
+
+test('SIGTERM deadline exits the real stalled worker once and preserves the admitted unfinished call', {timeout:30000}, async()=>{
+ const a=await actor();await a.start.choose(a.who,a.command);const refs=await ref(a);
+ let entered=false,release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ const respond=a.respond;a.respond=async(...args:any[])=>{entered=true;await gate;return respond(...args);};
+ const processes=await workerProcessFixture(f,a,model);
+ try{
+  const child=await processes.start(true,2000);await processes.until(async()=>entered);
+  const started=performance.now();child.signal();
+  await new Promise(resolve=>setTimeout(resolve,150));child.repeatSignal();
+  await child.stop(1);
+  assert(performance.now()-started>=1800,'the repeated signal must not bypass the grace period');
+  assert(performance.now()-started<10000,'the stalled call must not keep the process alive indefinitely');
+  const rows=(await f.db.query('SELECT status,call_status,output_ciphertext,finished_at,reservation_id FROM platform_first_letter_stages WHERE task_id=$1',[refs.taskId])).rows;
+  assert.equal(rows.length,1);assert.equal(rows[0].status,'running');assert.equal(rows[0].call_status,'admitted');
+  assert.equal(rows[0].output_ciphertext,null);assert.equal(rows[0].finished_at,null);
+  assert.equal((await f.db.query('SELECT status FROM platform_cost_reservations WHERE id=$1',[rows[0].reservation_id])).rows[0].status,'admitted');
+  assert.notEqual((await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason,'terminal');
+  assert.equal(a.calls,0,'the loopback response has not completed or been retried');
+ }finally{release();await processes.close();}
+});

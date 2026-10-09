@@ -38,7 +38,7 @@ Redis 探针独占临时 `RedisConnection`，仅发送只读命令，不构造 B
 
 共享 `withBoundedTransaction` 默认是最多5秒原生 checkout 等待，加借到连接后的2秒操作期限与清理；这不是整个检查严格2秒内返回的承诺。它用于此次探针与心跳，原有普通 `query`／`transaction` 没有因此全部获得总 deadline。CLI 新建 max1 的独立 pool，并标示 `poolScope: diagnostic_process`；它的 total／idle／waiting／idle-error计数不能代替运行中 API 或 worker 的池状态。worker 心跳报告自己进程的 pool 读数。当前每用户请求限额和聊天／语音租约也不是全平台数据库或推理容量限制。
 
-探针 close 等待自己有界的在途检查与连接清理，心跳 stop 等待当前写入并尝试 stopping 报告。整个 worker 的关闭仍包含任务、BullMQ、邮件组件等等待，没有总关闭 deadline；不能据此承诺在托管服务的 SIGTERM 窗口内一定退出。
+探针 close 等待自己有界的在途检查与连接清理，心跳 stop 等待当前写入并尝试 stopping 报告。整个 worker 的关闭期限现已接通，见 [Worker 总退出期限](worker-shutdown.md)。应用默认 25 秒覆盖全部收尾阶段；仍需核对目标托管窗口，不能把应用定时器当作宿主级的硬终止保证。
 
 ## 独立验收
 

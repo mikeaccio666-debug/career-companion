@@ -185,3 +185,9 @@ test('real API, worker, migration and operations entrypoints reject local settin
     }
   } finally { await new Promise<void>((resolve, reject) => trap.close(error => error ? reject(error) : resolve())); }
 });
+
+test('worker shutdown grace is bounded, explicit and defaults to 25 seconds',()=>{
+ assert.equal(readConfig({}).workerShutdownTimeoutMs,25000);
+ for(const value of ['1000','40000','120000'])assert.equal(readConfig({PLATFORM_WORKER_SHUTDOWN_TIMEOUT_MS:value}).workerShutdownTimeoutMs,Number(value));
+ for(const value of ['0','999','120001','1.5','-1','Infinity',' 1000','SECRET_FICTIONAL'])assert.throws(()=>readConfig({PLATFORM_WORKER_SHUTDOWN_TIMEOUT_MS:value}),e=>e instanceof Error&&e.message==='PLATFORM_WORKER_SHUTDOWN_TIMEOUT_MS must be an integer from 1000 to 120000');
+});

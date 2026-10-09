@@ -54,7 +54,7 @@ Render 官方技术说明支持 Web Service 流式响应，HTTP 响应上限为 
 
 Render 发布旧实例时发 SIGTERM，默认 shutdown delay 为 30 秒，可配置到 300 秒。当前 API `app.close()`、Worker `worker.close()` 需要实测能在这个窗口内停止接新任务、保存状态和结束子进程；超过窗口会 SIGKILL。不能把滚动部署的“服务无停机”解释成一个进行中的模型调用绝不被中断。[Render 部署与 graceful shutdown](https://render.com/docs/deploys)
 
-本次 probe close 会等待自己的有界底层清理，heartbeat stop 等待当前写入并尝试 stopping 报告；整个 worker 的 close 仍没有总 deadline，任务和其他组件可能继续等待。此实现尚未证明托管 SIGTERM 窗口足够，仍须目标实例故障／关闭验收。
+本次 probe close 会等待自己的有界底层清理，heartbeat stop 等待当前写入并尝试 stopping 报告；整个 worker 的 close 现有默认 25 秒总期限，正常等待收尾、超时退出 1 且保留未确认状态，见 [Worker 总退出期限](worker-shutdown.md)。需要将应用期限配置在托管终止窗口以内；仍须目标实例故障／关闭验收。
 
 ## 队列：Key Value 可用，但要正确设置
 

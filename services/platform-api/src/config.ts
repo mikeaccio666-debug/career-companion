@@ -27,6 +27,7 @@ export interface PlatformConfig {
   companionSealGlyphs?: Readonly<CompanionSealGlyphConfiguration>;
   workbenchEnabled: boolean;
   productEventsEnabled?: boolean;
+  workerShutdownTimeoutMs?: number;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
   exposeProviderDetails: boolean;
   mcp?: McpCatalogConfig;
@@ -188,6 +189,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   if (!Number.isSafeInteger(maxActiveJobs) || maxActiveJobs < 1) throw new Error('PLATFORM_MAX_ACTIVE_JOBS must be a positive integer');
   if (env.PLATFORM_WEB_STATIC_DIR !== undefined && !env.PLATFORM_WEB_STATIC_DIR.trim()) throw new Error('PLATFORM_WEB_STATIC_DIR must name the built web directory');
   return {
+    workerShutdownTimeoutMs: boundedInteger(env.PLATFORM_WORKER_SHUTDOWN_TIMEOUT_MS,'PLATFORM_WORKER_SHUTDOWN_TIMEOUT_MS',25000,1000,120000),
     productEventsEnabled: env.PLATFORM_PRODUCT_EVENTS_ENABLED==='1',
     webApiOrigin, databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
     mentorOrganizationId: env.PLATFORM_MENTOR_ORG_ID === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_ORG_ID),
