@@ -73,6 +73,23 @@ export class CareerStories {
  }
  async get(value:FixedSessionContext,inputKind:CareerLibraryKind,key:unknown,signal?:AbortSignal){const context=this.fixed(value),kind=this.kind(inputKind);let id:string;try{id=careerRecordId(key);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);const row=await this.row(client,context,kind,id);if(!row)throw missing();const record=await this.record(client,context,kind,row),evidenceAvailability=kind==='story'?await this.availability(client,context,record as CareerStory,signal):null;await authorizeFixedSession(client,context,signal);return Object.freeze({record,evidenceAvailability});});}
+ /** Read an existing operation without repeating its write. Missing records
+  * require a later authenticated delete receipt, never an inferred deletion. */
+ async observe(value:FixedSessionContext,inputKind:CareerLibraryKind,key:unknown,signal?:AbortSignal){
+  const context=this.fixed(value),kind=this.kind(inputKind);let id:string;try{id=careerRecordId(key);}catch{throw bad();}
+  return this.db.withBoundedTransaction(async client=>{
+   await this.authorize(client,context,signal);
+   const row=(await client.query('SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,id])).rows[0];
+   if(!row)throw missing();const receipt=await this.receipt(client,context,row);if(receipt.recordKind!==kind)throw missing();
+   const current=await this.row(client,context,kind,receipt.recordId);
+   const record=current?await this.record(client,context,kind,current):null;
+   if(record){if(record.revision<receipt.appliedRevision)throw unavailable();}
+   else {const latest=await this.latest(client,context,kind,receipt.recordId);if(latest.action!=='delete'||latest.appliedRevision<receipt.appliedRevision)throw unavailable();}
+   const evidenceAvailability=kind==='story'&&record?await this.availability(client,context,record as CareerStory,signal):null;
+   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
+   return Object.freeze({record,evidenceAvailability,operation:Object.freeze({id:receipt.operationId,recordId:receipt.recordId,recordKind:kind,appliedRevision:receipt.appliedRevision,replayed:true})});
+  });
+ }
  async list(value:FixedSessionContext,inputKind:CareerLibraryKind,query:unknown={},signal?:AbortSignal){const context=this.fixed(value),kind=this.kind(inputKind);let after:string|null;try{const q=careerRecordObject(query,[],['after']);after=Object.hasOwn(q,'after')?careerRecordId(q.after):null;}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);let cursor:any=null;if(after){cursor=await this.row(client,context,kind,after);if(!cursor)throw missing();await this.record(client,context,kind,cursor);}
    const rows=(await client.query('SELECT * FROM '+tables[kind]+' WHERE user_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2::timestamptz,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT 51 FOR SHARE',[context.userId,cursor?.created_at??null,after])).rows,records=[];

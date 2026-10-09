@@ -23,3 +23,22 @@ test('project choice lookup follows actual owner pagination and rejects repeated
  const first=Array.from({length:50},()=>project(randomUUID())),second=project(randomUUID()),cursor=first.at(-1)!.id;const c=client(path=>({records:(path.endsWith(cursor)?[second]:first).map(p=>({record:p,evidenceAvailability:null})),nextAfter:path.endsWith(cursor)?null:cursor}));assert.equal((await readCareerProjectChoices(c)).length,51);
  await assert.rejects(readCareerProjectChoices(client(()=>({records:[{record:{...second,verification:'mentor_reviewed'},evidenceAvailability:null}],nextAfter:null}))));
 });
+
+test('read-only recovery sends no command body and binds original kind, operation and revision',async()=>{
+ const body=command(),operation={id:body.operationId,recordId:id,recordKind:'story',appliedRevision:1,replayed:true},record=state({revision:2,lastOperationId:randomUUID()});
+ const response={record,evidenceAvailability:'current',operation};let requests=0;
+ const c=client((route,init)=>{requests++;assert.equal(route,'/career/stories/operations/'+body.operationId);assert.equal(init.method,undefined);assert.equal(init.body,undefined);assert.equal(init.cache,'no-store');return response;});
+ assert.equal((await changeCareerLibrary(c,'story','create',null,body,undefined,true)).record!.revision,2);assert.equal(requests,1);
+ for(const patch of [{replayed:false},{recordKind:'project'},{id:randomUUID()},{appliedRevision:2}])await assert.rejects(changeCareerLibrary(client(()=>({...response,operation:{...operation,...patch}})),'story','create',null,body,undefined,true));
+ assert.equal((await changeCareerLibrary(client(()=>({...response,record:null,evidenceAvailability:null})),'story','create',null,body,undefined,true)).record,null);
+ await assert.rejects(changeCareerLibrary(client(()=>({...response,record:state({revision:1,lastOperationId:randomUUID()})})),'story','create',null,body,undefined,true));
+});
+test('empty list and removed-operation results are rejected after account invalidation',async()=>{
+ const body=command(),response={record:null,evidenceAvailability:null,operation:{id:body.operationId,recordId:id,recordKind:'story',appliedRevision:1,replayed:true}};
+ for(const [reply,run] of [[{records:[],nextAfter:null},(c:BoundPlatformClient)=>readCareerLibrary(c,'story')],[response,(c:BoundPlatformClient)=>changeCareerLibrary(c,'story','create',null,body,undefined,true)]] as const){
+  let live=true;const c=client(()=>{live=false;return reply;});c.isCurrent=()=>live;
+  await assert.rejects(run(c));
+ }
+ let requested=false;const stale=client(()=>{requested=true;return {};});stale.isCurrent=()=>false;
+ await assert.rejects(readCareerLibrary(stale,'story'));await assert.rejects(readCareerLibraryRecord(stale,'story',id));assert.equal(requested,false);
+});
