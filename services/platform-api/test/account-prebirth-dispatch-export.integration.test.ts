@@ -31,7 +31,7 @@ test('queued and genuinely completed name tasks export original inventory and jo
  assert.equal((s.nameDispatches[0] as any).journalHold,null);assert.equal((s.nameDispatchOutbox[0] as any).heldReason,'terminal');
  assert.equal(s.prebirthHeads.length,1);assert.equal((s.prebirthHeads[0] as any).revision,s.prebirthInventory.length);
  assert(s.prebirthInventory.some((r:any)=>r.kind==='name_submission'&&r.sourceId===a.acceptance.submissionId));
- assert.equal(data.includedTables.length,141);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
+ assert.equal(data.includedTables.length,142);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
  for(const table of tables){assert(data.includedTables.includes(table));assert(!data.remainingTables.includes(table));}
  const json=JSON.stringify(data);
  for(const secret of [token,f.who.tokenHash,password,encoded,'originalSessionHash','submittedAuthVersion','leaseToken','executionToken','claimCipherDigest','captureDigest','payload_ciphertext','chain_digest'])assert(!json.includes(secret),secret);

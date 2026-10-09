@@ -21,7 +21,7 @@ test('exact raw inputs and applied, rejected, superseded, running and failed out
  assert.equal(rows.get(running.submissionId).status,'running');assert.equal(rows.get(running.submissionId).application.status,'pending');
  assert.equal(data.sections.companionNameIdentityReceipts.length,2);assert.equal(data.sections.companionNameIdentityProvenance.length,2);
  assert.equal((data.sections.companionNameIdentityProvenance as any[]).filter(r=>r.currentForIdentity).length,1);
- assert.equal(data.includedTables.length,141);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
+ assert.equal(data.includedTables.length,142);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
  const json=JSON.stringify(data);for(const secret of [other.who.userId,other.submission.submissionId,p.who.tokenHash,claim.leaseToken,live.leaseToken,token,password,encoded,'claim_ciphertext','leaseToken','executionToken','submittedSessionHash'])assert(!json.includes(secret),secret);
  assert(Object.isFrozen(rows.get(first).request));assert.equal(calls.length,n);assert.deepEqual(await snapshot(f,p.who),before);
  assert(!queries.filter(sql=>/FROM platform_companion_name_/.test(sql)).some(sql=>/FOR (UPDATE|SHARE|NO KEY UPDATE)/.test(sql)));
