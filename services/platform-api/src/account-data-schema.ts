@@ -1,9 +1,14 @@
 import type { AccountDataPolicy } from './account-data-coverage.ts';
 
-// Reviewed against migrations 001–089, using catalog metadata only. This is a
+// Reviewed against migrations 001–090, using catalog metadata only. This is a
 // fixed review baseline, not a runtime auto-classifier or completed export map.
 // Re-review the actual columns and relationships before changing a fingerprint.
 export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: AccountDataPolicy; fingerprint: string}>[] = Object.freeze([
+  // Reviewed 090: reporter-owned encrypted text shared explicitly with the
+  // configured support organization. The operations composite FK cascades with
+  // its report. Owner export includes replies but excludes internal digests.
+  Object.freeze({ table: 'platform_product_feedback', policy: 'owner_projection', fingerprint: '14ff8b6a3d42623b1e0eca218517691a7495322d418d79009326dc92fea7cf0f' }),
+  Object.freeze({ table: 'platform_product_feedback_operations', policy: 'owner_projection', fingerprint: 'e6f67fdbc83e283827db30a833032b3c8b3cc81f89e61c9e1009537df30cfbed' }),
   // Reviewed 089: direct owner FK with cascade; fixed enum-only events, no credentials or source bodies.
   Object.freeze({ table: 'platform_product_events', policy: 'owner_projection', fingerprint: '65e474de84233296f04f17204805e269bb87b3ed815bab7bef708d9c91a9ae80' }),
   Object.freeze({ table: 'platform_account_action_limits', policy: 'credential_projection', fingerprint: '76896bd9fba3a061e51b0cf5769171b90d96a83f6e00f5b1c342974b07ec57c9' }),

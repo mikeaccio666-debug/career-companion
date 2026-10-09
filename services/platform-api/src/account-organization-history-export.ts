@@ -38,7 +38,9 @@ export class AccountOrganizationHistoryExport {
    // staff read with no per-student target cannot be turned into a personal view receipt.
    const related=`a.user_id=$1 OR (a.action='org_entitlement_changed' AND a.target_id=$1)
     OR (a.action IN ('mentor_intent_matched','mentor_payment_recorded','mentor_schedule_recorded')
-     AND EXISTS(SELECT 1 FROM platform_mentor_sessions s WHERE s.user_id=$1 AND s.id=a.target_id AND s.org_id=a.org_id))`;
+     AND EXISTS(SELECT 1 FROM platform_mentor_sessions s WHERE s.user_id=$1 AND s.id=a.target_id AND s.org_id=a.org_id))
+    OR (a.action='product_feedback_updated' AND EXISTS(SELECT 1 FROM platform_product_feedback f
+     WHERE f.user_id=$1 AND f.id=a.target_id AND f.org_id=a.org_id))`;
    let after:string|null=null;
    for(;;){
     signal?.throwIfAborted();
@@ -49,9 +51,13 @@ export class AccountOrganizationHistoryExport {
      const denied=r.outcome==='deny'&&r.role===null&&r.record_count===0
       &&['student_account','organization_missing','organization_unavailable','role_unavailable','feature_disabled'].includes(r.reason);
      if(!allowed&&!denied)throw unavailable();
-     let relation:'own_action'|'account'|'mentor_session';
+     let relation:'own_action'|'account'|'mentor_session'|'product_feedback';
      if(r.user_id===who.userId)relation='own_action';
      else if(r.action==='org_entitlement_changed'&&r.target_id===who.userId)relation='account';
+     else if(r.action==='product_feedback_updated'){
+      const target=(await client.query('SELECT id FROM platform_product_feedback WHERE id=$1 AND user_id=$2 AND org_id=$3',[r.target_id,who.userId,r.org_id])).rows;
+      if(target.length!==1||target[0].id!==r.target_id)throw unavailable();relation='product_feedback';
+     }
      else{
       if(!['mentor_intent_matched','mentor_payment_recorded','mentor_schedule_recorded'].includes(r.action))throw unavailable();
       const target=(await client.query('SELECT id FROM platform_mentor_sessions WHERE id=$1 AND user_id=$2 AND org_id=$3',[r.target_id,who.userId,r.org_id])).rows;
