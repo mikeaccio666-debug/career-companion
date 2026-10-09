@@ -359,3 +359,5 @@ export * from './first-letter-progress.ts';
 export * from './career-profile.ts';
 
 export * from './product-events.ts';
+
+export * from './product-feedback.ts';

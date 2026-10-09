@@ -23,6 +23,7 @@ export interface PlatformConfig {
   orgContentBrand?: string;
   expertRoster?: Readonly<ExpertRelease>;
   mentorOrganizationId?: string;
+  supportOrganizationId?: string;
   mentorRetentionDays?: number; mentorRetentionEvidenceRef?: string;
   companionSealGlyphs?: Readonly<CompanionSealGlyphConfiguration>;
   workbenchEnabled: boolean;
@@ -192,6 +193,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     workerShutdownTimeoutMs: boundedInteger(env.PLATFORM_WORKER_SHUTDOWN_TIMEOUT_MS,'PLATFORM_WORKER_SHUTDOWN_TIMEOUT_MS',25000,1000,120000),
     productEventsEnabled: env.PLATFORM_PRODUCT_EVENTS_ENABLED==='1',
     webApiOrigin, databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
+    supportOrganizationId: env.PLATFORM_SUPPORT_ORG_ID === undefined ? undefined : supportOrganizationId(env.PLATFORM_SUPPORT_ORG_ID),
     mentorOrganizationId: env.PLATFORM_MENTOR_ORG_ID === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_ORG_ID),
     mentorRetentionDays: env.PLATFORM_MENTOR_RETENTION_DAYS === undefined ? undefined : mentorRetentionDays(env.PLATFORM_MENTOR_RETENTION_DAYS),
     mentorRetentionEvidenceRef: env.PLATFORM_MENTOR_RETENTION_EVIDENCE_REF === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_RETENTION_EVIDENCE_REF),
@@ -214,4 +216,9 @@ function mentorOrganizationId(value:string):string {
 
 function mentorRetentionDays(value:string):number {
  if(!/^[1-9][0-9]{0,4}$/.test(value)||Number(value)>36500)throw Error('Invalid mentor financial retention configuration.');return Number(value);
+}
+
+function supportOrganizationId(value:string):string {
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value))throw Error('Invalid support organization configuration.');
+ return value;
 }
