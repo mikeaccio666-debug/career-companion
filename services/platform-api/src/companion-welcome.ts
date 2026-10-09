@@ -1,3 +1,4 @@
+import {readWelcomeSnapshot,welcomeIntroV1,type WelcomeRow as Row} from './companion-welcome-snapshot.ts';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { PoolClient } from 'pg';
@@ -12,24 +13,9 @@ import { ApiError } from './errors.ts';
 import type { CompanionPrebirthSafety } from './companion-prebirth-safety.ts';
 const unavailable = () => new ApiError(503, 'COMPANION_WELCOME_UNAVAILABLE', 'The saved introduction could not be confirmed.');
 const conflict = () => new ApiError(409, 'COMPANION_WELCOME_CONFLICT', 'Read the saved introduction before choosing its next path.');
-const introContent = (name: string) => `我是${name}，名字是你起的。我是 AI。我们先花三分钟认识一下，然后我给你写第一封信。`;
 const fixed = (s: FixedSessionContext) => Object.freeze({ userId: s.userId, tokenHash: s.tokenHash });
 const iso = (v: Date) => v.toISOString();
 const same = isDeepStrictEqual;
-interface Row {
-    id: string;
-    user_id: string;
-    companion_id: string;
-    conversation_id: string;
-    birth_receipt_id: string;
-    intro_message_id: string;
-    intro_ciphertext: Buffer;
-    revision: 1 | 2;
-    step: 'C1' | 'C2' | 'C7';
-    choice: 'begin' | 'direct_letter' | null;
-    opened_at: Date;
-    updated_at: Date;
-}
 /** Account-serialized C1 publication. Uses the actual birth origin and real
  * main room. Rendering is explicitly fixed_intro_v1: no model, first letter,
  * lease, consent grant, external action or synthetic conversation is created. */
@@ -49,48 +35,9 @@ export class CompanionWelcomeService {
     private async row(client: PoolClient, s: FixedSessionContext, c: PublicActiveCompanion) {
         return (await client.query<Row>('SELECT * FROM platform_companion_welcome WHERE user_id=$1 AND companion_id=$2 FOR UPDATE', [s.userId, c.companionId])).rows[0];
     }
-    private async decode(client: PoolClient, s: FixedSessionContext, c: PublicActiveCompanion, row: Row): Promise<CompanionWelcome> {
-        try {
-            // Intro remains at immutable cipher revision 1 when the journey advances.
-            const original = parseCompanionWelcomeObservation(JSON.parse(this.storage.crypto!.openUtf8(row.intro_ciphertext, { table: 'platform_companion_welcome', column: 'intro_ciphertext', rowId: row.id, ownerId: s.userId, revision: 1 })));
-            if (original.kind !== 'welcome' || original.revision !== 1 || original.step !== 'C1' || original.choice !== null
-                || original.id !== row.id || original.companionId !== row.companion_id || row.companion_id !== c.companionId
-                || original.conversationId !== row.conversation_id || row.conversation_id !== c.main.id
-                || original.intro.id !== row.intro_message_id || original.openedAt !== iso(row.opened_at)
-                || original.intro.content !== introContent(original.intro.speaker.name))
-                throw unavailable();
-            const main = (await client.query('SELECT birth_receipt_id FROM platform_conversations WHERE id=$1 AND user_id=$2', [c.main.id, s.userId])).rows[0];
-            if (!main || main.birth_receipt_id !== row.birth_receipt_id)
-                throw unavailable();
-            const m = (await client.query('SELECT * FROM platform_messages WHERE id=$1 AND user_id=$2 FOR SHARE', [row.intro_message_id, s.userId])).rows[0];
-            const speaker = { displayName: original.intro.speaker.name, roleLabel: 'AI 主理人', sealChar: original.intro.speaker.sealChar,
-                ink_token: original.intro.speaker.inkToken, personaRevision: 1 };
-            if (!m || m.conversation_id !== c.main.id || m.companion_id !== c.companionId || m.room_kind !== 'main' || m.kind !== 'text'
-                || m.role !== 'assistant' || m.speaker_kind !== 'companion' || m.speaker_key !== null || m.speaker_ref !== c.companionId
-                || !same(m.speaker_snapshot, speaker) || m.channel !== 'web' || m.birth_receipt_id !== null || m.content !== ''
-                || m.status !== 'complete' || m.provider !== null || m.model !== null || m.lease_until !== null || !same(m.attachments, [])
-                || iso(m.created_at) !== original.openedAt || !same(m.payload, { type: 'companion_intro', welcomeId: row.id, rendering: 'fixed_intro_v1' }))
-                throw unavailable();
-            const state = parseCompanionWelcomeObservation({ ...original, revision: row.revision, step: row.step, choice: row.choice, updatedAt: iso(row.updated_at) });
-            if (state.kind !== 'welcome')
-                throw unavailable();
-            if (state.revision === 2) {
-                const operations = (await client.query('SELECT * FROM platform_companion_welcome_operations WHERE welcome_id=$1 AND user_id=$2 FOR SHARE', [row.id, s.userId])).rows;
-                if (operations.length !== 1)
-                    throw unavailable();
-                const op = operations[0];
-                const capture = JSON.parse(this.storage.crypto!.openUtf8(op.request_ciphertext, { table: 'platform_companion_welcome_operations', column: 'request_ciphertext', rowId: op.operation_id, ownerId: s.userId, revision: 1 }));
-                const command = parseCompanionWelcomeChoice(capture.command);
-                if (!same(capture, { welcomeId: row.id, companionId: c.companionId, command, appliedAt: iso(row.updated_at), acceptedAuthVersion: String(op.accepted_auth_version) })
-                    || command.welcomeId !== row.id || command.operationId !== op.operation_id || command.choice !== state.choice || op.companion_id !== c.companionId
-                    || op.applied_revision !== 2 || iso(op.created_at) !== iso(row.updated_at))
-                    throw unavailable();
-            }
-            return state;
-        }
-        catch {
-            throw unavailable();
-        }
+    private async decode(client:PoolClient,s:FixedSessionContext,c:PublicActiveCompanion,row:Row):Promise<CompanionWelcome>{
+        if(row.companion_id!==c.companionId||row.conversation_id!==c.main.id)throw unavailable();
+        return (await readWelcomeSnapshot(client,this.storage.crypto,s.userId,row,true)).state;
     }
     async read(context: FixedSessionContext, signal?: AbortSignal): Promise<CompanionWelcomeObservation> {
         const s = fixed(context);
@@ -132,7 +79,7 @@ export class CompanionWelcomeService {
                 now: Date;
             }>('SELECT clock_timestamp() AS now')).rows[0].now, id = randomUUID(), messageId = randomUUID();
             const state = parseCompanionWelcomeObservation({ kind: 'welcome', id, companionId: c.companionId, conversationId: c.main.id, revision: 1, step: 'C1', choice: null,
-                openedAt: iso(now), updatedAt: iso(now), intro: { id: messageId, kind: 'text', rendering: 'fixed_intro_v1', content: introContent(c.identity.name), createdAt: iso(now),
+                openedAt: iso(now), updatedAt: iso(now), intro: { id: messageId, kind: 'text', rendering: 'fixed_intro_v1', content: welcomeIntroV1(c.identity.name), createdAt: iso(now),
                     speaker: { name: c.identity.name, sealChar: c.identity.sealChar, inkToken: c.identity.inkToken, personaRevision: c.currentRevision } } });
             if (state.kind !== 'welcome')
                 throw unavailable();
