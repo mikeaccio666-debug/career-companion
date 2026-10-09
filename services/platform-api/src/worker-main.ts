@@ -1,3 +1,4 @@
+import { UploadWrites } from './upload-writes.ts';
 import { MentorFinancialLedger } from './mentor-financial-ledger.ts';
 import { UploadRemovals } from './upload-removals.ts';
 import { purgeExpiredMemoryDeletions } from './memory-retention.ts';
@@ -17,7 +18,7 @@ import { readCompanionSafetyResourceConfiguration } from './companion-safety-res
 import { CompanionNameQueue, createCompanionNameWorker } from './companion-name-queue.ts';
 const config=readConfig(),db=new Database(config.databaseUrl,{max:config.databasePoolMax,connectionTimeoutMillis:config.databaseConnectTimeoutMs});
 const legal=await loadLegalBundle(config.legalBundlePath),runtime=requireModelConsent(createProviderRuntime());
-const storage=createStorage(config),uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage);
+const storage=createStorage(config),uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage),uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
 const jobs=new JobService(db,config,runtime,storage,undefined,undefined,legal);
 const companion=new CompanionEntry(db,config,legal,runtime);
 const safetyResourcesConfiguration=await readCompanionSafetyResourceConfiguration(config);
@@ -28,7 +29,7 @@ await reconcileCompanionAccounting(companion);
 await purgeExpiredMemoryDeletions(db);
 const mentorFinancialRetention=config.dataCrypto?new MentorFinancialLedger(config):null;
 if(mentorFinancialRetention)await mentorFinancialRetention.purgeExpired(db);
-if(config.dataCrypto)await uploadRemovals.recover();
+if(config.dataCrypto){await uploadRemovals.recover();await uploadWrites.recover();}
 const worker=createWorker(jobs);
 const companionWorker=createCompanionGenerationWorker(companion),companionQueue=new CompanionGenerationQueue(companion);
 const companionNameWorker=createCompanionNameWorker(naming),companionNameQueue=new CompanionNameQueue(naming);
@@ -40,7 +41,7 @@ const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeV
 let closing=false,recovering:Promise<void>|undefined,shutdown:Promise<void>|undefined;
 const recovery=setInterval(()=>{
   if(closing||recovering)return;
-  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),...(mentorFinancialRetention?[mentorFinancialRetention.purgeExpired(db).catch(()=>{process.stderr.write('Mentor financial retention maintenance failed.\n');})]:[]),...(config.dataCrypto?[uploadRemovals.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
+  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),...(mentorFinancialRetention?[mentorFinancialRetention.purgeExpired(db).catch(()=>{process.stderr.write('Mentor financial retention maintenance failed.\n');})]:[]),...(config.dataCrypto?[uploadRemovals.recover(),uploadWrites.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
   recovering=current;
 },15_000);recovery.unref();
 process.stdout.write('Platform task worker started.\n');

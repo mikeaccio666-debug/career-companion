@@ -17,7 +17,7 @@ import { Database } from '../src/database.ts';
 // Real HTTP, authentication and database fixtures. Every actor connects from the
 // same loopback address; only verified sessions distinguish account limits.
 const prefix = '/api/platform', origin = 'https://limits-fixture.invalid';
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'limits-fixture', PLATFORM_AGENT_PROVIDER: 'limits-fixture', PLATFORM_REALTIME_PROVIDER: 'limits-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'limits-fixture', PLATFORM_SPEECH_PROVIDER: 'limits-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `request_limits_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_DATA_KEY:'b8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'limits-fixture', PLATFORM_AGENT_PROVIDER: 'limits-fixture', PLATFORM_REALTIME_PROVIDER: 'limits-fixture', PLATFORM_TRANSCRIPTION_PROVIDER: 'limits-fixture', PLATFORM_SPEECH_PROVIDER: 'limits-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `request_limits_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const databases = [new Database(url.toString()), new Database(url.toString())];

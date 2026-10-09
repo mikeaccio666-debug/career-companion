@@ -1,3 +1,4 @@
+import { UploadWrites } from './upload-writes.ts';
 import { AccountReauthentication } from './account-reauthentication.ts';
 import { CareerProgressService } from './career-progress.ts';
 import { CompanionPaidSettingsService } from './companion-paid-settings.ts';
@@ -130,7 +131,7 @@ export async function buildApp(options:AppOptions={}) {
   const careerStories=new CareerStories(db,config,bundle);
   const careerProgressService=new CareerProgressService(db,careerStories,careerApplications);
   const storage=options.storage??createStorage(config);
-  const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage);
+  const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage),uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
   const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview,careerApplications);
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
@@ -854,16 +855,14 @@ export async function buildApp(options:AppOptions={}) {
     finally{cancellation.dispose();}
   });
 
-  async function saveUpload(uid:string,name:string,mime:string,bytes:Uint8Array){
-    const id=randomUUID(),key=randomUUID(),filename=path.basename(name.replaceAll('\\','/')).replace(/[\u0000-\u001f\u007f]/g,'').slice(0,200)||'file';
-    await storage.put(key,bytes,mime);
-    try{await db.query('INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,$3,$4,$5,$6)',[id,uid,filename,mime,bytes.byteLength,key]);}
-    catch(error){const persisted=await db.query('SELECT id FROM platform_uploads WHERE id=$1 AND user_id=$2',[id,uid]).catch(()=>undefined);if(persisted&&!persisted.rowCount)await storage.delete(key).catch(()=>{});throw error;}
-    return {id,name:filename,mime,size:bytes.byteLength,url:`${prefix}/uploads/${id}`};
+  async function saveUpload(request:FastifyRequest,name:string,mime:string,bytes:Uint8Array,signal?:AbortSignal){
+    const filename=path.basename(name.replaceAll('\\','/')).replace(/[\u0000-\u001f\u007f]/g,'').slice(0,200)||'file';
+    const saved=await uploadWrites.upload(fixedRequestSession(request,userId(request)),{filename,mime,bytes},signal);
+    return {...saved,url:`${prefix}/uploads/${saved.id}`};
   }
   app.post(`${prefix}/uploads`,secure,async(request,reply)=>{
     const file=await request.file();if(!file)throw invalid('Choose a file to upload.');const bytes=await file.toBuffer();if(file.file.truncated)throw new ApiError(413,'FILE_TOO_LARGE','Files must be at most 20 MB.');
-    validateUpload(file.filename,file.mimetype,bytes);const attachment=await saveUpload(userId(request),file.filename,file.mimetype,bytes);reply.code(201);return {attachment};
+    validateUpload(file.filename,file.mimetype,bytes);const cancellation=requestSignal(request,reply);try{const attachment=await saveUpload(request,file.filename,file.mimetype,bytes,cancellation.signal);reply.code(201);return {attachment};}finally{cancellation.dispose();}
   });
   app.get(`${prefix}/upload-removals`,limitedAccount,async(request,reply)=>{const cancellation=requestSignal(request,reply);try{const result=await uploadRemovals.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),cancellation.signal);reply.header('Cache-Control','private, no-store');return result;}finally{cancellation.dispose();}});
   app.delete(`${prefix}/uploads/:id`,limitedAccount,async(request,reply)=>{
@@ -960,10 +959,11 @@ export async function buildApp(options:AppOptions={}) {
     try{
       const data=voiceBody(request.body,config.workbenchEnabled?['text']:['text','message_id']);
       if(!config.workbenchEnabled)throw new ApiError(403,'SPEECH_NOT_AVAILABLE','Speech playback is not available on this channel.');
+      uploadWrites.assertConfigured();
       const text=string(data.text,'text',4000),{provider,model,voice}=resolveModelRoute(config,runtime,'speech'),input={provider,text,voice,model};
       cancellation.signal.throwIfAborted();
       const audio=await withVoiceLease(db,userId(request),()=>{cancellation.signal.throwIfAborted();return runtime.speech(input,{signal:cancellation.signal,requestAdmission:modelConsent.forSession(session,cancellation.signal)});});
-      cancellation.signal.throwIfAborted();const attachment=await saveUpload(userId(request),audio.name,audio.mime,audio.bytes);reply.code(201);return {attachment};
+      cancellation.signal.throwIfAborted();const attachment=await saveUpload(request,audio.name,audio.mime,audio.bytes,cancellation.signal);reply.code(201);return {attachment};
     }finally{cancellation.dispose();}
   });
 

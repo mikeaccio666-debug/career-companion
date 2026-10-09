@@ -16,7 +16,7 @@ export interface BlobReadResult { stream: Readable; length: number; }
 
 export interface BlobStorage {
   readonly scope?: string;
-  put(key: string, bytes: Uint8Array, mime: string): Promise<void>;
+  put(key: string, bytes: Uint8Array, mime: string, signal?: AbortSignal): Promise<void>;
   get(key: string): Promise<Uint8Array>;
   delete(key: string, signal?: AbortSignal): Promise<void>;
   stat(key: string, signal?: AbortSignal): Promise<BlobStat>;
@@ -99,7 +99,7 @@ export class LocalBlobStorage implements BlobStorage {
     if (!/^[a-zA-Z0-9_-]+$/.test(key)) throw new Error('Invalid storage key');
     return path.join(this.directory, key);
   }
-  async put(key: string, bytes: Uint8Array) { await fs.mkdir(this.directory, { recursive: true, mode: 0o700 }); await fs.writeFile(this.file(key), bytes, { mode: 0o600, flag: 'wx' }); }
+  async put(key: string, bytes: Uint8Array, _mime?:string, signal?:AbortSignal) { checkAbort(signal);await fs.mkdir(this.directory, { recursive: true, mode: 0o700 }); await fs.writeFile(this.file(key), bytes, { mode: 0o600, flag: 'wx',signal }); }
   async get(key: string) { return new Uint8Array(await fs.readFile(this.file(key))); }
   async delete(key: string, signal?: AbortSignal) {checkAbort(signal);await fs.rm(this.file(key), { force: true });checkAbort(signal);}
   async stat(key: string, signal?: AbortSignal): Promise<BlobStat> {
@@ -134,7 +134,7 @@ export class S3BlobStorage implements BlobStorage {
     this.scope='blob_scope_'+createHash('sha256').update(JSON.stringify(['s3',config.endpoint??null,config.region,config.bucket])).digest('hex');
     this.client = client ?? new S3Client({ endpoint: config.endpoint, region: config.region, forcePathStyle: Boolean(config.endpoint), credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey } });
   }
-  async put(key: string, bytes: Uint8Array, mime: string) { await this.client.send(new PutObjectCommand({ Bucket: this.config.bucket, Key: key, Body: bytes, ContentType: mime })); }
+  async put(key: string, bytes: Uint8Array, mime: string, signal?:AbortSignal) { checkAbort(signal);await this.client.send(new PutObjectCommand({ Bucket: this.config.bucket, Key: key, Body: bytes, ContentType: mime }),{abortSignal:signal}); }
   async get(key: string) { const result = await this.client.send(new GetObjectCommand({ Bucket: this.config.bucket, Key: key })); if (!result.Body) throw new Error('Missing object'); return await result.Body.transformToByteArray(); }
   async delete(key: string, signal?: AbortSignal) {checkAbort(signal);await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }),{abortSignal:signal});checkAbort(signal);}
   async stat(key: string, signal?: AbortSignal): Promise<BlobStat> {

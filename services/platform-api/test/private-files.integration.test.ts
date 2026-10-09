@@ -16,7 +16,7 @@ import { Database } from '../src/database.ts';
 import { ApiError } from '../src/errors.ts';
 import { LocalBlobStorage, type BlobReadOptions, type BlobReadResult, type BlobStat } from '../src/storage.ts';
 
-const prefix='/api/platform',origin='http://localhost:4321',schema=`private_files_${randomUUID().replaceAll('-','')}`,base=readConfig({...process.env,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const prefix='/api/platform',origin='http://localhost:4321',schema=`private_files_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_DATA_KEY:'b8'.repeat(32),PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string,system:Awaited<ReturnType<typeof buildApp>>,port:number,alice:Actor,bob:Actor,video:Saved,audio:Saved,large:Saved;
 type Actor={id:string;cookie:string};type Saved={uploadId:string;artifactId:string;jobId:string;key:string;bytes:Buffer};
 type Opened={stream:Readable;signal?:AbortSignal;closed:boolean};

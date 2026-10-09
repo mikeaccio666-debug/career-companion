@@ -17,7 +17,7 @@ import { ApiError } from '../src/errors.ts';
 import { createWorkflowTemplate } from '../src/workflow-templates.ts';
 
 const origin = 'http://localhost:4321', prefix = '/api/platform';
-const base = readConfig({ ...process.env, NODE_ENV: 'development', PLATFORM_ENABLE_WORKBENCH: '0', PLATFORM_EXPOSE_PROVIDER_DETAILS: '0',
+const base = readConfig({ ...process.env, PLATFORM_DATA_KEY:'b8'.repeat(32), NODE_ENV: 'development', PLATFORM_ENABLE_WORKBENCH: '0', PLATFORM_EXPOSE_PROVIDER_DETAILS: '0',
   PLATFORM_CHAT_PROVIDER: 'channel-fixture', PLATFORM_AGENT_PROVIDER: 'channel-fixture', PLATFORM_REALTIME_PROVIDER: 'channel-fixture',
   PLATFORM_TRANSCRIPTION_PROVIDER: 'channel-fixture', PLATFORM_SPEECH_PROVIDER: 'channel-fixture' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema = `student_channel_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);

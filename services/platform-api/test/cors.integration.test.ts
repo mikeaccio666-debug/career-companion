@@ -18,7 +18,7 @@ import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 // These are real HTTP/session/PG protocol tests. A Node client explicitly replays
 // cookies; it cannot prove that a browser will send Secure/SameSite cookies.
 const prefix = '/api/platform', origin = 'https://app.cors-fixture.invalid', secondOrigin = 'https://studio.cors-fixture.invalid';
-const schema = `cors_${randomUUID().replaceAll('-', '')}`, base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'cors-fixture', PLATFORM_AGENT_PROVIDER: 'cors-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), admin = new Database(base.databaseUrl);
+const schema = `cors_${randomUUID().replaceAll('-', '')}`, base = readConfig({ ...process.env, PLATFORM_DATA_KEY:'b8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'cors-fixture', PLATFORM_AGENT_PROVIDER: 'cors-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), admin = new Database(base.databaseUrl);
 const databaseUrl = new URL(base.databaseUrl); databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString());
 type Actor = { id: string; cookie: string };
