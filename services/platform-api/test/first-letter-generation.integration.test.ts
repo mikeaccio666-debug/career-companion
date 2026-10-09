@@ -91,7 +91,7 @@ test('a genuine original call reserves and settles money before saving encrypted
   const saved=await row(a);assert(Buffer.isBuffer(saved.output_ciphertext));assert(!saved.output_ciphertext.includes(Buffer.from(text)));
   assert.equal(saved.lease_token,null);assert.equal(saved.runtime_lease_id,null);
   assert.equal((await f.db.query("SELECT count(*)::int AS n FROM platform_runtime_leases WHERE user_id=$1 AND kind='background'",[a.who.userId])).rows[0].n,0);
-  const archive=await capture(a);assert.deepEqual(archive.sections.firstLetterStages,[result]);assert.equal(archive.includedTables.length,143);
+  const archive=await capture(a);assert.deepEqual(archive.sections.firstLetterStages,[result]);assert.equal(archive.includedTables.length,145);
   const wire=JSON.stringify(archive.sections.firstLetterStages);
   for(const secret of [a.who.tokenHash,'authVersion','lease_token','runtime_lease_id','ciphertext'])assert(!wire.includes(secret));
   assert.equal(archive.complete,false);assert(Object.isFrozen(result.call?.receipt?.usage));
@@ -274,7 +274,7 @@ test('the private file archive retains the actual unreviewed draft and receipt w
    const archive=await new AccountFileArchive(f.db,f.config,new LocalBlobStorage(path.join(root,'blobs')),path.join(root,'archives')).capture(a.who,proof.token);
    try{
     const saved=JSON.parse(await fs.readFile(path.join(archive.directory,'account.json'),'utf8'));
-    assert.deepEqual(saved.sections.firstLetterStages,[result]);assert.equal(saved.includedTables.length,146);
+    assert.deepEqual(saved.sections.firstLetterStages,[result]);assert.equal(saved.includedTables.length,148);
     assert.equal(saved.remainingTables.length,20);assert.equal(saved.complete,false);
     const wire=JSON.stringify(saved.sections.firstLetterStages);
     for(const forbidden of [a.who.tokenHash,proof.token,'authVersion','lease_token','runtime_lease_id','ciphertext'])assert(!wire.includes(forbidden));
@@ -646,5 +646,87 @@ test('letter progress rejects damaged evidence and revoked users instead of repo
   await f.db.query('UPDATE platform_first_letter_stages SET output_ciphertext=$2 WHERE id=$1',[saved.id,saved.output_ciphertext]);
   await f.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[a.who.userId]);
   await assert.rejects(reader.read(a.who),{code:'AUTH_REQUIRED'});assert.equal(p.calls,1);
+ });
+});
+
+async function dispatchService(a:Awaited<ReturnType<typeof prepared>>,runtime:PlatformProviderRuntime){
+ const {FirstLetterDispatch}=await import('../src/first-letter-dispatch.ts'),{readConfig}=await import('../src/config.ts');
+ const config={...readConfig(),...f.config,modelRoutes:{...f.config.modelRoutes,first_letter_generation:{provider:'openai'}}};
+ return new FirstLetterDispatch(f.db,config,runtime,a.tasks,service(a,runtime));
+}
+const dispatchCommand=(a:Awaited<ReturnType<typeof prepared>>)=>({operationId:randomUUID(),taskId:pick(a).taskId,expectedPreparationId:a.saved.task.preparationId});
+test('accepted first-letter intent is atomic, private, replayable and fixes preparation before any execution',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),p=provider(),entry=await dispatchService(a,p.runtime),command=dispatchCommand(a);
+  const [one,two]=await Promise.all([entry.accept(a.who,command,settings),entry.accept(a.who,command,settings)]);
+  assert.equal(one.request.requestId,two.request.requestId);assert.equal(Number(one.replayed)+Number(two.replayed),1);assert.equal(p.calls,0);
+  assert.equal((await f.db.query('SELECT * FROM platform_first_letter_requests WHERE task_id=$1',[pick(a).taskId])).rowCount,1);
+  assert.equal((await f.db.query('SELECT * FROM platform_first_letter_outbox WHERE task_id=$1',[pick(a).taskId])).rowCount,1);
+  await assert.rejects(a.tasks.refresh(a.who,{taskId:pick(a).taskId,expectedPreparationId:a.saved.task.preparationId},
+   {...settings,localDate:'2026-10-10'}),{code:'FIRST_LETTER_TASK_ALREADY_STARTED'});
+  await assert.rejects(entry.accept(a.who,{...command,operationId:randomUUID()},settings),{code:'FIRST_LETTER_ACCEPTED_SOURCE_CHANGED'});
+  const exported=await capture(a);assert.equal(exported.sections.firstLetterRequests.length,1);assert.equal(exported.sections.firstLetterOutbox.length,1);
+  const json=JSON.stringify([one,exported.sections.firstLetterRequests,exported.sections.firstLetterOutbox]);
+  for(const secret of [a.who.tokenHash,'tokenHash','authVersion','payload_ciphertext','payload_digest'])assert(!json.includes(secret));
+  assert.equal(exported.includedTables.length,145);assert.equal(exported.complete,false);
+ });
+});
+test('reference-only delivery runs original and review once; renewed service reads retained results without spending again',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),p=provider({outputs:[validLetter(a),assessment()]}),entry=await dispatchService(a,p.runtime);
+  const accepted=await entry.accept(a.who,dispatchCommand(a),settings),refs={requestId:accepted.request.requestId,taskId:pick(a).taskId};
+  assert.equal((await entry.executeNotification(refs,settings)).kind,'reviewed');assert.equal(p.calls,2);
+  assert.equal((await (await dispatchService(a,p.runtime)).executeNotification(refs,settings)).kind,'reviewed');assert.equal(p.calls,2);
+  assert.equal((await a.welcome.read(a.who) as any).step,'C7');
+  assert.equal((await f.db.query("SELECT count(*)::int n FROM platform_cost_ledger WHERE user_id=$1 AND purpose='first_letter_generation'",[a.who.userId])).rows[0].n,2);
+ });
+});
+test('new login cannot replace the original accepted session; changed settings and forged notifications cannot run it',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const {tokenHash}=await import('../src/auth.ts');
+  const a=await reviewActor(birthRuntime),p=provider(),entry=await dispatchService(a,p.runtime),command=dispatchCommand(a);
+  const accepted=await entry.accept(a.who,command,settings),refs={requestId:accepted.request.requestId,taskId:pick(a).taskId};
+  await assert.rejects(entry.executeNotification({...refs,who:a.who},settings));
+  await assert.rejects(entry.executeNotification({...refs,taskId:randomUUID()},settings));
+  await assert.rejects(entry.executeNotification(refs,{...settings,localDate:'2026-10-10'}),{code:'FIRST_LETTER_TASK_PREPARATION_CHANGED'});
+  const fresh={userId:a.who.userId,tokenHash:tokenHash(randomUUID())};
+  await f.db.query("INSERT INTO platform_sessions(user_id,token_hash,auth_version,expires_at) VALUES($1,$2,0,clock_timestamp()+interval '1 hour')",[fresh.userId,fresh.tokenHash]);
+  await f.db.query('DELETE FROM platform_sessions WHERE user_id=$1 AND token_hash=$2',[a.who.userId,a.who.tokenHash]);
+  assert.equal((await entry.accept(fresh,command,settings)).replayed,true);
+  await assert.rejects(entry.executeNotification(refs,settings),{code:'AUTH_REQUIRED'});
+  assert.equal(p.calls,0);assert.equal(await row(a),undefined);
+ });
+});
+test('corrupt accepted authority blocks execution and export; same-owner task references cannot be moved to another account',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),b=await reviewActor(birthRuntime),p=provider();
+  const entry=await dispatchService(a,p.runtime),accepted=await entry.accept(a.who,dispatchCommand(a),settings);
+  const saved=(await f.db.query('SELECT * FROM platform_first_letter_requests WHERE id=$1',[accepted.request.requestId])).rows[0];
+  await assert.rejects(f.db.query('UPDATE platform_first_letter_requests SET user_id=$2 WHERE id=$1',[saved.id,b.who.userId]),{code:'23503'});
+  const broken=Buffer.from(saved.payload_ciphertext);broken[broken.length-1]^=1;
+  await f.db.query('UPDATE platform_first_letter_requests SET payload_ciphertext=$2 WHERE id=$1',[saved.id,broken]);
+  await assert.rejects(entry.executeNotification({requestId:saved.id,taskId:saved.task_id},settings),{code:'FIRST_LETTER_REQUEST_UNAVAILABLE'});
+  await assert.rejects(capture(a),{code:'FIRST_LETTER_REQUEST_UNAVAILABLE'});assert.equal(p.calls,0);
+  await f.db.query('UPDATE platform_first_letter_requests SET payload_ciphertext=$2 WHERE id=$1',[saved.id,saved.payload_ciphertext]);
+  await f.db.query('DELETE FROM platform_users WHERE id=$1',[a.who.userId]);
+  for(const table of ['platform_first_letter_requests','platform_first_letter_outbox'])
+   assert.equal((await f.db.query('SELECT * FROM '+table+' WHERE user_id=$1',[a.who.userId])).rowCount,0);
+  assert.deepEqual(await b.tasks.read(b.who,pick(b),settings),b.saved);
+ });
+});
+test('an outbox insertion failure rolls back accepted authority and leaves no executable intent',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await prepared(birthRuntime),p=provider(),entry=await dispatchService(a,p.runtime),command=dispatchCommand(a);
+  const original=f.db.withBoundedTransaction.bind(f.db);let injected=false;
+  f.db.withBoundedTransaction=async(run,options)=>original(c=>run(new Proxy(c,{get(target,key){
+   if(key==='query')return async(sql:any,...args:any[])=>{
+    if(typeof sql==='string'&&sql.startsWith('INSERT INTO platform_first_letter_outbox')){injected=true;throw Error('Fictional outbox failure');}
+    return(target.query as any)(sql,...args);
+   };const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+  }})),options);
+  try{await assert.rejects(entry.accept(a.who,command,settings));}finally{f.db.withBoundedTransaction=original;}
+  assert(injected);assert.equal((await f.db.query('SELECT * FROM platform_first_letter_requests WHERE task_id=$1',[pick(a).taskId])).rowCount,0);
+  assert.equal((await f.db.query('SELECT * FROM platform_first_letter_outbox WHERE task_id=$1',[pick(a).taskId])).rowCount,0);
+  assert.equal((await entry.accept(a.who,command,settings)).replayed,false);assert.equal(p.calls,0);
  });
 });

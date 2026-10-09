@@ -1,3 +1,4 @@
+import {FirstLetterDispatch} from './first-letter-dispatch.ts';
 import {FirstLetterProgressService} from './first-letter-progress.ts';
 import { TodayWeeklyService } from './today-weekly.ts';
 import {FirstLetterGeneration} from './first-letter-generation.ts';
@@ -136,6 +137,7 @@ export async function buildApp(options:AppOptions={}) {
   const firstLetterTasks=new FirstLetterTasks(db,config,firstLetterSources);
   const firstLetterGeneration=new FirstLetterGeneration(db,config,runtime,firstLetterTasks);
   const firstLetterProgress=new FirstLetterProgressService(db,config,firstLetterSources,firstLetterGeneration);
+  const firstLetterDispatch=new FirstLetterDispatch(db,config,runtime,firstLetterTasks,firstLetterGeneration);
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
   const sharedMemories=new SharedMemories(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
@@ -1018,5 +1020,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,firstLetterSources,firstLetterTasks,firstLetterGeneration,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,firstLetterSources,firstLetterTasks,firstLetterGeneration,firstLetterDispatch,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

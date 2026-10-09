@@ -1,3 +1,4 @@
+import {decodeFirstLetterRequest,projectFirstLetterRequest,firstLetterRequestUnavailable,type FirstLetterRequestRow} from './first-letter-request.ts';
 import {readFirstLetterStageRecord,type FirstLetterStageRow} from './first-letter-stage-record.ts';
 import {readFirstLetterTaskSnapshot,type FirstLetterTaskRow} from './first-letter-tasks.ts';
 import type {PoolClient} from 'pg';
@@ -7,8 +8,8 @@ import type {PlatformConfig} from './config.ts';
 import {readWelcomeSnapshot,type WelcomeRow} from './companion-welcome-snapshot.ts';
 import {ApiError} from './errors.ts';
 
-export const WELCOME_EXPORT_TABLES=Object.freeze(['platform_companion_welcome','platform_companion_welcome_operations','platform_first_letter_tasks','platform_first_letter_stages'] as const);
-export type WelcomeExportSection='companionWelcomes'|'companionWelcomeOperations'|'firstLetterTasks'|'firstLetterStages';
+export const WELCOME_EXPORT_TABLES=Object.freeze(['platform_companion_welcome','platform_companion_welcome_operations','platform_first_letter_tasks','platform_first_letter_stages','platform_first_letter_requests','platform_first_letter_outbox'] as const);
+export type WelcomeExportSection='companionWelcomes'|'companionWelcomeOperations'|'firstLetterTasks'|'firstLetterStages'|'firstLetterRequests'|'firstLetterOutbox';
 /** Owner export reads retained snapshots, including non-current companions.
  * It does not reopen C1, advance onboarding or require active model consent. */
 export class AccountWelcomeExport {
@@ -50,6 +51,28 @@ export class AccountWelcomeExport {
     'SELECT * FROM platform_first_letter_stages WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100',[who.userId,after])).rows;
    for(const row of stages){signal?.throwIfAborted();yield {section:'firstLetterStages',record:await readFirstLetterStageRecord(client,this.crypto,who.userId,row)};}
    if(stages.length<100)break;after=stages.at(-1)!.id;
+  }
+
+  after=null;
+  for(;;){
+   signal?.throwIfAborted();
+   const requests:FirstLetterRequestRow[]=(await client.query<FirstLetterRequestRow>(
+    'SELECT * FROM platform_first_letter_requests WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100',[who.userId,after])).rows;
+   for(const row of requests){
+    const saved=decodeFirstLetterRequest(row,this.crypto);
+    const taskRow=(await client.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND id=$2',[who.userId,saved.taskId])).rows[0];
+    if(!taskRow)throw firstLetterRequestUnavailable();
+    const task=readFirstLetterTaskSnapshot(taskRow,this.crypto,who.userId);
+    if(task.preparationId!==saved.preparationId||task.sourceId!==saved.sourceId||task.companionId!==saved.companionId
+     ||task.welcomeId!==saved.welcomeId||JSON.stringify(task.settings)!==JSON.stringify(saved.settings))throw firstLetterRequestUnavailable();
+    const outbox=(await client.query('SELECT * FROM platform_first_letter_outbox WHERE request_id=$1 AND user_id=$2 AND task_id=$3',[row.id,who.userId,saved.taskId])).rows[0];
+    if(!outbox||outbox.created_at.toISOString()!==saved.acceptedAt
+     ||outbox.held_reason!==null&&!['authorization','configuration','source_changed','storage','terminal'].includes(outbox.held_reason))throw firstLetterRequestUnavailable();
+    yield {section:'firstLetterRequests',record:projectFirstLetterRequest(saved)};
+    yield {section:'firstLetterOutbox',record:{requestId:saved.requestId,taskId:saved.taskId,createdAt:saved.acceptedAt,
+     dispatchedAt:outbox.dispatched_at?.toISOString()??null,hold:outbox.held_reason}};
+   }
+   if(requests.length<100)break;after=requests.at(-1)!.id;
   }
   await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
  }
