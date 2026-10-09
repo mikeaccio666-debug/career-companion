@@ -30,6 +30,7 @@ import {AccountWelcomeExport,WELCOME_EXPORT_TABLES,type WelcomeExportSection} fr
 import {exportConversationsInTransaction,CONVERSATION_EXPORT_TABLES,type ConversationExportSection} from './account-conversation-export.ts';
 import { ResumeOriginalReview,RESUME_EXPORT_TABLES,type ResumeExportSection } from './resume-original-review.ts';
 import { CAREER_EXPORT_TABLES,type CareerExportSection } from './account-export-rows.ts';
+import { CareerProfiles } from './career-profiles.ts';
 import { CareerTargets } from './career-targets.ts';
 import { CareerStories } from './career-stories.ts';
 import { ManualJobs } from './manual-jobs.ts';
@@ -83,7 +84,7 @@ export class AccountCoreExport {
   private readonly organizationHistory:AccountOrganizationHistoryExport;
   private readonly births:CompanionBirthOriginStore;
   private readonly maxBytes:number;
-  private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords|ResumeOriginalReview)[];
+  private readonly careerReaders:readonly (CareerProfiles|CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords|ResumeOriginalReview)[];
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number;fileCapture?:AccountFileCapture}={}){
     this.dailyPlans=new DailyPlans(db,config,null);
     this.rest=new TodayRestService(db,config,null);
@@ -107,7 +108,7 @@ export class AccountCoreExport {
     this.organizationHistory=new AccountOrganizationHistoryExport();
     this.births=new CompanionBirthOriginStore(config.dataCrypto);
     const jobs=new ManualJobs(db,config,null),applications=new CareerApplications(db,config,null,jobs);
-    this.careerReaders=Object.freeze([new CareerTargets(db,config,null),new CareerStories(db,config,null),jobs,applications,
+    this.careerReaders=Object.freeze([new CareerProfiles(db,config,null),new CareerTargets(db,config,null),new CareerStories(db,config,null),jobs,applications,
       new CareerInterviews(db,config,null,applications),new CareerIdentityRecords(db,config,null),new ResumeOriginalReview(db,config,null)]);
     this.maxBytes=limits.maxBytes??16*1024*1024;
     if(!Number.isSafeInteger(this.maxBytes)||this.maxBytes<1024||this.maxBytes>16*1024*1024)throw unavailable();
@@ -152,7 +153,7 @@ export class AccountCoreExport {
         companionBirthReceipts:[],companionBirthAssetMetadata:[],
         conversations:[],messages:[],chatCalls:[],audioTranscriptions:[],companionWelcomes:[],companionWelcomeOperations:[],firstLetterTasks:[],firstLetterStages:[],firstLetterRequests:[],firstLetterOutbox:[],
         termsConsents:[],sessions:[],memories:[],memoryOperations:[],memoryEvents:[],memoryUses:[],
-        careerTargets:[],careerTargetOperations:[],careerProjects:[],careerStories:[],careerLibraryOperations:[],
+        careerProfile:[],careerProfileOperations:[],careerTargets:[],careerTargetOperations:[],careerProjects:[],careerStories:[],careerLibraryOperations:[],
         savedJobs:[],savedJobOperations:[],careerApplications:[],careerApplicationOperations:[],careerApplicationEvents:[],
         careerInterviews:[],careerInterviewOperations:[],careerIdentity:[],careerIdentityOperations:[],
         pendingItems:[],pendingItemRevisions:[],pendingItemDecisions:[],pendingItemOperations:[],careerResumes:[],careerResumeCounters:[],

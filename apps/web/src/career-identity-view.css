@@ -25,3 +25,5 @@
 
 .identity-ai { position:sticky; top:0; z-index:2; padding:12px 0; background:var(--paper,#fcfaf6); border-bottom:1px solid var(--rule,#dedbd5); }
 .identity-record-footer { color:var(--ink-3,#706d67); font-size:12px; line-height:1.8; }
+
+.career-profile-panel{margin-block:2rem}.career-profile-panel dd{margin:0 0 1rem;overflow-wrap:anywhere}.career-profile-panel dt{font-weight:600}.career-profile-panel fieldset{min-width:0}.identity-editor .profile-track-choice{display:flex;align-items:center;gap:.65rem}.identity-editor .profile-track-choice input{width:auto;min-width:1rem}

@@ -113,7 +113,7 @@ test('105 real counted classifier calls and 105 retained relay records cross pag
  for(let n=0;n<105;n++)await f.db.query("INSERT INTO platform_model_relay_requests(id,user_id,job_id,generation,request_id,provider,model,reserved_tokens,status) VALUES($1,$2,$3,1,$4,'openai','fictional-audit-relay',100,'reserved')",[randomUUID(),who.userId,binding.jobId,randomUUID()]);
  const sqls:string[]=[],data=await new AccountCoreExport(instrument(sql=>{sqls.push(sql);}),f.config).capture(who,await proof(who));
  assert.equal(data.sections.safetyModelUsage.length,105);assert.equal(data.sections.modelRelayRequests.length,105);assert.equal(sqls.filter(auditRead).length,2);assert.equal(sqls.filter(relayRead).length,2);
- assert(!JSON.stringify(data).includes(foreign.who.userId));assert.equal(data.includedTables.length,145);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
+ assert(!JSON.stringify(data).includes(foreign.who.userId));assert.equal(data.includedTables.length,147);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
  assert(!sqls.filter(sql=>auditRead(sql)||relayRead(sql)).some(sql=>/FOR (SHARE|UPDATE)/.test(sql)));
 });
 

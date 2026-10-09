@@ -4,6 +4,8 @@ import { ApiError } from './errors.ts';
 
 /** Reviewed internal identifiers, never supplied by an HTTP caller or model. */
 export const CAREER_EXPORT_TABLES = Object.freeze({
+  platform_career_profiles: Object.freeze({key:'user_id',section:'careerProfile'} as const),
+  platform_career_profile_operations: Object.freeze({key:'operation_id',section:'careerProfileOperations'} as const),
   platform_career_targets: Object.freeze({key:'id',section:'careerTargets'} as const),
   platform_career_target_operations: Object.freeze({key:'operation_id',section:'careerTargetOperations'} as const),
   platform_career_evidence: Object.freeze({key:'id',section:'careerProjects'} as const),
