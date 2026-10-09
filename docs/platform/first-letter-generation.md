@@ -41,3 +41,5 @@ start_ciphertext 认证准备身份和路线；receipt_ciphertext 认证实际�
 尚未执行的准备现可通过 [FirstLetterTasks.refresh](first-letter-task-preparation.md) 显式更新，保留原任务身份；已有执行或费用记录不会被刷新。
 
 C7 已接入[学生只读进度](first-letter-progress.md)，反映真实保存状态并明确尚未送达；不触发执行或完成初见。
+
+已增加[持久化请求与后台队列](first-letter-dispatch.md)：原始会话绑定、数据库 outbox 和 Redis 恢复已实现；生产启动、学生触发和发布仍未接通。已接受请求的准备也不可刷新。

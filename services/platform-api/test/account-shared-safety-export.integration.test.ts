@@ -67,7 +67,7 @@ test('both original source kinds export prepared events and real reserve/claim/r
   assert.equal(s.safetyQuestionScopes.length,1);assert.equal(s.safetyQuestionOccurrences.length,1);assert.equal(s.safetyQuestionOperations.length,3);
   const occurrence=s.safetyQuestionOccurrences[0] as any;assert.equal(occurrence.phase,'declared');assert(occurrence.receiptReceivedAt);
   assert.equal((s.safetyQuestionOperations[1] as any).question,c.question);assert(Object.isFrozen(occurrence));
-  assert.equal(data.includedTables.length,143);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
+  assert.equal(data.includedTables.length,145);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
   const json=JSON.stringify(data),other=owners.find(x=>x.who.userId!==p.who.userId)!;
   for(const secret of [r.reservation.reservationToken!,c.grantPresentationToken!,p.who.tokenHash,r.renderOwnerId,other.who.userId,token,password,encoded,
    'session_hash','sessionHash','reservation_digest','grant_digest','render_owner_id','payload_ciphertext','secret',f.review.reviewerUserId])assert(!json.includes(secret),secret);

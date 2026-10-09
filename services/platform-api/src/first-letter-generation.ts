@@ -221,6 +221,7 @@ export class FirstLetterGeneration{
   },15000);heartbeat.unref();
   const deadline=setTimeout(()=>stop.abort(unavailable()),40000);deadline.unref();
   let callId:string|undefined,binding:CostReservationBinding|undefined,launched=false,admitted=false,finished:string|undefined,outcome:string|undefined;
+  let budgetFailure:ApiError|undefined;
   const reserveId=randomUUID(),route={provider:claim.row.provider,model:claim.row.model};
   const input={...route,mode:'chat' as const,messages:claim.request.messages.map(m=>({...m}))};
   const reserve:CostReserveInput={userId:who.userId,sourceKind:'job',sourceId:stageCostSource(claim.row),capability:'background',
@@ -233,7 +234,7 @@ export class FirstLetterGeneration{
     const saved=await this.db.withBoundedTransaction(async c=>{
      const row=await this.current(c,who,claim,signal);if(row.call_id)throw unavailable();
      const budget=await this.costs.reserveInTransaction(c,reserve,signal);
-     if(budget.decision!=='ok')throw new ApiError(503,'FIRST_LETTER_BUDGET_UNAVAILABLE','The first-letter generation budget is unavailable.');
+     if(budget.decision!=='ok')throw budgetFailure=new ApiError(503,'FIRST_LETTER_BUDGET_UNAVAILABLE','The first-letter generation budget is unavailable.');
      await c.query("UPDATE platform_first_letter_stages SET call_id=$2,reservation_id=$3,call_status='prepared' WHERE id=$1",[row.id,id,reserveId]);
      await this.costs.markDispatchRiskInTransaction(c,budget.reservation.binding,signal);
      await this.current(c,who,claim,signal);return budget.reservation.binding;
@@ -291,6 +292,9 @@ export class FirstLetterGeneration{
     else if(event.type!=='usage')throw unavailable();
    }}catch(e){error=e;}
    signal.throwIfAborted();
+   // Keep the actual CostGuard refusal even if the runtime wraps its callback error.
+   // Only the local pre-dispatch decision may reopen an uncalled stage.
+   if(budgetFailure&&!callId&&!binding&&!launched&&!admitted)throw budgetFailure;
    const invalidFormat=finished==='failed'&&outcome==='invalid_format'&&error&&typeof error==='object'&&'code' in error
     &&error.code==='PROVIDER_STRUCTURED_VALIDATION_FAILED'&&!text;
    if(!callId||!binding||!launched||!admitted||!finished||!invalidFormat&&(error||finished!=='complete'||!text))throw unavailable();

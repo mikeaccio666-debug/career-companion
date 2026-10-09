@@ -1,6 +1,6 @@
 import type { AccountDataPolicy } from './account-data-coverage.ts';
 
-// Reviewed against migrations 001–086, using catalog metadata only. This is a
+// Reviewed against migrations 001–087, using catalog metadata only. This is a
 // fixed review baseline, not a runtime auto-classifier or completed export map.
 // Re-review the actual columns and relationships before changing a fingerprint.
 export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: AccountDataPolicy; fingerprint: string}>[] = Object.freeze([
@@ -96,6 +96,10 @@ export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: Acco
   // Reservation owner/source/purpose are additionally authenticated at read.
   // Review predecessor composite FK retains the same task/owner; encrypted start binds predecessor and request digests.
   Object.freeze({ table: 'platform_first_letter_stages', policy: 'credential_projection', fingerprint: 'ac7f4d337c2169b3c3a20ea4ccf700e75bb8cf6c510630a4ce3a2c6d90201e8c' }),
+  // Original session hash is encrypted in requests; export only reviewed metadata.
+  // Both tables cascade through the same owner/task composite FK; outbox has no execution secrets.
+  Object.freeze({ table: 'platform_first_letter_requests', policy: 'credential_projection', fingerprint: '071744ea63a3ba80bd776e0c38e4bb232f6d158e646151f743fd4304a6eedb7e' }),
+  Object.freeze({ table: 'platform_first_letter_outbox', policy: 'owner_projection', fingerprint: '67b4c8892f96dbda7cac5640e2827bca6916c75f498c071313b59c427cc5f825' }),
   Object.freeze({ table: 'platform_first_letter_tasks', policy: 'owner_projection', fingerprint: 'd26bc7a7e2c722af2150adc3bf9d11f16124dd8283612199ae4e0601b069b78e' }),
   Object.freeze({ table: 'platform_jobs', policy: 'owner_projection', fingerprint: '12b57179cf30f106ed55c643dde76e4635531e9abf77bde98d86bc2e6b6bdc42' }),
   Object.freeze({ table: 'platform_knowledge_access_log', policy: 'product_exclusion', fingerprint: '6b798034e3b294032d992336db27c70f6a65816d72cf7fda611bd86a7ef27aa0' }),

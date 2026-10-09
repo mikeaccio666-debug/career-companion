@@ -124,7 +124,8 @@ export class FirstLetterTasks{
     return this.complete(c,s,source,prepared,row,signal);
    if(task.preparationId!==expectedPreparationId)throw changed();
    const used=await c.query(`SELECT
-    EXISTS(SELECT 1 FROM platform_first_letter_stages WHERE task_id=$1)
+    EXISTS(SELECT 1 FROM platform_first_letter_requests WHERE task_id=$1)
+    OR EXISTS(SELECT 1 FROM platform_first_letter_stages WHERE task_id=$1)
     OR EXISTS(SELECT 1 FROM platform_cost_reservations WHERE source_kind='job' AND source_id=$1)
     OR EXISTS(SELECT 1 FROM platform_cost_ledger WHERE source_kind='job' AND source_id=$1) AS used`,[taskId]);
    if(used.rows[0]?.used!==false)throw new ApiError(409,'FIRST_LETTER_TASK_ALREADY_STARTED',
