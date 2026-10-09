@@ -1,3 +1,4 @@
+import { ResumeOriginalReview,RESUME_EXPORT_TABLES,type ResumeExportSection } from './resume-original-review.ts';
 import { CAREER_EXPORT_TABLES,type CareerExportSection } from './account-export-rows.ts';
 import { CareerTargets } from './career-targets.ts';
 import { CareerStories } from './career-stories.ts';
@@ -14,8 +15,8 @@ import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
-const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES)]);
-type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection;
+const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES)]);
+type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
   try{const row=careerRecordObject(value,['userId','tokenHash']);
@@ -31,12 +32,12 @@ function freeze<T>(value:T):T{
 export class AccountCoreExport {
   private readonly memories:SharedMemories;
   private readonly maxBytes:number;
-  private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords)[];
+  private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords|ResumeOriginalReview)[];
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number}={}){
     this.memories=new SharedMemories(db,config,null);
     const jobs=new ManualJobs(db,config,null),applications=new CareerApplications(db,config,null,jobs);
     this.careerReaders=Object.freeze([new CareerTargets(db,config,null),new CareerStories(db,config,null),jobs,applications,
-      new CareerInterviews(db,config,null,applications),new CareerIdentityRecords(db,config,null)]);
+      new CareerInterviews(db,config,null,applications),new CareerIdentityRecords(db,config,null),new ResumeOriginalReview(db,config,null)]);
     this.maxBytes=limits.maxBytes??16*1024*1024;
     if(!Number.isSafeInteger(this.maxBytes)||this.maxBytes<1024||this.maxBytes>16*1024*1024)throw unavailable();
   }
@@ -57,6 +58,7 @@ export class AccountCoreExport {
         careerTargets:[],careerTargetOperations:[],careerProjects:[],careerStories:[],careerLibraryOperations:[],
         savedJobs:[],savedJobOperations:[],careerApplications:[],careerApplicationOperations:[],careerApplicationEvents:[],
         careerInterviews:[],careerInterviewOperations:[],careerIdentity:[],careerIdentityOperations:[],
+        pendingItems:[],pendingItemRevisions:[],pendingItemDecisions:[],pendingItemOperations:[],careerResumes:[],careerResumeCounters:[],
       };
       let bytes=Buffer.byteLength(JSON.stringify(sections));
       const append=(section:Exclude<keyof typeof sections,'account'>,record:unknown)=>{
