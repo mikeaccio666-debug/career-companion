@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { DataCrypto } from './data-crypto.ts';
-import { OnboardingStorage, type IntakeOperationRow, type SafetySubmissionRow } from './onboarding-storage.ts';
+import { OnboardingStorage, type IntakeDraftRow, type IntakeOperationRow, type SafetySubmissionRow } from './onboarding-storage.ts';
 import { readNameRawSourceInTransaction } from './companion-name-resource-source.ts';
 import { ApiError } from './errors.ts';
 
@@ -41,11 +41,11 @@ const payload = (row:Enrollment,head:Head,previousDigest:string) => ({...unsigne
 
 /** Enumerate and authenticate original raw records. Mutable detection progress,
  * identity, current preview and safety grades are deliberately not inputs. */
-async function observe(client:PoolClient,crypto:DataCrypto,userId:string,signal?:AbortSignal):Promise<Observation[]> {
+async function observe(client:PoolClient,crypto:DataCrypto,userId:string,signal?:AbortSignal,lock=true):Promise<Observation[]> {
   const storage = new OnboardingStorage({dataCrypto:crypto,requireVerifiedEmail:false},null), observations:Observation[]=[];
-  const draftRow = await storage.row(client,userId), draft = draftRow ? storage.decode(draftRow) : null;
-  const operations = (await client.query<IntakeOperationRow>('SELECT operation_id,draft_id,applied_revision,request_ciphertext FROM platform_onboarding_operations WHERE user_id=$1 ORDER BY applied_revision,operation_id FOR UPDATE',[userId])).rows;
-  const submissions = (await client.query<SafetySubmissionRow>('SELECT * FROM platform_onboarding_safety_submissions WHERE user_id=$1 ORDER BY submitted_revision,id FOR UPDATE',[userId])).rows;
+  const draftRow = lock ? await storage.row(client,userId) : (await client.query<IntakeDraftRow>('SELECT id,user_id,revision,payload_ciphertext,updated_at FROM platform_onboarding_drafts WHERE user_id=$1',[userId])).rows[0], draft = draftRow ? storage.decode(draftRow) : null;
+  const operations=await inventoryRows<IntakeOperationRow>(client,'SELECT operation_id,draft_id,applied_revision,request_ciphertext FROM platform_onboarding_operations WHERE user_id=$1 ORDER BY applied_revision,operation_id',userId,lock,signal);
+  const submissions=await inventoryRows<SafetySubmissionRow>(client,'SELECT * FROM platform_onboarding_safety_submissions WHERE user_id=$1 ORDER BY submitted_revision,id',userId,lock,signal);
   const seenRevisions = new Set<number>(), textIds = new Set<string>();
   for (const row of operations) {
     if (!draft || row.draft_id !== draft.id || row.applied_revision > draft.revision || seenRevisions.has(row.applied_revision)) throw prebirthInventoryUnavailable();
@@ -61,9 +61,8 @@ async function observe(client:PoolClient,crypto:DataCrypto,userId:string,signal?
     observations.push({kind:'intake_operation',sourceId:row.operation_id,coordinates:c,sourceDigest:digest(text)});
   }
   if (submissions.length !== textIds.size || submissions.some(row=>!textIds.has(row.id))) throw prebirthInventoryUnavailable();
-  const entries = (await client.query<{id:string;user_id:string;task_id:string;companion_id:string;preview_revision:number;revision:number;latest_submission_id:string;payload_ciphertext:Buffer}>(
-    'SELECT * FROM platform_companion_name_entries WHERE user_id=$1 ORDER BY task_id,id FOR UPDATE',[userId])).rows;
-  const rawRows = (await client.query<{id:string;entry_id:string;submitted_revision:number}>('SELECT id,entry_id,submitted_revision FROM platform_companion_name_submissions WHERE user_id=$1 ORDER BY entry_id,submitted_revision,id FOR UPDATE',[userId])).rows;
+  const entries=await inventoryRows<{id:string;user_id:string;task_id:string;companion_id:string;preview_revision:number;revision:number;latest_submission_id:string;payload_ciphertext:Buffer}>(client,'SELECT * FROM platform_companion_name_entries WHERE user_id=$1 ORDER BY task_id,id',userId,lock,signal);
+  const rawRows=await inventoryRows<{id:string;entry_id:string;submitted_revision:number}>(client,'SELECT id,entry_id,submitted_revision FROM platform_companion_name_submissions WHERE user_id=$1 ORDER BY entry_id,submitted_revision,id',userId,lock,signal);
   let observedNames=0;
   for (const entry of entries) {
     const rows=rawRows.filter(row=>row.entry_id===entry.id);
@@ -71,7 +70,7 @@ async function observe(client:PoolClient,crypto:DataCrypto,userId:string,signal?
     let originalPreview:unknown;
     for (let index=0;index<rows.length;index++) {
       if (rows[index].submitted_revision!==index+1) throw prebirthInventoryUnavailable();
-      const raw=await readNameRawSourceInTransaction(client,crypto,rows[index].id,signal), row=raw.source, capture=raw.sourceCapture;
+      const raw=await readNameRawSourceInTransaction(client,crypto,rows[index].id,signal,lock), row=raw.source, capture=raw.sourceCapture;
       if (row.user_id!==userId || row.entry_id!==entry.id) throw prebirthInventoryUnavailable();
       if (index===0) originalPreview=capture.previewCapture;
       else if (JSON.stringify(capture.previewCapture)!==JSON.stringify(originalPreview)) throw prebirthInventoryUnavailable();
@@ -89,17 +88,17 @@ async function observe(client:PoolClient,crypto:DataCrypto,userId:string,signal?
   if (observedNames!==rawRows.length) throw prebirthInventoryUnavailable();
   signal?.throwIfAborted(); return observations.sort((a,b)=>key(a).localeCompare(key(b),'en'));
 }
-async function read(client:PoolClient,crypto:DataCrypto|undefined,userId:string,signal?:AbortSignal) {
+async function read(client:PoolClient,crypto:DataCrypto|undefined,userId:string,signal?:AbortSignal,lock=true) {
   signal?.throwIfAborted(); if(!crypto) throw prebirthInventoryUnavailable();
-  const owner=(await client.query<{account_kind:string;prebirth_inventory_owner_id:string|null}>('SELECT account_kind,prebirth_inventory_owner_id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[userId])).rows[0];
+  const owner=(await client.query<{account_kind:string;prebirth_inventory_owner_id:string|null}>('SELECT account_kind,prebirth_inventory_owner_id FROM platform_users WHERE id=$1'+(lock?' FOR NO KEY UPDATE':''),[userId])).rows[0];
   if (!owner || owner.account_kind!=='student') throw prebirthInventoryUnavailable();
-  const head=(await client.query<Head>('SELECT * FROM platform_companion_prebirth_heads WHERE user_id=$1 FOR UPDATE',[userId])).rows[0];
-  const rows=(await client.query<Enrollment>('SELECT * FROM platform_companion_prebirth_inventory WHERE user_id=$1 ORDER BY revision,id FOR UPDATE',[userId])).rows;
+  const head=(await client.query<Head>('SELECT * FROM platform_companion_prebirth_heads WHERE user_id=$1'+(lock?' FOR UPDATE':''),[userId])).rows[0];
+  const rows=await inventoryRows<Enrollment>(client,'SELECT * FROM platform_companion_prebirth_inventory WHERE user_id=$1 ORDER BY revision,id',userId,lock,signal);
   if (owner.prebirth_inventory_owner_id===null) {
     if (head || rows.length) throw prebirthInventoryUnavailable();
     return {head:undefined,rows,crypto}; // A virgin legacy owner, not a missing adopted history.
   }
-  if (owner.prebirth_inventory_owner_id!==userId || !head || head.revision!==rows.length) throw prebirthInventoryUnavailable();
+  if (owner.prebirth_inventory_owner_id!==userId || !head || head.user_id!==userId || head.revision!==rows.length) throw prebirthInventoryUnavailable();
   if (crypto.openUtf8(head.payload_ciphertext,{table:'platform_companion_prebirth_heads',column:'payload_ciphertext',rowId:userId,ownerId:userId,revision:head.revision})!==JSON.stringify(headPayload(head))) throw prebirthInventoryUnavailable();
   let previous=zero;
   for (let index=0;index<rows.length;index++) {
@@ -119,6 +118,23 @@ function match(rows:Enrollment[],observations:Observation[],allowAppend:boolean)
   }
   if(!allowAppend && rows.length!==observations.length) throw prebirthInventoryUnavailable();
 }
+/** Archive callers use one repeatable-read snapshot. Live writers retain their
+ * original locks; archive pages do not initialize or repair inventory. */
+async function inventoryRows<T extends import('pg').QueryResultRow>(client:PoolClient,sql:string,userId:string,lock:boolean,signal?:AbortSignal):Promise<T[]> {
+  if(lock)return (await client.query<T>(sql+' FOR UPDATE',[userId])).rows;
+  const rows:T[]=[];
+  for(;;){signal?.throwIfAborted();const page=(await client.query<T>(sql+' LIMIT 100 OFFSET $2',[userId,rows.length])).rows;
+    rows.push(...page);if(page.length<100)return rows;}
+}
+export async function readArchivedPrebirthInventory(client:PoolClient,crypto:DataCrypto|undefined,userId:string,signal?:AbortSignal) {
+  const state=await read(client,crypto,userId,signal,false);
+  if(state.head)match(state.rows,await observe(client,state.crypto,userId,signal,false),false);
+  signal?.throwIfAborted();
+  return {head:state.head?{ownerId:userId,revision:state.head.revision,adoptedAt:state.head.adopted_at.toISOString(),latestInventoryId:state.head.tip_id}:null,
+    records:state.rows.map(row=>({id:row.id,ownerId:userId,revision:row.revision,kind:row.kind,sourceId:row.source_id,
+      coordinates:coordinates(row),enrolledAt:row.enrolled_at.toISOString()}))};
+}
+
 /** Verification cannot initialize, repair or resign a missing adopted history.
  * NULL legacy roots are explicitly adopted by sync in the same owner transaction. */
 export async function verifyPrebirthInventoryInTransaction(client:PoolClient,crypto:DataCrypto|undefined,userId:string,signal?:AbortSignal):Promise<void> {
