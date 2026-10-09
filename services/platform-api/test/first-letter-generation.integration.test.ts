@@ -49,23 +49,23 @@ const values:Basics={study:{degreeField:'ds_statistics',programChoice:'24_month'
  roles:{kind:'selected',roles:['ds','da']},search_stage:'applying',emotion_language:'en',identity_stage:'stem_opt'};
 
 const text=JSON.stringify({body:'接下来可以一起了解你的方向。',factReferences:[]});
-function provider(options:{body?:string;hook?:()=>Promise<void>;usage?:boolean;refusal?:boolean}={}){
+function provider(options:{body?:string;hook?:()=>Promise<void>;usage?:boolean;refusal?:boolean;outputs?:string[]}={}){
  let calls=0;
  const runtime=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-injected-only',OPENAI_FIRST_LETTER_MODEL:model},
   fetch:async(url,init)=>{
-   calls++;assert.equal(String(url),'https://api.openai.com/v1/responses');
+   calls++;if(options.outputs)assert(calls<=options.outputs.length,'Unexpected extra model call');assert.equal(String(url),'https://api.openai.com/v1/responses');
    const req=JSON.parse(String(init?.body));assert.equal(req.model,model);assert.equal(req.store,false);
    assert.deepEqual(req.tools,[]);assert.equal(req.tool_choice,'none');assert.equal(req.text.format.strict,true);assert.equal(req.max_output_tokens,1536);
    await options.hook?.();
    const response={type:'response.completed',response:{status:'completed',
     ...(options.usage===false?{}:{usage:{input_tokens:10,output_tokens:10}}),
-    output:[{type:'message',role:'assistant',status:'completed',content:[options.refusal?{type:'refusal',refusal:'Fictional refusal'}:{type:'output_text',text:options.body??text}]}]}};
+    output:[{type:'message',role:'assistant',status:'completed',content:[options.refusal?{type:'refusal',refusal:'Fictional refusal'}:{type:'output_text',text:options.outputs?.[calls-1]??options.body??text}]}]}};
    return new Response('data: '+JSON.stringify(response)+'\n\ndata: [DONE]\n\n',{status:200,headers:{'content-type':'text/event-stream'}});
   }});
  return {runtime,get calls(){return calls;}};
 }
-async function prepared(birthRuntime:PlatformProviderRuntime){
- const a=await setup(birthRuntime,{}),tasks=new FirstLetterTasks(f.db,f.config,a.sources),saved=await tasks.prepare(a.who,settings);
+async function prepared(birthRuntime:PlatformProviderRuntime,profile:Basics={}){
+ const a=await setup(birthRuntime,profile),tasks=new FirstLetterTasks(f.db,f.config,a.sources),saved=await tasks.prepare(a.who,settings);
  return {...a,tasks,saved};
 }
 const service=(a:Awaited<ReturnType<typeof prepared>>,runtime:PlatformProviderRuntime)=>new FirstLetterGeneration(f.db,{...f.config,modelRoutes:{...f.config.modelRoutes,first_letter_generation:{provider:'openai'}}},runtime,a.tasks);
@@ -281,5 +281,139 @@ test('the private file archive retains the actual unreviewed draft and receipt w
    }finally{await archive.dispose();}
    assert.deepEqual(await fs.readdir(path.join(root,'archives')),[]);
   }finally{await fs.rm(root,{recursive:true,force:true});}
+ });
+});
+
+function validLetter(a:Awaited<ReturnType<typeof prepared>>){
+ const body='我是'+a.saved.preparation.signature.name+'，名字是你起的。我是 AI。只记你同意的；在「我 → 它记得的你」可查看、修改、删除。'+
+ '要发给别人的消息和材料，都先进待确认；表单里哪些项可以替你做，由你在对话里逐项确认；最终提交永远由你本人点。'+
+ '你填的专业是 DS / 统计，目前在投，还没面试。接下来一起看今天的三件事。';
+ return JSON.stringify({body,factReferences:[{ref:'study',quote:'DS / 统计'},{ref:'search_stage',quote:'在投，还没面试'}]});
+}
+const assessment=(verdict='supported')=>JSON.stringify({
+ checks:Object.fromEntries(['identity','memory','external_actions','user_facts','experts','today','language_personality','prohibited_content'].map(k=>[k,k==='user_facts'?verdict:'supported'])),
+ references:{study:verdict,search_stage:'supported'}
+});
+const reviewActor=(runtime:PlatformProviderRuntime)=>prepared(runtime,{...values,emotion_language:'zh'});
+test('durable review consumes the actual saved original and returns bound judgment without a second model call on reread',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),p=provider({outputs:[validLetter(a),assessment()]}),g=service(a,p.runtime);
+  await g.generate(a.who,pick(a),settings);
+  const result=await g.review(a.who,pick(a),settings);
+  assert.equal(result.kind,'reviewed_draft');if(result.kind!=='reviewed_draft')throw Error('Expected reviewed draft');
+  assert.equal(result.assurance,'durable_model_judgment');assert.equal(result.rewrites,0);assert.equal(p.calls,2);
+  assert.deepEqual(result.evidence.map(r=>r.stage),['write_original','review_original']);
+  assert.deepEqual(await service(a,createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'}})).review(a.who,pick(a),settings),result);
+  assert.deepEqual(await g.readReview(a.who,pick(a),settings),result);assert.equal(p.calls,2);
+  assert.equal((await a.welcome.read(a.who) as any).step,'C7');assert(!Object.hasOwn(result,'approved'));
+  const archive=await capture(a);assert.equal(archive.sections.firstLetterStages.length,2);
+  const reservations=(await f.db.query("SELECT * FROM platform_cost_reservations WHERE user_id=$1 AND purpose='first_letter_generation'",[a.who.userId])).rows;
+  assert.equal(reservations.length,2);assert(reservations.every(r=>r.status==='committed'));
+  assert(reservations.some(r=>r.source_id===result.evidence[1].stageId));
+ });
+});
+test('a new service resumes after a budget-blocked rewrite without repeating the original or first review',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime);let calls=0;
+  const p=provider({outputs:[validLetter(a),assessment('contradicted'),validLetter(a),assessment()],hook:async()=>{
+   calls++;if(calls===2)await f.db.query('UPDATE platform_cost_user_policy SET hard_micros=1 WHERE user_id=$1',[a.who.userId]);
+  }}),g=service(a,p.runtime);
+  await g.generate(a.who,pick(a),settings);await assert.rejects(g.review(a.who,pick(a),settings));assert.equal(p.calls,2);
+  const pending=await g.readReview(a.who,pick(a),settings);assert.equal(pending.kind,'needs_stage');
+  if(pending.kind==='needs_stage'){assert.equal(pending.stage,'rewrite');assert.equal(pending.status,'failed');}
+  await f.db.query('UPDATE platform_cost_user_policy SET hard_micros=100000000 WHERE user_id=$1',[a.who.userId]);
+  const result=await service(a,p.runtime).review(a.who,pick(a),settings);
+  assert.equal(result.kind,'reviewed_draft');if(result.kind!=='reviewed_draft')throw Error('Expected reviewed draft');
+  assert.equal(result.rewrites,1);assert.equal(p.calls,4);
+  assert.deepEqual(result.evidence.map(r=>r.stage),['write_original','review_original','rewrite','review_rewrite']);
+  assert.deepEqual(await g.review(a.who,pick(a),settings),result);assert.equal(p.calls,4);
+  const archive=await capture(a);assert.equal(archive.sections.firstLetterStages.length,4);
+  await f.db.query('DELETE FROM platform_users WHERE id=$1',[a.who.userId]);
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_first_letter_stages WHERE task_id=$1',[pick(a).taskId])).rows[0].n,0);
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_cost_reservations WHERE user_id=$1',[a.who.userId])).rows[0].n,0);
+ });
+});
+test('uncertain second review is a durable one-rewrite failure; malformed original skips only its first semantic review',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),p=provider({outputs:[validLetter(a),assessment('uncertain'),validLetter(a),assessment('uncertain')]}),g=service(a,p.runtime);
+  await g.generate(a.who,pick(a),settings);const failed=await g.review(a.who,pick(a),settings);
+  assert.equal(failed.kind,'failed');assert.equal(failed.rewrites,1);assert.equal(p.calls,4);
+  assert.deepEqual(await service(a,p.runtime).review(a.who,pick(a),settings),failed);assert.equal(p.calls,4);
+  assert.equal((await f.db.query("SELECT count(*)::int AS n FROM platform_first_letter_stages WHERE task_id=$1 AND stage='rewrite'",[pick(a).taskId])).rows[0].n,1);
+  const b=await reviewActor(birthRuntime),q=provider({outputs:['not JSON',validLetter(b),assessment()]}),h=service(b,q.runtime);
+  assert.equal((await h.generate(b.who,pick(b),settings)).status,'invalid_format');
+  const fixed=await h.review(b.who,pick(b),settings);assert.equal(fixed.kind,'reviewed_draft');
+  assert.deepEqual(fixed.evidence.map(r=>r.stage),['write_original','rewrite','review_rewrite']);assert.equal(q.calls,3);
+ });
+});
+test('malformed reviewer output is paid and retained but never opens a rewrite or grants reviewed status',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),p=provider({outputs:[validLetter(a),'not JSON']}),g=service(a,p.runtime);
+  await g.generate(a.who,pick(a),settings);await assert.rejects(g.review(a.who,pick(a),settings));
+  await assert.rejects(service(a,p.runtime).review(a.who,pick(a),settings));assert.equal(p.calls,2);
+  const stages=(await f.db.query('SELECT * FROM platform_first_letter_stages WHERE task_id=$1',[pick(a).taskId])).rows;
+  assert.equal(stages.length,2);assert(stages.some(r=>r.stage==='review_original'&&r.status==='invalid_format'));
+  const archived=await capture(a);assert.equal(archived.sections.firstLetterStages.length,2);
+ });
+});
+test('concurrent review callers cannot each purchase a review or rewrite',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime);let release!:()=>void,entered!:()=>void,calls=0;
+  const gate=new Promise<void>(r=>release=r),atFetch=new Promise<void>(r=>entered=r);
+  const p=provider({outputs:[validLetter(a),assessment()],hook:async()=>{if(++calls===2){entered();await gate;}}}),g=service(a,p.runtime);
+  await g.generate(a.who,pick(a),settings);const running=g.review(a.who,pick(a),settings);
+  try{
+   await Promise.race([atFetch,running.then(()=>{throw Error('Review finished before transport');})]);
+   await assert.rejects(service(a,p.runtime).review(a.who,pick(a),settings),{code:'FIRST_LETTER_RECOVERY_REQUIRED'});
+  }finally{release();}
+  assert.equal((await running).kind,'reviewed_draft');assert.equal(p.calls,2);
+ });
+});
+test('predecessor and request digests reject reassigned, damaged or stale review evidence',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),b=await reviewActor(birthRuntime);
+  const p=provider({outputs:[validLetter(a),assessment(),validLetter(b),assessment()]}),g=service(a,p.runtime),h=service(b,p.runtime);
+  await g.generate(a.who,pick(a),settings);await g.review(a.who,pick(a),settings);
+  await h.generate(b.who,pick(b),settings);await h.review(b.who,pick(b),settings);
+  const stages=(await f.db.query('SELECT * FROM platform_first_letter_stages WHERE task_id=$1',[pick(a).taskId])).rows;
+  const original=stages.find(r=>r.stage==='write_original'),review=stages.find(r=>r.stage==='review_original');
+  const foreign=await row(b);
+  await assert.rejects(f.db.query('UPDATE platform_first_letter_stages SET predecessor_id=$2 WHERE id=$1',[review.id,foreign.id]),{code:'23503'});
+  for(const key of ['predecessor_digest','request_digest']){
+   await f.db.query('UPDATE platform_first_letter_stages SET '+key+'=$2 WHERE id=$1',[review.id,'0'.repeat(64)]);
+   await assert.rejects(g.readReview(a.who,pick(a),settings));await assert.rejects(capture(a));
+   await f.db.query('UPDATE platform_first_letter_stages SET '+key+'=$2 WHERE id=$1',[review.id,review[key]]);
+  }
+  const damaged=Buffer.from(original.output_ciphertext);damaged[damaged.length-1]^=1;
+  await f.db.query('UPDATE platform_first_letter_stages SET output_ciphertext=$2 WHERE id=$1',[original.id,damaged]);
+  await assert.rejects(g.review(a.who,pick(a),settings));assert.equal(p.calls,4);
+ });
+});
+
+test('recovery of a lost review callback reconciles that stage without replaying its paid predecessor',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),p=provider({outputs:[validLetter(a),assessment()]});
+  await service(a,p.runtime).generate(a.who,pick(a),settings);
+  const wrapped:PlatformProviderRuntime={...p.runtime,streamChat:(input,context={})=>p.runtime.streamChat(input,{...context,
+   onModelCall:event=>event.type==='finished'&&context.background?.responseFormat.name==='career_first_letter_review'?undefined:context.onModelCall?.(event)})};
+  const original=f.db.withBoundedTransaction.bind(f.db);
+  f.db.withBoundedTransaction=async(run,options)=>original(c=>run(new Proxy(c,{get(target,key){
+   if(key==='query')return async(sql:any,...args:any[])=>{
+    if(typeof sql==='string'&&sql.startsWith('UPDATE platform_first_letter_stages SET status=CASE'))throw Error('Fictional lost review cleanup');
+    return(target.query as any)(sql,...args);
+   };const v=Reflect.get(target,key);return typeof v==='function'?v.bind(target):v;
+  }})),options);
+  try{await assert.rejects(service(a,wrapped).review(a.who,pick(a),settings));}finally{f.db.withBoundedTransaction=original;}
+  const review=(await f.db.query("SELECT * FROM platform_first_letter_stages WHERE task_id=$1 AND stage='review_original'",[pick(a).taskId])).rows[0];
+  assert.equal(review.status,'running');assert.equal(review.call_status,'admitted');
+  await f.db.query("UPDATE platform_first_letter_stages SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",[review.id]);
+  await f.db.query("UPDATE platform_cost_reservations SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[review.reservation_id]);
+  const g=service(a,p.runtime),recovered=await g.recoverReview(a.who,pick(a),settings);
+  assert.equal(recovered.kind,'needs_stage');if(recovered.kind==='needs_stage'){assert.equal(recovered.stage,'review_original');assert.equal(recovered.status,'uncertain');}
+  assert.deepEqual(await g.recoverReview(a.who,pick(a),settings),recovered);
+  await assert.rejects(g.review(a.who,pick(a),settings),{code:'FIRST_LETTER_RECOVERY_REQUIRED'});assert.equal(p.calls,2);
+  assert.equal((await g.read(a.who,pick(a),settings))?.status,'draft_saved');
+  const ledger=(await f.db.query('SELECT * FROM platform_cost_ledger WHERE reservation_id=$1',[review.reservation_id])).rows[0];
+  assert.equal(ledger.source_id,review.id);assert.equal(ledger.estimated,true);assert.equal(ledger.usage_status,'expired');
  });
 });
