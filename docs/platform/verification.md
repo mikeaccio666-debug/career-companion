@@ -663,3 +663,14 @@ Validation: all 30 affected migration, worker lifecycle, PDF, upload and authent
 
 
 Publishing limitation: GitHub rejected the combined branch because the current OAuth credential lacks the `workflow` scope; the existing GitHub SSH path also rejected authentication. The combined commit `3d2b7d0` remains on remote-development branch `codex/ci-platform-regressions-p0`. Only the two ordinary test fixes and this record are published from `codex/ci-fixture-compatibility-p0`; `.github/workflows/ci.yml` in that branch is unchanged. The PDF workflow patch still needs the repository owner's authorized credential update. Earlier failed runs and the five hosted PDF failures are not claimed resolved by this split PR.
+
+
+## 账户数据导出覆盖检查（2026-10-08）
+
+按 09 第 8B 步要求，对隔离 PostgreSQL 实际应用 001–080 迁移后的 166 张表逐项登记。`account-data-schema.ts` 固定表名、审阅类别和字段／外键摘要；`account-data-coverage.ts` 只读系统目录，检查新表、缺表、字段类型及外键变化，不查询用户数据行。新增 `pnpm --filter @companion/platform-api account:coverage` 内部命令，使用已配置数据库执行只读、有界事务，不迁移数据库；退出 0 仅表示结构与审阅基线一致，输出仍明确 `exportReady: false`、`exportStatus: not_implemented`。
+
+166 张表分为：111 张本人领域数据、10 张间接归属、9 张需排除凭据的账户元数据、7 张文件与清理记录、22 张组织／员工数据需专门审阅、2 张需专门处理的财务记录，以及 5 张不含账户记录的共享配置／汇总表。后者为 migrations、model_prices、deleted_account_cost_daily、worker_heartbeats、orgs；这不是把组织知识库或支付凭据当作匿名数据。私有知识切片、任务尝试、计划步骤和文件写入日志没有统一 user_id，也不能漏掉。所有个人／待审阅类别目前均为 `blocked_projection_required`，尚未登记任何已完成的账户导出读取器。
+
+待完成：同一账户快照内的领域解码和分页、凭据字段及加密正文内部的排除、私有文件一致性和归档下载、重新验证身份后的完整 HTTP／UI 流程。删除协调器、外部处理方、备份删除重放和保留政策仍需分别实现或确认。此次未开放导出或删除接口，也未修改任何数据保留决定。
+
+验证：真实 PostgreSQL 隔离 schema 下 9/9 项通过、无跳过，含新增直接／间接关联表、新增凭据列、删除归属外键、缺表／空库、CLI 实际读取及拒绝参数。API 类型检查通过；首轮类型检查发现查询接口约束过宽，改为实际使用的窄查询接口后复验通过。检查只读取系统目录，测试使用虚构账号；临时 schema 已确认删除。主预览、主数据库与用户文件均未改动。
