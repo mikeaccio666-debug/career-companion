@@ -1,3 +1,4 @@
+import { TodayWeeklyService } from './today-weekly.ts';
 import {FirstLetterGeneration} from './first-letter-generation.ts';
 import {FirstLetterTasks} from './first-letter-tasks.ts';
 import { TodayAgendaService } from './today-agenda.ts';
@@ -150,6 +151,7 @@ export async function buildApp(options:AppOptions={}) {
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage),uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
   const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview,careerApplications);
+  const todayWeekly=new TodayWeeklyService(db,{settings:companionDailySettings,stories:careerStories,resumes:resumeReview});
   const todayAgenda=new TodayAgendaService(db,{settings:companionDailySettings,rest:todayRest,jobs:manualJobs,interviews:careerInterviews,resumes:resumeReview});
   const todaySources=new TodaySources(db,{behavior:new CompanionPlanningSources(db,config,bundle,companion.generation),plans:dailyPlans,rest:todayRest,settings:companionDailySettings,targets:careerTargets,library:careerStories,resumes:resumeReview,jobs:manualJobs,applications:careerApplications,interviews:careerInterviews});
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
@@ -831,6 +833,7 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/companion/settings`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/companion/settings/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.operation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
   app.patch(`${prefix}/companion/settings`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.change(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/today/weekly`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await todayWeekly.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/today/agenda`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await todayAgenda.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/today`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await dailyPlans.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/today/plan/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await dailyPlans.observe(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});

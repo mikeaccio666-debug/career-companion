@@ -1,3 +1,4 @@
+import { todayWeekWindow, type TodayWeekWindow } from '@companion/platform-contracts';
 import { accountExportRows } from './account-export-rows.ts';
 import type { OwnedCareerEvidence,OwnedCareerInput } from './career-run-context.ts';
 import { createHash,randomUUID } from 'node:crypto';
@@ -127,6 +128,30 @@ export class CareerStories {
    evidence.push(Object.freeze({id:p.id,ownerId:p.ownerId,subjectId:p.subjectId,kind:p.kind,state:p.state,verification:p.verification,referenceId:p.referenceId,occurredAt:p.occurredAt}));
   }
   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return Object.freeze(evidence);
+ }
+ /** Count distinct retained stories edited in the local week, not confirmations
+  * or current updatedAt. The event receipt is the authority for the edit time. */
+ async readWeeklyEditsInTransaction(client:PoolClient,value:FixedSessionContext,window:TodayWeekWindow,signal?:AbortSignal){
+  const context=this.fixed(value);await this.authorize(client,context,signal);
+  const w=todayWeekWindow(window.capturedAt,window.timeZone);if(w.weekStart!==window.weekStart||w.localDate!==window.localDate)throw bad();
+  const rows=(await client.query(`SELECT o.* FROM platform_career_library_operations o
+   JOIN platform_career_stories s ON s.user_id=o.user_id AND s.id=o.record_id
+   WHERE o.user_id=$1 AND o.record_kind='story' AND o.action='edit'
+    AND (o.created_at AT TIME ZONE $2)::date >= $3::date AND o.created_at<=$4::timestamptz
+   ORDER BY o.created_at,o.operation_id LIMIT 1001 FOR SHARE OF o,s`,[context.userId,w.timeZone,w.weekStart,w.capturedAt])).rows;
+  if(rows.length>1000)throw unavailable();
+  const ids=new Set<string>();
+  for(const row of rows){
+   signal?.throwIfAborted();const proof=await this.receipt(client,context,row);
+   if(proof.recordKind!=='story'||proof.action!=='edit')throw unavailable();
+   if(!ids.has(proof.recordId)){
+    const current=await this.row(client,context,'story',proof.recordId);if(!current)throw unavailable();
+    const story=await this.record(client,context,'story',current);
+    if(story.revision<proof.appliedRevision)throw unavailable();ids.add(proof.recordId);
+   }
+  }
+  if(ids.size>500)throw unavailable();await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
+  return Object.freeze({ownerId:context.userId,count:ids.size});
  }
  async progress(value:FixedSessionContext,signal?:AbortSignal){const context=this.fixed(value);return this.db.withBoundedTransaction(async client=>{const evidence=await this.readProgressEvidenceInTransaction(client,context,signal);return Object.freeze({progress:careerProgress(context.userId,evidence),coverage:Object.freeze(['project'])});});}
  async mutate(value:FixedSessionContext,inputKind:CareerLibraryKind,action:CareerLibraryAction,key:unknown,input:unknown,signal?:AbortSignal){const context=this.fixed(value),kind=this.kind(inputKind);let command:ReturnType<typeof parseCareerLibraryCommand>,requested:string|null;try{command=parseCareerLibraryCommand(kind,action,input);requested=action==='create'?null:careerRecordId(key);}catch{throw bad();}

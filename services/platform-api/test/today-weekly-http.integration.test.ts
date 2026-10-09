@@ -1,0 +1,36 @@
+import { before, after, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { createProviderRuntime } from '@companion/ai-core';
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
+import { buildApp } from '../src/app.ts';
+import { readConfig } from '../src/config.ts';
+import { hashPassword } from '../src/auth.ts';
+import { createPrebirthFixture, withPrebirthLoopback, type PrebirthFixture } from './fixtures/companion-prebirth.ts';
+import { readyBirth } from './fixtures/companion-birth.ts';
+import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
+const origin = 'https://fictional-daily-settings.example.invalid', prefix = '/api/platform/today/weekly', password = 'Fictional-settings-password-123';
+let f: PrebirthFixture, system: Awaited<ReturnType<typeof buildApp>>, calls = 0;
+before(async () => { f = await createPrebirthFixture(); system = await buildApp({ db: f.db, config: { ...readConfig(), dataCrypto: f.crypto, requireVerifiedEmail: true, allowedOrigins: new Set([origin]) }, legalBundle: FICTIONAL_LEGAL, enableQueue: false, runtime: createProviderRuntime({ env: { PLATFORM_ALLOW_PROVIDER_CALLS: '0' }, fetch: async () => { calls++; throw Error('No external call'); } }) }); });
+after(async () => { await system?.app.close(); assert.equal(calls, 0); await f?.close(); });
+async function login(owner: string) { const r = await system.app.inject({ method: 'POST', url: '/api/platform/auth/login', headers: { origin }, payload: { email: owner + '@example.invalid', password } }); assert.equal(r.statusCode, 200, r.body); const raw = r.headers['set-cookie']; return { origin, cookie: (Array.isArray(raw) ? raw[0] : raw)!.split(';')[0], [PLATFORM_ACCOUNT_HEADER]: owner }; }
+test('real HTTP week is private, owner-bound, read-only and based on authenticated story edits',async()=>{
+ const who=await f.actor();await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[who.userId,await hashPassword(password)]);
+ const headers=await login(who.userId);
+ assert.equal((await system.app.inject({url:prefix,headers})).statusCode,409);
+ await withPrebirthLoopback(async runtime=>{const b=await readyBirth(f,runtime,{who});await b.service.birth(who,b.body,b.key);});
+ const daily=await system.app.inject({url:'/api/platform/companion/settings/daily',headers});assert.equal(daily.statusCode,200,daily.body);
+ const preferences={timeZone:'America/New_York',morningTime:'09:00',quietStart:'22:30',quietEnd:'08:30',dailyMinutes:90,webAlert:'none'};
+ const saved=await system.app.inject({method:'PATCH',url:'/api/platform/companion/settings/daily',headers,payload:{companionId:daily.json().settings.companionId,operationId:randomUUID(),expectedRevision:0,preferences}});assert.equal(saved.statusCode,200,saved.body);
+ const empty=await system.app.inject({url:prefix,headers});assert.equal(empty.statusCode,200,empty.body);assert.equal(empty.headers['cache-control'],'private, no-store');assert.equal(empty.json().practiceQuestions,null);
+ const {CareerStories}=await import('../src/career-stories.ts');const stories=new CareerStories(f.db,f.config,FICTIONAL_LEGAL);
+ const body={operationId:randomUUID(),expectedRevision:0,title:'Fictional HTTP story',experienceKind:'course_project',sensitivity:'normal',english:{situation:'Fictional',task:'Fictional',action:'Fictional',result:'Fictional'},chinese:{situation:'',task:'',action:'',result:''},tags:[],projects:[]};
+ const story=(await stories.mutate(who,'story','create',null,body)).record!;
+ await stories.mutate(who,'story','edit',story.id,{...body,operationId:randomUUID(),expectedRevision:1,title:'Fictional edited HTTP story'});
+ const view=await system.app.inject({url:prefix,headers});assert.equal(view.statusCode,200,view.body);assert.equal(view.json().storiesEdited,1);assert(!view.body.includes(story.id));assert(!view.body.includes('Fictional'));
+ assert.equal((await system.app.inject({url:prefix})).statusCode,401);
+ assert.equal((await system.app.inject({url:prefix,headers:{...headers,[PLATFORM_ACCOUNT_HEADER]:randomUUID()}})).statusCode,409);
+ for(const query of ['owner='+who.userId,'timeZone=UTC','weekStart=2020-01-01'])assert.equal((await system.app.inject({url:prefix+'?'+query,headers})).statusCode,400);
+ assert.equal((await system.app.inject({method:'POST',url:prefix,headers,payload:{storiesEdited:50}})).statusCode,404);
+ assert.equal((await f.db.query('SELECT id FROM platform_jobs WHERE user_id=$1',[who.userId])).rowCount,0);
+});
