@@ -1,3 +1,4 @@
+import { workerProcessFixture } from './fixtures/first-letter-worker-process.ts';
 import {FirstLetterProgressService} from '../src/first-letter-progress.ts';
 import {beforeEach,afterEach,test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -49,18 +50,18 @@ async function actor(preferences=true,release=true){
   const body='我是'+birth.receipt.identity.name+'，名字是你起的。我是 AI。只记你同意的；在「我 → 它记得的你」可查看、修改、删除。'+
    '要发给别人的消息和材料，都先进待确认；表单里哪些项可以替你做，由你在对话里逐项确认；最终提交永远由你本人点。'+
    '你填的专业是 DS / 统计，目前在投，还没面试。接下来一起看今天的三件事。';
-  const runtime=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-injected-only',OPENAI_FIRST_LETTER_MODEL:model},
-   fetch:async(target,init)=>{
+  const respond:typeof fetch=async(target,init)=>{
     assert.equal(String(target),'https://api.openai.com/v1/responses');const request=JSON.parse(String(init?.body));assert.equal(request.model,model);calls++;
     const text=request.text.format.name==='career_first_letter_review'?JSON.stringify({
      checks:Object.fromEntries(['identity','memory','external_actions','user_facts','experts','today','language_personality','prohibited_content'].map(k=>[k,'supported'])),
      references:{study:'supported',search_stage:'supported'}}):JSON.stringify({body,factReferences:[{ref:'study',quote:'DS / 统计'},{ref:'search_stage',quote:'在投，还没面试'}]});
     return new Response('data: '+JSON.stringify({type:'response.completed',response:{status:'completed',usage:{input_tokens:10,output_tokens:10},
      output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text}]}]}})+'\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
-   }});
+   };
+  const runtime=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-injected-only',OPENAI_FIRST_LETTER_MODEL:model},fetch:respond});
   const generation=new FirstLetterGeneration(f.db,config,runtime,tasks),entry=new FirstLetterDispatch(f.db,config,runtime,tasks,generation,settings);
   const start=new FirstLetterStart(f.db,config,welcome,settings,tasks,entry);
-  result={who,config,daily,settings,welcome,tasks,sources,entry,generation,start,runtime,get calls(){return calls;},
+  result={who,config,respond,authority:b.ready.authority,daily,settings,welcome,tasks,sources,entry,generation,start,runtime,get calls(){return calls;},
    command:{welcomeId:opened.id,expectedRevision:1,operationId:randomUUID(),choice:'direct_letter'},
    savePreferences:()=>daily.change(who,{operationId:randomUUID(),expectedRevision:0,companionId:birth.receipt.identity.companionId,preferences:prefs})};
  });return result;
@@ -229,4 +230,42 @@ test('a dispatched failed call remains interrupted even when the service is now 
  for(let i=0;i<2;i++)assert.equal((await reader.read(a.who)).state,'interrupted');
  assert.equal(calls,1);assert.equal(a.calls,0);
  assert.equal((await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason,null);
+});
+
+test('actual worker-main preserves disabled work, restarts into processing and never buys the completed letter twice', {timeout:65000}, async()=>{
+ const a=await actor();await a.start.choose(a.who,a.command);const refs=await ref(a);
+ const processes=await workerProcessFixture(f,a,model);
+ try{
+  const disabled=await processes.start(false);
+  await processes.until(async()=> (await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason==='configuration');
+  assert.equal(a.calls,0);assert.equal((await f.db.query('SELECT * FROM platform_first_letter_stages WHERE task_id=$1',[refs.taskId])).rowCount,0);
+  await disabled.stop();
+  const active=await processes.start(true);
+  await processes.until(async()=> (await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason==='terminal',25000);
+  assert.equal(a.calls,2);assert.equal((await a.generation.readReview(a.who,{taskId:refs.taskId},await a.settings.read(a.who))).kind,'reviewed_draft');
+  assert.equal((await a.welcome.read(a.who)).step,'C7');
+  await active.stop();
+  const restarted=await processes.start(true);
+  // Observe the actual newly launched worker and multiple real producer ticks.
+  await processes.until(async()=> (await f.db.query("SELECT count(*)::integer n FROM platform_worker_heartbeats WHERE queue_name=$1 AND process_state='running'",[a.config.queueName])).rows[0].n===1,15000);
+  assert.equal(a.calls,2);
+  assert.equal((await f.db.query('SELECT * FROM platform_first_letter_stages WHERE task_id=$1',[refs.taskId])).rowCount,2);
+  await restarted.stop();
+  assert.equal((await f.db.query("SELECT count(*)::integer n FROM platform_worker_heartbeats WHERE queue_name=$1 AND process_state='stopping'",[a.config.queueName])).rows[0].n,3);
+ }finally{await processes.close();}
+});
+test('SIGTERM waits for the real in-flight letter, finishes its review and releases worker database sessions', {timeout:30000}, async()=>{
+ const a=await actor();await a.start.choose(a.who,a.command);const refs=await ref(a);
+ let entered=false,release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ const respond=a.respond;a.respond=async(...args:any[])=>{entered=true;await gate;return respond(...args);};
+ const processes=await workerProcessFixture(f,a,model);let child:Awaited<ReturnType<typeof processes.start>>|undefined;
+ try{
+  child=await processes.start(true);await processes.until(async()=>entered);
+  child.signal();
+  await processes.until(async()=> (await f.db.query("SELECT * FROM platform_worker_heartbeats WHERE queue_name=$1 AND process_state='stopping'",[a.config.queueName])).rowCount===1);
+  assert.equal(child.exited(),false,'stopping heartbeat must not be mistaken for a drained process');
+  release();await child.stop();assert.equal(a.calls,2);
+  assert.equal((await a.generation.readReview(a.who,{taskId:refs.taskId},await a.settings.read(a.who))).kind,'reviewed_draft');
+  assert.equal((await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason,'terminal');
+ }finally{release();await processes.close();}
 });
