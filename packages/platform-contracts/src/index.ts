@@ -345,3 +345,4 @@ export { ACCOUNT_PRIVACY_PURPOSES, accountPrivacyPurpose, parseAccountReauthenti
 export type { AccountPrivacyPurpose, AccountReauthentication, AccountPrivacyProof } from './account-privacy.ts';
 
 export * from './companion-daily-settings.ts';
+export * from './today-rest.ts';

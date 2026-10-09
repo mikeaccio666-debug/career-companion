@@ -158,6 +158,7 @@ export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: Acco
   Object.freeze({ table: 'platform_staff_audit', policy: 'organization_review', fingerprint: '771ffb85234fae9aa35ff7b7f73651a28e767e7248edcbe18a9231b4376e1cc2' }),
   Object.freeze({ table: 'platform_terms_consents', policy: 'owner_projection', fingerprint: '24796e1c7fbd87a0f3e3f0baba3779d3324d9791491bae2ca3cbbd7d4a7af93c' }),
   Object.freeze({ table: 'platform_terms_policy', policy: 'organization_review', fingerprint: '96c8f8c4b580af8036fb17700a6de5ebbbc8d3dc2eaf1308d2ea7f178a534f33' }),
+  Object.freeze({ table: 'platform_today_rest', policy: 'owner_projection', fingerprint: 'eb162c740088ca3b757544a81b13ee6136f4570549f9656d89cec73f98e7e77b' }),
   Object.freeze({ table: 'platform_upload_removal_events', policy: 'file_projection', fingerprint: '57e6c4cc27aafd2b531deff50ad80a4a966e396482f94b217628de69a06e4d67' }),
   Object.freeze({ table: 'platform_upload_removals', policy: 'file_projection', fingerprint: '9d9bc0bc5a5732de2c3eafb2a7ffa0f59e42e864d83c39473c5144d7aeac3180' }),
   Object.freeze({ table: 'platform_upload_write_events', policy: 'file_projection', fingerprint: 'db6e3ae47bf077b2fa085f6af54d8b44ec38d25991197a9d453bcffcb1863bfe' }),

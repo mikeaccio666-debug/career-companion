@@ -49,7 +49,7 @@ test('owner export preserves every original revision, decline, approval, archiva
  assert.equal(decisions[0].payloadDigest,v.item.approvedDigest);assert.equal(decisions[0].operationId,v.item.approvalOperationId);
  assert.equal(s.careerResumes.length,3);assert.equal(s.pendingItemOperations.length,7);assert.deepEqual(s.careerResumeCounters,[{track:'da',sequence:3}]);
  assert.equal((s.careerResumes as any[]).find(x=>x.id===v.item.resumeVersionId).status,'archived');
- assert.equal(result.includedTables.length,94);for(const table of Object.keys(RESUME_EXPORT_TABLES)){assert(result.includedTables.includes(table));assert(!result.remainingTables.includes(table));}
+ assert.equal(result.includedTables.length,95);for(const table of Object.keys(RESUME_EXPORT_TABLES)){assert(result.includedTables.includes(table));assert(!result.remainingTables.includes(table));}
  assert(result.remainingTables.includes('platform_uploads'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
  assert(Object.isFrozen(revisions[0].payload));const serialized=JSON.stringify(result);
  for(const secret of [b.userId,foreign.item.id,'Fictional foreign private original',a.tokenHash,token,password,encoded,'acceptedAuthVersion','requestDigest','recordDigest','record_ciphertext','receipt_ciphertext'])assert(!serialized.includes(secret));

@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {createPrebirthFixture,withPrebirthLoopback,type PrebirthFixture} from './fixtures/companion-prebirth.ts';
 import {readyBirth} from './fixtures/companion-birth.ts';
 import {FICTIONAL_LEGAL} from './fixtures/student-entry.ts';
+import {TodayRestService} from '../src/today-rest.ts';
 import {TodaySources} from '../src/today-sources.ts';
 import {CompanionDailySettingsService} from '../src/companion-daily-settings.ts';
 import {CareerTargets} from '../src/career-targets.ts';
@@ -16,7 +17,7 @@ import {ApiError} from '../src/errors.ts';
 import type {FixedSessionContext} from '../src/auth.ts';
 let f:PrebirthFixture,settings:CompanionDailySettingsService,targets:CareerTargets,library:CareerStories,resumes:ResumeOriginalReview,jobs:ManualJobs,applications:CareerApplications,interviews:CareerInterviews,sources:TodaySources;
 const preferences={timeZone:'America/New_York',morningTime:'09:00',quietStart:'22:30',quietEnd:'08:30',dailyMinutes:90,webAlert:'none' as const};
-before(async()=>{f=await createPrebirthFixture();settings=new CompanionDailySettingsService(f.db,f.config,FICTIONAL_LEGAL);targets=new CareerTargets(f.db,f.config,FICTIONAL_LEGAL);library=new CareerStories(f.db,f.config,FICTIONAL_LEGAL);resumes=new ResumeOriginalReview(f.db,f.config,FICTIONAL_LEGAL);jobs=new ManualJobs(f.db,f.config,FICTIONAL_LEGAL);applications=new CareerApplications(f.db,f.config,FICTIONAL_LEGAL,jobs);interviews=new CareerInterviews(f.db,f.config,FICTIONAL_LEGAL,applications);sources=new TodaySources(f.db,{settings,targets,library,resumes,jobs,applications,interviews});});
+before(async()=>{f=await createPrebirthFixture();settings=new CompanionDailySettingsService(f.db,f.config,FICTIONAL_LEGAL);targets=new CareerTargets(f.db,f.config,FICTIONAL_LEGAL);library=new CareerStories(f.db,f.config,FICTIONAL_LEGAL);resumes=new ResumeOriginalReview(f.db,f.config,FICTIONAL_LEGAL);jobs=new ManualJobs(f.db,f.config,FICTIONAL_LEGAL);applications=new CareerApplications(f.db,f.config,FICTIONAL_LEGAL,jobs);interviews=new CareerInterviews(f.db,f.config,FICTIONAL_LEGAL,applications);sources=new TodaySources(f.db,{rest:new TodayRestService(f.db,f.config,FICTIONAL_LEGAL),settings,targets,library,resumes,jobs,applications,interviews});});
 after(async()=>{await f?.close();});
 const operation=(expectedRevision=0)=>({operationId:randomUUID(),expectedRevision});
 const error=(status:number)=>(e:unknown)=>e instanceof ApiError&&e.status===status;
@@ -110,4 +111,46 @@ test('authenticated old schedule rollback and late session revocation fail inste
  f.db.withBoundedTransaction=async(run,options)=>original(async c=>run(new Proxy(c,{get(target,key){if(key==='query')return async(sql:any,...args:any[])=>{const result=await(target.query as any)(sql,...args);if(typeof sql==='string'&&sql.startsWith('SELECT * FROM platform_career_application_events WHERE user_id=$1 AND care_until'))await target.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[fresh.userId]);return result;};const v=Reflect.get(target,key);return typeof v==='function'?v.bind(target):v;}})),options);
  try{await assert.rejects(sources.read(fresh),error(401));}finally{f.db.withBoundedTransaction=original;}
  await assert.rejects(sources.read(fresh,AbortSignal.abort()));
+});
+
+// Only the service clock is replaced; all source records, crypto, authentication,
+// timezone arithmetic, immutable receipts and transactions remain real PostgreSQL.
+async function withClock(at:string,run:()=>Promise<void>){const original=f.db.withBoundedTransaction.bind(f.db);f.db.withBoundedTransaction=async(fn,options)=>original(c=>fn(new Proxy(c,{get(target,key){if(key==='query')return async(sql:any,...args:any[])=>{if(sql==='SELECT clock_timestamp() at')return{rows:[{at:new Date(at)}]};return(target.query as any)(sql,...args);};const v=Reflect.get(target,key);return typeof v==='function'?v.bind(target):v;}})),options);try{await run();}finally{f.db.withBoundedTransaction=original;}}
+test('today opt-out follows stored timezone through DST and timezone changes cannot prematurely end the saved rest',async()=>{
+ const who=await born(),rest=new TodayRestService(f.db,f.config,FICTIONAL_LEGAL),companionId=(await rest.read(who)).settings.companionId;
+ let until='',sourceId='';
+ await withClock('2026-11-01T04:30:00.000Z',async()=>{
+  const before=await sources.read(who);assert.equal(before.rest.tasksSuppressed,false);
+  const saved=await rest.change(who,{...operation(),companionId,choice:'today'});until=saved.settings.optedOutUntil!;
+  assert.equal(until,'2026-11-02T05:00:00.000Z');assert.equal(saved.settings.optedOutDate,'2026-11-01');
+  const paused=await sources.read(who);assert.equal(paused.rest.tasksSuppressed,true);assert.equal(paused.rest.proactivePaused,false);assert.equal(paused.rest.remindersMuted,false);assert.notEqual(paused.sourceId,before.sourceId);
+  await assert.rejects(f.db.withBoundedTransaction(c=>sources.assertCurrentInTransaction(c,who,coord(before))),error(409));
+  await settings.change(who,{...operation(1),companionId,preferences:{...preferences,timeZone:'Asia/Shanghai'}});
+  const shifted=await sources.read(who);assert.equal(shifted.rest.tasksSuppressed,true);sourceId=shifted.sourceId;
+ });
+ await withClock('2026-11-02T04:59:59.999Z',async()=>{const still=await sources.read(who);assert.equal(still.localDate,'2026-11-02');assert.equal(still.rest.optedOutDate,'2026-11-02');assert.equal(still.rest.tasksSuppressed,true);});
+ await withClock(until,async()=>{const ended=await sources.read(who);assert.equal(ended.rest.tasksSuppressed,false);assert.equal(ended.rest.optedOutDate,null);assert.notEqual(ended.sourceId,sourceId);assert.equal((await rest.read(who)).settings.revision,1);});
+});
+test('calendar-day pause preserves local wall time, all-off survives retries and ends exactly at expiry',async()=>{
+ const who=await born(),rest=new TodayRestService(f.db,f.config,FICTIONAL_LEGAL),companionId=(await rest.read(who)).settings.companionId;
+ const cmd={...operation(),companionId,choice:'1_day'};let savedUntil='';
+ await withClock('2026-10-31T16:00:00.000Z',async()=>{
+  await assert.rejects(rest.change(who,{...operation(),companionId,choice:'reminders_off'}),error(409));
+  const saved=await rest.change(who,cmd);savedUntil=saved.settings.pauseUntil!;assert.equal(savedUntil,'2026-11-01T17:00:00.000Z');
+  assert.equal((await sources.read(who)).rest.pauseUntil,savedUntil);assert.equal((await sources.read(who)).rest.proactivePaused,true);
+  await rest.change(who,{...operation(1),companionId,choice:'reminders_off'});assert.equal((await sources.read(who)).rest.remindersMuted,true);
+ });
+ await withClock('2026-11-01T16:00:00.000Z',async()=>{const replay=await rest.change(who,cmd);assert.equal(replay.settings.pauseUntil,savedUntil);assert.equal(replay.settings.reminders,'off');assert.equal(replay.settings.revision,2);});
+ await withClock(savedUntil,async()=>{
+  const s=await sources.read(who);assert.equal(s.rest.tasksSuppressed,false);assert.equal(s.rest.remindersMuted,false);assert.equal(s.rest.pauseUntil,null);
+  await assert.rejects(rest.change(who,{...operation(2),companionId,choice:'reminders_off'}),error(409));
+  const renewed=await rest.change(who,{...operation(2),companionId,choice:'3_days'});assert.equal(renewed.settings.pauseUntil,'2026-11-04T17:00:00.000Z');assert.equal(renewed.settings.reminders,'keep');
+  const seven=await rest.change(who,{...operation(3),companionId,choice:'7_days'});assert.equal(seven.settings.pauseUntil,'2026-11-08T17:00:00.000Z');
+ });
+});
+test('spring DST skips the missing hour without inventing 24-hour local days; no preferences means no write',async()=>{
+ const who=await born(false),rest=new TodayRestService(f.db,f.config,FICTIONAL_LEGAL),companionId=(await rest.read(who)).settings.companionId;
+ await assert.rejects(rest.change(who,{...operation(),companionId,choice:'today'}),error(409));assert.equal((await rest.read(who)).settings.revision,0);
+ await settings.change(who,{...operation(),companionId,preferences});
+ await withClock('2027-03-13T17:00:00.000Z',async()=>{const saved=await rest.change(who,{...operation(),companionId,choice:'1_day'});assert.equal(saved.settings.pauseUntil,'2027-03-14T16:00:00.000Z');});
 });

@@ -1,3 +1,4 @@
+import {TodayRestService} from './today-rest.ts';
 import {CompanionDailySettingsService} from './companion-daily-settings.ts';
 import {exportExecutionInTransaction,EXECUTION_EXPORT_TABLES,type ExecutionExportSection} from './account-execution-export.ts';
 import {exportTasksInTransaction,TASK_EXPORT_TABLES,type TaskExportSection} from './account-task-export.ts';
@@ -33,8 +34,8 @@ import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
-const projectedTables=Object.freeze(['platform_companion_daily_settings','platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES,...COMPANION_EXPORT_TABLES,...COMPANION_GENERATION_EXPORT_TABLES,...ONBOARDING_EXPORT_TABLES,...COST_EXPORT_TABLES,...SECURITY_EXPORT_TABLES,...VOICE_USAGE_EXPORT_TABLES,...PRIVATE_KNOWLEDGE_EXPORT_TABLES,...MCP_EXPORT_TABLES,...PLAN_EXPORT_TABLES,...MENTOR_EXPORT_TABLES,...UPLOAD_JOURNAL_EXPORT_TABLES,...TASK_EXPORT_TABLES,...EXECUTION_EXPORT_TABLES]);
-type ArraySection='companionDailySettings'|'termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection|CompanionGenerationExportSection|OnboardingExportSection|CostExportSection|SecurityExportSection|VoiceUsageExportSection|PrivateKnowledgeExportSection|McpExportSection|PlanExportSection|MentorExportSection|AccountFileSection|UploadJournalExportSection|TaskExportSection|ExecutionExportSection;
+const projectedTables=Object.freeze(['platform_today_rest','platform_companion_daily_settings','platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES,...COMPANION_EXPORT_TABLES,...COMPANION_GENERATION_EXPORT_TABLES,...ONBOARDING_EXPORT_TABLES,...COST_EXPORT_TABLES,...SECURITY_EXPORT_TABLES,...VOICE_USAGE_EXPORT_TABLES,...PRIVATE_KNOWLEDGE_EXPORT_TABLES,...MCP_EXPORT_TABLES,...PLAN_EXPORT_TABLES,...MENTOR_EXPORT_TABLES,...UPLOAD_JOURNAL_EXPORT_TABLES,...TASK_EXPORT_TABLES,...EXECUTION_EXPORT_TABLES]);
+type ArraySection='todayRest'|'companionDailySettings'|'termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection|CompanionGenerationExportSection|OnboardingExportSection|CostExportSection|SecurityExportSection|VoiceUsageExportSection|PrivateKnowledgeExportSection|McpExportSection|PlanExportSection|MentorExportSection|AccountFileSection|UploadJournalExportSection|TaskExportSection|ExecutionExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
 const tooLarge=()=>new ApiError(503,'ACCOUNT_EXPORT_TOO_LARGE','This export requires the archive worker. No partial export was returned.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
@@ -49,6 +50,7 @@ function freeze<T>(value:T):T{
 /** Partial internal archive input, not a complete export or a download endpoint.
  * No consumer sees the returned private sections before COMMIT succeeds. */
 export class AccountCoreExport {
+  private readonly rest:TodayRestService;
   private readonly dailySettings:CompanionDailySettingsService;
   private readonly uploadJournals:AccountUploadJournalExport;
   private readonly fileCapture:AccountFileCapture|undefined;
@@ -62,6 +64,7 @@ export class AccountCoreExport {
   private readonly maxBytes:number;
   private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords|ResumeOriginalReview)[];
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number;fileCapture?:AccountFileCapture}={}){
+    this.rest=new TodayRestService(db,config,null);
     this.dailySettings=new CompanionDailySettingsService(db,config,null);
     this.uploadJournals=new AccountUploadJournalExport(config);
     this.fileCapture=limits.fileCapture;
@@ -106,7 +109,7 @@ export class AccountCoreExport {
         onboardingDrafts:[],onboardingOperations:[],onboardingSafetySubmissions:[],
         companionSourceManifests:[],companionGenerationRequests:[],companionGenerationOutbox:[],companionGenerationCheckpoints:[],
         companionAnswers:[],companionGenerationTasks:[],companionRevisions:[],companionGenerationCalls:[],companionOutputBlocks:[],
-        companionDailySettings:[],companions:[],companionPaidSettingOperations:[],
+        todayRest:[],companionDailySettings:[],companions:[],companionPaidSettingOperations:[],
         companionBirthReceipts:[],companionBirthAssetMetadata:[],
         conversations:[],messages:[],chatCalls:[],audioTranscriptions:[],companionWelcomes:[],companionWelcomeOperations:[],
         termsConsents:[],sessions:[],memories:[],memoryOperations:[],memoryEvents:[],memoryUses:[],
@@ -142,6 +145,7 @@ export class AccountCoreExport {
       for await(const item of exportConversationsInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.welcomes.exportInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.births.exportInTransaction(client,who,signal))append(item.section,item.record);
+      for await(const item of this.rest.exportInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.dailySettings.exportInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.companions.exportInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.generations.exportInTransaction(client,who,signal))append(item.section,item.record);

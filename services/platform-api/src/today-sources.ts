@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { careerRecordId, careerRecordObject } from '@companion/platform-contracts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
+import type { TodayRestService } from './today-rest.ts';
 import type { CompanionDailySettingsService } from './companion-daily-settings.ts';
 import type { CareerTargets } from './career-targets.ts';
 import type { CareerStories } from './career-stories.ts';
@@ -22,6 +23,7 @@ function localDate(at: string, timeZone: string) {
   return ['year', 'month', 'day'].map(k => parts.find(p => p.type === k)!.value).join('-');
 }
 export interface TodaySourcePorts {
+  rest: Pick<TodayRestService, 'readForPolicyInTransaction'>;
   settings: Pick<CompanionDailySettingsService, 'readForPolicyInTransaction'>;
   targets: Pick<CareerTargets, 'readForPreparationInTransaction'>;
   library: Pick<CareerStories, 'readPreparationIndexInTransaction'>;
@@ -43,6 +45,8 @@ export class TodaySources {
     const settings = await this.ports.settings.readForPolicyInTransaction(c, s, signal);
     if (!settings.preferences) throw new ApiError(409, 'DAILY_SETTINGS_REQUIRED', 'Choose your daily preferences first.');
     const capturedAt = (await c.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
+    const rest = await this.ports.rest.readForPolicyInTransaction(c, s, signal);
+    if (rest.ownerId !== s.userId || rest.companionId !== settings.companionId) throw new ApiError(503, 'TODAY_SOURCES_UNAVAILABLE', 'The owned rest choice could not be confirmed.');
     const targets = await this.ports.targets.readForPreparationInTransaction(c, s, signal);
     const library = await this.ports.library.readPreparationIndexInTransaction(c, s, signal);
     const resumes = await this.ports.resumes.readForDailyPlanningInTransaction(c, s, signal);
@@ -60,6 +64,13 @@ export class TodaySources {
     const appMap = new Map(applications.map(v => [v.id, v]));
     const content = Object.freeze({
       kind: 'owned_today_source_snapshot' as const, ownerId: s.userId, localDate: date, settings,
+      rest: Object.freeze({ settings: rest,
+        tasksSuppressed: !!(rest.optedOutUntil && rest.optedOutUntil > capturedAt || rest.pauseUntil && rest.pauseUntil > capturedAt),
+        optedOutDate: rest.optedOutUntil && rest.optedOutUntil > capturedAt ? date : null,
+        pauseUntil: rest.pauseUntil && rest.pauseUntil > capturedAt ? rest.pauseUntil : null,
+        proactivePaused: !!(rest.pauseUntil && rest.pauseUntil > capturedAt),
+        remindersMuted: rest.reminders === 'off' && !!(rest.optedOutUntil && rest.optedOutUntil > capturedAt || rest.pauseUntil && rest.pauseUntil > capturedAt),
+      }),
       targets: Object.freeze(targets.map(v => Object.freeze({ id: v.id, revision: v.revision, status: v.status }))),
       projects: Object.freeze(library.projects.map(v => Object.freeze({ id: v.id, revision: v.revision }))),
       stories: Object.freeze(library.stories.map(v => Object.freeze({ id: v.id, revision: v.revision }))),
@@ -81,7 +92,7 @@ export class TodaySources {
       // Genuine immutable events survive application removal. This does not
       // claim that the separately missing crisis/other overlay source is empty.
       rejectionWindows: Object.freeze(rejectionWindows.filter(v => v.until > capturedAt)),
-      coverage: Object.freeze(['daily_preferences', 'target_coordinates', 'normal_project_coordinates', 'confirmed_story_coordinates', 'resume_reviews', 'manual_job_deadlines', 'application_states', 'interview_schedules', 'post_rejection_events'] as const),
+      coverage: Object.freeze(['rest_choices', 'daily_preferences', 'target_coordinates', 'normal_project_coordinates', 'confirmed_story_coordinates', 'resume_reviews', 'manual_job_deadlines', 'application_states', 'interview_schedules', 'post_rejection_events'] as const),
       // Missing data stays missing, never [] / false / an unearned plan grant.
       companionBehavior: null, companionOverlays: null, journeyFocus: null, dailyHistory: null, practiceReceipts: null,
     });
