@@ -6,7 +6,7 @@ export interface AccountSchemaColumn { table_name: string; column_name: string; 
 export interface AccountSchemaForeignKey { child: string; parent: string; definition: string; }
 export interface AccountSchemaInventory { columns: AccountSchemaColumn[]; fks: AccountSchemaForeignKey[]; }
 export type AccountDataPolicy = 'owner_projection' | 'indirect_owner_projection' | 'credential_projection'
-  | 'file_projection' | 'organization_review' | 'financial_review' | 'nonpersonal';
+  | 'file_projection' | 'organization_review' | 'financial_review' | 'nonpersonal' | 'product_exclusion';
 
 export const ACCOUNT_DATA_POLICY_REASONS: Readonly<Record<AccountDataPolicy, string>> = Object.freeze({
   owner_projection: 'Export only the authenticated owner’s decoded domain data and receipts; never raw ciphertext or another actor’s private fields.',
@@ -15,7 +15,18 @@ export const ACCOUNT_DATA_POLICY_REASONS: Readonly<Record<AccountDataPolicy, str
   file_projection: 'Export the owner’s confirmed private files and reviewed metadata; storage coordinates, cleanup leases and unpublished writes require separate handling.',
   organization_review: 'Shared organization or staff data needs an explicit projection policy; never copy licensed corpora, other users, or staff authority into a student archive.',
   financial_review: 'Retained financial records have no user_id but may remain linkable through payment references; resolve coverage and retention explicitly before release.',
+  product_exclusion: 'Personal records excluded only by a named, table-specific product rule; exclusion does not authorize retention after account deletion.',
   nonpersonal: 'Reviewed table contains shared schema/runtime/price configuration or aggregate counters, without account records; excluded from individual account exports.',
+});
+
+// Specific product exceptions to 09 §11's general owner-table coverage rule.
+// These remain personal data: never classify them as nonpersonal or infer an
+// exception for other organization tables from their name or foreign keys.
+export const ACCOUNT_PRODUCT_EXPORT_EXCLUSIONS: Readonly<Record<string, Readonly<{reference:string;reason:string}>>> = Object.freeze({
+  platform_knowledge_access_log: Object.freeze({reference:'docs/product/04-manteng-assets.md#411-账号删除与导出',
+    reason:'04 §4.11 explicitly excludes knowledge access logs from export; account deletion must still delete these personal records.'}),
+  platform_user_entitlements: Object.freeze({reference:'docs/product/04-manteng-assets.md#411-账号删除与导出',
+    reason:'04 §4.11 exports only the first three objects in the mentor packet/grants/sessions/entitlements row; entitlements are excluded and must still be deleted with the account.'}),
 });
 
 /** Reads catalog metadata only. No user rows, migrations, credentials or files. */
@@ -41,8 +52,9 @@ export function accountTableFingerprint(inventory: AccountSchemaInventory, table
 }
 
 /** Coverage inventory, NOT an export authorization or evidence of completed readers.
- * Every personal category stays blocked until actual projection/file readers and
- * archive verification exist. New tables/columns/FKs cannot silently inherit a policy.
+ * Personal categories require actual projection/file readers and archive
+ * verification, except named product exclusions. Exclusions do not remove
+ * deletion obligations. New tables/columns/FKs cannot silently inherit a policy.
  */
 export function auditAccountDataCoverage(inventory: AccountSchemaInventory) {
   const actual = new Set(inventory.columns.map(c => c.table_name));
@@ -52,17 +64,18 @@ export function auditAccountDataCoverage(inventory: AccountSchemaInventory) {
     const schemaStatus = !entry ? 'unreviewed' : !actual.has(table) ? 'missing'
       : accountTableFingerprint(inventory,table) !== entry.fingerprint ? 'changed' : 'reviewed';
     const policy = entry?.policy ?? null;
+    const exemption = policy === 'product_exclusion' ? ACCOUNT_PRODUCT_EXPORT_EXCLUSIONS[table] : undefined;
     const exportStatus = schemaStatus !== 'reviewed' ? 'blocked_schema_review'
-      : policy === 'nonpersonal' ? 'excluded_nonpersonal' : 'blocked_projection_required';
-    return Object.freeze({ table, schemaStatus, policy, exportStatus,
-      reason: policy ? ACCOUNT_DATA_POLICY_REASONS[policy] : 'No reviewed account-data policy exists for this table.' });
+      : policy === 'nonpersonal' ? 'excluded_nonpersonal' : exemption ? 'excluded_product_policy' : 'blocked_projection_required';
+    return Object.freeze({ table, schemaStatus, policy, exportStatus, policyReference:exemption?.reference ?? null,
+      reason: exemption?.reason ?? (policy ? ACCOUNT_DATA_POLICY_REASONS[policy] : 'No reviewed account-data policy exists for this table.') });
   });
   const schemaReady = tables.every(table => table.schemaStatus === 'reviewed');
   return Object.freeze({ scope: 'account_export_coverage_inventory' as const,
     schemaStatus: schemaReady ? 'reviewed' as const : 'blocked' as const,
     exportStatus: 'not_implemented' as const, exportReady: false as const,
     tableCount: tables.length,
-    excludedTables: tables.filter(table => table.exportStatus === 'excluded_nonpersonal').length,
+    excludedTables: tables.filter(table => table.exportStatus === 'excluded_nonpersonal' || table.exportStatus === 'excluded_product_policy').length,
     requiredProjections: tables.filter(table => table.exportStatus === 'blocked_projection_required').length,
     tables: Object.freeze(tables) });
 }

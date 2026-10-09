@@ -51,3 +51,12 @@ OrgKnowledge.search 是未向学生暴露、未注册进 agent 的服务端结�
 用虚构许可和资料在隔离 PostgreSQL schema、真实 LocalBlobStorage、实际密码登录 HTTP 中测试；全程模型请求关闭。覆盖私有凭据、用途、独立角色、整批失败回滚、150 条导入／发布、重复操作、引用版本、权益与许可撤销、旧密文回放拒绝、不可变证明、内容篡改、模式隐藏、mentor 身份、账户删除及重复迁移。隔离 schema 与虚构文件均清理。
 
 本切片没有修改运行中的预览或主数据库，没有部署。CareerKnowledgePort 已接通真实准备引用和统一读取，服务内绑定与剩余运行持久化边界见 career-knowledge-port.md。下一步仍需将知识绑定写入真实专家运行记录，接通任务租约和输入准入，完成 skill 绑定、真实回复的出处标签接入、练习／反馈记录及提醒；独立出处页见 org-source-web.md。完整 64 KiB 来源、不同机器负载和真实内容批次仍需进一步容量验证；150 条短虚构题通过不等同于最坏负载保证。09 的模型实测与禁止付费调用之间的待决事项继续保持原边界。
+
+
+## 账户导出的明确排除范围
+
+依据 `docs/product/04-manteng-assets.md` §4.11，知识访问日志不导出；同一表格的 mentor_packet／mentor_grants／mentor_sessions／user_entitlements 行只导出前三项，因此用户权益也排除。这是 09 §11「覆盖所有带 user_id 的表，或写明豁免理由」的具体例外，不是把两类记录改称非个人数据。账号删除仍需清除它们。
+
+覆盖清单把这两张表标为 product_exclusion，并记录逐表理由及产品文档依据。内部 AccountCoreExport 返回 exclusions，明确区分 excluded_product_policy 和 excluded_nonpersonal；excluded 数据不计入 includedTables，也不伪装为未完成的 reader。当前 166 张表分为 65 张已投影、7 张明确排除（其中 2 张是这次确认的个人记录例外）和 94 张待处理。只要任一表字段、外键或存在性与已审阅基线不符，整个捕获仍拒绝，不会沿用旧排除规则。数据库结构和指纹未改。
+
+机构语料、内容操作及混合所有权证明没有因此整体豁免；仍需单独审阅。这里没有读取、解密或打包权益、访问日志、机构正文或员工许可文件，也不会额外产生访问日志。完整账户下载与私有文件尚未实现，complete=false、filesIncluded=false 保持。

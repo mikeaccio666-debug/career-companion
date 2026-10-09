@@ -22,11 +22,11 @@ test('all 166 migrated tables are reviewed, but the inventory does not claim a c
   const inventory=await readAccountSchemaInventory(f.db),report=auditAccountDataCoverage(inventory);
   assert.equal(new Set(ACCOUNT_DATA_SCHEMA.map(entry=>entry.table)).size,ACCOUNT_DATA_SCHEMA.length);
   assert.equal(report.schemaStatus,'reviewed',JSON.stringify(report.tables.filter(row=>row.schemaStatus!=='reviewed')));
-  assert.equal(report.tableCount,166);assert.equal(report.excludedTables,5);assert.equal(report.requiredProjections,161);
+  assert.equal(report.tableCount,166);assert.equal(report.excludedTables,7);assert.equal(report.requiredProjections,159);
   assert.equal(report.exportReady,false);assert.equal(report.exportStatus,'not_implemented');
   for(const column of inventory.columns.filter(column=>column.column_name==='user_id')){
     const entry=report.tables.find(entry=>entry.table===column.table_name)!;
-    assert.equal(entry.exportStatus,'blocked_projection_required');assert(entry.reason.length>30);
+    assert.equal(entry.exportStatus,['platform_knowledge_access_log','platform_user_entitlements'].includes(entry.table)?'excluded_product_policy':'blocked_projection_required');assert(entry.reason.length>30);
   }
   assert(Object.isFrozen(report));assert(Object.isFrozen(report.tables));
 });
@@ -61,7 +61,7 @@ test('an added credential column on an otherwise excluded table removes its excl
     await client.query('ALTER TABLE platform_worker_heartbeats ADD COLUMN fictional_private_token text');
     const report=await inspect(client),row=report.tables.find(entry=>entry.table==='platform_worker_heartbeats')!;
     assert.equal(row.schemaStatus,'changed');assert.equal(row.exportStatus,'blocked_schema_review');
-    assert.equal(report.excludedTables,4);assert.equal(report.schemaStatus,'blocked');
+    assert.equal(report.excludedTables,6);assert.equal(report.schemaStatus,'blocked');
   });
 });
 
@@ -117,4 +117,39 @@ test('CLI rejects arguments before config or database access and does not echo s
     env:{...process.env,PLATFORM_DATABASE_URL:'fictional-invalid-private-database-url'}});
   assert.equal(child.status,2);assert.deepEqual(JSON.parse(child.stdout),{status:'rejected',code:'ACCOUNT_COVERAGE_NO_ARGUMENTS'});
   assert.equal(child.stderr,'');assert(!child.stdout.includes('fictional-private'));
+});
+
+
+test('product exclusions are personal, named and do not exempt related organization or mentor records',async()=>{
+  const report=await inspect(),rows=new Map(report.tables.map(row=>[row.table,row]));
+  assert.deepEqual(report.tables.filter(row=>row.exportStatus==='excluded_product_policy').map(row=>row.table),['platform_knowledge_access_log','platform_user_entitlements']);
+  for(const table of ['platform_knowledge_access_log','platform_user_entitlements']){
+    const row=rows.get(table)!;assert.equal(row.policy,'product_exclusion');
+    assert.equal(row.policyReference,'docs/product/04-manteng-assets.md#411-账号删除与导出');assert.match(row.reason,/delet/);
+  }
+  for(const table of ['platform_org_content_state_proofs','platform_org_content_operations','platform_mentor_sessions'])
+    assert.equal(rows.get(table)!.exportStatus,'blocked_projection_required');
+  assert.equal(report.exportReady,false);
+});
+
+test('each product exemption loses effect after column or ownership changes, and missing tables still block',async()=>{
+  for(const table of ['platform_knowledge_access_log','platform_user_entitlements']){
+    await rolledBack(async client=>{
+      await client.query(`ALTER TABLE ${table} ADD COLUMN fictional_new_personal_data text`);
+      const report=await inspect(client),row=report.tables.find(row=>row.table===table)!;
+      assert.equal(row.schemaStatus,'changed');assert.equal(row.exportStatus,'blocked_schema_review');assert.equal(report.excludedTables,6);
+    });
+    await rolledBack(async client=>{
+      const name=(await client.query(`SELECT k.conname FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid
+        JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_class p ON p.oid=k.confrelid
+        WHERE n.nspname=current_schema() AND c.relname=$1 AND p.relname='platform_users' AND k.contype='f'`,[table])).rows[0].conname;
+      assert.match(name,/^[a-z_]+$/);await client.query(`ALTER TABLE ${table} DROP CONSTRAINT "${name}"`);
+      const row=(await inspect(client)).tables.find(row=>row.table===table)!;
+      assert.equal(row.schemaStatus,'changed');assert.equal(row.exportStatus,'blocked_schema_review');
+    });
+    await rolledBack(async client=>{
+      await client.query(`DROP TABLE ${table}`);const row=(await inspect(client)).tables.find(row=>row.table===table)!;
+      assert.equal(row.schemaStatus,'missing');assert.equal(row.exportStatus,'blocked_schema_review');
+    });
+  }
 });
