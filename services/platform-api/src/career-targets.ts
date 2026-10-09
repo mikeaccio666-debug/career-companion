@@ -44,6 +44,22 @@ export class CareerTargets {
  async get(value:FixedSessionContext,key:unknown,signal?:AbortSignal){const context=this.fixed(value);let id:string;try{id=careerTargetId(key);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);const row=await this.row(client,context,id);if(!row)throw notFound();const target=await this.record(client,context,row);await authorizeFixedSession(client,context,signal);return target;});
  }
+ /** Read-only recovery of an accepted operation. Never replays a write or
+  * resurrects the source after deletion; admission withdrawal still allows
+  * the owner to inspect existing private records. */
+ async observe(value:FixedSessionContext,key:unknown,signal?:AbortSignal){
+  const context=this.fixed(value);let id:string;try{id=careerTargetId(key);}catch{throw bad();}
+  return this.db.withBoundedTransaction(async client=>{
+   await this.authorize(client,context,signal);
+   const operation=(await client.query('SELECT * FROM platform_career_target_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,id])).rows[0];
+   if(!operation)throw notFound();
+   const r=await this.receipt(client,context,operation),row=await this.row(client,context,r.targetId);
+   let target:Readonly<CareerTarget>|null=null;
+   if(row)target=await this.record(client,context,row);else if((await this.latest(client,context,r.targetId)).action!=='delete')throw unavailable();
+   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
+   return Object.freeze({target,operation:Object.freeze({id:r.operationId,targetId:r.targetId,appliedRevision:r.appliedRevision,replayed:true})});
+  });
+ }
  async list(value:FixedSessionContext,query:unknown={},signal?:AbortSignal){const context=this.fixed(value);try{careerTargetObject(query,[]);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);const rows=(await client.query('SELECT * FROM platform_career_targets WHERE user_id=$1 ORDER BY priority,created_at,id LIMIT 101 FOR SHARE',[context.userId])).rows;
    if(rows.length>100)throw new ApiError(409,'CAREER_TARGET_CAPACITY','Reduce the saved direction list before continuing.');const targets=[];for(const row of rows){signal?.throwIfAborted();targets.push(await this.record(client,context,row));}await authorizeFixedSession(client,context,signal);return Object.freeze({targets:Object.freeze(targets)});

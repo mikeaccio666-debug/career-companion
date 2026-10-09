@@ -48,3 +48,12 @@ test('real authenticated HTTP persists and clears a review date, rejects impossi
  assert.equal((await system.app.inject({url:prefix,headers:a.headers})).json().targets[0].reviewOn,null);
  const b=await actor();assert.equal((await system.app.inject({method:'PATCH',url:prefix+'/'+id,headers:b.headers,payload:{operationId:randomUUID(),expectedRevision:2,reviewOn:'2028-03-01'}})).statusCode,404);
 });
+
+test('real login GET observes the original operation without mutation, rejects foreign windows and extra query input, and reports deletion',async()=>{
+ const a=await actor(),b=await actor(),payload=command(),created=await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload}),id=created.json().target.id,url=prefix+'/operations/'+payload.operationId;
+ const r=await system.app.inject({url,headers:a.headers});assert.equal(r.statusCode,200,r.body);assert.equal(r.headers['cache-control'],'private, no-store');assert.equal(r.json().operation.replayed,true);assert.equal(r.json().target.id,id);
+ assert.equal((await system.app.inject({url,headers:b.headers})).statusCode,404);assert.equal((await system.app.inject({url,headers:{...b.headers,[PLATFORM_ACCOUNT_HEADER]:a.id}})).statusCode,409);
+ assert.equal((await system.app.inject({url:url+'?ownerId='+a.id,headers:a.headers})).statusCode,400);assert.equal((await system.app.inject({url})).statusCode,401);
+ await system.app.inject({method:'DELETE',url:prefix+'/'+id,headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:1}});
+ assert.equal((await system.app.inject({url,headers:a.headers})).json().target,null);assert.equal(calls,0);
+});
