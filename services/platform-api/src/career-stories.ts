@@ -1,3 +1,4 @@
+import {ProductEvents} from './product-events.ts';
 import { todayWeekWindow, type TodayWeekWindow } from '@companion/platform-contracts';
 import { accountExportRows } from './account-export-rows.ts';
 import type { OwnedCareerEvidence,OwnedCareerInput } from './career-run-context.ts';
@@ -24,7 +25,8 @@ const proofKey=(kind:CareerLibraryKind,id:string)=>kind+':'+id;
  * source safety classification, model use, mentor review or execution permission. */
 export class CareerStories {
  private readonly storage:OnboardingStorage;
- constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null){this.storage=new OnboardingStorage(config,legal);}
+ private readonly productEvents:ProductEvents;
+ constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'|'productEventsEnabled'>,legal:LegalBundle|null){this.storage=new OnboardingStorage(config,legal);this.productEvents=new ProductEvents(config);}
  private kind(value:CareerLibraryKind){if(value!=='project'&&value!=='story')throw bad();return value;}
  private fixed(value:FixedSessionContext){try{const v=careerRecordObject(value,['userId','tokenHash']);if(typeof v.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(v.tokenHash))throw bad();return Object.freeze({userId:careerRecordId(v.userId),tokenHash:v.tokenHash});}catch{throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');}}
  private async authorize(client:PoolClient,context:FixedSessionContext,signal?:AbortSignal){await authorizeFixedSession(client,context,signal);const row=(await client.query('SELECT account_kind,auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[context.userId])).rows[0];if(row?.account_kind!=='student')throw new ApiError(403,'STUDENT_ACCOUNT_REQUIRED','Use a student account.');if(!this.storage.crypto)throw unavailable();signal?.throwIfAborted();return row;}
@@ -175,6 +177,7 @@ export class CareerStories {
      await client.query("INSERT INTO platform_career_evidence(id,user_id,kind,state,verification,sensitivity,revision,last_operation_id,record_ciphertext,created_at,updated_at,withdrawn_at) VALUES($1,$2,'project',$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET state=EXCLUDED.state,verification=EXCLUDED.verification,sensitivity=EXCLUDED.sensitivity,revision=EXCLUDED.revision,last_operation_id=EXCLUDED.last_operation_id,record_ciphertext=EXCLUDED.record_ciphertext,updated_at=EXCLUDED.updated_at,withdrawn_at=EXCLUDED.withdrawn_at",[id,context.userId,p.state,p.verification,p.sensitivity,revision,command.operationId,cipher,p.createdAt,at,withdrawnAt]);}
     else {const s=record as CareerStory;await client.query('INSERT INTO platform_career_stories(id,user_id,status,sensitivity,revision,last_operation_id,record_ciphertext,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,sensitivity=EXCLUDED.sensitivity,revision=EXCLUDED.revision,last_operation_id=EXCLUDED.last_operation_id,record_ciphertext=EXCLUDED.record_ciphertext,updated_at=EXCLUDED.updated_at',[id,context.userId,s.status,s.sensitivity,revision,command.operationId,cipher,s.createdAt,at]);}
    }else await client.query('DELETE FROM '+tables[kind]+' WHERE user_id=$1 AND id=$2',[context.userId,id]);
+   if(kind==='story'&&(action==='create'||action==='edit'))await this.productEvents.record(client,context.userId,command.operationId,{event:'story_saved',props:{source:'user_entered'}});
    const evidenceAvailability=kind==='story'&&record?await this.availability(client,context,record as CareerStory,signal):null;await authorizeFixedSession(client,context,signal);return Object.freeze({record,evidenceAvailability,operation:Object.freeze({id:command.operationId,recordId:id,recordKind:kind,appliedRevision:revision,replayed:false})});
   });}
 }

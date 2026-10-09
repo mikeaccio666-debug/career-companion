@@ -26,6 +26,7 @@ export interface PlatformConfig {
   mentorRetentionDays?: number; mentorRetentionEvidenceRef?: string;
   companionSealGlyphs?: Readonly<CompanionSealGlyphConfiguration>;
   workbenchEnabled: boolean;
+  productEventsEnabled?: boolean;
   modelRoutes: Partial<Record<ModelRoutePurpose, { provider: string }>>;
   exposeProviderDetails: boolean;
   mcp?: McpCatalogConfig;
@@ -93,6 +94,7 @@ function modelRoutes(env: NodeJS.ProcessEnv): PlatformConfig['modelRoutes'] {
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig {
   const production = env.NODE_ENV === 'production';
+  if(env.PLATFORM_PRODUCT_EVENTS_ENABLED!==undefined&&!['0','1'].includes(env.PLATFORM_PRODUCT_EVENTS_ENABLED))throw Error('PLATFORM_PRODUCT_EVENTS_ENABLED must be 0 or 1');
   // Development-only runtimes must never become available through inherited
   // environment groups, even while commercial provider calls are disabled.
   if (production && Object.entries(env).some(([name, value]) =>
@@ -186,6 +188,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   if (!Number.isSafeInteger(maxActiveJobs) || maxActiveJobs < 1) throw new Error('PLATFORM_MAX_ACTIVE_JOBS must be a positive integer');
   if (env.PLATFORM_WEB_STATIC_DIR !== undefined && !env.PLATFORM_WEB_STATIC_DIR.trim()) throw new Error('PLATFORM_WEB_STATIC_DIR must name the built web directory');
   return {
+    productEventsEnabled: env.PLATFORM_PRODUCT_EVENTS_ENABLED==='1',
     webApiOrigin, databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
     mentorOrganizationId: env.PLATFORM_MENTOR_ORG_ID === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_ORG_ID),
     mentorRetentionDays: env.PLATFORM_MENTOR_RETENTION_DAYS === undefined ? undefined : mentorRetentionDays(env.PLATFORM_MENTOR_RETENTION_DAYS),

@@ -1,3 +1,4 @@
+import {ProductEvents} from './product-events.ts';
 import { todayWeekWindow, type TodayWeekWindow } from '@companion/platform-contracts';
 import type { BlobStorage } from './storage.ts';
 import { readResumeFileText,type OwnedResumeFile } from './resume-file-text.ts';
@@ -31,7 +32,8 @@ interface PreparationProofs {latest:Map<string,any>;resumes:Map<string,any>;payl
  * delivery, registers tools or records a fake expert/model authorization. */
 export class ResumeOriginalReview {
  private readonly storage:OnboardingStorage;
- constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null,private readonly uploads?:BlobStorage){this.storage=new OnboardingStorage(config,legal);}
+ private readonly productEvents:ProductEvents;
+ constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'|'productEventsEnabled'>,legal:LegalBundle|null,private readonly uploads?:BlobStorage){this.storage=new OnboardingStorage(config,legal);this.productEvents=new ProductEvents(config);}
  private fixed(value:FixedSessionContext){try{const v=careerRecordObject(value,['userId','tokenHash']);if(typeof v.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(v.tokenHash))throw bad();return Object.freeze({userId:careerRecordId(v.userId),tokenHash:v.tokenHash});}catch{throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');}}
  private async authorize(client:PoolClient,context:FixedSessionContext,signal?:AbortSignal){await authorizeFixedSession(client,context,signal);const row=(await client.query('SELECT account_kind,auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[context.userId])).rows[0];if(row?.account_kind!=='student')throw new ApiError(403,'STUDENT_ACCOUNT_REQUIRED','Use a student account.');if(!this.storage.crypto)throw unavailable();signal?.throwIfAborted();return String(row.auth_version);}
  private async receipt(client:PoolClient,context:FixedSessionContext,row:any):Promise<Receipt>{
@@ -363,6 +365,7 @@ export class ResumeOriginalReview {
     if(action==='decline'||approving&&!already)await client.query('INSERT INTO platform_pending_item_decisions(user_id,item_id,operation_id,generation,revision,payload_digest,decision,channel,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,\'web\',$8)',[context.userId,id,command.operationId,generation,revision,item.payloadDigest,approving?'approved':'declined',at]);
     view=Object.freeze({item,payload});
    }
+   if(action==='create'&&view)await this.productEvents.record(client,context.userId,command.operationId,{event:'resume_version_created',props:{source:view.item.source}});
    await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return Object.freeze({view,operation:Object.freeze({id:command.operationId,itemId:requested??view!.item.id,replayed:false})});
   });
  }

@@ -10,7 +10,7 @@ import { createCompanionNameSafetyFixture } from './fixtures/companion-name-safe
 import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
 const origin = 'https://fictional-application.example.invalid', prefix = '/api/platform/career/applications', password = 'Fictional-application-password-123';
 let f: Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>, system: Awaited<ReturnType<typeof buildApp>>, calls = 0;
-before(async () => { f = await createCompanionNameSafetyFixture(); system = await buildApp({ db: f.db, legalBundle: FICTIONAL_LEGAL, config: { ...readConfig(), dataCrypto: f.crypto, requireVerifiedEmail: true, allowedOrigins: new Set([origin]) }, enableQueue: false, runtime: createProviderRuntime({ env: { PLATFORM_ALLOW_PROVIDER_CALLS: '0' }, fetch: async () => { calls++; throw Error('No external request is allowed'); } }) }); });
+before(async () => { f = await createCompanionNameSafetyFixture(); system = await buildApp({ db: f.db, legalBundle: FICTIONAL_LEGAL, config: { ...readConfig(), dataCrypto: f.crypto, requireVerifiedEmail: true, productEventsEnabled: true, allowedOrigins: new Set([origin]) }, enableQueue: false, runtime: createProviderRuntime({ env: { PLATFORM_ALLOW_PROVIDER_CALLS: '0' }, fetch: async () => { calls++; throw Error('No external request is allowed'); } }) }); });
 after(async () => { await system?.app.close(); assert.equal(calls, 0); await f?.close(); });
 async function actor() { const who = await f.actor(); await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1', [who.userId, await hashPassword(password)]); const r = await system.app.inject({ method: 'POST', url: '/api/platform/auth/login', headers: { origin }, payload: { email: who.userId + '@example.invalid', password } }); assert.equal(r.statusCode, 200); const raw = r.headers['set-cookie'], cookie = (Array.isArray(raw) ? raw[0] : raw)!.split(';')[0]; return { id: who.userId, headers: { origin, cookie, [PLATFORM_ACCOUNT_HEADER]: who.userId } }; }
 async function make(a: Awaited<ReturnType<typeof actor>>) {
@@ -44,6 +44,9 @@ test('real login routes save, stage, observe, edit, append history and delete wi
     assert.equal(removed.json().application, null);
     assert.equal((await system.app.inject({ url: prefix + '/operations/' + payload.operationId, headers: a.headers })).json().application, null);
     assert.equal((await system.app.inject({ method: 'POST', url: prefix, headers: a.headers, payload })).statusCode, 200);
+    const events=(await f.db.query('SELECT event,props,channel FROM platform_product_events WHERE user_id=$1',[a.id])).rows;
+    assert.deepEqual(events,[{event:'application_stage_changed',props:{from_stage:'saved',to_stage:'applied',closed_reason:'none'},channel:'web'}]);
+    assert(!JSON.stringify(events).includes('Fictional'));
     assert.equal(calls, 0);
 });
 test('foreign owners, CSRF, stale account window, unsupported metadata and repeated queries are rejected by HTTP', async () => {

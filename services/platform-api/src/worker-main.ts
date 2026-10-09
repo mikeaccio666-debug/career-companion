@@ -1,3 +1,4 @@
+import {purgeExpiredProductEvents} from './product-events.ts';
 import {FirstLetterSettings} from './first-letter-settings.ts';
 import {FirstLetterSources} from './first-letter-sources.ts';
 import {FirstLetterTasks} from './first-letter-tasks.ts';
@@ -55,7 +56,7 @@ const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeV
 let closing=false,recovering:Promise<void>|undefined,shutdown:Promise<void>|undefined;
 const recovery=setInterval(()=>{
   if(closing||recovering)return;
-  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),...(mentorFinancialRetention?[mentorFinancialRetention.purgeExpired(db).catch(()=>{process.stderr.write('Mentor financial retention maintenance failed.\n');})]:[]),...(config.dataCrypto?[uploadRemovals.recover(),uploadWrites.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
+  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),purgeExpiredProductEvents(db).catch(()=>{process.stderr.write('Product event retention maintenance failed.\n');}),...(mentorFinancialRetention?[mentorFinancialRetention.purgeExpired(db).catch(()=>{process.stderr.write('Mentor financial retention maintenance failed.\n');})]:[]),...(config.dataCrypto?[uploadRemovals.recover(),uploadWrites.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
   recovering=current;
 },15_000);recovery.unref();
 process.stdout.write('Platform task worker started.\n');
