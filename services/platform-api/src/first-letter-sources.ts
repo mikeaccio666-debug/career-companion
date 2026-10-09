@@ -10,6 +10,7 @@ import type {CompanionPrebirthSafety} from './companion-prebirth-safety.ts';
 import {CompanionBirthAnswerSources} from './companion-birth-answer-source.ts';
 import {readWelcomeSnapshot,type WelcomeRow} from './companion-welcome-snapshot.ts';
 import {ApiError} from './errors.ts';
+import {composeFirstLetter, snapshotFirstLetterSettings, type FirstLetterCompositionSettings} from './first-letter-composition.ts';
 
 const unavailable=()=>new ApiError(503,'FIRST_LETTER_SOURCES_UNAVAILABLE','The saved first-letter sources could not be confirmed.');
 const required=()=>new ApiError(409,'FIRST_LETTER_TRIGGER_REQUIRED','Choose the saved first-letter path before continuing.');
@@ -26,7 +27,7 @@ function session(value:FixedSessionContext):FixedSessionContext{
 }
 const digest=(value:unknown)=>'first_letter_source_'+createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-/** Server-only C1 direct-letter source composition. No prompt, letter, task,
+/** Server-only C1 direct-letter sources and prompt preparation. No letter, task,
  * lease, message, profile mutation or entry completion is created. Missing C6
  * and timeout sources cannot be supplied by a caller or inferred from C2. */
 export class FirstLetterSources{
@@ -64,6 +65,7 @@ export class FirstLetterSources{
       ownerId:s.userId,companionId:birth.companionId,conversationId:birth.conversationId,
       trigger:Object.freeze({kind:'direct_letter' as const,welcomeId:state.id,operationId:operation.id,revision:state.revision,
         chosenAt:operation.createdAt,birthReceiptId:birth.birthReceiptId}),
+      companion:birth.companion,
       facts:Object.freeze(facts),omittedQuestions:Object.freeze(omitted),
       emotionLanguage:language.kind==='answered'?language.value:null,
       requiredFactReferences:Math.min(2,facts.length),needsMoreFacts:facts.length<2,
@@ -74,6 +76,13 @@ export class FirstLetterSources{
   }
   async read(value:FixedSessionContext,signal?:AbortSignal){
     const s=session(value);return this.db.withBoundedTransaction(c=>this.readInTransaction(c,s,signal));
+  }
+  /** Internal preparation only. Settings come from server release configuration
+   * and its local date; no HTTP route accepts them. No model or publication. */
+  async prepare(value:FixedSessionContext,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
+    const savedSettings=snapshotFirstLetterSettings(settings);
+    const snapshot=await this.read(value,signal);
+    return composeFirstLetter(snapshot,savedSettings);
   }
   async assertCurrentInTransaction(c:PoolClient,value:FixedSessionContext,expected:unknown,signal?:AbortSignal){
     const s=session(value);let ownerId:string,sourceId:string;
