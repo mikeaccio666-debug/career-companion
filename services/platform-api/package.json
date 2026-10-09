@@ -13,6 +13,7 @@
     "migrate": "tsx src/migrate.ts",
     "operations": "tsx src/operations-main.ts",
     "eval:plan": "tsx evals/main.ts",
+    "eval:pilot": "tsx evals/live-main.ts",
     "check": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 test/*.test.ts",
     "org-content": "tsx src/org-content-import.ts",
