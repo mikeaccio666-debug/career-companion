@@ -16,6 +16,11 @@ export interface CareerProfile extends CareerProfileFacts {
     readonly createdAt: string;
     readonly updatedAt: string;
     readonly lastOperationId: string;
+    /** Present only while O2 still owns this record; manual edits detach it. */
+    readonly intakeSource?: Readonly<{
+        draftId: string;
+        revision: number;
+    }>;
 }
 export interface CareerProfileSnapshot {
     readonly ownerId: string;
@@ -66,12 +71,17 @@ export function parseCareerProfileFacts(value: unknown): Readonly<CareerProfileF
     return Object.freeze({ degreeField: v.degreeField as CareerDegreeField | null, graduationMonth: v.graduationMonth as string | null, graduated: v.graduated as boolean | null, targetTracks: Object.freeze(tracks) });
 }
 export function parseCareerProfile(value: unknown): Readonly<CareerProfile> {
-    const v = careerRecordObject(value, ['id', 'ownerId', 'revision', 'source', 'confirmedAt', 'createdAt', 'updatedAt', 'lastOperationId', 'degreeField', 'graduationMonth', 'graduated', 'targetTracks']);
+    const v = careerRecordObject(value, ['id', 'ownerId', 'revision', 'source', 'confirmedAt', 'createdAt', 'updatedAt', 'lastOperationId', 'degreeField', 'graduationMonth', 'graduated', 'targetTracks'], ['intakeSource']);
     const id = careerRecordId(v.id), ownerId = careerRecordId(v.ownerId), createdAt = timestamp(v.createdAt), updatedAt = timestamp(v.updatedAt), confirmedAt = timestamp(v.confirmedAt);
     if (id !== ownerId || v.source !== 'user_entered' || confirmedAt !== updatedAt || createdAt > updatedAt)
         return fail();
+    let intakeSource: CareerProfile['intakeSource'];
+    if (Object.hasOwn(v, 'intakeSource')) {
+        const r = careerRecordObject(v.intakeSource, ['draftId', 'revision']);
+        intakeSource = Object.freeze({ draftId: careerRecordId(r.draftId), revision: careerProfileRevision(r.revision, 1) });
+    }
     return Object.freeze({ ...parseCareerProfileFacts({ degreeField: v.degreeField, graduationMonth: v.graduationMonth, graduated: v.graduated, targetTracks: v.targetTracks }),
-        id, ownerId, revision: careerProfileRevision(v.revision, 1), source: 'user_entered', createdAt, updatedAt, confirmedAt, lastOperationId: careerRecordId(v.lastOperationId) });
+        id, ownerId, revision: careerProfileRevision(v.revision, 1), source: 'user_entered', createdAt, updatedAt, confirmedAt, lastOperationId: careerRecordId(v.lastOperationId), ...(intakeSource ? { intakeSource } : {}) });
 }
 export function parseCareerProfileSnapshot(value: unknown): Readonly<CareerProfileSnapshot> {
     const v = careerRecordObject(value, ['ownerId', 'revision', 'profile']), ownerId = careerRecordId(v.ownerId), revision = careerProfileRevision(v.revision), profile = v.profile === null ? null : parseCareerProfile(v.profile);

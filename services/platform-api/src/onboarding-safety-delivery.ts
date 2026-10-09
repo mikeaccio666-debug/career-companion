@@ -1,3 +1,4 @@
+import { CareerProfiles } from './career-profiles.ts';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { parseNameSafetyPublicationCommand, parseNameSafetyResourceCommand, type NameSafetyPublicationCommand,
@@ -56,9 +57,11 @@ function idInput(value:unknown,key:'publicationId'|'submissionId'):string{return
 /** Source-specific resource lifecycle. Transport uses the caller's fixed real
  * session; body delivery never grants model, tool or clinical clearance. */
 export class OnboardingSafetyDelivery {
+  private readonly profiles:CareerProfiles;
   private readonly storage:OnboardingStorage;private readonly bundle:SafetyResponseBundle|null;private readonly review:SafetyDeliveryReview|null;
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null,
     bundle:SafetyResponseBundle|null,review:SafetyDeliveryReview|null){
+    this.profiles=new CareerProfiles(db,config,legal);
     this.storage=new OnboardingStorage(config,legal);this.bundle=bundle===null?null:parseSafetyResponseBundle(bundle);this.review=review===null?null:parseSafetyDeliveryReview(review);
   }
   private async admission(client:PoolClient,fixed:FixedSessionContext,signal?:AbortSignal){
@@ -243,7 +246,10 @@ export class OnboardingSafetyDelivery {
             if(!current||current.status!=='detected'||current.level!=='L0'||current.detector_mode!=='full')throw deliveryStorageUnavailable();
             next=resumeOnboardingDraft(draft,{expectedRevision:draft.revision,at:op.created_at.toISOString(),currentTextResult:this.storage.decodeResult(current)});
           }
-          if(next!==draft)await this.storage.write(client,draft,next);
+          if(next!==draft){
+            await this.storage.write(client,draft,next);
+            await this.profiles.projectIntakeInTransaction(client,draft,next,authVersion!,signal);
+          }
         }
       }
       await authorizeFixedSession(client,fixed,signal);signal?.throwIfAborted();return {state:await this.stateView(client,record),operation:{id:op.operation_id,appliedRevision:op.applied_revision,replayed:false},...(token?{presentationReceipt:token}:{})};

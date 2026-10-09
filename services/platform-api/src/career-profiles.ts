@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto';
+import { parseOnboardingDraft } from '@companion/career-core';
+import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { careerRecordObject, careerRecordId, careerProfileRevision, parseCareerProfile, parseCareerProfileCommand, type CareerProfile, type CareerProfileAction, type CareerProfileSnapshot } from '@companion/platform-contracts';
+import { careerRecordObject, careerRecordId, careerProfileRevision, parseCareerProfile, parseCareerProfileCommand, type CareerProfile, type CareerProfileAction, type CareerProfileFacts, type CareerProfileSnapshot, type OnboardingDraft } from '@companion/platform-contracts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
@@ -52,7 +53,7 @@ export class CareerProfiles {
         signal?.throwIfAborted();
         return row;
     }
-    private receipt(s: FixedSessionContext, row: any): Receipt {
+    private receipt(s: Pick<FixedSessionContext, 'userId'>, row: any): Receipt {
         try {
             const raw = this.storage.crypto!.openUtf8(row.receipt_ciphertext, { table: 'platform_career_profile_operations', column: 'receipt_ciphertext', rowId: row.operation_id, ownerId: s.userId, revision: row.applied_revision });
             const r = careerRecordObject(JSON.parse(raw), ['schemaVersion', 'ownerId', 'operationId', 'action', 'commandDigest', 'recordDigest', 'appliedRevision', 'acceptedAuthVersion', 'createdAt']);
@@ -70,7 +71,7 @@ export class CareerProfiles {
             throw unavailable();
         }
     }
-    private async state(c: PoolClient, s: FixedSessionContext): Promise<Readonly<CareerProfileSnapshot>> {
+    private async state(c: PoolClient, s: Pick<FixedSessionContext, 'userId'>): Promise<Readonly<CareerProfileSnapshot>> {
         const row = (await c.query('SELECT * FROM platform_career_profiles WHERE user_id=$1 FOR UPDATE', [s.userId])).rows[0];
         const last = (await c.query('SELECT * FROM platform_career_profile_operations WHERE user_id=$1 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE', [s.userId])).rows[0];
         const receipt = last ? this.receipt(s, last) : null;
@@ -125,6 +126,27 @@ export class CareerProfiles {
             return Object.freeze({ ...current, operation: Object.freeze({ id: r.operationId, action: r.action, appliedRevision: r.appliedRevision, replayed: true }) });
         });
     }
+    private async persist(c: PoolClient, ownerId: string, authVersion: string, current: Readonly<CareerProfileSnapshot>, action: CareerProfileAction, operationId: string, commandDigest: string, facts?: Readonly<CareerProfileFacts>, intakeSource?: CareerProfile['intakeSource']) {
+        const revision = current.revision + 1;
+        if (revision > 2147483647)
+            throw changed();
+        const at = (await c.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
+        const profile: Readonly<CareerProfile> | null = action === 'delete' ? null : parseCareerProfile({ ...facts, id: ownerId, ownerId: ownerId, revision, source: 'user_entered',
+            createdAt: current.profile?.createdAt ?? at, updatedAt: at, confirmedAt: at, lastOperationId: operationId, ...(intakeSource ? { intakeSource } : {}) });
+        const receipt: Receipt = { schemaVersion: 1, ownerId: ownerId, operationId: operationId, action, commandDigest, recordDigest: profile ? digest(profile) : null,
+            appliedRevision: revision, acceptedAuthVersion: authVersion, createdAt: at };
+        const encrypted = this.storage.crypto!.sealUtf8(canonical(receipt), { table: 'platform_career_profile_operations', column: 'receipt_ciphertext', rowId: operationId, ownerId: ownerId, revision });
+        await c.query('INSERT INTO platform_career_profile_operations(user_id,operation_id,action,applied_revision,created_at,receipt_ciphertext) VALUES($1,$2,$3,$4,$5,$6)', [ownerId, operationId, action, revision, at, encrypted]);
+        if (profile) {
+            const sealed = this.storage.crypto!.sealUtf8(canonical(profile), { table: 'platform_career_profiles', column: 'record_ciphertext', rowId: ownerId, ownerId: ownerId, revision });
+            await c.query(`INSERT INTO platform_career_profiles(user_id,revision,last_operation_id,record_ciphertext,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6)
+      ON CONFLICT(user_id) DO UPDATE SET revision=EXCLUDED.revision,last_operation_id=EXCLUDED.last_operation_id,record_ciphertext=EXCLUDED.record_ciphertext,
+      created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at`, [ownerId, revision, operationId, sealed, profile.createdAt, at]);
+        }
+        else
+            await c.query('DELETE FROM platform_career_profiles WHERE user_id=$1', [ownerId]);
+        return Object.freeze({ ownerId, revision, profile, operation: Object.freeze({ id: operationId, action, appliedRevision: revision, replayed: false }) });
+    }
     async mutate(value: FixedSessionContext, action: CareerProfileAction, input: unknown, signal?: AbortSignal) {
         const s = this.fixed(value);
         let command: ReturnType<typeof parseCareerProfileCommand>;
@@ -152,28 +174,46 @@ export class CareerProfiles {
                 throw missing();
             if (action === 'save')
                 await this.storage.authorizeSession(c, s, signal);
-            const revision = current.revision + 1;
-            if (revision > 2147483647)
-                throw changed();
-            const at = (await c.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
-            const profile: Readonly<CareerProfile> | null = action === 'delete' ? null : parseCareerProfile({ ...command.facts, id: s.userId, ownerId: s.userId, revision, source: 'user_entered',
-                createdAt: current.profile?.createdAt ?? at, updatedAt: at, confirmedAt: at, lastOperationId: command.operationId });
-            const receipt: Receipt = { schemaVersion: 1, ownerId: s.userId, operationId: command.operationId, action, commandDigest, recordDigest: profile ? digest(profile) : null,
-                appliedRevision: revision, acceptedAuthVersion: String(auth.auth_version), createdAt: at };
-            const encrypted = this.storage.crypto!.sealUtf8(canonical(receipt), { table: 'platform_career_profile_operations', column: 'receipt_ciphertext', rowId: command.operationId, ownerId: s.userId, revision });
-            await c.query('INSERT INTO platform_career_profile_operations(user_id,operation_id,action,applied_revision,created_at,receipt_ciphertext) VALUES($1,$2,$3,$4,$5,$6)', [s.userId, command.operationId, action, revision, at, encrypted]);
-            if (profile) {
-                const sealed = this.storage.crypto!.sealUtf8(canonical(profile), { table: 'platform_career_profiles', column: 'record_ciphertext', rowId: s.userId, ownerId: s.userId, revision });
-                await c.query(`INSERT INTO platform_career_profiles(user_id,revision,last_operation_id,record_ciphertext,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6)
-      ON CONFLICT(user_id) DO UPDATE SET revision=EXCLUDED.revision,last_operation_id=EXCLUDED.last_operation_id,record_ciphertext=EXCLUDED.record_ciphertext,
-      created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at`, [s.userId, revision, command.operationId, sealed, profile.createdAt, at]);
-            }
-            else
-                await c.query('DELETE FROM platform_career_profiles WHERE user_id=$1', [s.userId]);
+            const result = await this.persist(c, s.userId, String(auth.auth_version), current, action, command.operationId, commandDigest, command.facts);
             await authorizeFixedSession(c, s, signal);
             signal?.throwIfAborted();
-            return Object.freeze({ ownerId: s.userId, revision, profile, operation: Object.freeze({ id: command.operationId, action, appliedRevision: revision, replayed: false }) });
+            return result;
         });
+    }
+    /** Called only inside an already accepted intake transition. No HTTP body
+     * can select an owner, manufacture a safety result or invoke this writer.
+     * Original intake choices own this projection until a manual edit/deletion. */
+    async projectIntakeInTransaction(c: PoolClient, before: OnboardingDraft, next: OnboardingDraft, authVersion: string, signal?: AbortSignal) {
+        const previous = parseOnboardingDraft(before), draft = parseOnboardingDraft(next), keys = ['study', 'graduation', 'roles'] as const;
+        if (previous.id !== draft.id || previous.userId !== draft.userId || draft.revision <= previous.revision)
+            throw unavailable();
+        if (!keys.some(k => canonical(previous.answersPartial[k] ?? null) !== canonical(draft.answersPartial[k] ?? null)))
+            return;
+        await this.storage.authorizeAccount(c, draft.userId, authVersion, signal);
+        const row = await this.storage.row(c, draft.userId);
+        if (!row || canonical(this.storage.decode(row)) !== canonical(draft))
+            throw unavailable();
+        const current = await this.state(c, { userId: draft.userId }), p = current.profile;
+        // Forgetting or a manual edit is final for this automatic projection.
+        if (!p && current.revision > 0 || p && !p.intakeSource)
+            return;
+        if (p?.intakeSource && (p.intakeSource.draftId !== draft.id || p.intakeSource.revision >= draft.revision))
+            return;
+        const answers = draft.answersPartial, study = answers.study, graduation = answers.graduation, roles = answers.roles;
+        if (!p && !keys.some(k => answers[k]?.kind === 'answered'))
+            return;
+        const facts: CareerProfileFacts = {
+            degreeField: study?.kind === 'answered' ? study.value.degreeField : null,
+            graduationMonth: graduation?.kind === 'answered' ? graduation.value.month : null,
+            graduated: graduation?.kind === 'answered' ? graduation.value.graduated : null,
+            targetTracks: roles?.kind === 'answered' && roles.value.kind === 'selected' ? roles.value.roles : [],
+        };
+        if (p && canonical(facts) === canonical({ degreeField: p.degreeField, graduationMonth: p.graduationMonth, graduated: p.graduated, targetTracks: p.targetTracks }))
+            return;
+        const intakeSource = Object.freeze({ draftId: draft.id, revision: draft.revision });
+        await this.persist(c, draft.userId, authVersion, current, 'save', randomUUID(), digest({ kind: 'intake_projection', intakeSource, facts }), facts, intakeSource);
+        await this.storage.authorizeAccount(c, draft.userId, authVersion, signal);
+        signal?.throwIfAborted();
     }
     /** Structured normal-sensitivity fields only; no identity dates or free text. */
     async readForPreparationInTransaction(c: PoolClient, value: FixedSessionContext, signal?: AbortSignal): Promise<Readonly<OwnedCareerProfile> | null> {
