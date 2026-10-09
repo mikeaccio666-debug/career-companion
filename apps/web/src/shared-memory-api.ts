@@ -1,4 +1,4 @@
-import { parseSharedMemoryRecord,parseSharedMemoryCommand,sharedMemoryId,type SharedMemoryRecord,type SharedMemoryCommandKind } from '@companion/platform-contracts';
+import { parseSharedMemoryObservation,parseSharedMemoryRecord,parseSharedMemoryCommand,sharedMemoryId,type SharedMemoryRecord,type SharedMemoryCommandKind } from '@companion/platform-contracts';
 import type { BoundPlatformClient } from './api.ts';
 export type SharedMemoryClient=Pick<BoundPlatformClient,'account'|'isCurrent'|'subscribe'|'request'>;
 function current(client:SharedMemoryClient){if(!client.isCurrent())fail();}
@@ -34,4 +34,14 @@ export async function readSharedMemoryUses(client:SharedMemoryClient,id:string,s
     ||!['web','discord','voice'].includes(v.channel)||!['chat','morning_brief','self_set_reminder','external_draft','handoff_note'].includes(v.purpose)||typeof v.createdAt!=='string'||!Number.isFinite(Date.parse(v.createdAt))||new Date(v.createdAt).toISOString()!==v.createdAt)fail();
   uses.push(Object.freeze({id:sharedMemoryId(v.id),memoryRevision:v.memoryRevision as number,conversationId:sharedMemoryId(v.conversationId),messageId:sharedMemoryId(v.messageId),speaker:v.speaker as string,channel:v.channel as string,purpose:v.purpose as string,createdAt:v.createdAt as string}));
  }return Object.freeze(uses);
+}
+
+/** Read an existing command's receipt; never reissue its mutation. */
+export async function readSharedMemoryOperation(client:SharedMemoryClient,kind:SharedMemoryCommandKind,id:string|null,value:unknown,signal?:AbortSignal){
+ current(client);const command=parseSharedMemoryCommand(kind,value),target=kind==='create'?null:sharedMemoryId(id);
+ const raw=await client.request('/memories/operations/'+command.operationId,{signal});current(client);
+ const result=parseSharedMemoryObservation(raw),op=result.operation;
+ if(result.ownerId!==client.account.accountId||op.id!==command.operationId||op.action!==kind||
+  op.appliedRevision!==command.expectedRevision+1||target!==null&&op.memoryId!==target)fail();
+ return result;
 }

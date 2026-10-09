@@ -167,6 +167,10 @@ test('genuine undo expiry physically purges content and stale create replay cann
  assert.equal((await f.db.query('SELECT id FROM platform_memories WHERE id=$1',[a.memory.id])).rowCount,0);
  assert.equal((await f.db.query('SELECT id FROM platform_memory_safety_sources WHERE memory_id=$1',[a.memory.id])).rowCount,0);assert.equal((await f.db.query("SELECT call_id FROM platform_safety_model_usage WHERE memory_id=$1 AND status='complete'",[a.memory.id])).rowCount,1);
  assert.equal((await f.db.query('SELECT id FROM platform_memory_events WHERE memory_id=$1',[a.memory.id])).rowCount,2);
+ const observation=await service.observeOperation(who,command.operationId);
+ assert.equal(observation.memory,null);assert.equal(observation.removal?.purged,true);assert.equal(observation.removal?.revision,2);
+ assert.equal(observation.removal?.deletionOperationId,deleted.operation.id);assert(!JSON.stringify(observation).includes(command.content));
+ assert.equal((await service.observeOperation(who,deleted.operation.id)).operation.action,'delete');
  await assert.rejects(service.mutate(who,'create',null,command),bad(409));
  assert.equal((await counts(who.userId)).memories,2);
 });
@@ -202,4 +206,42 @@ test('053 upgrades genuine pre-existing rows and rerunning the migration preserv
   for(const key of ['category','sensitivity','source','status','confidence','confirmed_at','updated_at','record_ciphertext'])assert.equal(row[key],null);
   assert.equal(row.record_revision,0);assert.equal((await db.query('SELECT count(*)::int n FROM platform_memory_operations')).rows[0].n,0);
  }finally{await db.close();try{if(created)await admin.query(`DROP SCHEMA ${schema} CASCADE`);}finally{await admin.close();}}
+});
+
+test('receipt observations remain available after admission changes but reject absent live sources and invalid sessions',async()=>{
+ const who=await f.actor(),other=await f.actor(),staff=await f.actor(true),command=create(),saved=await service.mutate(who,'create',null,command);
+ await f.db.query('DELETE FROM platform_terms_consents WHERE user_id=$1',[who.userId]);await f.db.query('UPDATE platform_users SET email_verified_at=NULL WHERE id=$1',[who.userId]);
+ assert.equal((await service.observeOperation(who,command.operationId)).memory?.id,saved.memory.id);
+ await assert.rejects(service.observeOperation(other,command.operationId),bad(404));await assert.rejects(service.observeOperation(staff,command.operationId),bad(403));
+ await f.db.query('DELETE FROM platform_memories WHERE id=$1',[saved.memory.id]);
+ await assert.rejects(service.observeOperation(who,command.operationId),bad(503));
+ await f.db.query("UPDATE platform_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE token_hash=$1",[who.tokenHash]);
+ await assert.rejects(service.observeOperation(who,command.operationId),bad(401));
+});
+
+test('damaged original receipt and session invalidation during observation cannot produce a success',async()=>{
+ const who=await f.actor(),command=create();await service.mutate(who,'create',null,command);
+ const original=f.db.withBoundedTransaction.bind(f.db);
+ for(const mode of ['cipher','revoke']){
+  let injected=false;
+  f.db.withBoundedTransaction=async(run,options)=>original(async client=>{
+   const query=client.query.bind(client);
+   const guarded=new Proxy(client,{get(target,key){
+    if(key!=='query')return Reflect.get(target,key);
+    return async(...args:any[])=>{
+     const result=await (query as any)(...args);
+     if(!injected&&typeof args[0]==='string'&&args[0].startsWith('SELECT * FROM platform_memory_operations WHERE user_id=$1 AND operation_id=$2')){
+      injected=true;
+      if(mode==='revoke')await query("UPDATE platform_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE token_hash=$1",[who.tokenHash]);
+      else {const row=result.rows[0],cipher=Buffer.from(row.receipt_ciphertext);cipher[cipher.length-1]^=1;return {...result,rows:[{...row,receipt_ciphertext:cipher}]};}
+     }
+     return result;
+    };
+   }});
+   return run(guarded);
+  },options);
+  try{await assert.rejects(service.observeOperation(who,command.operationId),bad(mode==='cipher'?503:401));assert(injected);}
+  finally{f.db.withBoundedTransaction=original;}
+ }
+ assert.equal((await service.observeOperation(who,command.operationId)).memory?.revision,1);
 });

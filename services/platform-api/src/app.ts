@@ -872,6 +872,13 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/memories`,limitedAccount,async(request,reply)=>{
     const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await sharedMemories.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),cancellation.signal);}finally{cancellation.dispose();}
   });
+  app.get(`${prefix}/memories/operations/:id`,limitedAccount,async(request,reply)=>{
+    reply.header('Cache-Control','private, no-store');
+    if(Object.keys(object(request.query)).length)throw new ApiError(400,'MEMORY_INPUT_INVALID','Unsupported memory operation query.');
+    const cancellation=requestSignal(request,reply);
+    try{return await sharedMemories.observeOperation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}
+    finally{cancellation.dispose();}
+  });
   app.get(`${prefix}/memories/:id`,limitedAccount,async(request,reply)=>{
     if(Object.keys(object(request.query)).length)throw new ApiError(400,'MEMORY_INPUT_INVALID','Unsupported memory query.');
     const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {memory:await sharedMemories.get(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}finally{cancellation.dispose();}

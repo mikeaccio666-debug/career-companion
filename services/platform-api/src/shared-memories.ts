@@ -1,7 +1,7 @@
 import { confirmedMemorySafetyInTransaction } from './shared-memory-safety-protocol.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { parseSharedMemoryRecord, parseSharedMemoryCommand, sharedMemoryId, type SharedMemoryRecord, type SharedMemoryCommand, type SharedMemoryCommandKind } from '@companion/platform-contracts';
+import { parseSharedMemoryObservation, type SharedMemoryRemoval, parseSharedMemoryRecord, parseSharedMemoryCommand, sharedMemoryId, type SharedMemoryRecord, type SharedMemoryCommand, type SharedMemoryCommandKind } from '@companion/platform-contracts';
 import { selectCompanionContextMemories, type ContextMemory, type MemoryContextScope } from '@companion/career-core';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
@@ -170,6 +170,32 @@ export class SharedMemories {
       const chosen=rows.slice(0,p.limit),memories=[];for(const row of chosen)memories.push((await this.decode(client,s,row)).state);
       const last=chosen.at(-1),nextCursor=rows.length>p.limit&&last?Buffer.from(canonical([s.userId,last.page_timestamp,last.id])).toString('base64url'):null;
       await authorizeFixedSession(client,s,signal);return Object.freeze({memories:Object.freeze(memories),hasMore:nextCursor!==null,nextCursor});});
+  }
+  /** Authenticate an immutable receipt and observe its current source without
+   * replaying the command. Missing content alone never proves a user deletion. */
+  async observeOperation(context:FixedSessionContext,value:unknown,signal?:AbortSignal){
+    const s=fixed(context);let operationId:string;try{operationId=sharedMemoryId(value);}catch{throw bad();}
+    return this.db.withBoundedTransaction(async client=>{
+      await this.authorize(client,s,signal);
+      const saved=(await client.query('SELECT * FROM platform_memory_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[s.userId,operationId])).rows[0];
+      if(!saved)throw notFound();const proof=await this.receipt(client,s,saved);
+      const row=await this.row(client,s,proof.memoryId);
+      let memory:Readonly<SharedMemoryRecord>|null=null,removal:SharedMemoryRemoval|null=null;
+      if(row){
+        const {state}=await this.decode(client,s,row);
+        if(state.deletedAt===null)memory=state;
+        else removal={id:state.id,revision:state.revision,deletedAt:state.deletedAt,undoUntil:state.undoUntil!,deletionOperationId:state.deletionOperationId!,purged:false};
+      }else{
+        const latest=(await client.query('SELECT * FROM platform_memory_operations WHERE user_id=$1 AND memory_id=$2 ORDER BY applied_revision DESC LIMIT 1 FOR SHARE',[s.userId,proof.memoryId])).rows[0];
+        if(!latest)throw unavailable();const deleted=await this.receipt(client,s,latest);
+        const undoUntil=new Date(Date.parse(deleted.createdAt)+10000).toISOString();
+        if(deleted.action!=='delete'||deleted.appliedRevision<proof.appliedRevision||undoUntil>await this.time(client))throw unavailable();
+        removal={id:deleted.memoryId,revision:deleted.appliedRevision,deletedAt:deleted.createdAt,undoUntil,deletionOperationId:deleted.operationId,purged:true};
+      }
+      let result;try{result=parseSharedMemoryObservation({ownerId:s.userId,memory,removal,
+        operation:{id:proof.operationId,memoryId:proof.memoryId,action:proof.action,appliedRevision:proof.appliedRevision,replayed:true}});}catch{throw unavailable();}
+      await this.authorize(client,s,signal);return result;
+    });
   }
   async mutate(context:FixedSessionContext,kind:SharedMemoryCommandKind,memoryId:unknown,input:unknown,signal?:AbortSignal) {
     let command:Readonly<SharedMemoryCommand>,id:string|null;
