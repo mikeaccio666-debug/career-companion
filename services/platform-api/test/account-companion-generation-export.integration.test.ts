@@ -46,7 +46,7 @@ test('real answered questionnaire and completed generation export saved personal
  assert.equal(revisions.length,1);assert.equal(revisions[0].summary,preview.summary);assert.deepEqual(revisions[0].samples,preview.samples);assert.equal(revisions[0].generatedBy,'model');
  assert.equal(revisions[0].styleCard,tasks[0].prepared.styleCard);assert.deepEqual(revisions[0].dimensions,tasks[0].prepared.dimensions);assert.equal(revisions[0].dimensions.structure,1);
  assert.equal(calls.length,1);assert.deepEqual(revisions[0].callIds,[calls[0].id]);assert.equal(calls[0].status,'complete');assert.equal(calls[0].usageStatus,'reported');assert.equal(calls[0].inputTokens,34);assert.equal(calls[0].outputTokens,21);
- assert.deepEqual(result.sections.companionOutputBlocks,[]);assert.equal(result.includedTables.length,82);assert(result.includedTables.includes('platform_companion_generation_checkpoints'));assert(result.includedTables.includes('platform_companion_source_prefixes'));assert.equal(result.complete,false);
+ assert.deepEqual(result.sections.companionOutputBlocks,[]);assert.equal(result.includedTables.length,88);assert(result.includedTables.includes('platform_companion_generation_checkpoints'));assert(result.includedTables.includes('platform_companion_source_prefixes'));assert.equal(result.complete,false);
  const text=JSON.stringify(result);for(const secret of [other.who.userId,other.prepared.taskId,p.who.tokenHash,password,encoded,token,'authVersion','seed_ciphertext','payload_ciphertext','lease_token','runtime_lease_id','sourceReceiptDigest','fictional-loopback-only'])assert(!text.includes(secret));
  assert(Object.isFrozen(revisions[0].dimensions));assert(Object.isFrozen(answers[0].answersPartial.Q1));
 });

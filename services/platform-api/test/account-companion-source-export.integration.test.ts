@@ -39,7 +39,7 @@ test('original version-one source manifest links every captured operation withou
  assert.deepEqual(manifest.operations.map((op:any)=>op.operationId),original.payload.operations.map((op:any)=>op.operationId));assert(manifest.operations.length>1);
  assert(!('intakeResources' in manifest));assert.deepEqual(manifest.followups,[]);assert.deepEqual(manifest.handledSubmissionIds,[]);noCredentials(manifest);
  for(const secret of [p.who.tokenHash,other.who.userId,other.taskId,original.row.payload_digest,original.payload.canonicalAnswersDigest,original.payload.canonicalSeedDigest])assert(!JSON.stringify(manifest).includes(secret));
- assert(Object.isFrozen(manifest.operations[0]));assert.equal(result.includedTables.length,82);assert(!result.remainingTables.includes('platform_companion_source_prefixes'));assert(result.remainingTables.includes('platform_onboarding_safety_v2_followups'));assert.equal(result.complete,false);
+ assert(Object.isFrozen(manifest.operations[0]));assert.equal(result.includedTables.length,88);assert(!result.remainingTables.includes('platform_companion_source_prefixes'));assert(result.remainingTables.includes('platform_onboarding_safety_v2_followups'));assert.equal(result.complete,false);
 });
 
 test('real legacy handling keeps publication, presentation and acknowledgment links but drops the nested original session',async()=>{
