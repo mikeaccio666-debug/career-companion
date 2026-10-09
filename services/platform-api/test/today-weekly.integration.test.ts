@@ -111,3 +111,38 @@ test('late session revocation and cancellation never release stale counts',async
  try{await assert.rejects(weekly.read(who),denied(401));}finally{f.db.withBoundedTransaction=original;}
  await assert.rejects(weekly.read(await born(),AbortSignal.abort()));
 });
+
+test('reconfirmation has no second decision and never creates another weekly accomplishment',async()=>{
+ const who=await born();let first:any;
+ await clock('2026-11-02T04:50:00.000Z',async()=>{
+  first=await approved(who);
+  const repeat={...operation(first.item.revision),payloadDigest:first.item.payloadDigest};
+  const again=(await resumes.mutate(who,'approve',first.item.id,repeat,'web')).view!;
+  assert.equal(again.item.approvalOperationId,first.item.approvalOperationId);
+  assert.equal((await f.db.query('SELECT * FROM platform_pending_item_decisions WHERE item_id=$1',[first.item.id])).rowCount,1);
+  assert.equal((await f.db.query("SELECT * FROM platform_pending_item_operations WHERE item_id=$1 AND action='approve'",[first.item.id])).rowCount,2);
+  assert.equal((await weekly.read(who)).resumesConfirmed,1);
+  await resumes.mutate(who,'approve',first.item.id,repeat,'web');
+  assert.equal((await weekly.read(who)).resumesConfirmed,1);
+ });
+ await clock('2026-11-02T05:10:00.000Z',async()=>{
+  await resumes.mutate(who,'approve',first.item.id,{...operation(first.item.revision),payloadDigest:first.item.payloadDigest},'web');
+  assert.equal((await weekly.read(who)).resumesConfirmed,0,'A new-week acknowledgement is not a new confirmed original.');
+  await resumes.mutate(who,'archive',first.item.id,{...operation(first.item.revision),payloadDigest:first.item.payloadDigest},'web');
+  await resumes.mutate(who,'approve',first.item.id,{...operation(first.item.revision),payloadDigest:first.item.payloadDigest},'web');
+  assert.equal((await weekly.read(who)).resumesConfirmed,0);
+  await approved(who);
+  assert.equal((await weekly.read(who)).resumesConfirmed,1);
+ });
+});
+
+test('a missing first approval decision is still corruption, even when a later acknowledgement exists',async()=>{
+ const who=await born(),first=await approved(who);
+ await resumes.mutate(who,'approve',first.item.id,{...operation(first.item.revision),payloadDigest:first.item.payloadDigest},'web');
+ await f.db.withBoundedTransaction(async c=>{
+  await c.query('ALTER TABLE platform_pending_item_decisions DISABLE TRIGGER pending_decision_immutable');
+  await c.query('DELETE FROM platform_pending_item_decisions WHERE item_id=$1',[first.item.id]);
+  await c.query('ALTER TABLE platform_pending_item_decisions ENABLE TRIGGER pending_decision_immutable');
+ });
+ await assert.rejects(weekly.read(who),denied(503));
+});

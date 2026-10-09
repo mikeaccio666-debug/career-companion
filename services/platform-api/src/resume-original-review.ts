@@ -213,19 +213,31 @@ export class ResumeOriginalReview {
     AND o.created_at<=$4::timestamptz ORDER BY o.created_at,o.operation_id LIMIT 1001 FOR SHARE OF o,p`,
    [context.userId,w.timeZone,w.weekStart,w.capturedAt])).rows;
   if(rows.length>1000)throw unavailable();
-  const records=new Map<string,Readonly<ResumeReviewView>>();
+  const records=new Map<string,Readonly<ResumeReviewView>>(),confirmed=new Set<string>();
   for(const row of rows){
    signal?.throwIfAborted();const receipt=await this.receipt(client,context,row);
-   if(receipt.action!=='approve'||receipt.recordDigest===null||row.decision!=='approved'||row.channel!=='web'
-    ||row.decision_at?.toISOString()!==receipt.createdAt
-    ||receipt.requestDigest!==workflowHash({action:'approve',itemId:receipt.itemId,command:{operationId:receipt.operationId,expectedRevision:row.revision,payloadDigest:row.payload_digest}}))throw unavailable();
    let view=records.get(receipt.itemId);
    if(!view){const current=await this.row(client,context,receipt.itemId);if(!current)throw unavailable();view=await this.decode(client,context,current);records.set(receipt.itemId,view);}
-   if(receipt.generation>view.item.generation||row.revision>view.item.revision
+   const item=view.item;
+   // A new operation ID can legitimately acknowledge an already-approved
+   // original. write() retains the first decision and does not create another.
+   // Authenticate that acknowledgement, but never treat its time as new work.
+   if(receipt.action!=='approve'||receipt.recordDigest===null||item.approvalOperationId===null
+    ||item.approvedRevision===null||item.approvedDigest===null||item.approvedAt===null
+    ||receipt.generation>item.generation||receipt.createdAt<item.approvedAt||receipt.createdAt>item.updatedAt
+    ||receipt.requestDigest!==workflowHash({action:'approve',itemId:receipt.itemId,
+     command:{operationId:receipt.operationId,expectedRevision:item.approvedRevision,payloadDigest:item.approvedDigest}}))throw unavailable();
+   if(receipt.operationId!==item.approvalOperationId){
+    if(row.decision!==null||row.decision_at!==null)throw unavailable();
+    continue;
+   }
+   if(row.decision!=='approved'||row.channel!=='web'||row.decision_at?.toISOString()!==receipt.createdAt
+    ||row.revision!==item.approvedRevision||row.payload_digest!==item.approvedDigest
     ||workflowHash(await this.payload(client,context,receipt.itemId,row.revision))!==row.payload_digest)throw unavailable();
+   confirmed.add(receipt.itemId);
   }
   if(records.size>500)throw unavailable();await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
-  return Object.freeze({ownerId:context.userId,count:records.size});
+  return Object.freeze({ownerId:context.userId,count:confirmed.size});
  }
  async get(value:FixedSessionContext,key:unknown,byResume=false,signal?:AbortSignal){const context=this.fixed(value);let id:string;try{id=careerRecordId(key);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{const auth=await this.authorize(client,context,signal),row=await this.row(client,context,id,byResume);if(!row)throw missing();return this.current(client,context,row,auth,signal);});
