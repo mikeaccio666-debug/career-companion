@@ -1,3 +1,4 @@
+import { CompanionPaidSettingsPage } from './companion-paid-settings-view';
 import { applicationRoute } from './career-application-route';
 import { MentorIntentPage } from './mentor-intent-view';
 import { OrgSourcePage } from './org-source-view';
@@ -776,6 +777,7 @@ function AccountEntryApp() {
   if (window.location.pathname === '/journey/targets' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerTargetPage onLogout={() => void logout()} />;
   if ((window.location.pathname === '/me/mentors' || window.location.pathname === '/community/mentors') && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <MentorIntentPage onLogout={() => void logout()} />;
   if (window.location.pathname === '/me/profile' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CareerIdentityPage onLogout={() => void logout()} />;
+  if (window.location.pathname === '/me/companion' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <CompanionPaidSettingsPage key={`${user.id}:${accountClient.account.generation}`} onLogout={() => void logout()} />;
   if (window.location.pathname === '/me/memory' && accountClient?.isCurrent() && accountClient.account.accountId===user.id) return <SharedMemoryPage onLogout={() => void logout()} />;
   if (!accountReady) return <AccountGate key={accountScope.current.revision} user={user} options={authOptions} onVerified={verifiedAccount} onLogout={() => void logout()} serverError={error}  />;
   if (!consentCurrent) return <AccountConsentView key={`consent-${accountScope.current.revision}`} user={user} options={authOptions} consent={consent} checking={checkingConsent} serverError={error} onRetry={() => void connectWorkspace(true)} onConsented={(status) => { if (accountClient?.isCurrent() && accountScope.current.isCurrent(renderSession) && isCurrentStudentConsent(authOptions, user.id, status)) setConsent(status); }} onLogout={() => void logout()} />;

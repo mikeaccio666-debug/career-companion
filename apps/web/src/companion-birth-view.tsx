@@ -44,6 +44,7 @@ export function CompanionBirthView({ client, observation, name, sealChar, availa
         <div><span className="onboarding-ai">你的主理人 · AI</span><h2>{active.identity.name}</h2></div></header>
       <p className="companion-birth-event" role="status">—— {new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(active.bornAt))} · {active.identity.name}诞生 ——</p>
       <p>你的主理人已经诞生，名字和印章都保存好了。</p>
+      <a href="/me/companion" className="onboarding-link">主理人设置</a>
       <CompanionWelcomeView client={client} companionId={active.companionId} paused={supportBlocked} />
       <nav className="mentor-human-group" aria-label="真人与社区"><h2>真人与社区</h2><MentorHumanEntry/></nav>
     </> : <>
