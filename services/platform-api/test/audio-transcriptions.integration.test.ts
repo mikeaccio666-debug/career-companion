@@ -15,7 +15,7 @@ import { Database } from '../src/database.ts';
 import { LocalBlobStorage, type BlobReadOptions } from '../src/storage.ts';
 
 const prefix = '/api/platform', origin = 'http://localhost:4321';
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'audio-chat-fixture', PLATFORM_AGENT_PROVIDER: 'audio-chat-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `audio_receipts_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_DATA_KEY:'b8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'audio-chat-fixture', PLATFORM_AGENT_PROVIDER: 'audio-chat-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `audio_receipts_${randomUUID().replaceAll('-', '')}`;
 const databaseUrl = new URL(base.databaseUrl);
 assert(['localhost', '127.0.0.1', '[::1]'].includes(databaseUrl.hostname), 'Audio receipt fixtures require a loopback PostgreSQL instance.');
 databaseUrl.searchParams.set('options', `-c search_path=${schema}`);

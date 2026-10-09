@@ -14,7 +14,7 @@ import { VOICE_HISTORY_LIMITS } from '../src/voice-history.ts';
 
 const prefix='/api/platform', origin='http://localhost:4321';
 const schema=`voice_history_test_${randomUUID().replaceAll('-','')}`;
-const config=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai', PLATFORM_REALTIME_PROVIDER: 'openai', PLATFORM_TRANSCRIPTION_PROVIDER: 'openai', PLATFORM_SPEECH_PROVIDER: 'openai' ,PLATFORM_REQUIRE_INVITE:'1'}), admin=new Database(config.databaseUrl);
+const config=readConfig({ ...process.env, PLATFORM_DATA_KEY:'b8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai', PLATFORM_REALTIME_PROVIDER: 'openai', PLATFORM_TRANSCRIPTION_PROVIDER: 'openai', PLATFORM_SPEECH_PROVIDER: 'openai' ,PLATFORM_REQUIRE_INVITE:'1'}), admin=new Database(config.databaseUrl);
 const url=new URL(config.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());
 let system:Awaited<ReturnType<typeof buildApp>>,directory:string,actorCount=0;

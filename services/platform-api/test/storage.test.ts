@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { Readable } from 'node:stream';
-import { HeadObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { HeadObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { LocalBlobStorage, S3BlobStorage, validateUpload } from '../src/storage.ts';
 
 const config={bucket:'synthetic-bucket',region:'us-east-1',accessKeyId:'synthetic-access',secretAccessKey:'synthetic-secret'};
@@ -180,3 +180,12 @@ test('official S3 SDK uses real local HTTP streams, conditional ranges and socke
     assert.equal(head,2);assert.equal(get,2);
   }finally{sdk.destroy();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });
+
+test('private writes propagate actual abort signals and pre-aborted writes perform no local or SDK I/O',async()=>fixture(async(storage,directory)=>{
+  const controller=new AbortController();controller.abort();
+  await assert.rejects(storage.put('cancelled',Buffer.from('Fictional'),'text/plain',controller.signal));assert.deepEqual(await fs.readdir(directory),[]);
+  let calls=0;const live=new AbortController();
+  const remote=new S3BlobStorage(config,client((command,options)=>{calls++;assert(command instanceof PutObjectCommand);assert.equal(options?.abortSignal,live.signal);return {};}));
+  await assert.rejects(remote.put('cancelled',Buffer.from('Fictional'),'text/plain',controller.signal));assert.equal(calls,0);
+  await remote.put('fictional',Buffer.from('Fictional'),'text/plain',live.signal);assert.equal(calls,1);
+}));

@@ -13,7 +13,7 @@ import { Database } from '../src/database.ts';
 import { ApiError } from '../src/errors.ts';
 
 const prefix='/api/platform',origin='http://localhost:4321';
-const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai', PLATFORM_REALTIME_PROVIDER: 'openai', PLATFORM_TRANSCRIPTION_PROVIDER: 'openai', PLATFORM_SPEECH_PROVIDER: 'openai' ,PLATFORM_REQUIRE_INVITE:'1'}),schema=`voice_provider_test_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl);
+const base=readConfig({ ...process.env, PLATFORM_DATA_KEY:'b8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'openai', PLATFORM_AGENT_PROVIDER: 'openai', PLATFORM_REALTIME_PROVIDER: 'openai', PLATFORM_TRANSCRIPTION_PROVIDER: 'openai', PLATFORM_SPEECH_PROVIDER: 'openai' ,PLATFORM_REQUIRE_INVITE:'1'}),schema=`voice_provider_test_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl);
 const databaseUrl=new URL(base.databaseUrl);databaseUrl.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(databaseUrl.toString());
 let system:Awaited<ReturnType<typeof buildApp>>,directory:string,actorCount=0;
@@ -276,4 +276,16 @@ test('malformed realtime voice or turn-taking is rejected before usage and lease
     assert.deepEqual(await state(actor),{leases:0,usage:0,sessions:0});
   }
   assert.equal(calls.length,beforeCalls);
+});
+
+test('speech refuses unavailable durable storage before any provider call or voice lease',async()=>{
+  const actor=await register(),before=calls.length;
+  const unconfigured=await buildApp({legalBundle:FICTIONAL_LEGAL,db,config:{...base,dataCrypto:undefined,databaseUrl:databaseUrl.toString(),storageDir:directory,s3:undefined},runtime,enableQueue:false});
+  try{
+    const result=await unconfigured.app.inject({method:'POST',url:prefix+'/voice/speech',remoteAddress:actor.ip,
+      headers:{origin,cookie:actor.cookie,[PLATFORM_ACCOUNT_HEADER]:actor.user.id},payload:{text:'Fictional speech request'}});
+    assert.equal(result.statusCode,503);assert.equal(result.json().error.code,'UPLOAD_WRITE_UNAVAILABLE');assert.equal(calls.length,before);
+    assert.equal((await db.query('SELECT 1 FROM platform_runtime_leases WHERE user_id=$1',[actor.user.id])).rowCount,0);
+    assert.equal((await db.query('SELECT 1 FROM platform_upload_writes WHERE user_id=$1',[actor.user.id])).rowCount,0);
+  }finally{await unconfigured.app.close();}
 });

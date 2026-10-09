@@ -47,3 +47,10 @@ web的pre-deploy只阻塞该web服务，不保证worker先等迁移完成。首�
 ## 验收边界
 
 已在独立虚构PG／Redis的Linux ARM64容器通过迁移、web／worker启动、nonroot＋只读rootfs、同源静态／API边界、cookie／Origin及匿名文件拒绝。HTTP仅映射localhost，fixture随后清理；S3为虚构HTTPS配置，未证明bucket连接。本地Docker启动不能证明Render发布、真实HTTPS入口、目标AMD64、R2／S3、托管队列、负载或恢复目标已通过。目标环境仍需流式取消／恢复、私人媒体Range、运行中worker中断、PITR及发布回退验收。过程与结果记录在 [验证文档](../../../docs/platform/verification.md)。
+
+
+### 私有文件写入日志（迁移 079）
+
+网页上传与 `/voice/speech` 文件保存现在也要求 API 和 worker 配置同一个 `PLATFORM_DATA_KEY`。未配置时返回明确的上传不可用错误，不先写出文件。写入前保存加密坐标与事件，成功发布在同一事务内登记 upload 并移除暂存日志；失败或中断后的日志由 worker 恢复。执行器的 job/workflow/browser 产物写入尚未接入这一协议，不能据此宣称所有存储路径已经覆盖。
+
+首次升级先迁移，再启动匹配版本的 API/worker；不要在这项账号删除准备工作中运行旧写入器。已确认完成、未发布的写入在确认物理文件消失后清除日志；供应商返回结果不明或进程失去回执的写入保留日志并重复清理，单次 404 不代表彻底完成。这些未知结果仍需要可信的存储/进程对账流程，不能靠超时删除日志或宣布账号删除完成。历史未登记文件、对象版本和备份也不在本次覆盖范围。
