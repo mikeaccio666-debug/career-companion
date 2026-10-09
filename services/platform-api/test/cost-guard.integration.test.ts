@@ -15,7 +15,7 @@ let created = false;
 before(async () => { await admin.query(`CREATE SCHEMA ${schema}`); created = true; await db.migrate(); });
 after(async () => { try { await db.close(); } finally { try { if (created) await admin.query(`DROP SCHEMA ${schema} CASCADE`); } finally { await admin.close(); } } });
 beforeEach(async () => {
-  await db.query('DELETE FROM platform_cost_ledger'); await db.query('DELETE FROM platform_cost_reservations');
+  await db.query('DELETE FROM platform_deleted_account_cost_daily'); await db.query('DELETE FROM platform_cost_ledger'); await db.query('DELETE FROM platform_cost_reservations');
   await db.query('DELETE FROM platform_cost_user_policy'); await db.query('DELETE FROM platform_cost_global_policy');
   await db.query('DELETE FROM platform_model_prices');
 });
@@ -271,11 +271,12 @@ test('deleted owners retain anonymous estimated expenditure without relaxing any
   const userId = await fixture(), r = allowed(await guard.reserve(input(userId))); await admit(r);
   await guard.commit(r.binding, { status: 'missing' });
   await db.query('DELETE FROM platform_users WHERE id=$1', [userId]);
-  const cost = await ledger(r); assert.equal(cost.user_id, null); assert.equal(cost.cost_micros, '20'); assert.equal(cost.estimated, true);
-  assert.equal((await row(r)).user_id, null);
+  assert.equal(await ledger(r), undefined); assert.equal(await row(r), undefined);
+  const cost = (await db.query('SELECT cost_micros::text,estimated_micros::text FROM platform_deleted_account_cost_daily')).rows[0];
+  assert.equal(cost.cost_micros, '20'); assert.equal(cost.estimated_micros, '20');
   await assert.rejects(guard.commit(r.binding, { status: 'reported', inputTokens: 1, outputTokens: 1 }), denied);
   await assert.rejects(admit(r), denied); await assert.rejects(guard.release(r.binding), denied);
-  assert.equal((await ledger(r)).cost_micros, '20');
+  assert.deepEqual((await db.query('SELECT cost_micros::text,estimated_micros::text FROM platform_deleted_account_cost_daily')).rows[0], cost);
 });
 test('reservation and settlement COMMIT failure returns no money receipt and rolls back every partial row', async () => {
   const userId = await fixture(); let made = false;
