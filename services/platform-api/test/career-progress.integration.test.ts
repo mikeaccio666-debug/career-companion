@@ -39,6 +39,7 @@ test('actual project and application sources derive one owner snapshot without t
     a = await stage(who, a, { stage: 'applied' });
     const ledger = await evidence(who), snapshot = await progress.read(who);
     assert.deepEqual(snapshot.progress, careerProgress(who.userId, ledger));
+    assert.equal(snapshot.ownerId, who.userId);
     assert.deepEqual(snapshot.coverage, ['project', 'application']);
     assert.equal(snapshot.progress.counts.project, 1);
     assert.equal(snapshot.progress.provisionalCounts.application, 1);
