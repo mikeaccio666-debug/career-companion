@@ -191,8 +191,11 @@ export class CostGuard {
   }
   private async sums(client: PoolClient, userId: string | null, from: Date, until: Date, daily = false) {
     const result = (await client.query(`SELECT
-      COALESCE((SELECT sum(cost_micros) FROM platform_cost_ledger WHERE ($1::uuid IS NULL OR user_id=$1)
-        AND created_at>=$2 AND created_at<$3 AND (NOT $4::boolean OR capability IN ('chat','background'))),0)::text AS settled,
+      (COALESCE((SELECT sum(cost_micros) FROM platform_cost_ledger WHERE ($1::uuid IS NULL OR user_id=$1)
+        AND created_at>=$2 AND created_at<$3 AND (NOT $4::boolean OR capability IN ('chat','background'))),0)
+      + COALESCE((SELECT sum(cost_micros) FROM platform_deleted_account_cost_daily WHERE $1::uuid IS NULL
+        AND day>=($2::timestamptz AT TIME ZONE 'UTC')::date AND day<($3::timestamptz AT TIME ZONE 'UTC')::date
+        AND (NOT $4::boolean OR capability IN ('chat','background'))),0))::text AS settled,
       COALESCE((SELECT sum(estimate_micros) FROM platform_cost_reservations WHERE ($1::uuid IS NULL OR user_id=$1)
         AND status IN ('reserved','admitted')),0)::text AS reserved`, [userId, from, until, daily])).rows[0];
     return { settled: money(result.settled), reserved: money(result.reserved) };

@@ -848,3 +848,40 @@ test('actual generation uses cache rates for settlement, replay and authenticate
     }
   } finally { await db.query("UPDATE platform_model_prices SET micros_per_unit=1 WHERE unit IN ('cached_input_token','cache_write_input_token')"); }
 });
+
+test('account deletion aggregates actual completed generation costs and erases its source graph without weakening live-owner foreign keys', async () => {
+  await loopback((_body, reply) => respond(reply), async runtime => {
+    const {who,prepared}=await ready(runtime), service=generator(runtime);
+    await service.generate(who,{taskId:prepared.taskId});
+    const current=await stored(who), reservationId=current.reservations[0].id;
+    const total=async()=>BigInt((await db.query('SELECT coalesce(sum(cost_micros),0)::text n FROM platform_deleted_account_cost_daily')).rows[0].n);
+    const before=await total();
+    await assert.rejects(db.transaction(async c=>{
+      await c.query('DELETE FROM platform_cost_ledger WHERE reservation_id=$1',[reservationId]);
+      await c.query('DELETE FROM platform_cost_reservations WHERE id=$1',[reservationId]);
+    })); // The deferred FK still rejects an orphaned live generation at COMMIT.
+    assert.equal((await stored(who)).costs.length,1);
+    await db.query('DELETE FROM platform_users WHERE id=$1',[who.userId]);
+    const after=await stored(who);
+    for(const key of ['companions','answers','tasks','calls','revisions','reservations','costs','leases','blocks'] as const)assert.equal(after[key].length,0);
+    assert.equal(await total(),before+BigInt(current.costs[0].cost_micros));
+    await assert.rejects(service.read(who,{taskId:prepared.taskId}));
+  });
+});
+
+test('account deletion during an actual pending model response keeps only the anonymous estimate and fences late completion', async () => {
+  let who!:FixedSessionContext, estimate=0n;
+  const total=async()=>BigInt((await db.query('SELECT coalesce(sum(cost_micros),0)::text n FROM platform_deleted_account_cost_daily')).rows[0].n);
+  await loopback(async(_body,reply)=>{
+    const current=await stored(who);assert.equal(current.reservations.length,1);
+    assert.equal(current.costs.length,0);assert.equal(current.reservations[0].status,'admitted');
+    estimate=BigInt(current.reservations[0].estimate_micros);
+    await db.query('DELETE FROM platform_users WHERE id=$1',[who.userId]);respond(reply);
+  },async(runtime,bodies)=>{
+    const f=await ready(runtime);who=f.who;const before=await total();
+    await assert.rejects(generator(runtime).generate(who,{taskId:f.prepared.taskId}));
+    assert.equal(bodies.length,1);assert(estimate>0n);assert.equal(await total(),before+estimate);
+    const current=await stored(who);
+    for(const key of ['tasks','calls','revisions','reservations','costs','leases'] as const)assert.equal(current[key].length,0);
+  });
+});
