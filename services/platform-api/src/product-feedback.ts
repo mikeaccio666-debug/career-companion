@@ -79,15 +79,39 @@ export class ProductFeedbackService {
     const row=(await c.query('SELECT * FROM platform_product_feedback WHERE user_id=$1 AND id=$2 FOR SHARE',[s.userId,r.feedbackId])).rows[0];
     if(!row)throw unavailable();const feedback=await this.decode(c,row);await authorizeFixedSession(c,s,signal);signal?.throwIfAborted();return this.result(feedback,r,true);
    }
+   if(command.recipientId!==org)throw new ApiError(409,'FEEDBACK_RECIPIENT_CHANGED','Review the current feedback recipient before submitting.');
    // Do not say "submitted" when no active support organization/operator exists.
    const orgRow=(await c.query("SELECT id FROM platform_orgs WHERE id=$1 AND status='active' FOR SHARE",[org])).rows[0];if(!orgRow)throw unavailable();
    const recipient=(await c.query(`SELECT r.user_id FROM platform_org_roles r JOIN platform_users u ON u.id=r.user_id
     WHERE r.org_id=$1 AND r.status='active' AND r.role IN ('ops','org_admin') AND u.account_kind='staff' ORDER BY r.user_id LIMIT 1 FOR SHARE OF r,u`,[org])).rows[0];if(!recipient)throw unavailable();
    if((await c.query('SELECT count(*)::int count FROM platform_product_feedback WHERE user_id=$1',[s.userId])).rows[0].count>=500)throw new ApiError(409,'FEEDBACK_CAPACITY','The feedback limit has been reached.');
    const at=(await c.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
-   const {operationId,...fields}=command;
+   const {operationId,recipientId,...fields}=command;
    const p=parseProductFeedback({...fields,id:randomUUID(),ownerId:s.userId,organizationId:org,revision:1,lastOperationId:operationId,status:'submitted',triage:null,createdAt:at,updatedAt:at,updates:[]});
    await this.persist(c,p,commandDigest);await this.events.record(c,s.userId,command.operationId,{event:'feedback_submitted',props:{category:command.category}});await authorizeFixedSession(c,s,signal);signal?.throwIfAborted();return this.result(p,undefined,false);
+  });
+ }
+
+ async availability(value:FixedSessionContext,signal?:AbortSignal){
+  const s=fixed(value),org=this.organizationId;
+  return this.db.withBoundedTransaction(async c=>{
+   await this.owner(c,s,signal);
+   const row=org?(await c.query(`SELECT o.id,o.display_name FROM platform_orgs o WHERE o.id=$1 AND o.status='active'
+    AND EXISTS(SELECT 1 FROM platform_org_roles r JOIN platform_users u ON u.id=r.user_id
+     WHERE r.org_id=o.id AND r.status='active' AND r.role IN ('ops','org_admin') AND u.account_kind='staff') FOR SHARE OF o`,[org])).rows[0]:undefined;
+   await authorizeFixedSession(c,s,signal);signal?.throwIfAborted();
+   if(row&&(typeof row.display_name!=='string'||!row.display_name.trim()||row.display_name.length>200))throw unavailable();
+   return Object.freeze({available:!!row,recipient:row?Object.freeze({id:careerRecordId(row.id),name:row.display_name}):null});
+  });
+ }
+ async observe(value:FixedSessionContext,id:unknown,signal?:AbortSignal){
+  const s=fixed(value),key=input(()=>careerRecordId(id));
+  return this.db.withBoundedTransaction(async c=>{
+   await this.owner(c,s,signal);
+   const op=(await c.query('SELECT * FROM platform_product_feedback_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[s.userId,key])).rows[0];if(!op)throw missing();
+   const receipt=this.receipt(op),row=(await c.query('SELECT * FROM platform_product_feedback WHERE user_id=$1 AND id=$2 FOR SHARE',[s.userId,receipt.feedbackId])).rows[0];
+   if(!row)throw unavailable();const feedback=await this.decode(c,row);
+   await authorizeFixedSession(c,s,signal);signal?.throwIfAborted();return this.result(feedback,receipt,true);
   });
  }
  async get(value:FixedSessionContext,id:unknown,signal?:AbortSignal){

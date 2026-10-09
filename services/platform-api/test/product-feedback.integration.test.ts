@@ -13,10 +13,12 @@ import {ACCOUNT_DATA_SCHEMA} from '../src/account-data-schema.ts';
 import type {Database} from '../src/database.ts';
 let f:Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>;
 before(async()=>{f=await createCompanionNameSafetyFixture();});after(async()=>{await f?.close();});
-const submit=()=>({operationId:randomUUID(),category:'incorrect',surface:'conversation',description:'FICTIONAL_PRIVATE_REPORT',sharedExcerpt:null,shareWithSupport:true});
+let recipientId=randomUUID();
+const submit=()=>({operationId:randomUUID(),recipientId,category:'incorrect',surface:'conversation',description:'FICTIONAL_PRIVATE_REPORT',sharedExcerpt:null,shareWithSupport:true});
 const update=(expectedRevision=1)=>({operationId:randomUUID(),expectedRevision,status:'in_review',triage:'quality',reply:'FICTIONAL_PRIVATE_REPLY'});
 async function setup(){
  const owner=await f.actor(),other=await f.actor(),authority=await f.identityAuthority();
+ recipientId=authority.orgId;
  const config={...f.config,supportOrganizationId:authority.orgId,productEventsEnabled:true};
  return {owner,other,authority,config,service:new ProductFeedbackService(f.db,config)};
 }
@@ -74,11 +76,11 @@ test('only configured organization ops can read and update; audits contain no fe
  await assert.rejects(service.update(authority.operator,p.id,update(3)),{code:'STAFF_ROLE_REQUIRED'});
 });
 test('student cannot update status, inactive organizations reject and foreign feedback remains inaccessible',async()=>{
- const a=await setup(),b=await setup(),p=(await a.service.submit(a.owner,submit())).feedback;
+ const a=await setup(),b=await setup(),p=(await a.service.submit(a.owner,{...submit(),recipientId:a.authority.orgId})).feedback;
  await assert.rejects(a.service.update(a.owner,p.id,update()),{code:'STAFF_ROLE_REQUIRED'});
  await assert.rejects(b.service.update(b.authority.operator,p.id,update()),{code:'NOT_FOUND'});
  await f.db.query("UPDATE platform_orgs SET status='disabled' WHERE id=$1",[a.authority.orgId]);
- await assert.rejects(a.service.submit(a.owner,submit()),{code:'FEEDBACK_UNAVAILABLE'});
+ await assert.rejects(a.service.submit(a.owner,{...submit(),recipientId:a.authority.orgId}),{code:'FEEDBACK_UNAVAILABLE'});
  await assert.rejects(a.service.inbox(a.authority.operator),{code:'STAFF_ROLE_REQUIRED'});
  assert.equal((await a.service.get(a.owner,p.id)).id,p.id);
 });
@@ -170,4 +172,23 @@ test('telemetry opt-out preserves feedback and audit failure does not publish a 
  await assert.rejects(new ProductFeedbackService(db,config).update(authority.operator,p.id,update()),e=>e===fail);
  assert.equal((await service.get(owner,p.id)).revision,1);
  assert.equal((await f.db.query('SELECT 1 FROM platform_product_feedback_operations WHERE feedback_id=$1',[p.id])).rowCount,1);
+});
+
+test('availability exposes only an active configured recipient and rejects stale recipient consent without persisting',async()=>{
+ const {owner,authority,service}=await setup();
+ const a=await service.availability(owner);assert.equal(a.available,true);assert.equal(a.recipient?.id,authority.orgId);
+ assert(!JSON.stringify(a).includes(authority.operator.userId));
+ await assert.rejects(service.submit(owner,{...submit(),recipientId:randomUUID()}),{code:'FEEDBACK_RECIPIENT_CHANGED'});
+ assert.equal((await service.list(owner)).records.length,0);
+ const off=await new ProductFeedbackService(f.db,f.config).availability(owner);assert.deepEqual(off,{available:false,recipient:null});
+});
+test('read-only operation observation returns the current owner record without submitting or granting another owner access',async()=>{
+ const {owner,other,authority,service}=await setup(),body=submit();
+ await assert.rejects(service.observe(owner,body.operationId),{code:'NOT_FOUND'});
+ const p=(await service.submit(owner,body)).feedback;
+ await service.update(authority.operator,p.id,{...update(),status:'resolved',reply:'Fictional resolved reply'});
+ const seen=await service.observe(owner,body.operationId);
+ assert.equal(seen.operation.replayed,true);assert.equal(seen.operation.appliedRevision,1);assert.equal(seen.feedback.revision,2);assert.equal(seen.feedback.status,'resolved');
+ await assert.rejects(service.observe(other,body.operationId),{code:'NOT_FOUND'});
+ assert.equal((await f.db.query('SELECT 1 FROM platform_product_feedback WHERE user_id=$1',[owner.userId])).rowCount,1);
 });
