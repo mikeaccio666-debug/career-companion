@@ -19,7 +19,7 @@ export class MentorFinancialLedger {
     !['paid','refunded_partial','refunded_full'].includes(v.status as string)||v.status!==(refundedCents===0?'paid':refundedCents===priceCents?'refunded_full':'refunded_partial'))throw Error();
    externalPaymentRef(v.paymentRef);const paidAt=mentorServiceTime(v.paidAt),updatedAt=mentorServiceTime(v.updatedAt);if(paidAt>updatedAt||updatedAt>=mentorServiceTime(v.retentionUntil))throw Error();
    const latest=(await c.query('SELECT * FROM platform_mentor_financial_proofs WHERE record_id=$1 ORDER BY revision DESC LIMIT 1 FOR SHARE',[row.id])).rows[0];
-   if(!latest||latest.revision!==row.revision)throw Error();
+   if(!latest||latest.record_id!==row.id||latest.revision!==row.revision)throw Error();
    const proof=careerRecordObject(this.crypto.open('mentor_financial_proof',row.id,row.id,row.revision,latest.proof_ciphertext),['digest','action','externalRefHash']);if(proof.digest!==digest(v)||proof.action!==latest.action||proof.externalRefHash!==latest.external_ref_hash)throw Error();return v;
   }catch{throw new ApiError(503,'MENTOR_FINANCE_STORAGE_UNAVAILABLE','暂时无法确认账务记录。');}
  }
@@ -42,6 +42,27 @@ export class MentorFinancialLedger {
   const row=(await c.query('SELECT * FROM platform_mentor_financial_records WHERE id=$1 FOR SHARE',[order.id])).rows[0];
   if(!row)throw new ApiError(503,'MENTOR_FINANCE_STORAGE_UNAVAILABLE','暂时无法确认账务记录。');const v=await this.decode(c,row);
   if(v.priceCents!==order.priceCents||v.paymentRef!==order.paymentRef||v.handoffCode!==order.handoffCode||v.refundedCents!==order.payment?.refundedCents||v.status!==order.status||v.updatedAt!==order.updatedAt)throw new ApiError(503,'MENTOR_FINANCE_STORAGE_UNAVAILABLE','暂时无法确认账务记录。');
+ }
+ /** Only for an existing, already validated owner order. Detached retention rows
+  * must never be recovered by payment reference or attribution code. */
+ async historyInTransaction(c:PoolClient,order:MentorOrder,commands:readonly Readonly<MentorPaymentCommand>[]){
+  try{
+   if(!order.payment||commands.length!==order.revision-1)throw Error();
+   await this.verifyInTransaction(c,order);
+   const row=(await c.query('SELECT * FROM platform_mentor_financial_records WHERE id=$1 FOR SHARE',[order.id])).rows[0];
+   if(!row||row.id!==order.id||row.revision!==commands.length)throw Error();
+   const v=await this.decode(c,row),proofs=(await c.query('SELECT * FROM platform_mentor_financial_proofs WHERE record_id=$1 ORDER BY revision FOR SHARE',[order.id])).rows;
+   if(proofs.length!==commands.length||v.paidAt!==order.payment.paidAt)throw Error();
+   const operations=proofs.map((p,i)=>{
+    const command=commands[i],revision=i+1;
+    const value=careerRecordObject(this.crypto.open('mentor_financial_proof',order.id,order.id,revision,p.proof_ciphertext),['digest','action','externalRefHash']);
+    if(p.record_id!==order.id||p.revision!==revision||p.action!==command.action||value.action!==p.action||value.externalRefHash!==p.external_ref_hash||
+     p.external_ref_hash!==createHash('sha256').update(command.externalRef).digest('hex')||typeof value.digest!=='string'||!/^[0-9a-f]{64}$/.test(value.digest))throw Error();
+    return {recordId:order.id,revision,action:command.action,orderOperationId:command.operationId};
+   });
+   return {record:{id:order.id,revision:row.revision,priceCents:v.priceCents,refundedCents:v.refundedCents,currency:v.currency,paymentRef:v.paymentRef,
+    paidAt:v.paidAt,updatedAt:v.updatedAt,status:v.status,retentionUntil:v.retentionUntil},operations};
+  }catch{throw new ApiError(503,'MENTOR_FINANCE_STORAGE_UNAVAILABLE','暂时无法确认账务记录。');}
  }
  async purgeExpired(db:Database,signal?:AbortSignal){
   return db.withBoundedTransaction(async c=>{
