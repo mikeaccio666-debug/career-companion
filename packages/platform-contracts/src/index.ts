@@ -340,3 +340,6 @@ export * from './companion-paid-settings.ts';
 export * from './resume-diff.ts';
 
 export * from './career-progress.ts';
+
+export { ACCOUNT_PRIVACY_PURPOSES, accountPrivacyPurpose, parseAccountReauthentication } from './account-privacy.ts';
+export type { AccountPrivacyPurpose, AccountReauthentication, AccountPrivacyProof } from './account-privacy.ts';
