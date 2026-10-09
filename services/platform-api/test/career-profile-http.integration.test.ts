@@ -39,3 +39,18 @@ test('account binding, CSRF, session and closed inputs reject forged ownership a
  for(const path of [prefix,prefix+'/operations/'+payload.operationId]){assert.equal((await system.app.inject({url:path+'?ownerId='+b.id,headers:a.headers})).statusCode,400);assert.equal((await system.app.inject({url:path})).statusCode,401);}
  assert.equal((await system.app.inject({method:'DELETE',url:prefix,headers:b.headers,payload:{operationId:randomUUID(),expectedRevision:0,ownerId:a.id}})).statusCode,400);
 });
+
+test('the current onboarding HTTP path writes the profile immediately and original answer retries cannot undo a later deletion',async()=>{
+ const a=await actor(),url='/api/platform/onboarding';
+ const start=await system.app.inject({method:'PATCH',url,headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:0,action:{kind:'start',mode:'standard'}}});
+ assert.equal(start.statusCode,200,start.body);
+ const payload={operationId:randomUUID(),expectedRevision:1,action:{kind:'answer',questionId:'study',value:{degreeField:'ds_statistics',programChoice:null}}};
+ const answer=await system.app.inject({method:'PATCH',url,headers:a.headers,payload});assert.equal(answer.statusCode,200,answer.body);
+ const read=await system.app.inject({url:prefix,headers:a.headers});assert.equal(read.statusCode,200,read.body);
+ assert.equal(read.json().profile.degreeField,'ds_statistics');assert.equal(read.json().profile.graduationMonth,null);
+ assert.deepEqual(read.json().profile.intakeSource,{draftId:answer.json().result.draft.id,revision:2});
+ const deleted=await system.app.inject({method:'DELETE',url:prefix,headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:1}});
+ assert.equal(deleted.statusCode,200,deleted.body);
+ const retry=await system.app.inject({method:'PATCH',url,headers:a.headers,payload});assert.equal(retry.statusCode,200,retry.body);assert.equal(retry.json().result.operation.replayed,true);
+ assert.equal((await system.app.inject({url:prefix,headers:a.headers})).json().profile,null);
+});

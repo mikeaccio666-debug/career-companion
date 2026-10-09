@@ -1,3 +1,4 @@
+import { CareerProfiles } from './career-profiles.ts';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { OnboardingDraft, OnboardingFollowupResult, OnboardingFollowupState } from '@companion/platform-contracts';
@@ -41,8 +42,10 @@ function capturedInput(value:SafetyFollowupCapture) {
  */
 export class OnboardingSafetyFollowup {
   private readonly storage:OnboardingStorage;
+  private readonly profiles:CareerProfiles;
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,legal:LegalBundle|null,private readonly prospective=false) {
     this.storage=new OnboardingStorage(config,legal);
+    this.profiles=new CareerProfiles(db,config,legal);
   }
   private async resourceAdmission(client:PoolClient,fixed:FixedSessionContext,signal?:AbortSignal) {
     await authorizeFixedSession(client,fixed,signal);
@@ -113,8 +116,9 @@ export class OnboardingSafetyFollowup {
     try {
       return await this.db.withBoundedTransaction(async client=>{
         const kind=command.action.kind;
-        if(kind==='continue_intake'||kind==='clarify_exaggeration')await this.storage.authorizeSession(client,fixed,signal);
-        else await this.resourceAdmission(client,fixed,signal);
+        const handling=kind==='continue_intake'||kind==='clarify_exaggeration';
+        const authVersion=handling?await this.storage.authorizeSession(client,fixed,signal):null;
+        if(!handling)await this.resourceAdmission(client,fixed,signal);
         const current=await this.history(client,fixed);
         if(!current)throw new ApiError(404,'NOT_FOUND','The intake is not available.');
         const {draft,sources,history}=current;
@@ -174,7 +178,10 @@ export class OnboardingSafetyFollowup {
         const ciphertext=this.storage.crypto!.sealUtf8(JSON.stringify(payload),{
           table:'platform_onboarding_safety_followups',column:'payload_ciphertext',rowId:command.operationId,ownerId:fixed.userId,revision:next.revision});
         await authorizeFixedSession(client,fixed,signal);
-        if(next!==draft)await this.storage.write(client,draft,next);
+        if(next!==draft){
+          await this.storage.write(client,draft,next);
+          await this.profiles.projectIntakeInTransaction(client,draft,next,authVersion!,signal);
+        }
         await client.query(`INSERT INTO platform_onboarding_safety_followups
           (user_id,operation_id,draft_id,publication_id,action_kind,expected_revision,applied_revision,session_hash,presentation_digest,
            presentation_operation_id,acknowledgment_operation_id,handled,clarified_at,payload_ciphertext,created_at)

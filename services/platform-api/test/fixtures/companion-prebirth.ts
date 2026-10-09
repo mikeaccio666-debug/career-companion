@@ -43,6 +43,7 @@ export type ReadyPrebirthSource = Awaited<ReturnType<PrebirthFixture['ready']>>;
 export async function withPrebirthLoopback(
   run: (runtime: PlatformProviderRuntime, requests: Record<string, unknown>[]) => Promise<void>,
   decision: 'L0' | 'L1' | 'L2' = 'L0',
+  intakeResolution?: unknown,
 ) {
   const requests: Record<string, unknown>[] = [];
   let failure: unknown;
@@ -59,7 +60,7 @@ export async function withPrebirthLoopback(
       assert.deepEqual(body.tools, []);
       assert.equal(body.text.format.strict, true);
       assert([generationModel, classifierModel].includes(body.model));
-      const value = body.model === generationModel ? syntheticPreview : { level: decision };
+      const value = body.model === generationModel ? syntheticPreview : { level: decision, ...(intakeResolution === undefined ? {} : { resolution: intakeResolution }) };
       reply.writeHead(200, { 'content-type': 'text/event-stream' });
       reply.end(`data: ${JSON.stringify({ type: 'response.completed', response: {
         status: 'completed', output: [{ type: 'message', role: 'assistant', status: 'completed',

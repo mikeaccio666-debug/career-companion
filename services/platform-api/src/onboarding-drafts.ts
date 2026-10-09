@@ -1,3 +1,4 @@
+import { CareerProfiles } from './career-profiles.ts';
 import { randomUUID } from 'node:crypto';
 import type { OnboardingCommand, OnboardingDraft, OnboardingSaveResult } from '@companion/platform-contracts';
 import { createOnboardingDraft, parseOnboardingCommand, transitionOnboardingDraft } from '@companion/career-core';
@@ -23,10 +24,12 @@ export class OnboardingDrafts {
   private readonly crypto: DataCrypto | undefined;
   private readonly storage: OnboardingStorage;
   private readonly safety: OnboardingSafety;
+  private readonly profiles: CareerProfiles;
   constructor(readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, readonly bundle: LegalBundle | null) {
     this.crypto = config.dataCrypto;
     this.storage = new OnboardingStorage(config, bundle);
-    this.safety = new OnboardingSafety(db, this.storage);
+    this.profiles = new CareerProfiles(db, config, bundle);
+    this.safety = new OnboardingSafety(db, this.storage, this.profiles);
   }
   claimSafety(context: FixedSessionContext, options: { detectorRevision: number; leaseMs?: number }, signal?: AbortSignal) {
     return this.safety.claim(context, options, signal);
@@ -64,7 +67,7 @@ export class OnboardingDrafts {
     command = JSON.parse(canonical) as OnboardingCommand;
     try {
       return await this.db.withBoundedTransaction(async client => {
-        await this.storage.authorizeSession(client, fixed, signal);
+        const authVersion = await this.storage.authorizeSession(client, fixed, signal);
         await verifyPrebirthInventoryInTransaction(client, this.crypto, fixed.userId, signal);
         const row = await this.storage.row(client, fixed.userId);
         const previous = row ? this.storage.decode(row) : null;
@@ -119,6 +122,7 @@ export class OnboardingDrafts {
           VALUES($1,$2,$3,$4,$5)`, [fixed.userId, command.operationId, draft.id, draft.revision, requestCiphertext]);
         if (command.action.kind === 'text') await this.storage.recover(client, draft);
         await syncPrebirthInventoryInTransaction(client, this.crypto, fixed.userId, signal);
+        await this.profiles.projectIntakeInTransaction(client, initial, draft, authVersion, signal);
         // Admission is checked after the writes. The transaction helper confirms COMMIT
         // before returning; expiry/cancellation after this check does not undo an accepted write.
         await authorizeFixedSession(client, fixed, signal);

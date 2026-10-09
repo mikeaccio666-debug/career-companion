@@ -1,3 +1,4 @@
+import type { CareerProfiles } from './career-profiles.ts';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { OnboardingDraft, ProviderRequestAdmission } from '@companion/platform-contracts';
@@ -28,7 +29,7 @@ function captured(value: unknown): Readonly<OnboardingSafetyClaim> {
 
 /** Durable inbox/claim/result path. This does not provide a detector, reviewed templates, crisis delivery or student release. */
 export class OnboardingSafety {
-  constructor(readonly db: Database, private readonly storage: OnboardingStorage) {}
+  constructor(readonly db: Database, private readonly storage: OnboardingStorage, private readonly profiles: Pick<CareerProfiles, 'projectIntakeInTransaction'>) {}
   async read(context: FixedSessionContext, signal?: AbortSignal) {
     const fixed = Object.freeze({ userId: context.userId, tokenHash: context.tokenHash });
     return this.db.withBoundedTransaction(async client => {
@@ -96,7 +97,7 @@ export class OnboardingSafety {
       }
     };
   }
-  private async advance(client: PoolClient, draft: OnboardingDraft, rows: SafetySubmissionRow[]): Promise<boolean> {
+  private async advance(client: PoolClient, draft: OnboardingDraft, rows: SafetySubmissionRow[], authVersion: string, signal?: AbortSignal): Promise<boolean> {
     const handled = await this.storage.handledSources(client, draft, rows);
     const safety = this.storage.safetyState(rows, handled);
     if (draft.state === 'safety_paused' && draft.safety && safety.status === 'clear') {
@@ -105,7 +106,9 @@ export class OnboardingSafety {
       // Consume that authenticated request, never infer permission from classification alone.
       if (!paused || !handled.has(paused.id)) return false;
       const next = resumeOnboardingDraft(draft, { expectedRevision: draft.revision, at: await this.storage.at(client) });
-      await this.storage.write(client, draft, next); return true;
+      await this.storage.write(client, draft, next);
+      await this.profiles.projectIntakeInTransaction(client, draft, next, authVersion, signal);
+      return true;
     }
     if (draft.state !== 'safety_pending' || !draft.pendingText) return false;
     const row = rows.find(item => item.operation_id === draft.pendingText!.id);
@@ -114,7 +117,9 @@ export class OnboardingSafety {
     // A previous high-risk result remains a separate barrier. Never attribute it to the new message.
     if (result.level === 'L0' && safety.status !== 'clear') return false;
     const next = resolveOnboardingText(draft, result, { at: await this.storage.at(client) });
-    await this.storage.write(client, draft, next); return true;
+    await this.storage.write(client, draft, next);
+    await this.profiles.projectIntakeInTransaction(client, draft, next, authVersion, signal);
+    return true;
   }
   async process(value: OnboardingSafetyClaim, classify: IntakeClassifier, signal?: AbortSignal, guard?: IntakeExecutionGuard): Promise<SafetyProcessReceipt> {
     const claim = captured(value);
@@ -182,7 +187,7 @@ export class OnboardingSafety {
       if (!saved.rowCount) throw safetyClaimChanged();
       await enqueueSafetyResponse(client, saved.rows[0], this.storage.decodeResult(saved.rows[0]));
       const rows = owned.rows.map(row => row.id === claim.submissionId ? saved.rows[0] : row);
-      const advanced = await this.advance(client, owned.draft, rows);
+      const advanced = await this.advance(client, owned.draft, rows, claim.authVersion, signal);
       // Writes linearize at this final lease-time check; later expiry does not undo an accepted COMMIT.
       const stillValid = await client.query('SELECT id FROM platform_onboarding_safety_submissions WHERE id=$1 AND lease_until>clock_timestamp()', [claim.submissionId]);
       signal?.throwIfAborted(); if (!stillValid.rowCount) throw safetyClaimChanged();

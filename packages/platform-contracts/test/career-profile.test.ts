@@ -17,3 +17,16 @@ test('client attribution, invalid months, sparse/accessor/duplicate tracks and f
  for(const revision of [-0,-1,1.5,2147483648])assert.throws(()=>parseCareerProfileCommand('delete',{operationId,expectedRevision:revision}));
  assert.throws(()=>parseCareerProfileSnapshot({ownerId:operationId,revision:0,profile:{...facts,id:operationId}}));
 });
+
+test('intake provenance is optional for legacy profiles, closed and immutable, and cannot be supplied in a manual command',()=>{
+ const profile={...facts,id:operationId,ownerId:operationId,revision:1,source:'user_entered',
+  confirmedAt:'2026-10-01T00:00:00.000Z',createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z',lastOperationId:operationId};
+ const snapshot=(p:unknown)=>parseCareerProfileSnapshot({ownerId:operationId,revision:1,profile:p});
+ assert(!Object.hasOwn(snapshot(profile).profile!,'intakeSource'));
+ const intakeSource={draftId:operationId,revision:2},parsed=snapshot({...profile,intakeSource});
+ intakeSource.revision=9;assert.equal(parsed.profile?.intakeSource?.revision,2);assert(Object.isFrozen(parsed.profile?.intakeSource));
+ for(const value of [null,undefined,{draftId:operationId,revision:0},{draftId:'invalid',revision:1},{draftId:operationId,revision:1,ownerId:operationId}]){
+  assert.throws(()=>snapshot({...profile,intakeSource:value}));
+ }
+ assert.throws(()=>parseCareerProfileCommand('save',{operationId,expectedRevision:0,facts,confirmed:true,intakeSource}));
+});
