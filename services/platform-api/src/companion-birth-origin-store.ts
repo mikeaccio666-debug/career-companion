@@ -4,7 +4,7 @@ import {
   parseCompanionBirthCommand, parseCompanionBirthViewerState,
   type CompanionBirthCommand, type CompanionBirthViewerState, type PublicCompanionBirthReceipt,
 } from '@companion/platform-contracts';
-import type { FixedSessionContext } from './auth.ts';
+import { authorizeFixedSession,type FixedSessionContext } from './auth.ts';
 import type { BirthCapture, BirthOriginStore } from './companion-birth-types.ts';
 import type { CompanionSealRendered } from './companion-seal-rendering.ts';
 import { openCompanionBirthAssets, sealCompanionBirthAssets } from './companion-birth-assets.ts';
@@ -15,6 +15,8 @@ import {
 import type { DataCrypto } from './data-crypto.ts';
 import { ApiError } from './errors.ts';
 
+export const BIRTH_EXPORT_TABLES=Object.freeze(['platform_companion_birth_receipts'] as const);
+export type BirthExportSection='companionBirthReceipts'|'companionBirthAssetMetadata';
 const unavailable = companionBirthStorageUnavailable;
 const exists = () => new ApiError(409, 'COMPANION_EXISTS', 'This account already has a companion.');
 const notReady = () => new ApiError(400, 'PERSONA_NOT_ACCEPTED', 'Accept the companion preview before birth.');
@@ -75,7 +77,7 @@ async function one(client: PoolClient, sql: string, values: unknown[]): Promise<
 export class CompanionBirthOriginStore implements BirthOriginStore {
   constructor(private readonly crypto: DataCrypto | undefined) {}
 
-  private async decodeWithAssets(client: PoolClient, ownerId: string, row: Record<string, any>, savedAsset?: Record<string, any>): Promise<Readonly<{
+  private async decodeWithAssets(client: PoolClient, ownerId: string, row: Record<string, any>, savedAsset?: Record<string, any>, lockRecords=true): Promise<Readonly<{
     snapshot: Readonly<CompanionBirthOriginSnapshot>; rendered: Readonly<CompanionSealRendered>;
   }>> {
     const snapshot = openCompanionBirthOrigin(this.crypto, ownerId, row.id,
@@ -83,24 +85,24 @@ export class CompanionBirthOriginStore implements BirthOriginStore {
     assertColumns(row, originColumns(snapshot));
     if (timestamp(row.born_at) !== snapshot.receipt.bornAt) throw unavailable();
     const { receipt, capture } = snapshot, companionId = receipt.identity.companionId;
-    const companion = await one(client, 'SELECT * FROM platform_companions WHERE id=$1 AND user_id=$2 FOR SHARE', [companionId, ownerId]);
+    const companion = await one(client, 'SELECT * FROM platform_companions WHERE id=$1 AND user_id=$2 '+(lockRecords?'FOR SHARE':''), [companionId, ownerId]);
     assertColumns(companion, { id: companionId, user_id: ownerId, birth_receipt_id: receipt.id,
       birth_idempotency_key: receipt.idempotencyKey, current_revision: 1 });
     if (!['active', 'retired'].includes(companion.status) || timestamp(companion.born_at) !== receipt.bornAt) throw unavailable();
     // Current spelling, relationship stage and seal are mutable projections;
     // their later values cannot alter this authenticated original identity.
-    const main = await one(client, 'SELECT * FROM platform_conversations WHERE id=$1 AND user_id=$2 FOR SHARE', [receipt.main.id, ownerId]);
+    const main = await one(client, 'SELECT * FROM platform_conversations WHERE id=$1 AND user_id=$2 '+(lockRecords?'FOR SHARE':''), [receipt.main.id, ownerId]);
     assertColumns(main, { id: receipt.main.id, user_id: ownerId, kind: 'main', companion_id: companionId,
       birth_receipt_id: receipt.id, mode: 'companion', persona: null });
     if (timestamp(main.created_at) !== receipt.bornAt) throw unavailable();
-    const event = await one(client, 'SELECT * FROM platform_messages WHERE id=$1 AND user_id=$2 FOR SHARE', [receipt.event.id, ownerId]);
+    const event = await one(client, 'SELECT * FROM platform_messages WHERE id=$1 AND user_id=$2 '+(lockRecords?'FOR SHARE':''), [receipt.event.id, ownerId]);
     assertColumns(event, { id: receipt.event.id, conversation_id: receipt.main.id, user_id: ownerId, companion_id: companionId,
       room_kind: 'main', birth_receipt_id: receipt.id, role: 'system', kind: 'event', content: '', status: 'complete',
       provider: null, model: null, lease_until: null, speaker_kind: 'system', speaker_key: null, speaker_ref: null, channel: 'system' });
     if (timestamp(event.created_at) !== receipt.bornAt || !emptyArray(event.attachments)
       || !exactJson(event.speaker_snapshot, systemSnapshot)
       || !exactJson(event.payload, { event: 'companion_born', birthReceiptId: receipt.id, companionId })) throw unavailable();
-    const assets = savedAsset ?? await one(client, 'SELECT * FROM platform_companion_birth_assets WHERE id=$1 AND user_id=$2 FOR SHARE',
+    const assets = savedAsset ?? await one(client, 'SELECT * FROM platform_companion_birth_assets WHERE id=$1 AND user_id=$2 '+(lockRecords?'FOR SHARE':''),
       [receipt.identity.sealAssetId, ownerId]);
     const rendered = openCompanionBirthAssets(this.crypto, assets, snapshot.asset);
     if (capture.ownerId !== ownerId) throw unavailable();
@@ -109,6 +111,45 @@ export class CompanionBirthOriginStore implements BirthOriginStore {
 
   private async decode(client: PoolClient, ownerId: string, row: Record<string, any>): Promise<Readonly<CompanionBirthOriginSnapshot>> {
     return (await this.decodeWithAssets(client, ownerId, row)).snapshot;
+  }
+
+  /** Capture historical origins in the caller's reauthenticated account snapshot.
+   * No active-companion lookup, consent check, model call, render or file delivery.
+   * Asset bytes are authenticated but only metadata is projected here; the file
+   * table remains outstanding until the archive packs those private bytes. */
+  async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal):AsyncGenerator<{section:BirthExportSection;record:unknown}>{
+    const input=birthFields(value,['userId','tokenHash']),ownerId=birthUUID(input.userId);
+    if(typeof input.tokenHash!=='string'||!/^[a-f0-9]{64}$/.test(input.tokenHash))throw unavailable();
+    const who=Object.freeze({userId:ownerId,tokenHash:input.tokenHash});
+    await authorizeFixedSession(client,who,signal);let after:string|null=null;
+    try{
+      for(;;){
+        signal?.throwIfAborted();
+        const rows:Record<string,any>[]=(await client.query(`SELECT * FROM platform_companion_birth_receipts WHERE user_id=$1
+          AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100`,[ownerId,after])).rows;
+        for(const row of rows){
+          signal?.throwIfAborted();const {snapshot}=await this.decodeWithAssets(client,ownerId,row,undefined,false);signal?.throwIfAborted();
+          const {receipt,capture,asset}=snapshot,identity=capture.identity;
+          yield {section:'companionBirthReceipts',record:{receipt,
+            source:{terms:{version:capture.terms.version,contentDigest:capture.terms.contentDigest},
+              generation:{taskId:capture.task.id,generation:capture.task.generation,answersId:capture.task.answersId,
+                sourceDraftId:capture.task.sourceDraftId,sourceRevision:capture.task.sourceRevision,sourceReceiptVersion:capture.task.sourceReceiptVersion},
+              prefix:capture.prefix?{id:capture.prefix.id,version:capture.prefix.version}:null,
+              inventory:{tipId:capture.inventory.tipId,revision:capture.inventory.revision},
+              identity:{draftId:identity.identityDraftId,revision:identity.identityRevision,nameSubmissionId:identity.nameSubmissionId,
+                nameGeneration:identity.nameGeneration,nameApplicationOperationId:identity.nameApplicationOperationId,
+                selectionId:identity.selectionId,selectionRevision:identity.selectionRevision,selectionOperationId:identity.selectionOperationId,
+                bundleRevision:identity.bundleRevision,sealCandidates:identity.sealCandidates}}}};
+          yield {section:'companionBirthAssetMetadata',record:{id:asset.id,companionId:asset.companionId,birthReceiptId:asset.birthReceiptId,
+            bornAt:asset.bornAt,sealChar:asset.sealChar,inkToken:asset.inkToken,rendererVersion:asset.rendererVersion,templateVersion:asset.templateVersion,
+            paletteVersion:asset.paletteVersion,glyphSourceDigest:asset.glyphSourceDigest,pathDigest:asset.pathDigest,
+            svgDigest:asset.svgDigest,pngDigest:asset.pngDigest,svgSizeBytes:asset.svgSizeBytes,pngSizeBytes:asset.pngSizeBytes,
+            width:asset.width,height:asset.height,bytesVerified:true,bytesIncluded:false}};
+        }
+        if(rows.length<100)break;after=birthUUID(rows.at(-1)!.id);
+      }
+      await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
+    }catch(error){if(signal?.aborted)throw error;throw unavailable();}
   }
 
   /** An opaque id only locates an owned saved asset. The authenticated original
