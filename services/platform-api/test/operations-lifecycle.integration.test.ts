@@ -2,7 +2,7 @@ import { seedFictionalConsent } from './fixtures/student-entry.ts';
 import { FICTIONAL_LEGAL, seedFictionalActiveLegal } from './fixtures/student-entry.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,7 +19,7 @@ import { startWorkerHeartbeat } from '../src/worker-heartbeat.ts';
 
 // Real isolated PostgreSQL, Redis and BullMQ connections; only the task runtime is synthetic.
 // Injected clocks accelerate report scheduling/cache expiration, never fake connection facts or DB time.
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `ops_lifecycle_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_REQUIRE_INVITE: '1', PLATFORM_DATA_KEY: randomBytes(32).toString('hex')}), schema = `ops_lifecycle_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl, { max: 1, connectionTimeoutMillis: 1000 });
 const databaseUrl = new URL(base.databaseUrl); databaseUrl.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(databaseUrl.toString(), { max: 4, connectionTimeoutMillis: 1000 });
@@ -85,6 +85,8 @@ function fixture(workerRedisUrl = base.redisUrl) {
     createVoiceSession: forbidden, transcribe: forbidden, speech: forbidden,
   };
   const config = { ...base, databaseUrl: databaseUrl.toString(), redisUrl: base.redisUrl, queueName, codeVersion, storageDir: directory, accountEmail: undefined, requireVerifiedEmail: false };
+  // Real durable output storage is mandatory even for this synthetic runtime.
+  assert.ok(config.dataCrypto);
   const storage = new LocalBlobStorage(directory), producerJobs = new JobService(db, config, runtime, storage,undefined,undefined,FICTIONAL_LEGAL);
   const workerJobs = new JobService(db, { ...config, redisUrl: workerRedisUrl }, runtime, storage,undefined,undefined,FICTIONAL_LEGAL);
   const queue = new TaskQueue(producerJobs), control = new ProducerQueue(queueName, base.redisUrl), worker = createWorker(workerJobs);
