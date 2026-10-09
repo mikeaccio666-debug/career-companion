@@ -1,3 +1,4 @@
+import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -117,7 +118,7 @@ test('live reads require current consent and safety, while account export retain
   await assert.rejects(tasks(a).prepare(a.who,settings),(e:any)=>e.status===403);
   await f.db.query("UPDATE platform_companions SET status='retired',retired_at=clock_timestamp() WHERE id=$1",[one.task.companionId]);
   const result=await new AccountCoreExport(f.db,f.config).capture(a.who,token);
-  assert.deepEqual(result.sections.firstLetterTasks,[one.task]);assert.equal(result.includedTables.length,147);
+  assert.deepEqual(result.sections.firstLetterTasks,[one.task]);assertPartialExportInventory(result);
   assert(!result.remainingTables.includes('platform_first_letter_tasks'));assert.equal(result.complete,false);
   const text=JSON.stringify(result.sections.firstLetterTasks);
   for(const secret of [a.who.tokenHash,token,encoded,password,other.task.taskId,b.who.userId,'ciphertext','messages','ds_statistics'])assert(!text.includes(secret));
@@ -173,7 +174,7 @@ test('the private file archive includes the same task metadata and disposes gene
     const saved=JSON.parse(await fs.readFile(path.join(result.directory,'account.json'),'utf8'));
     assert.deepEqual(saved.sections.firstLetterTasks,[one.task]);
     assert.deepEqual(result.snapshot.sections.firstLetterTasks,[one.task]);
-    assert.equal(saved.includedTables.length,150);assert.equal(saved.remainingTables.length,20);
+    assertPartialExportInventory(saved,true);assert.equal(saved.remainingTables.length,20);
     assert.equal(saved.complete,false);assert.equal(saved.filesIncluded,true);
     const wire=JSON.stringify(saved.sections.firstLetterTasks);
     for(const secret of [a.who.tokenHash,token,'preparation_ciphertext','styleCard','messages'])assert(!wire.includes(secret));

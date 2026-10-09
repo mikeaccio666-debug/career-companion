@@ -1,3 +1,4 @@
+import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import {before,after,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -38,7 +39,7 @@ test('actual saved voice excerpts and sessions export private text and archive-l
  assert.equal(records.get(realtime.id).sessionRef,exportedSession.sessionRef);assert.equal(records.get(realtime.id).provider,'fictional-provider');assert.equal(records.get(realtime.id).provenance,'client_submitted');assert.equal(records.get(realtime.id).text,realtime.text);
  assert.deepEqual(records.get(realtime.id).attachments,[{id:source.id,availability:'metadata_present'}]);assert.equal(records.get(transcript.id).sessionRef,null);assert.equal(records.get(speech.id).role,'unknown');
  for(const secret of [voice,foreignSession,foreignRecord.id,other.userId,foreignRoom,source.storageKey,who.tokenHash,password,encoded])assert(!JSON.stringify(result).includes(secret));
- assert(Object.isFrozen(records.get(realtime.id).attachments));assert.equal(result.includedTables.length,147);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert.deepEqual(await snapshot(who),before);
+ assert(Object.isFrozen(records.get(realtime.id).attachments));assertPartialExportInventory(result);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert.deepEqual(await snapshot(who),before);
 });
 
 test('released or expired sessions and withdrawn model consent still permit reading the retained user-selected excerpt',async()=>{

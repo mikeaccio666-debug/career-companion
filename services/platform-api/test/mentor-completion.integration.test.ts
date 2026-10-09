@@ -1,3 +1,4 @@
+import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import type {PoolClient} from 'pg';
 import type {Database} from '../src/database.ts';
 import type {FixedSessionContext} from '../src/auth.ts';
@@ -225,7 +226,7 @@ test('account archive preserves actual completed service, original offer and pri
  for(const secret of [s.operator.userId,s.mentor.userId,s.ref,s.profile.recordId,s.slot.recordId,other.owner.userId,other.intent.session.id,pair.order.handoffCode!,s.owner.tokenHash,exportPassword])assert(!JSON.stringify(result).includes(secret));
  assert(!queries.some(sql=>/\b(?:FROM|JOIN)\s+platform_mentor_capacity_(?:records|proofs)\b/i.test(sql)));
  assert(!queries.some(sql=>/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+platform_mentor_/i.test(sql)));
- assert(Object.isFrozen(session.assignment));assert.equal(result.includedTables.length,147);assert.equal(result.remainingTables.length,23);assert(result.includedTables.includes('platform_mentor_orders'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+ assert(Object.isFrozen(session.assignment));assertPartialExportInventory(result);assert.equal(result.remainingTables.length,23);assert(result.includedTables.includes('platform_mentor_orders'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
 });
 
 test('all saved intent phases and both cancellation routes retain their own original operation histories',async()=>{

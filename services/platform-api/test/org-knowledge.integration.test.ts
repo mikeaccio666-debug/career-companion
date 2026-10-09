@@ -1,3 +1,4 @@
+import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import { CareerMethodReferences } from '../src/career-method-references.ts';
 import { CapabilityRegistry, type CapabilityScope } from '../src/capabilities.ts';
 import type {PoolClient} from 'pg';
@@ -486,8 +487,7 @@ test('account archive applies 04 exclusions to real entitlements and access logs
     assert.deepEqual(await snapshot(),before);
     assert.deepEqual(archive.exclusions.filter(row=>row.status==='excluded_product_policy').map(row=>row.table),['platform_knowledge_access_log','platform_user_entitlements']);
     assert(archive.exclusions.filter(row=>row.status==='excluded_product_policy').every(row=>row.policyReference&&row.reason.includes('4.11')));
-    const partition=[...archive.includedTables,...archive.remainingTables,...archive.exclusions.map(row=>row.table)];
-    assert.equal(partition.length,177);assert.equal(new Set(partition).size,177);assert.equal(archive.includedTables.length,147);
+    assertPartialExportInventory(archive);
     assert.equal(archive.remainingTables.length,23);assert.equal(archive.complete,false);assert.equal(archive.filesIncluded,false);
     assert(archive.remainingTables.includes('platform_org_content_state_proofs'));assert(Object.isFrozen(archive.exclusions[0]));
     assert.equal(archive.sections.organizationAccessEvents.length,revoked?2:1);
