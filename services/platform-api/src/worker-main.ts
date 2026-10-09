@@ -1,3 +1,4 @@
+import {purgeExpiredKnowledgeAccess} from './knowledge-access-retention.ts';
 import {createWorkerShutdownHandler} from './worker-shutdown.ts';
 import {purgeExpiredProductEvents} from './product-events.ts';
 import {FirstLetterSettings} from './first-letter-settings.ts';
@@ -36,6 +37,7 @@ const naming=studentOnboarding.naming;
 await db.query('SELECT 1');await recoverInterrupted(jobs);
 await reconcileCompanionAccounting(companion);
 await purgeExpiredMemoryDeletions(db);
+await purgeExpiredKnowledgeAccess(db).catch(()=>{process.stderr.write('Knowledge access retention maintenance failed.\n');});
 const mentorFinancialRetention=config.dataCrypto?new MentorFinancialLedger(config):null;
 if(mentorFinancialRetention)await mentorFinancialRetention.purgeExpired(db);
 if(config.dataCrypto){await uploadRemovals.recover();await uploadWrites.recover();}
@@ -57,7 +59,7 @@ const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeV
 let closing=false,recovering:Promise<void>|undefined;
 const recovery=setInterval(()=>{
   if(closing||recovering)return;
-  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),purgeExpiredProductEvents(db).catch(()=>{process.stderr.write('Product event retention maintenance failed.\n');}),...(mentorFinancialRetention?[mentorFinancialRetention.purgeExpired(db).catch(()=>{process.stderr.write('Mentor financial retention maintenance failed.\n');})]:[]),...(config.dataCrypto?[uploadRemovals.recover(),uploadWrites.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
+  const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),purgeExpiredKnowledgeAccess(db).catch(()=>{process.stderr.write('Knowledge access retention maintenance failed.\n');}),purgeExpiredProductEvents(db).catch(()=>{process.stderr.write('Product event retention maintenance failed.\n');}),...(mentorFinancialRetention?[mentorFinancialRetention.purgeExpired(db).catch(()=>{process.stderr.write('Mentor financial retention maintenance failed.\n');})]:[]),...(config.dataCrypto?[uploadRemovals.recover(),uploadWrites.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
   recovering=current;
 },15_000);recovery.unref();
 process.stdout.write('Platform task worker started.\n');
