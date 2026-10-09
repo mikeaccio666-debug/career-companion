@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { ArrowLeft, ArrowUpRight, ChevronRight } from 'lucide-react';
 import { useRequiredPlatformAccountClient } from './account-client';
 import { BRAND } from './brand';
+import { AppearanceSettings } from './AppearanceSettings';
 import type { User } from './types';
 import './career-design-tokens.css';
 import './student-me-view.css';
@@ -41,6 +42,7 @@ export function StudentMePage({ user, onLogout }: { user: User; onLogout: () => 
     <header className="student-me-top"><a href="/"><ArrowLeft size={18} aria-hidden="true" />回到首页</a><span>{BRAND.name}</span></header>
     <div className="student-me-content">
       <header className="student-me-heading"><h1 id="student-me-title">我</h1><p>你的资料与偏好，由你决定。</p><small>主理人与队员都是 AI</small></header>
+      {current && <AppearanceSettings/>}
       {!current ? <section className="student-me-notice" role="status"><p>账号状态已变化，请重新确认账号。</p><a href="/">重新确认账号</a></section> : !online ? <section className="student-me-notice" role="status"><p>没网了，或页面已切到后台。回来并连上之后，这里会自动更新。</p></section> : <>
         <section className="student-me-account" aria-label="当前账号"><span className="student-me-avatar" aria-hidden="true">{Array.from(user.name || user.email)[0]}</span><div><h2>{user.name || '我的账号'}</h2><p>{user.email}</p><small>{user.emailVerified ? '邮箱已验证' : '邮箱未验证'}</small></div></section>
         <div className="student-me-sections">{sections.map(section => <section key={section.title} aria-label={section.title} className="student-me-section"><header><h2>{section.title}</h2><p>{section.description}</p></header><ul>{section.links.map(link => <li key={link.href}><a href={link.href}><span><strong>{link.label}</strong><small>{link.detail}</small></span><ChevronRight size={18} aria-hidden="true" /></a></li>)}</ul></section>)}</div>
