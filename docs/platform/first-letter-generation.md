@@ -20,7 +20,7 @@ draft_saved 的正文明确标记 unreviewed_model_output。它不是“第一�
 - 已经建立调用记录的失败、取消、拒绝或不确定结果，不在本步自动重试。原稿格式错误记为 invalid_format，供后续明确的一次重写状态机消费，不能重新调原稿来绕过限制。
 - recover 只重新核验历史证据、处理过期租约和协调 CostGuard。可能已发出但缺少正常回执的请求标记 uncertain，超期费用保守记账；重复恢复不重复记账、不重发请求。
 - 执行租约凭据仅保留在服务端表中，完成/失败时清除。旧执行器不能修改持有新租约的任务。
-- 当前没有恢复 worker。故障注入验证了丢失 finished 回调与清理事务失败后的数据库恢复，尚未做真实进程 kill/restart 测试，复核/重写阶段的持久化续跑见 [后续实现](first-letter-durable-review.md)。
+- 当前没有恢复 worker。[真实进程退出测试](first-letter-process-recovery-verification.md)已覆盖原稿发送、费用回执与正文提交，以及复核发送后的恢复；复核/重写阶段的持久化续跑见 [后续实现](first-letter-durable-review.md)。
 
 ## 数据和账户生命周期
 
