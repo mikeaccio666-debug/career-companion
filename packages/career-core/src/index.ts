@@ -33,3 +33,5 @@ export * from './paid-suggestion-policy.ts';
 export * from './pending/resume-diff.ts';
 
 export * from './today-three.ts';
+
+export * from './proactive-policy.ts';

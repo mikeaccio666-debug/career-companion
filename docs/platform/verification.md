@@ -1204,3 +1204,16 @@ JSON 覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；既有
 - 临时页面、视口覆盖、拥有的预览进程和 SSH 转发已清理；主预览未重启，无付费模型、真实申请、主库迁移、部署或合并。
 
 证据：远端忽略目录 ci-regression-20261008/appearance-web-check.log、appearance-web-tests.log（首轮失败）、appearance-focused.log、appearance-build.log、appearance-web-final.log；交互预览构建在 .local/verification/appearance-20261009。截图仅含虚构资料，保存在本地临时文件 career-companion-appearance-mobile.jpg / career-companion-appearance-desktop.jpg，不进仓库。
+
+
+## 2026-10-09：主动消息纯准入规则
+
+按 02 §8.1/§9、05 §2.8 和 09 第 6 步新增 [主动消息准入规则](proactive-admission-policy.md)。仅向 career-core 导出纯函数，不接 UI、API、模型、队列或发送器。真实 Today 的完整覆盖状态仍为 null，不能通过默认空集合启用它。
+
+- 最终 career-core 全量 **275/275 通过**，零失败、零取消、零跳过，包含新增 20 项测试。覆盖跨渠道预留/未知结果计数、1+2/3 日额度、例外优先级、面试合并、当地日和夏令时、延期错过有效期、暂停与都关掉、任务分类、危机/被拒/低落/冲刺覆盖、第一封信与关心回访分离、隔天锚点、休眠、后续类型组合及非法/异用户/不完整输入。
+- 初版 273 项通过；补任务/非任务区分后 274 项通过。复核产品发现提醒应在任何覆盖期去掉准备任务，周报则在被拒期仍可私下准备、危机期抑制；修正并增加边界断言后跑上述完整 275 项，不把不同批次累加。
+- career-core 与 platform-api TypeScript 检查通过；git diff --check 通过。无数据库或 schema 变更，不运行无关的账户导出或 Web 全量检查。
+- 数据均为虚构元数据，测试时商业调用关闭。后续类型测试不开放身份提醒、被拒信、周报或 Discord；父母周报合并建议不是独立发送许可。纯函数没有源身份认证或跨进程原子预留能力，不能以此声称消息不会重复发送。
+- 真实来源、完整 overlays、调度/通知 outbox、所有发送前再验证、早间面试前晚调度、Discord 窗口和真实模型质量均未因此完成；没有改产品范围、主库迁移、重启主预览、付费模型调用、真实申请、部署或合并。
+
+日志保存在远端忽略目录 .local/verification/ci-regression-20261008：proactive-core-tests.log、proactive-core-types.log、proactive-core-final-tests.log、proactive-core-final-types.log、proactive-reviewed-tests.log、proactive-reviewed-types.log、proactive-api-types.log。
