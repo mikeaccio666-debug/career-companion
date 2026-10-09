@@ -1,3 +1,5 @@
+import { UploadWrites, type StagedUpload } from './upload-writes.ts';
+import type { DataCrypto } from './data-crypto.ts';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { BrowserCheckpoint, BrowserCheckpointEvent, BrowserObservation, BrowserTarget, CreateJobInput, JobExecutionResult, PlatformProviderRuntime } from '@companion/platform-contracts';
@@ -6,7 +8,7 @@ import type { Database } from './database.ts';
 import type { BlobStorage } from './storage.ts';
 import { ApiError, invalid, notFound, object } from './errors.ts';
 
-export interface BrowserBinding { jobId:string;userId:string;generation:number;leaseToken:string;definitionHash:string;signal:AbortSignal; }
+export interface BrowserBinding { authVersion:string;jobId:string;userId:string;generation:number;leaseToken:string;definitionHash:string;signal:AbortSignal; }
 const MAX_JSON_BYTES=512*1024,MAX_TEXT_BYTES=80*1024,MAX_PNG_BYTES=4*1024*1024;
 const snapshot=(row:any):BrowserCheckpoint=>({definitionHash:row.definition_hash,revision:row.revision,nextIndex:row.next_index,state:row.state});
 export function normalizeBrowserInput(input:CreateJobInput,runtime:PlatformProviderRuntime):CreateJobInput {
@@ -22,7 +24,7 @@ export async function initializeBrowserCheckpoint(client:PoolClient,jobId:string
 }
 export async function assertBrowserAuthorized(client:PoolClient|Database,binding:BrowserBinding,lock=false){
   binding.signal.throwIfAborted();
-  const result=await client.query(`SELECT j.* FROM platform_jobs j WHERE j.id=$1 AND j.user_id=$2 AND j.generation=$3 AND j.lease_token=$4 AND j.lease_until>now() AND j.status='running' AND j.kind='browser' AND j.requires_approval AND EXISTS(SELECT 1 FROM platform_approvals a WHERE a.job_id=j.id AND a.user_id=j.user_id AND a.generation=j.generation AND a.status='approved' AND a.args->>'browserDefinitionHash'=$5)${lock?' FOR UPDATE OF j':''}`,[binding.jobId,binding.userId,binding.generation,binding.leaseToken,binding.definitionHash]);
+  const result=await client.query(`SELECT j.* FROM platform_jobs j WHERE j.id=$1 AND j.user_id=$2 AND j.generation=$3 AND j.lease_token=$4 AND j.lease_until>clock_timestamp() AND j.status='running' AND j.kind='browser' AND EXISTS(SELECT 1 FROM platform_users u WHERE u.id=j.user_id AND u.auth_version=$6) AND j.requires_approval AND EXISTS(SELECT 1 FROM platform_approvals a WHERE a.job_id=j.id AND a.user_id=j.user_id AND a.generation=j.generation AND a.status='approved' AND a.args->>'browserDefinitionHash'=$5)${lock?' FOR UPDATE OF j':''}`,[binding.jobId,binding.userId,binding.generation,binding.leaseToken,binding.definitionHash,binding.authVersion]);
   if(!result.rowCount)throw new ApiError(409,'BROWSER_AUTH_REVOKED','This browser task is no longer authorized to execute.');
   if(browserDefinitionHash({kind:'browser',provider:result.rows[0].provider,prompt:result.rows[0].prompt,options:result.rows[0].options})!==binding.definitionHash)throw new ApiError(409,'BROWSER_DEFINITION_CHANGED','The reviewed browser plan changed. Prepare another reviewed task.');
   return result.rows[0];
@@ -86,17 +88,15 @@ export function validateBrowserResult(result:JobExecutionResult,input:CreateJobI
   if(!observation||observation.requestedUrl!==new URL(plan.url).href||observation.completedActions!==completedActions)throw invalid('The browser observation does not match this task step.');
   return observation;
 }
-async function discardUnpublished(db:Database,storage:BlobStorage,keys:string[]){
-  const found=keys.length?await db.query('SELECT storage_key FROM platform_uploads WHERE storage_key=ANY($1::text[])',[keys]).catch(()=>undefined):undefined;
-  if(!found)return;const published=new Set(found.rows.map(row=>row.storage_key));for(const key of keys)if(!published.has(key))await storage.delete(key).catch(()=>{});
-}
-export async function applyBrowserCheckpoint(db:Database,storage:BlobStorage,binding:BrowserBinding,event:BrowserCheckpointEvent):Promise<BrowserCheckpoint>{
+async function discardUnpublished(writes:UploadWrites,files:StagedUpload[]){for(const file of files)await writes.abandon(file);}
+export async function applyBrowserCheckpoint(db:Database,storage:BlobStorage,crypto:DataCrypto|undefined,binding:BrowserBinding,event:BrowserCheckpointEvent):Promise<BrowserCheckpoint>{
+  const writes=new UploadWrites(db,crypto,storage);
   const job=await assertBrowserAuthorized(db,binding),input:CreateJobInput={kind:'browser',provider:job.provider,prompt:job.prompt,options:job.options};
   if(event.definitionHash!==binding.definitionHash||!Number.isSafeInteger(event.expectedRevision)||event.expectedRevision<0||!Number.isSafeInteger(event.index)||event.index<0||event.index>11||!['started','completed'].includes(event.type))throw invalid('Invalid browser checkpoint transition.');
   if(event.type==='completed')validateBrowserResult(event.result,input,event.index+1);
-  const files:{key:string;uploadId:string;artifactId:string;artifact:JobExecutionResult['artifacts'][number]}[]=[];
+  const files:{staged:StagedUpload;uploadId:string;artifactId:string;artifact:JobExecutionResult['artifacts'][number]}[]=[];
   try{
-    if(event.type==='completed')for(const artifact of event.result.artifacts){binding.signal.throwIfAborted();const file={key:randomUUID(),uploadId:randomUUID(),artifactId:randomUUID(),artifact};files.push(file);await storage.put(file.key,artifact.bytes,artifact.mime);}
+    if(event.type==='completed')for(const artifact of event.result.artifacts){binding.signal.throwIfAborted();const staged=await writes.stage(binding.userId,{filename:artifact.name,mime:artifact.mime,bytes:artifact.bytes},async c=>{await assertBrowserAuthorized(c,binding,true);},binding.signal);files.push({staged,uploadId:staged.id,artifactId:randomUUID(),artifact});}
     return await db.transaction(async client=>{
       await assertBrowserAuthorized(client,binding,true);
       const found=await client.query('SELECT * FROM platform_browser_checkpoints WHERE job_id=$1 FOR UPDATE',[binding.jobId]);const row=found.rows[0];
@@ -104,7 +104,7 @@ export async function applyBrowserCheckpoint(db:Database,storage:BlobStorage,bin
       if(row.revision!==event.expectedRevision)throw new ApiError(409,'BROWSER_CHECKPOINT_CONFLICT','The browser journal advanced in another execution.');
       if(event.index!==row.next_index||event.index>=row.total_actions||row.state!==(event.type==='started'?'ready':'started'))throw new ApiError(409,'BROWSER_REVIEW_REQUIRED','This browser action cannot be replayed or completed out of order.');
       for(const file of files){
-        await client.query('INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,$3,$4,$5,$6)',[file.uploadId,binding.userId,file.artifact.name,file.artifact.mime,file.artifact.bytes.byteLength,file.key]);
+        await writes.publishInTransaction(client,file.staged);
         await client.query('INSERT INTO platform_artifacts(id,user_id,job_id,kind,mime,filename,upload_id,metadata) VALUES($1,$2,$3,\'browser\',$4,$5,$6,$7)',[file.artifactId,binding.userId,binding.jobId,file.artifact.mime,file.artifact.name,file.uploadId,JSON.stringify({browserAction:event.index,browserGeneration:binding.generation,definitionHash:binding.definitionHash,partialCompleted:true,browserObservation:file.artifact.name==='browser-observation.json'})]);
       }
       const revision=row.revision+1,nextIndex=row.next_index+(event.type==='completed'?1:0),state=event.type==='started'?'started':nextIndex===row.total_actions?'completed':'ready';
@@ -114,7 +114,7 @@ export async function applyBrowserCheckpoint(db:Database,storage:BlobStorage,bin
       await client.query('UPDATE platform_jobs SET progress=$2,updated_at=now() WHERE id=$1',[binding.jobId,Math.round(nextIndex/row.total_actions*95)]);
       return snapshot(saved.rows[0]);
     });
-  }catch(error){await discardUnpublished(db,storage,files.map(file=>file.key));throw error;}
+  }catch(error){await discardUnpublished(writes,files.map(file=>file.staged));throw error;}
 }
 function truncateUtf8(value:string,bytes:number){return Buffer.from(value).subarray(0,bytes).toString('utf8').replace(/\ufffd$/,'');}
 export async function getBrowserObservation(db:Database,storage:BlobStorage,userId:string,jobId:string){

@@ -1,3 +1,4 @@
+import { UploadWrites, type StagedUpload } from './upload-writes.ts';
 import { ModelConsent, requireModelConsent } from './model-routing.ts';
 import type { LegalBundle } from './legal-documents.ts';
 import { randomUUID } from 'node:crypto';
@@ -148,8 +149,10 @@ export async function verifyAttachments(client: PoolClient | Database, userId: s
 
 export class JobService {
   readonly mcp: McpConnections;
+  readonly uploadWrites:UploadWrites;
   readonly modelConsent:ModelConsent;
   constructor(readonly db: Database, readonly config: PlatformConfig, readonly runtime: PlatformProviderRuntime, readonly storage: BlobStorage, readonly relayOptions?:ModelRelayOptions, mcpTransport?:McpTransport, legalBundle:LegalBundle|null=null) {
+    this.uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
     this.runtime=requireModelConsent(runtime);this.modelConsent=new ModelConsent(db,legalBundle);
     this.mcp=new McpConnections(db,config.mcp,mcpTransport,storage);
   }
@@ -456,25 +459,35 @@ export async function processJob(jobs: JobService, id: string, generation: numbe
   const heartbeat=setInterval(()=>void jobs.db.query("UPDATE platform_jobs SET lease_until=now()+interval '60 seconds' WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_until>now() RETURNING id",[id,token]).then(result=>{if(!result.rowCount)abort.abort();}).catch(()=>abort.abort()),10_000);
   heartbeat.unref();
   const workspaceDirectory=path.join(jobs.config.storageDir,'workspaces',row.user_id,id);
-  const storedKeys:string[]=[];
+  const stagedFiles:StagedUpload[]=[];
   const mcpBinding:McpExecutionBinding|undefined=row.kind==='mcp'?{jobId:id,userId:row.user_id,generation,leaseToken:token,input:jobInput(row),policy:row.execution_policy?.mcp,signal:abort.signal}:undefined;
+  const artifactAuthority=async(client:PoolClient)=>{
+    abort.signal.throwIfAborted();
+    const account=(await client.query('SELECT auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[row.user_id])).rows[0];
+    if(!account||row.claimedAuthVersion!==undefined&&String(account.auth_version)!==row.claimedAuthVersion)throw new ApiError(409,'JOB_APPROVAL_REVOKED','The task account is no longer authorized.');
+    const task=(await client.query("SELECT requires_approval FROM platform_jobs WHERE id=$1 AND user_id=$2 AND generation=$3 AND lease_token=$4 AND status='running' AND lease_until>clock_timestamp() FOR UPDATE",[id,row.user_id,generation,token])).rows[0];
+    if(!task)throw new ApiError(409,'JOB_LEASE_EXPIRED','The execution lease is no longer current.');
+    if(task.requires_approval&&!(await client.query("SELECT 1 FROM platform_approvals WHERE job_id=$1 AND user_id=$2 AND generation=$3 AND status='approved'",[id,row.user_id,generation])).rowCount)throw new ApiError(409,'JOB_APPROVAL_REVOKED','The task is no longer approved.');
+    if(mcpBinding)await jobs.mcp.assertPublication(client,mcpBinding);
+  };
   let mcpToolError=false;
   try {
+    jobs.uploadWrites.assertConfigured();
     await verifyGoalPlanInputSources(jobs.db,jobs.storage,row,abort.signal);
     await fs.mkdir(workspaceDirectory,{recursive:true,mode:0o700});
     const input=jobInput(row);
-    const workflowBinding:WorkflowBinding|undefined=row.kind==='workflow'?{jobId:id,userId:row.user_id,generation,leaseToken:token,definitionHash:workflowDefinitionHash(input),signal:abort.signal}:undefined;
+    const workflowBinding:WorkflowBinding|undefined=row.kind==='workflow'?{authVersion:row.claimedAuthVersion!,jobId:id,userId:row.user_id,generation,leaseToken:token,definitionHash:workflowDefinitionHash(input),signal:abort.signal}:undefined;
     const workflowCheckpoint=workflowBinding?await loadWorkflowCheckpoint(jobs.db,workflowBinding):undefined;
     const templatePolicy=validateExecutionTemplates(input,row.execution_policy,jobs.runtime,completedWorkflowStepIndexes(workflowCheckpoint?.steps));
     if(row.requires_approval&&row.provider==='comfyui'){const approval=(await jobs.db.query("SELECT args FROM platform_approvals WHERE job_id=$1 AND user_id=$2 AND generation=$3 AND status='approved' ORDER BY decided_at DESC LIMIT 1",[id,row.user_id,generation])).rows[0];assertExecutionTemplateApproval(input,approval?.args);}
-    const browserBinding:BrowserBinding|undefined=row.kind==='browser'?{jobId:id,userId:row.user_id,generation,leaseToken:token,definitionHash:browserDefinitionHash(input),signal:abort.signal}:undefined;
+    const browserBinding:BrowserBinding|undefined=row.kind==='browser'?{authVersion:row.claimedAuthVersion!,jobId:id,userId:row.user_id,generation,leaseToken:token,definitionHash:browserDefinitionHash(input),signal:abort.signal}:undefined;
     const browserCheckpoint=browserBinding?await loadBrowserCheckpoint(jobs.db,browserBinding):undefined;
     const mcpResult=mcpBinding?await jobs.mcp.execute(mcpBinding):undefined;
     mcpToolError=mcpResult?.mcpToolError===true;
     const result=mcpResult??await jobs.runtime.executeJob(input,{jobId:id,userId:row.user_id,signal:abort.signal,requestAdmission,workspaceDirectory,previousProviderTaskId:row.provider_task_id ?? undefined,
       ...(templatePolicy?.job?{comfyuiTemplate:templatePolicy.job}:{}),...(templatePolicy?.steps?{workflowComfyUITemplates:templatePolicy.steps}:{}),
-      ...(workflowBinding?{workflowCheckpoint,onWorkflowCheckpoint:event=>applyWorkflowCheckpoint(jobs.db,jobs.storage,workflowBinding,event),readWorkflowArtifact:attachmentId=>readWorkflowArtifact(jobs.db,jobs.storage,workflowBinding,attachmentId)}:{}),
-      ...(browserBinding?{browserCheckpoint,onBrowserCheckpoint:event=>applyBrowserCheckpoint(jobs.db,jobs.storage,browserBinding,event),assertBrowserAuthorized:async()=>{providerAvailable(jobs.runtime,row.provider,'browser');if(browserCheckpoint&&!jobs.runtime.capabilities().find(provider=>provider.id===row.provider)?.browserActionsEnabled)throw new ApiError(503,'BROWSER_ACTIONS_DISABLED','Browser actions are disabled on this server.');await assertBrowserAuthorized(jobs.db,browserBinding);}}:{}),
+      ...(workflowBinding?{workflowCheckpoint,onWorkflowCheckpoint:event=>applyWorkflowCheckpoint(jobs.db,jobs.storage,jobs.config.dataCrypto,workflowBinding,event),readWorkflowArtifact:attachmentId=>readWorkflowArtifact(jobs.db,jobs.storage,workflowBinding,attachmentId)}:{}),
+      ...(browserBinding?{browserCheckpoint,onBrowserCheckpoint:event=>applyBrowserCheckpoint(jobs.db,jobs.storage,jobs.config.dataCrypto,browserBinding,event),assertBrowserAuthorized:async()=>{providerAvailable(jobs.runtime,row.provider,'browser');if(browserCheckpoint&&!jobs.runtime.capabilities().find(provider=>provider.id===row.provider)?.browserActionsEnabled)throw new ApiError(503,'BROWSER_ACTIONS_DISABLED','Browser actions are disabled on this server.');await assertBrowserAuthorized(jobs.db,browserBinding);}}:{}),
       requestModel:row.kind==='cli'?createJobModelRelay(jobs.db,{jobId:id,userId:row.user_id,generation,leaseToken:token,signal:abort.signal,requestAdmission},jobs.relayOptions):undefined,
       readAttachment:attachmentId=>jobs.readAttachment(row.user_id,attachmentId,row.execution_policy?.goalPlanInput,abort.signal),
       onProgress:async progress=>{await jobs.db.query("UPDATE platform_jobs SET progress=$3,updated_at=now() WHERE id=$1 AND lease_token=$2 AND status='running'",[id,token,Math.max(0,Math.min(99,Math.round(progress)))]);},
@@ -487,12 +500,11 @@ export async function processJob(jobs: JobService, id: string, generation: numbe
     if(browserCheckpoint&&result.artifacts.length)throw new ApiError(502,'BROWSER_RESULT_INVALID','Action results must be published only through the browser journal.');
     const generated=[...result.artifacts];
     if(!browserCheckpoint&&result.text && !generated.some(artifact=>artifact.mime.startsWith('text/') && new TextDecoder().decode(artifact.bytes)===result.text))generated.push({name:'result.txt',mime:'text/plain',bytes:new TextEncoder().encode(result.text)});
-    const prepared:{uploadId:string;artifactId:string;key:string;artifact:GeneratedArtifact}[]=[];
+    const prepared:{uploadId:string;artifactId:string;staged:StagedUpload;artifact:GeneratedArtifact}[]=[];
     for(const artifact of generated){
       if(artifact.bytes.byteLength>200*1024*1024)throw new ApiError(413,'ARTIFACT_TOO_LARGE','Generated artifact exceeds the storage limit.');
-      const uploadId=randomUUID(), artifactId=randomUUID(),key=randomUUID();
-      await jobs.storage.put(key,artifact.bytes,artifact.mime);storedKeys.push(key);
-      prepared.push({uploadId,artifactId,key,artifact});
+      const staged=await jobs.uploadWrites.stage(row.user_id,{filename:artifact.name,mime:artifact.mime,bytes:artifact.bytes},artifactAuthority,abort.signal);stagedFiles.push(staged);
+      prepared.push({uploadId:staged.id,artifactId:randomUUID(),staged,artifact});
     }
     await jobs.db.transaction(async client=>{
       const locked=await client.query("SELECT *,lease_until>now() AS lease_active FROM platform_jobs WHERE id=$1 AND generation=$3 AND lease_token=$2 AND user_id=$4 FOR UPDATE",[id,token,generation,row.user_id]);
@@ -516,7 +528,7 @@ export async function processJob(jobs: JobService, id: string, generation: numbe
         if(browserCheckpoint){const saved=await client.query('SELECT * FROM platform_browser_checkpoints WHERE job_id=$1',[id]);const cp=saved.rows[0];if(!cp||cp.definition_hash!==browserBinding.definitionHash||cp.state!=='completed'||cp.next_index!==cp.total_actions||cp.total_actions!==parseBrowserTaskOptions(input.options).actions?.length)throw new ApiError(409,'BROWSER_REVIEW_REQUIRED','The browser journal did not confirm all reviewed actions.');}
       }
       for(const entry of prepared){
-        await client.query('INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,$3,$4,$5,$6)',[entry.uploadId,row.user_id,entry.artifact.name,entry.artifact.mime,entry.artifact.bytes.byteLength,entry.key]);
+        await jobs.uploadWrites.publishInTransaction(client,entry.staged);
         await client.query('INSERT INTO platform_artifacts(id,user_id,job_id,kind,mime,filename,upload_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[entry.artifactId,row.user_id,id,row.kind,entry.artifact.mime,entry.artifact.name,entry.uploadId,JSON.stringify(mcpBinding?{mcpGeneration:generation,mcpDefinitionHash:mcpDefinitionHash(input,mcpBinding.policy),mcp:mcpSummary(mcpBinding.policy)}:browserBinding?{browserGeneration:generation,definitionHash:browserBinding.definitionHash,browserObservation:entry.artifact.name==='browser-observation.json'}:{})]);
       }
       if(mcpBinding){if(prepared.length!==1)throw new ApiError(502,'MCP_RESULT_INVALID','The MCP result did not contain one private JSON artifact.');await jobs.mcp.complete(client,mcpBinding,prepared[0].artifactId,prepared[0].artifact.bytes,mcpToolError);}
@@ -535,9 +547,7 @@ export async function processJob(jobs: JobService, id: string, generation: numbe
       }
     });
   } catch(error) {
-    // A lost COMMIT acknowledgement must not delete blobs that PostgreSQL already published.
-    const published=storedKeys.length?await jobs.db.query('SELECT storage_key FROM platform_uploads WHERE storage_key=ANY($1::text[])',[storedKeys]).catch(()=>undefined):undefined;
-    if(published){const retained=new Set(published.rows.map(entry=>entry.storage_key));for(const key of storedKeys)if(!retained.has(key))await jobs.storage.delete(key).catch(()=>{});}
+    for(const staged of stagedFiles)await jobs.uploadWrites.abandon(staged);
     const safe=publicError(error);
     await jobs.db.transaction(async client=>{
       const current=await client.query('SELECT status,provider_task_id FROM platform_jobs WHERE id=$1 AND generation=$2 AND lease_token=$3 FOR UPDATE',[id,generation,token]);

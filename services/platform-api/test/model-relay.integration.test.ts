@@ -18,7 +18,7 @@ import { createProviderRuntime, ProviderError } from '@companion/ai-core';
 import { fakeCodexResponse } from '../../../packages/ai-core/test/fixtures/codex-responses.ts';
 import { fileURLToPath } from 'node:url';
 
-const schema=`relay_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'});
+const schema=`relay_test_${randomUUID().replaceAll('-','')}`,base=readConfig({ ...process.env, PLATFORM_DATA_KEY:'d8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'});
 const admin=new Database(base.databaseUrl),url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());
 const env={PLATFORM_CLI_MODEL_RELAY:'1',PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-relay-key',PLATFORM_CLI_MODEL:'fictional-model',PLATFORM_CLI_RELAY_MAX_OUTPUT_TOKENS:'256'};
@@ -210,7 +210,7 @@ test('worker retains a relay provider uncertainty instead of publishing successf
   const unavailable=async()=>{throw new Error('Unused synthetic provider');};
   const runtime:PlatformProviderRuntime={capabilities:()=>[{id:'cli',name:'Fictional CLI',enabled:true,keyConfigured:true,capabilities:['cli'],models:['fictional-model'],envVariables:[]}],streamChat:async function*(){throw new Error('Unused');},createVoiceSession:unavailable,transcribe:unavailable,speech:unavailable,
     executeJob:async(_input,context)=>{assert(context.requestModel);await context.requestModel({requestId:'worker-request',body:input,signal:new AbortController().signal});return {artifacts:[{name:'must-not-publish.txt',mime:'text/plain',bytes:new TextEncoder().encode('Fictional result')}]};}};
-  const service=new JobService(db,{...base,storageDir:directory},runtime,{} as BlobStorage,{env,fetch:fake(()=>new Response('fictional-private-error',{status:503}))},undefined,FICTIONAL_LEGAL);
+  const service=new JobService(db,{...base,storageDir:directory},runtime,new LocalBlobStorage(directory),{env,fetch:fake(()=>new Response('fictional-private-error',{status:503}))},undefined,FICTIONAL_LEGAL);
   try{
     const created=await service.create(binding.userId,{kind:'cli',provider:'cli',prompt:'Fictional worker task'});await service.decide(binding.userId,created.approval.id,'approved');
     await processJob(service,created.job.id,1);
@@ -241,7 +241,7 @@ test('worker requires review when relay settlement is missing or its result is e
       throw new ProviderError(auditStatus?'CLI_RELAY_PROTOCOL':'MODEL_RELAY_UNCERTAIN','Synthetic settlement requires review.',502);
     }};
   const storage=new Map<string,Uint8Array>();
-  const service=new JobService(db,{...base,storageDir:directory},runtime,{put:async(key,bytes)=>{storage.set(key,bytes);},get:async key=>storage.get(key)!,delete:async key=>{storage.delete(key);},stat:async()=>{throw new Error('Metadata reads are unused by this settlement fixture');},openRead:async()=>{throw new Error('Streaming reads are unused by this settlement fixture');}},{env},undefined,FICTIONAL_LEGAL);
+  const service=new JobService(db,{...base,storageDir:directory},runtime,{scope:'blob_scope_'+'f'.repeat(64),put:async(key,bytes)=>{storage.set(key,bytes);},get:async key=>storage.get(key)!,delete:async key=>{storage.delete(key);},stat:async key=>{const value=storage.get(key);if(!value)throw new ApiError(404,'STORAGE_NOT_FOUND','Fictional object is absent.');return {size:value.byteLength};},openRead:async()=>{throw new Error('Streaming reads are unused by this settlement fixture');}},{env},undefined,FICTIONAL_LEGAL);
   try{
     for(const scenario of [{status:undefined,returns:false},{status:'reserved',returns:false},{status:'reserved',returns:true},{status:'uncertain',returns:true}]){
       auditStatus=scenario.status;returnArtifact=scenario.returns;

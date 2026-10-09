@@ -1,3 +1,5 @@
+import { UploadWrites, type StagedUpload } from './upload-writes.ts';
+import type { DataCrypto } from './data-crypto.ts';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { PoolClient } from 'pg';
@@ -9,7 +11,7 @@ import { ApiError, invalid, notFound } from './errors.ts';
 import { parseWorkflowTemplate } from './workflow-templates.ts';
 import { validateExecutionTemplates } from './execution-templates.ts';
 
-export interface WorkflowBinding { jobId: string; userId: string; generation: number; leaseToken: string; definitionHash: string; signal: AbortSignal; }
+export interface WorkflowBinding { authVersion:string; jobId: string; userId: string; generation: number; leaseToken: string; definitionHash: string; signal: AbortSignal; }
 const MAX_TEXT_BYTES = 512 * 1024, MAX_ARTIFACT_BYTES = 100 * 1024 * 1024, MAX_RESULT_BYTES = 200 * 1024 * 1024;
 const hashValid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
@@ -38,7 +40,7 @@ export function completedWorkflowStepIndexes(steps: WorkflowStepCheckpoint[] | u
 
 async function authorize(client: PoolClient | Database, binding: WorkflowBinding, lock = false) {
   binding.signal.throwIfAborted();
-  const result = await client.query(`SELECT j.*,c.definition_hash,c.revision,c.steps AS checkpoint_steps FROM platform_jobs j JOIN platform_workflow_checkpoints c ON c.job_id=j.id WHERE j.id=$1 AND j.user_id=$2 AND j.generation=$3 AND j.lease_token=$4 AND j.lease_until>now() AND j.status='running' AND j.kind='workflow' AND j.provider='workflow' AND j.requires_approval AND EXISTS(SELECT 1 FROM platform_approvals a WHERE a.job_id=j.id AND a.user_id=j.user_id AND a.generation=j.generation AND a.status='approved' AND a.args->>'workflowDefinitionHash'=c.definition_hash)${lock ? ' FOR UPDATE OF j,c' : ''}`, [binding.jobId, binding.userId, binding.generation, binding.leaseToken]);
+  const result = await client.query(`SELECT j.*,c.definition_hash,c.revision,c.steps AS checkpoint_steps FROM platform_jobs j JOIN platform_workflow_checkpoints c ON c.job_id=j.id WHERE j.id=$1 AND j.user_id=$2 AND j.generation=$3 AND j.lease_token=$4 AND j.lease_until>clock_timestamp() AND j.status='running' AND j.kind='workflow' AND j.provider='workflow' AND EXISTS(SELECT 1 FROM platform_users u WHERE u.id=j.user_id AND u.auth_version=$5) AND j.requires_approval AND EXISTS(SELECT 1 FROM platform_approvals a WHERE a.job_id=j.id AND a.user_id=j.user_id AND a.generation=j.generation AND a.status='approved' AND a.args->>'workflowDefinitionHash'=c.definition_hash)${lock ? ' FOR UPDATE OF j,c' : ''}`, [binding.jobId, binding.userId, binding.generation, binding.leaseToken,binding.authVersion]);
   if (!result.rowCount) throw new ApiError(409, 'WORKFLOW_AUTH_REVOKED', 'This workflow is no longer authorized to execute.');
   const row = result.rows[0];
   const definitionHash = workflowDefinitionHash({ kind: 'workflow', provider: 'workflow', prompt: row.prompt, options: row.options });
@@ -77,12 +79,12 @@ export async function markWorkflowInterrupted(client: PoolClient, jobId: string,
   if(revision!==row.revision)await client.query('UPDATE platform_workflow_checkpoints SET steps=$2,revision=$3,updated_at=now() WHERE job_id=$1',[jobId,JSON.stringify(steps),revision]);
 }
 
-async function persistMaterials(db: Database, storage: BlobStorage, binding: WorkflowBinding, result: JobExecutionResult) {
+async function persistMaterials(writes: UploadWrites, binding: WorkflowBinding, result: JobExecutionResult) {
   const text = result.text ?? '';
   if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES) throw new ApiError(413, 'WORKFLOW_RESULT_TOO_LARGE', 'The workflow text result exceeds its checkpoint limit.');
   if (!Array.isArray(result.artifacts) || result.artifacts.length > 8) throw invalid('At most eight artifacts may be saved for one workflow step.');
   let total = 0;
-  const files: { key: string; uploadId: string; artifactId: string; name: string; mime: string; bytes: Uint8Array }[] = [];
+  const files: { staged: StagedUpload; uploadId: string; artifactId: string; name: string; mime: string; bytes: Uint8Array }[] = [];
   try {
     for (const artifact of result.artifacts) {
       if (!(artifact.bytes instanceof Uint8Array) || !artifact.bytes.length || artifact.bytes.byteLength > MAX_ARTIFACT_BYTES || (total += artifact.bytes.byteLength) > MAX_RESULT_BYTES) throw new ApiError(413, 'WORKFLOW_RESULT_TOO_LARGE', 'The workflow artifacts exceed their checkpoint limits.');
@@ -90,26 +92,21 @@ async function persistMaterials(db: Database, storage: BlobStorage, binding: Wor
       const mime = String(artifact.mime).split(';')[0].trim();
       if (!/^[a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+$/.test(mime)) throw invalid('Invalid workflow artifact media type.');
       binding.signal.throwIfAborted();
-      const file = { key: randomUUID(), uploadId: randomUUID(), artifactId: randomUUID(), name, mime, bytes: artifact.bytes };
-      files.push(file); await storage.put(file.key, file.bytes, file.mime);
+      const staged=await writes.stage(binding.userId,{filename:name,mime,bytes:artifact.bytes},async c=>{await authorize(c,binding,true);},binding.signal);
+      files.push({staged,uploadId:staged.id,artifactId:randomUUID(),name,mime,bytes:artifact.bytes});
     }
     return { text, hasText: result.text!==undefined, files };
-  } catch (error) { await discardUnpublished(db, storage, files.map(file => file.key)); throw error; }
+  } catch (error) { await discardUnpublished(writes, files.map(file => file.staged)); throw error; }
 }
-async function discardUnpublished(db: Database, storage: BlobStorage, keys: string[]) {
-  if (!keys.length) return;
-  const retained = await db.query('SELECT storage_key FROM platform_uploads WHERE storage_key=ANY($1::text[])', [keys]).catch(() => undefined);
-  if (!retained) return; // An unknown COMMIT result is not permission to delete a published file.
-  const published = new Set(retained.rows.map(row => row.storage_key));
-  for (const key of keys) if (!published.has(key)) await storage.delete(key).catch(() => {});
-}
+async function discardUnpublished(writes:UploadWrites,files:StagedUpload[]){for(const file of files)await writes.abandon(file);}
 
-export async function applyWorkflowCheckpoint(db: Database, storage: BlobStorage, binding: WorkflowBinding, event: WorkflowCheckpointEvent): Promise<WorkflowCheckpoint> {
+export async function applyWorkflowCheckpoint(db: Database, storage: BlobStorage, crypto:DataCrypto|undefined, binding: WorkflowBinding, event: WorkflowCheckpointEvent): Promise<WorkflowCheckpoint> {
+  const writes=new UploadWrites(db,crypto,storage);
   const authorized = await authorize(db, binding);
   const plan: WorkflowStep[] = authorized.options.steps;
   eventInput(event, plan);
   // Validate lease/revision again after storing private bytes, before publishing their references.
-  const materials = event.type === 'completed' ? await persistMaterials(db, storage, binding, event.result) : undefined;
+  const materials = event.type === 'completed' ? await persistMaterials(writes, binding, event.result) : undefined;
   try {
     return await db.transaction(async client => {
       const row = await authorize(client, binding, true);
@@ -129,7 +126,7 @@ export async function applyWorkflowCheckpoint(db: Database, storage: BlobStorage
       if (event.type === 'provider_task' && current?.providerTaskId && current.providerTaskId !== event.providerTaskId) throw new ApiError(409, 'WORKFLOW_PROVIDER_TASK_CHANGED', 'The existing provider task cannot be silently replaced.');
       const refs: WorkflowArtifactRef[] = [];
       if (materials) for (const file of materials.files) {
-        await client.query('INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,$3,$4,$5,$6)', [file.uploadId, binding.userId, file.name, file.mime, file.bytes.byteLength, file.key]);
+        await writes.publishInTransaction(client,file.staged);
         await client.query('INSERT INTO platform_artifacts(id,user_id,job_id,kind,mime,filename,upload_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [file.artifactId, binding.userId, binding.jobId, plan[event.index].kind, file.mime, file.name, file.uploadId, JSON.stringify({ workflowStep: event.index, definitionHash: binding.definitionHash, partialCompleted: true })]);
         refs.push({ attachmentId: file.uploadId, name: file.name, mime: file.mime, size: file.bytes.byteLength });
       }
@@ -145,7 +142,7 @@ export async function applyWorkflowCheckpoint(db: Database, storage: BlobStorage
       await client.query('UPDATE platform_jobs SET progress=$2,updated_at=now() WHERE id=$1', [binding.jobId, Math.round(steps.filter(step => step.state === 'completed').length / plan.length * 95)]);
       return snapshot(saved.rows[0]);
     });
-  } catch (error) { if (materials) await discardUnpublished(db, storage, materials.files.map(file => file.key)); throw error; }
+  } catch (error) { if (materials) await discardUnpublished(writes, materials.files.map(file => file.staged)); throw error; }
 }
 
 export async function readWorkflowArtifact(db: Database, storage: BlobStorage, binding: WorkflowBinding, attachmentId: string): Promise<ProviderAttachment> {

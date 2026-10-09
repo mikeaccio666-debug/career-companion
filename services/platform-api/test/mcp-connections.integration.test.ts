@@ -17,7 +17,7 @@ import { jobDefinitionHash, processJob, recoverInterrupted } from '../src/jobs.t
 import { mcpSchemaHash, type McpCatalogConfig } from '../src/mcp-config.ts';
 import type { McpDiscoveredTool, McpToolResult, McpTransport } from '../src/mcp-transport-port.ts';
 
-const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'});
+const prefix = '/api/platform', origin = 'http://localhost:4321', base = readConfig({ ...process.env, PLATFORM_DATA_KEY:'d8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'});
 const schema = `mcp_call_test_${randomUUID().replaceAll('-', '')}`, admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());
@@ -90,7 +90,7 @@ async function approved(owner?: Actor) {
   const item = await prepared(owner), response = await exchange(`/approvals/${item.approval.id}/decision`, item.user, { body: { decision: 'approved' } });
   assert.equal(response.status, 200, response.body); return item;
 }
-async function count(table: 'platform_artifacts' | 'platform_mcp_receipts' | 'platform_uploads', userId: string) { return (await db.query(`SELECT count(*)::integer AS count FROM ${table} WHERE user_id=$1`, [userId])).rows[0].count; }
+async function count(table: 'platform_artifacts' | 'platform_mcp_receipts' | 'platform_uploads' | 'platform_upload_writes', userId: string) { return (await db.query(`SELECT count(*)::integer AS count FROM ${table} WHERE user_id=$1`, [userId])).rows[0].count; }
 const errorCode = (response: Response) => JSON.parse(response.body).error.code;
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 async function waitStarted(promise: Promise<void>): Promise<void> {
@@ -284,7 +284,7 @@ test('changed frozen task or approval cannot reach an MCP call', async () => {
 
 test('revocation, cancellation, approval removal and lease expiry reject delayed results without publishing blobs', async () => {
   for (const change of ['grant', 'cancel', 'approval', 'lease', 'generation', 'receipt_tool', 'receipt_schema']) {
-    const item = await approved(), started = deferred(), release = deferred(), before = calls, deletes = storage.deleteCount;
+    const item = await approved(), started = deferred(), release = deferred(), before = calls, writes = storage.putCount;
     invoke = async () => { started.resolve(); await release.promise; return { content: [{ type: 'text', text: 'Fictional delayed private result' }] }; };
     const running = processJob(system.jobs, item.job.id, 1);
     try {
@@ -297,7 +297,7 @@ test('revocation, cancellation, approval removal and lease expiry reject delayed
       if (change === 'receipt_tool') await db.query("UPDATE platform_mcp_receipts SET tool_name='different_fictional_tool' WHERE job_id=$1", [item.job.id]);
       if (change === 'receipt_schema') await db.query('UPDATE platform_mcp_receipts SET schema_hash=$2 WHERE job_id=$1', [item.job.id, 'f'.repeat(64)]);
     } finally { release.resolve(); await running; invoke = undefined; }
-    assert.equal(calls, before + 1); assert.equal(await count('platform_artifacts', item.user.id), 0); assert.equal(await count('platform_uploads', item.user.id), 0); assert(storage.deleteCount > deletes);
+    assert.equal(calls, before + 1); assert.equal(await count('platform_artifacts', item.user.id), 0); assert.equal(await count('platform_uploads', item.user.id), 0); assert.equal(storage.putCount,writes);assert.equal(await count('platform_upload_writes',item.user.id),0);
     assert.equal((await exchange(`/mcp/tasks/${item.job.id}/result`, item.user)).status, 404);
     const receipt = (await db.query('SELECT status FROM platform_mcp_receipts WHERE job_id=$1', [item.job.id])).rows[0];
     assert.equal(receipt.status, 'uncertain');

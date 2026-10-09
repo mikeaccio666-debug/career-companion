@@ -15,9 +15,12 @@ interface WriteRecord {
  status:'writing'|'ready'|'cleanup';writerFinished:boolean;revision:number;lastEventId:string;
  publishUntil:string;leaseToken:string|null;leaseUntil:string|null;
 }
+export interface StagedUpload {readonly id:string;readonly name:string;readonly mime:string;readonly size:number;}
+type WriteAuthority=(client:PoolClient)=>Promise<void>;
 /** Persist before I/O; publish and retire the intent in one transaction. Unknown
  * remote outcomes keep a durable cleanup tombstone until positively reconciled. */
 export class UploadWrites {
+ private readonly staged=new WeakMap<StagedUpload,{ownerId:string;storageKey:string;writerToken:string;authorize:WriteAuthority;signal?:AbortSignal}>();
  constructor(private db:Database,private crypto:DataCrypto|undefined,private storage:BlobStorage){}
  assertConfigured(){if(!this.crypto||!/^blob_scope_[0-9a-f]{64}$/.test(this.storage.scope??''))throw unavailable();}
  private async save(c:PoolClient,r:WriteRecord){
@@ -52,18 +55,20 @@ export class UploadWrites {
    await this.save(c,this.next(r,{writerFinished:r.writerFinished||completed,status:abandon||r.status==='cleanup'||!active?'cleanup':'ready'}));
   });
  }
- async upload(value:FixedSessionContext,input:{filename:string;mime:string;bytes:Uint8Array},signal?:AbortSignal){
-  this.assertConfigured();let who:FixedSessionContext;
-  try{const v=careerRecordObject(value,['userId','tokenHash']);if(typeof v.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(v.tokenHash))throw unavailable();who=Object.freeze({userId:careerRecordId(v.userId),tokenHash:v.tokenHash});}
-  catch{throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');}
+ /** Server-only transaction callback, never deserialized from request input.
+  * The opaque staged value is not publication authority: the same real source
+  * checks run again inside the caller's artifact/checkpoint transaction. */
+ async stage(owner:string,input:{filename:string;mime:string;bytes:Uint8Array},authorize:WriteAuthority,signal?:AbortSignal):Promise<StagedUpload>{
+  this.assertConfigured();const ownerId=careerRecordId(owner);if(typeof authorize!=='function')throw unavailable();
   const filename=input.filename,mime=input.mime,bytes=Buffer.from(input.bytes);
   if(!filename||filename.length>200||/[\x00-\x1f\x7f]/.test(filename)||!mime||mime.length>150||bytes.length>200*1024*1024)throw unavailable();
   const id=randomUUID(),storageKey=randomUUID(),writerToken=randomUUID();let attempted=false,acknowledged=false;
   try{
    await this.db.withBoundedTransaction(async c=>{
-    await authorizeFixedSession(c,who,signal);
+    if(!(await c.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[ownerId])).rowCount)throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');
+    await authorize(c);signal?.throwIfAborted();
     const until=(await c.query("SELECT clock_timestamp()+interval '2 minutes' until")).rows[0].until.toISOString();
-    await this.save(c,{schemaVersion:1,id,ownerId:who.userId,storageKey,scope:this.storage.scope!,writerToken,status:'writing',writerFinished:false,
+    await this.save(c,{schemaVersion:1,id,ownerId,storageKey,scope:this.storage.scope!,writerToken,status:'writing',writerFinished:false,
      revision:1,lastEventId:randomUUID(),publishUntil:until,leaseToken:null,leaseUntil:null});signal?.throwIfAborted();
    });
    signal?.throwIfAborted();attempted=true;
@@ -71,21 +76,33 @@ export class UploadWrites {
    await this.storage.put(storageKey,bytes,mime,io);acknowledged=true;
    await this.finish(id,writerToken,true,false);
    signal?.throwIfAborted();const stat=await this.storage.stat(storageKey,io);if(stat.size!==bytes.length)throw unavailable();
-   await this.db.withBoundedTransaction(async c=>{
-    await authorizeFixedSession(c,who,signal);const r=await this.read(c,id);
-    if(!r||r.writerToken!==writerToken||r.status!=='ready'||!r.writerFinished||r.scope!==this.storage.scope
-     ||!(await c.query('SELECT 1 WHERE clock_timestamp()<$1',[r.publishUntil])).rowCount)throw unavailable();
-    await c.query('INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,$3,$4,$5,$6)',[id,who.userId,filename,mime,bytes.length,storageKey]);
-    await c.query('DELETE FROM platform_upload_writes WHERE id=$1',[id]);await authorizeFixedSession(c,who,signal);
-   });
-   return {id,name:filename,mime,size:bytes.length};
+   const staged=Object.freeze({id,name:filename,mime,size:bytes.length});this.staged.set(staged,{ownerId,storageKey,writerToken,authorize,signal});return staged;
   }catch(error){
-   // If publication committed but its acknowledgement was lost, the intent is
-   // already absent. Never infer that the published object should be removed.
-   await this.finish(id,writerToken,acknowledged||!attempted,true).catch(()=>{});
-   await this.cleanup(id).catch(()=>{});
+   await this.finish(id,writerToken,acknowledged||!attempted,true).catch(()=>{});await this.cleanup(id).catch(()=>{});
    if(error instanceof ApiError)throw error;throw unavailable();
   }
+ }
+ async publishInTransaction(c:PoolClient,staged:StagedUpload):Promise<void>{
+  const binding=this.staged.get(staged);if(!binding)throw unavailable();const {ownerId,storageKey,writerToken,authorize,signal}=binding;
+  signal?.throwIfAborted();if(!(await c.query('SELECT id FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[ownerId])).rowCount)throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');
+  await authorize(c);const r=await this.read(c,staged.id);
+  if(!r||r.ownerId!==ownerId||r.storageKey!==storageKey||r.writerToken!==writerToken||r.status!=='ready'||!r.writerFinished||r.scope!==this.storage.scope
+   ||!(await c.query('SELECT 1 WHERE clock_timestamp()<$1',[r.publishUntil])).rowCount)throw unavailable();
+  await c.query('INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,$3,$4,$5,$6)',[staged.id,ownerId,staged.name,staged.mime,staged.size,storageKey]);
+  await c.query('DELETE FROM platform_upload_writes WHERE id=$1',[staged.id]);await authorize(c);signal?.throwIfAborted();
+ }
+ async abandon(staged:StagedUpload):Promise<void>{
+  const binding=this.staged.get(staged);if(!binding)throw unavailable();
+  // Missing intent may mean publication committed and its ack was lost.
+  await this.finish(staged.id,binding.writerToken,true,true).catch(()=>{});await this.cleanup(staged.id).catch(()=>{});
+ }
+ async upload(value:FixedSessionContext,input:{filename:string;mime:string;bytes:Uint8Array},signal?:AbortSignal){
+  this.assertConfigured();let who:FixedSessionContext;
+  try{const v=careerRecordObject(value,['userId','tokenHash']);if(typeof v.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(v.tokenHash))throw unavailable();who=Object.freeze({userId:careerRecordId(v.userId),tokenHash:v.tokenHash});}
+  catch{throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');}
+  const staged=await this.stage(who.userId,input,c=>authorizeFixedSession(c,who,signal),signal);
+  try{await this.db.withBoundedTransaction(c=>this.publishInTransaction(c,staged));return staged;}
+  catch(error){await this.abandon(staged);if(error instanceof ApiError)throw error;throw unavailable();}
  }
  async cleanup(id:string,signal?:AbortSignal){
   this.assertConfigured();careerRecordId(id);signal?.throwIfAborted();

@@ -16,7 +16,7 @@ import { ApiError } from '../src/errors.ts';
 import { JobService, TaskQueue, connectionFromUrl, createWorker, jobDefinitionHash, processJob, recoverInterrupted } from '../src/jobs.ts';
 import { ProducerQueue, QUEUE_DISPATCH_TIMEOUT_MS } from '../src/queue-connection.ts';
 
-const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}),schema=`queue_recovery_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl);
+const base=readConfig({ ...process.env, PLATFORM_DATA_KEY:'d8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}),schema=`queue_recovery_${randomUUID().replaceAll('-','')}`,admin=new Database(base.databaseUrl);
 const url=new URL(base.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string;
 before(async()=>{await admin.query(`CREATE SCHEMA ${schema}`);await db.migrate(); await seedFictionalActiveLegal(db);directory=await fs.mkdtemp(path.join(os.tmpdir(),'queue-recovery-fixtures-'));});
