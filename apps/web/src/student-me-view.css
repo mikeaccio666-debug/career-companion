@@ -1,0 +1,33 @@
+.student-me-page { min-height:100dvh;background:var(--paper);padding:0 24px 48px;font-size:15px;line-height:24px; }
+.student-me-page * { box-sizing:border-box; }
+.student-me-top { min-height:64px;max-width:960px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--rule); }
+.student-me-top a { display:flex;align-items:center;gap:8px;min-height:44px;color:var(--ink-2);text-decoration:none; }
+.student-me-top>span { font-size:13px;line-height:20px;color:var(--ink-3); }
+.student-me-content { max-width:760px;margin:40px auto 0; }
+.student-me-heading { margin-bottom:28px; }
+.student-me-heading h1 { font-size:28px;line-height:38px;margin:0 0 8px;font-weight:700; }
+.student-me-heading p { margin:0 0 4px;color:var(--ink-2); }
+.student-me-heading small { color:var(--ink-3);font-size:12px;line-height:18px; }
+.student-me-account { display:flex;align-items:center;gap:16px;background:var(--sheet);border:1px solid var(--rule);border-radius:8px;padding:24px;margin-bottom:32px; }
+.student-me-avatar { display:grid;place-items:center;flex:0 0 48px;height:48px;background:var(--tint);color:var(--ink-2);border-radius:8px;font-size:22px;line-height:30px; }
+.student-me-account>div { min-width:0;overflow-wrap:anywhere; }
+.student-me-account h2,.student-me-section h2 { margin:0;font-size:17px;line-height:26px;font-weight:700; }
+.student-me-account p { margin:4px 0;color:var(--ink-2);overflow-wrap:anywhere; }
+.student-me-account small { font-size:12px;line-height:18px;color:var(--ink-3); }
+.student-me-sections { display:grid;gap:32px; }
+.student-me-section>header p { color:var(--ink-3);font-size:13px;line-height:20px;margin:6px 0 14px; }
+.student-me-section ul { list-style:none;margin:0;padding:0;border:1px solid var(--rule);background:var(--sheet);border-radius:8px;overflow:hidden; }
+.student-me-section li+li { border-top:1px solid var(--rule); }
+.student-me-section li>a { display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:64px;padding:16px 20px;color:var(--ink);text-decoration:none; }
+.student-me-section li>a>span { min-width:0;overflow-wrap:anywhere; }
+.student-me-section strong { display:block;font-size:15px;line-height:24px;font-weight:500; }
+.student-me-section small { display:block;font-size:13px;line-height:20px;color:var(--ink-3);margin-top:2px; }
+.student-me-section svg { flex-shrink:0;color:var(--ink-3); }
+.student-me-section li>a:hover { background:var(--tint); }
+.student-me-legal { margin-top:32px; }
+.student-me-legal button { margin-top:24px;min-height:44px;border:1px solid var(--ink-4);border-radius:8px;background:var(--sheet);color:var(--ink);padding:8px 20px;font:inherit;cursor:pointer; }
+.student-me-page :is(a,button):focus-visible { outline:2px solid var(--focus);outline-offset:3px; }
+.student-me-section li>a:focus-visible { outline-offset:-3px; }
+.student-me-notice { padding:20px;background:var(--sheet);border:1px solid var(--rule);border-radius:8px; }
+.student-me-notice p { margin:0 0 8px; }.student-me-notice a { color:var(--air); }
+@media(max-width:639px) { .student-me-page { padding:0 16px calc(32px + env(safe-area-inset-bottom)); }.student-me-top { min-height:56px; }.student-me-content { margin-top:28px; }.student-me-account { padding:20px 16px; }.student-me-section li>a { padding:14px 16px; } }
