@@ -334,3 +334,5 @@ export * from './mentor-scheduling.ts';
 export * from './mentor-ratings.ts';
 
 export * from './companion-paid-settings.ts';
+
+export * from './resume-diff.ts';

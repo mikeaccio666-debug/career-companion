@@ -105,3 +105,12 @@ test('actual multipart upload to original review preserves owned file provenance
   assert.equal(calls,0);
  }finally{const {LocalBlobStorage}=await import('../src/storage.ts');await new LocalBlobStorage(readConfig().storageDir).delete(key);}
 });
+
+test('real authenticated HTTP diff uses strict revision query, no-store private history and cannot approve or read another owner',async()=>{
+ const a=await actor(),b=await actor(),created=await system.app.inject({method:'POST',url:root+'career/resume-versions',headers:a.headers,payload:create()}),v=parseResumeReviewView(created.json().view),base=root+'pending-items/'+v.item.id;
+ const edit=await system.app.inject({method:'POST',url:base+'/revisions',headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:1,payloadDigest:v.item.payloadDigest,label:'Fictional changed',text:'Fictional revised personal contribution.'}});assert.equal(edit.statusCode,200,edit.body);
+ const response=await system.app.inject({url:base+'/diff?from=1&to=2',headers:a.headers});assert.equal(response.statusCode,200,response.body);assert.equal(response.headers['cache-control'],'private, no-store');assert.equal(response.json().ownerId,a.id);assert.equal(response.json().to.payloadDigest,edit.json().view.item.payloadDigest);
+ assert.equal((await system.app.inject({url:base,headers:a.headers})).json().item.status,'pending');assert.equal((await system.app.inject({url:base+'/diff?from=1&to=2',headers:b.headers})).statusCode,404);assert.equal((await system.app.inject({url:base+'/diff?from=1&to=2'})).statusCode,401);
+ for(const query of ['from=1&to=2&ownerId='+a.id,'from=1&from=2&to=2','from=1&to=1','from=0&to=2','from=1.0&to=2','from=1','from=1&to=2147483648'])assert.equal((await system.app.inject({url:base+'/diff?'+query,headers:a.headers})).statusCode,400);
+ assert.equal(calls,0);
+});
