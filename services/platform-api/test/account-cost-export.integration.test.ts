@@ -38,7 +38,7 @@ test('owner cost policy, exact reservation prices and settled usage export witho
  assert.equal(result.sections.costReservations.length,1);assert.equal(reservation.id,own.binding.id);assert.equal(reservation.pricing.revision,2);assert.equal(reservation.pricing.input.microsPerUnit,'1.000000');assert.equal(reservation.estimateMicros,'20');
  assert.equal(ledger.reservationId,own.binding.id);assert.equal(ledger.costMicros,'8');assert.equal(ledger.estimated,false);assert.equal(ledger.usageStatus,'reported');assert.deepEqual(ledger.units,{inputTokens:2,outputTokens:3,cachedInputTokens:0,cacheWriteInputTokens:0});
  for(const secret of [who.approver,other.userId,foreign.binding.id,who.tokenHash,password,encoded,token])assert(!JSON.stringify(result).includes(secret));assert(Object.isFrozen(reservation.pricing.input));assert(Object.isFrozen(ledger.units));
- assert.equal(result.includedTables.length,51);for(const name of ['user_policy','reservations','ledger'])assert(!result.remainingTables.includes(`platform_cost_${name}`));assert(result.remainingTables.includes('platform_cost_global_policy'));assert.equal(result.complete,false);
+ assert.equal(result.includedTables.length,58);for(const name of ['user_policy','reservations','ledger'])assert(!result.remainingTables.includes(`platform_cost_${name}`));assert(result.remainingTables.includes('platform_cost_global_policy'));assert.equal(result.complete,false);
 });
 
 test('an account with no cost policy or usage remains empty rather than receiving fabricated zero-cost records',async()=>{
