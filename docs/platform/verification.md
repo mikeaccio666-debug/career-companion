@@ -1217,3 +1217,18 @@ JSON 覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；既有
 - 真实来源、完整 overlays、调度/通知 outbox、所有发送前再验证、早间面试前晚调度、Discord 窗口和真实模型质量均未因此完成；没有改产品范围、主库迁移、重启主预览、付费模型调用、真实申请、部署或合并。
 
 日志保存在远端忽略目录 .local/verification/ci-regression-20261008：proactive-core-tests.log、proactive-core-types.log、proactive-core-final-tests.log、proactive-core-final-types.log、proactive-reviewed-tests.log、proactive-reviewed-types.log、proactive-api-types.log。
+
+
+## 2026-10-09：第一封信的 O2 真实来源与直接写信触发
+
+新增 [FirstLetterSources](first-letter-sources.md)，由 buildApp 组装真实数据库服务。只在已保存 C7/direct_letter、真实欢迎消息/选择凭据和当前初见/命名安全来源均核对后，返回 O2 四类白名单事实、原始坐标、情绪语言选择和事实不足标记。共用诞生答案认证抽出后，Q4 规划投影保持原字段与错误码。
+
+- 最终组合回归 **59/59 通过**，零失败、零取消、零跳过：first-letter-sources、companion-planning-source、companion-context-source、companion-welcome、today-sources、today-agenda、account-welcome-export 七个测试文件。命令为 platform-api exec tsx --test --test-concurrency=1 加上述 .integration.test.ts 文件。
+- 新增专项 11 项包含在 59 项中。实际完成虚构 O2 答题、loopback 人格/命名流程、真实诞生、C1 打开和选择；核对每个事实的原命令应用版本。零/一条事实不凑数；专业与学制合计一条；未定方向和未选语言原样保留。身份阶段、情境题、原文和凭据不进入输出。
+- 来源损坏、重封装改写答案、跨用户密文、欢迎内容损坏和已保存选择后安全回执损坏都拒绝；后者保留可读取的 C7，却不能准备第一封信。异用户/伪造会话、员工、未诞生、撤回协议、取消邮箱验证、晚到会话撤销和取消同样拒绝；重新消费时核对本人/sourceId。
+- 读取前后实际消息、欢迎、选择、答案、生成任务、记忆、计划、后台 jobs 行一致，provider 请求数不增加。真实 buildApp 暴露内部服务但未注册公开来源读写路由。没有让客户端提交 facts 或传完成标记。
+- 首轮定向 **15/17 通过**：新测试错误地在诞生后调用只支持 awaiting_name 的旧命名读取；另一个把缺来源请求在 CSRF 层的 403 错预期为 404。分别改成破坏实际已有安全回执后验证拒绝，以及检查真实路由注册不存在，随后完整跑上述 59 项。未放松业务检查。
+- API TypeScript 检查与 git diff --check 通过；没有 schema 变更或 UI 变更，不以此声称已测试新信件页面。所有资料虚构，模型通信仅测试拥有的 loopback；隔离 schema 清理确认。无付费模型、主库迁移、主预览重启、部署或合并。
+- C2–C6/超时触发、当前档案与记忆修订、人格/队员/费用绑定、信件生成/整段输出验证、租约恢复/持久化/展示和可信完成回执尚未接入；学生入口门槛及主对话真实模型评测门槛保持未完成。
+
+日志：远端忽略目录 .local/verification/ci-regression-20261008/first-letter-source-targeted.log（首轮失败）、first-letter-source-types.log、first-letter-source-final-types.log、first-letter-source-regression.log。

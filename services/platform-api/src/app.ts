@@ -1,6 +1,7 @@
 import { TodayAgendaService } from './today-agenda.ts';
 import { DailyPlans } from './daily-plans.ts';
 import { parseDailyPlanCommand } from '@companion/platform-contracts';
+import { FirstLetterSources } from './first-letter-sources.ts';
 import { CompanionPlanningSources } from './companion-planning-source.ts';
 import { TodaySources } from './today-sources.ts';
 import { TodayRestService } from './today-rest.ts';
@@ -127,6 +128,7 @@ export async function buildApp(options:AppOptions={}) {
   if(config.companionSealGlyphs){try{birthGlyphs=loadCompanionSealGlyphLookup(config.companionSealGlyphs.file,config.companionSealGlyphs.bindings);}catch{/* New seal rendering is unavailable; own saved origins remain readable. */}}
   const birth=new CompanionBirthService(db,config,bundle,studentOnboarding.prebirth,studentOnboarding.names,
     companion.generation,studentOnboarding.identities,new CompanionBirthOriginStore(config.dataCrypto),birthGlyphs);
+  const firstLetterSources=new FirstLetterSources(db,config,bundle,companion.generation,studentOnboarding.prebirth);
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
   const sharedMemories=new SharedMemories(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
@@ -1003,5 +1005,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,firstLetterSources,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
