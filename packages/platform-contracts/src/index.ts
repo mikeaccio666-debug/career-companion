@@ -343,3 +343,5 @@ export * from './career-progress.ts';
 
 export { ACCOUNT_PRIVACY_PURPOSES, accountPrivacyPurpose, parseAccountReauthentication } from './account-privacy.ts';
 export type { AccountPrivacyPurpose, AccountReauthentication, AccountPrivacyProof } from './account-privacy.ts';
+
+export * from './companion-daily-settings.ts';

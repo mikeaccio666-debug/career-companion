@@ -1,3 +1,4 @@
+import { CompanionDailySettingsService } from './companion-daily-settings.ts';
 import { UploadWrites } from './upload-writes.ts';
 import { AccountReauthentication } from './account-reauthentication.ts';
 import { CareerProgressService } from './career-progress.ts';
@@ -124,6 +125,7 @@ export async function buildApp(options:AppOptions={}) {
   const sharedMemories=new SharedMemories(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
   const companionPaidSettings=new CompanionPaidSettingsService(db,config,bundle);
+  const companionDailySettings=new CompanionDailySettingsService(db,config,bundle);
   const careerIdentity=new CareerIdentityRecords(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerApplications=new CareerApplications(db,config,bundle,manualJobs);
@@ -813,6 +815,9 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/companion/settings`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/companion/settings/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.operation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
   app.patch(`${prefix}/companion/settings`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.change(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/companion/settings/daily`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/companion/settings/daily/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.operation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
+  app.patch(`${prefix}/companion/settings/daily`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.change(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets`,limitedAccount,async(request,reply)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerTargets.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerTargets.observe(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {target:await careerTargets.get(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}finally{cancellation.dispose();}});

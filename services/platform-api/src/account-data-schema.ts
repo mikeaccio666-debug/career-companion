@@ -33,6 +33,8 @@ export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: Acco
   Object.freeze({ table: 'platform_companion_answers', policy: 'owner_projection', fingerprint: '1cf2c338df79543c67fb8a512a2e2e7de7e14032094bb39cd67a52c4aeefb9d4' }),
   Object.freeze({ table: 'platform_companion_birth_assets', policy: 'file_projection', fingerprint: 'ac293e7531a700b895cd79b93de234d832adae5ea06576370b8c63afdbfb90e8' }),
   Object.freeze({ table: 'platform_companion_birth_receipts', policy: 'owner_projection', fingerprint: '0449ef6e0344ae40c8d72999499d023032c3396a0acb30954b8b7aa9c31013bf' }),
+  // Owner + companion composite FK, encrypted preference history; account deletion cascades.
+  Object.freeze({ table: 'platform_companion_daily_settings', policy: 'owner_projection', fingerprint: 'eb162c740088ca3b757544a81b13ee6136f4570549f9656d89cec73f98e7e77b' }),
   Object.freeze({ table: 'platform_companion_generation_calls', policy: 'owner_projection', fingerprint: '6028a516d6abff9fc80f270c149ad556e72cb764b0e83d8646059bfdd711ff1b' }),
   Object.freeze({ table: 'platform_companion_generation_checkpoints', policy: 'owner_projection', fingerprint: '64b77dba5cce0cae528eeffe40384eaff551ace80a70587737dc1eb97704be10' }),
   Object.freeze({ table: 'platform_companion_generation_outbox', policy: 'owner_projection', fingerprint: '94fa7f451a63a0dd16740c98cb9670f6573bfd6ef9cb9ec5e53e3884dfdab3d2' }),
