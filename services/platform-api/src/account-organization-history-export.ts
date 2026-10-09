@@ -39,7 +39,7 @@ export class AccountOrganizationHistoryExport {
    const related=`a.user_id=$1 OR (a.action='org_entitlement_changed' AND a.target_id=$1)
     OR (a.action IN ('mentor_intent_matched','mentor_payment_recorded','mentor_schedule_recorded')
      AND EXISTS(SELECT 1 FROM platform_mentor_sessions s WHERE s.user_id=$1 AND s.id=a.target_id AND s.org_id=a.org_id))
-    OR (a.action='product_feedback_updated' AND EXISTS(SELECT 1 FROM platform_product_feedback f
+    OR (a.action IN ('product_feedback_updated','product_feedback_viewed') AND EXISTS(SELECT 1 FROM platform_product_feedback f
      WHERE f.user_id=$1 AND f.id=a.target_id AND f.org_id=a.org_id))`;
    let after:string|null=null;
    for(;;){
@@ -54,7 +54,7 @@ export class AccountOrganizationHistoryExport {
      let relation:'own_action'|'account'|'mentor_session'|'product_feedback';
      if(r.user_id===who.userId)relation='own_action';
      else if(r.action==='org_entitlement_changed'&&r.target_id===who.userId)relation='account';
-     else if(r.action==='product_feedback_updated'){
+     else if(r.action==='product_feedback_updated'||r.action==='product_feedback_viewed'){
       const target=(await client.query('SELECT id FROM platform_product_feedback WHERE id=$1 AND user_id=$2 AND org_id=$3',[r.target_id,who.userId,r.org_id])).rows;
       if(target.length!==1||target[0].id!==r.target_id)throw unavailable();relation='product_feedback';
      }
