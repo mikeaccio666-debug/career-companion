@@ -5,12 +5,13 @@ import type {PlatformConfig} from './config.ts';
 import {readFirstLetterTaskSnapshot,type FirstLetterTaskRow} from './first-letter-tasks.ts';
 import {estimateTokenCost,reportedTokenCost} from './cost-guard.ts';
 import {ApiError} from './errors.ts';
+export type FirstLetterStageName='write_original'|'review_original'|'rewrite'|'review_rewrite';
 export type FirstLetterStageRow={
  id:string;task_id:string;user_id:string;stage:string;provider:string;model:string;auth_version:string;
  status:string;lease_token:string|null;runtime_lease_id:string|null;lease_until:Date|null;
  start_ciphertext:Buffer;call_id:string|null;reservation_id:string|null;call_status:string|null;
  admitted_at:Date|null;call_finished_at:Date|null;receipt_ciphertext:Buffer|null;output_ciphertext:Buffer|null;
- created_at:Date;finished_at:Date|null;
+ created_at:Date;finished_at:Date|null;predecessor_id:string|null;predecessor_digest:string|null;request_digest:string|null;
 };
 export const firstLetterStageUnavailable=()=>new ApiError(503,'FIRST_LETTER_STAGE_UNAVAILABLE','The first-letter generation record could not be confirmed.');
 export const stageBinding=(row:Pick<FirstLetterStageRow,'id'|'user_id'>,column:string)=>
@@ -25,22 +26,42 @@ export interface FirstLetterCallReceipt {
  status:'complete'|'failed'|'cancelled'|'interrupted';admittedAt:string|null;finishedAt:string;
  usage:ModelCallUsage;structuredOutcome:'invalid_format'|null;launched:boolean;costMicros:string|null;estimated:boolean|null;
 }
+export interface FirstLetterStageRecord{
+ readonly id:string;readonly taskId:string;readonly ownerId:string;readonly stage:FirstLetterStageName;readonly preparationId:string;
+ readonly provider:string;readonly model:string;readonly status:string;readonly createdAt:string;readonly finishedAt:string|null;
+ readonly predecessorId:string|null;readonly predecessorDigest:string|null;readonly requestDigest:string|null;
+ readonly call:Readonly<{id:string;reservationId:string;status:string;receipt:Readonly<FirstLetterCallReceipt>|null}>|null;
+ readonly output:Readonly<{text:string;assurance:'unreviewed_model_output'}>|null;
+}
+export const stageCostSource=(row:Pick<FirstLetterStageRow,'id'|'task_id'|'stage'>)=>row.stage==='write_original'?row.task_id:row.id;
 function equivalent(a:Record<string,unknown>,b:Record<string,unknown>){
  return Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>a[k]===b[k]);
 }
 /** Same decoder for current reads and historical account export. Current
  * authorization and lease checks belong to the executor, never this decoder. */
-export async function readFirstLetterStageRecord(c:PoolClient,crypto:PlatformConfig['dataCrypto'],ownerId:string,row:FirstLetterStageRow){
+export async function readFirstLetterStageRecord(c:PoolClient,crypto:PlatformConfig['dataCrypto'],ownerId:string,row:FirstLetterStageRow,depth=0):Promise<Readonly<FirstLetterStageRecord>>{
  try{
-  if(!crypto||row.user_id!==ownerId||row.stage!=='write_original')throw firstLetterStageUnavailable();
+  if(!crypto||row.user_id!==ownerId||depth>3||!['write_original','review_original','rewrite','review_rewrite'].includes(row.stage))throw firstLetterStageUnavailable();
   careerRecordId(row.id);
   const parent=(await c.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE id=$1 AND user_id=$2',[row.task_id,ownerId])).rows[0];
   if(!parent)throw firstLetterStageUnavailable();
   const task=readFirstLetterTaskSnapshot(parent,crypto,ownerId);
   const start=crypto.openUtf8(row.start_ciphertext,stageBinding(row,'start_ciphertext'));
-  const expected={stageId:row.id,taskId:row.task_id,ownerId,stage:'write_original',preparationId:task.preparationId,
-   sourceId:task.sourceId,provider:row.provider,model:row.model,authVersion:String(row.auth_version),createdAt:stageTime(row.created_at)};
+  const expected={stageId:row.id,taskId:row.task_id,ownerId,stage:row.stage,preparationId:task.preparationId,
+   sourceId:task.sourceId,provider:row.provider,model:row.model,authVersion:String(row.auth_version),createdAt:stageTime(row.created_at),
+   ...(row.stage==='write_original'?{}:{predecessorId:row.predecessor_id,predecessorDigest:row.predecessor_digest,requestDigest:row.request_digest})};
   if(start!==JSON.stringify(expected))throw firstLetterStageUnavailable();
+  if(row.stage==='write_original'){
+   if(row.predecessor_id||row.predecessor_digest||row.request_digest)throw firstLetterStageUnavailable();
+  }else{
+   if(!row.predecessor_id||!/^[a-f0-9]{64}$/.test(row.predecessor_digest??'')||!/^[a-f0-9]{64}$/.test(row.request_digest??''))throw firstLetterStageUnavailable();
+   const prior=(await c.query<FirstLetterStageRow>('SELECT * FROM platform_first_letter_stages WHERE id=$1 AND user_id=$2 AND task_id=$3',
+    [row.predecessor_id,ownerId,row.task_id])).rows[0];
+   const allowed=row.stage==='review_original'?['write_original']:row.stage==='rewrite'?['write_original','review_original']:['rewrite'];
+   if(!prior||!allowed.includes(prior.stage)||!['draft_saved','invalid_format'].includes(prior.status))throw firstLetterStageUnavailable();
+   const predecessor=await readFirstLetterStageRecord(c,crypto,ownerId,prior,depth+1);
+   if(row.predecessor_digest!==stageDigest(JSON.stringify(predecessor))||predecessor.provider!==row.provider||predecessor.model!==row.model)throw firstLetterStageUnavailable();
+  }
   const active=row.status==='running';
   if(!['running','draft_saved','invalid_format','failed','uncertain'].includes(row.status)
    ||active&&(!row.lease_token||!row.runtime_lease_id||!row.lease_until||row.finished_at)
@@ -64,7 +85,7 @@ export async function readFirstLetterStageRecord(c:PoolClient,crypto:PlatformCon
    careerRecordId(row.call_id);careerRecordId(row.reservation_id);
    const reservation=(await c.query('SELECT * FROM platform_cost_reservations WHERE id=$1',[row.reservation_id])).rows[0];
    const ledger=(await c.query('SELECT * FROM platform_cost_ledger WHERE reservation_id=$1',[row.reservation_id])).rows[0];
-   const matches=(r:any)=>r&&r.user_id===ownerId&&r.source_kind==='job'&&r.source_id===row.task_id
+   const matches=(r:any)=>r&&r.user_id===ownerId&&r.source_kind==='job'&&r.source_id===stageCostSource(row)
     &&r.capability==='background'&&r.purpose==='first_letter_generation'&&r.provider===row.provider&&r.model===row.model;
    if(!matches(reservation)||reservation.pricing_revision!==2
     ||estimateTokenCost(reservation,reservation.max_input_tokens,reservation.max_output_tokens)!==reservation.estimate_micros)throw firstLetterStageUnavailable();
@@ -106,7 +127,8 @@ export async function readFirstLetterStageRecord(c:PoolClient,crypto:PlatformCon
   }else if(row.status==='draft_saved')throw firstLetterStageUnavailable();
   if(row.status==='invalid_format'&&receipt?.structuredOutcome!=='invalid_format')throw firstLetterStageUnavailable();
   if(receipt){Object.freeze(receipt.usage);Object.freeze(receipt);}
-  return Object.freeze({id:row.id,taskId:row.task_id,ownerId,stage:'write_original' as const,preparationId:task.preparationId,
+  return Object.freeze({id:row.id,taskId:row.task_id,ownerId,stage:row.stage as FirstLetterStageName,preparationId:task.preparationId,
+   predecessorId:row.predecessor_id,predecessorDigest:row.predecessor_digest,requestDigest:row.request_digest,
    provider:row.provider,model:row.model,status:row.status,createdAt:stageTime(row.created_at)!,finishedAt:stageTime(row.finished_at),
    call:row.call_id?Object.freeze({id:row.call_id,reservationId:row.reservation_id!,status:row.call_status!,receipt}):null,output});
  }catch{throw firstLetterStageUnavailable();}

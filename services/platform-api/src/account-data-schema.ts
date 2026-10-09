@@ -1,6 +1,6 @@
 import type { AccountDataPolicy } from './account-data-coverage.ts';
 
-// Reviewed against migrations 001–085, using catalog metadata only. This is a
+// Reviewed against migrations 001–086, using catalog metadata only. This is a
 // fixed review baseline, not a runtime auto-classifier or completed export map.
 // Re-review the actual columns and relationships before changing a fingerprint.
 export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: AccountDataPolicy; fingerprint: string}>[] = Object.freeze([
@@ -94,7 +94,8 @@ export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: Acco
   // Execution lease tokens/auth version are credentials: export only authenticated business receipts and owner text.
   // Task owner FK cascades; deferred reservation FK preserves privacy cost aggregation before owner deletion.
   // Reservation owner/source/purpose are additionally authenticated at read.
-  Object.freeze({ table: 'platform_first_letter_stages', policy: 'credential_projection', fingerprint: '2c0d2a0dea54210a3e1d5aaf4f4615015656ce3d0f9d975655614449d1e7ba16' }),
+  // Review predecessor composite FK retains the same task/owner; encrypted start binds predecessor and request digests.
+  Object.freeze({ table: 'platform_first_letter_stages', policy: 'credential_projection', fingerprint: 'ac7f4d337c2169b3c3a20ea4ccf700e75bb8cf6c510630a4ce3a2c6d90201e8c' }),
   Object.freeze({ table: 'platform_first_letter_tasks', policy: 'owner_projection', fingerprint: 'd26bc7a7e2c722af2150adc3bf9d11f16124dd8283612199ae4e0601b069b78e' }),
   Object.freeze({ table: 'platform_jobs', policy: 'owner_projection', fingerprint: '12b57179cf30f106ed55c643dde76e4635531e9abf77bde98d86bc2e6b6bdc42' }),
   Object.freeze({ table: 'platform_knowledge_access_log', policy: 'product_exclusion', fingerprint: '6b798034e3b294032d992336db27c70f6a65816d72cf7fda611bd86a7ef27aa0' }),
