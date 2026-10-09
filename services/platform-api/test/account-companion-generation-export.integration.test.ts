@@ -46,7 +46,7 @@ test('real answered questionnaire and completed generation export saved personal
  assert.equal(revisions.length,1);assert.equal(revisions[0].summary,preview.summary);assert.deepEqual(revisions[0].samples,preview.samples);assert.equal(revisions[0].generatedBy,'model');
  assert.equal(revisions[0].styleCard,tasks[0].prepared.styleCard);assert.deepEqual(revisions[0].dimensions,tasks[0].prepared.dimensions);assert.equal(revisions[0].dimensions.structure,1);
  assert.equal(calls.length,1);assert.deepEqual(revisions[0].callIds,[calls[0].id]);assert.equal(calls[0].status,'complete');assert.equal(calls[0].usageStatus,'reported');assert.equal(calls[0].inputTokens,34);assert.equal(calls[0].outputTokens,21);
- assert.deepEqual(result.sections.companionOutputBlocks,[]);assert.equal(result.includedTables.length,47);assert(result.includedTables.includes('platform_companion_generation_checkpoints'));assert(result.remainingTables.includes('platform_companion_source_prefixes'));assert.equal(result.complete,false);
+ assert.deepEqual(result.sections.companionOutputBlocks,[]);assert.equal(result.includedTables.length,48);assert(result.includedTables.includes('platform_companion_generation_checkpoints'));assert(result.includedTables.includes('platform_companion_source_prefixes'));assert.equal(result.complete,false);
  const text=JSON.stringify(result);for(const secret of [other.who.userId,other.prepared.taskId,p.who.tokenHash,password,encoded,token,'authVersion','seed_ciphertext','payload_ciphertext','lease_token','runtime_lease_id','sourceReceiptDigest','fictional-loopback-only'])assert(!text.includes(secret));
  assert(Object.isFrozen(revisions[0].dimensions));assert(Object.isFrozen(answers[0].answersPartial.Q1));
 });
@@ -121,9 +121,9 @@ test('a legacy-shaped seed read stays explicitly legacy without writing or inven
  const p=await prepare('pending'),row=(await f.db.query('SELECT * FROM platform_companion_generation_tasks WHERE id=$1',[p.prepared.taskId])).rows[0];
  const binding={table:'platform_companion_generation_tasks',column:'seed_ciphertext',rowId:row.id,ownerId:p.who.userId,revision:row.source_revision};
  const original=JSON.parse(f.crypto.openUtf8(row.seed_ciphertext,binding));delete original.sourceReceiptVersion;delete original.sourceReceiptDigest;
- // Simulate the retained pre-manifest row shape only after its owned SQL read.
+ // Simulate retained pre-manifest task and absent-manifest reads after owned SQL reads.
  // Current storage correctly prevents downgrading a task with a bound manifest.
- const db=instrument((sql,rows)=>{if(table(sql,'generation_tasks')&&rows.length){rows[0].source_receipt_version=null;rows[0].seed_ciphertext=f.crypto.sealUtf8(JSON.stringify(original),binding);}});
+ const db=instrument((sql,rows)=>{if(table(sql,'source_prefixes'))rows.splice(0);if(table(sql,'generation_tasks')&&rows.length){rows[0].source_receipt_version=null;rows[0].seed_ciphertext=f.crypto.sealUtf8(JSON.stringify(original),binding);}});
  const before=(await f.db.query('SELECT count(*)::int n FROM platform_companion_source_prefixes WHERE user_id=$1',[p.who.userId])).rows[0].n;
  const result=await new AccountCoreExport(db,f.config).capture(p.who,await proof(p.who));assert.equal((result.sections.companionGenerationTasks[0] as any).sourceReceiptVersion,null);
  assert.equal((await f.db.query('SELECT source_receipt_version FROM platform_companion_generation_tasks WHERE id=$1',[row.id])).rows[0].source_receipt_version,row.source_receipt_version);
