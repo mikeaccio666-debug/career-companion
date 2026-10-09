@@ -133,7 +133,7 @@ test('real Redis worker obtains settings from the original owner instead of a no
   }
   assert.equal(a.calls,2);assert.equal((await a.generation.readReview(a.who,{taskId:refs.taskId},await a.settings.read(a.who))).kind,'reviewed_draft');
   assert.equal((await a.welcome.read(a.who)).step,'C7');
-  const progress=new FirstLetterProgressService(f.db,a.config,a.sources,a.generation);
+  const progress=new FirstLetterProgressService(f.db,a.config,a.sources,a.generation,{settings:a.settings,config:a.config,runtime:a.runtime});
   await intercept((sql,result)=>{if(sql==='SELECT clock_timestamp() at')result.rows[0].at=new Date('2027-01-01T00:00:00Z');},async()=>{
    assert.equal((await progress.read(a.who)).state,'reviewed');
   });
@@ -173,4 +173,60 @@ test('a preference change between stage claim and actual started callback is che
   assert.equal(stage.status,'failed');assert.equal(stage.call_id,null);
   assert.equal((await f.db.query("SELECT * FROM platform_cost_reservations WHERE source_kind='job' AND source_id=$1",[refs.taskId])).rowCount,0);
  });
+});
+
+function progress(a:any,runtime=a.runtime,config=a.config){
+ return new FirstLetterProgressService(f.db,a.config,a.sources,a.generation,{settings:a.settings,config,runtime});
+}
+test('owned queue progress distinguishes an accepted request and disabled service without changing durable work',async()=>{
+ const a=await actor();await a.start.choose(a.who,a.command);
+ const refs=await ref(a),before=(await f.db.query('SELECT * FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0];
+ assert.equal((await progress(a).read(a.who)).state,'queued');
+ const off=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'}});
+ const unavailable=await progress(a,off).read(a.who);assert.equal(unavailable.state,'service_unavailable');assert.equal(unavailable.delivered,false);
+ assert.equal((await progress(a,a.runtime,{...a.config,modelRoutes:{}}).read(a.who)).state,'service_unavailable');
+ const json=JSON.stringify(unavailable);
+ for(const secret of [a.who.tokenHash,refs.requestId,refs.taskId,model,'authVersion','payload_digest','ciphertext','held_reason'])assert(!json.includes(secret));
+ assert.deepEqual((await f.db.query('SELECT * FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0],before);
+ assert.equal((await f.db.query('SELECT * FROM platform_first_letter_stages WHERE task_id=$1',[refs.taskId])).rowCount,0);assert.equal(a.calls,0);
+});
+test('owner sees changed dates and original-session expiry before any worker runs; a newer login grants no execution',async()=>{
+ const a=await actor();
+ await intercept((sql,result)=>{if(sql==='SELECT clock_timestamp() at')result.rows[0].at=new Date('2026-10-09T03:00:00Z');},async()=>{
+  await a.start.choose(a.who,a.command);
+ });
+ await intercept((sql,result)=>{if(sql==='SELECT clock_timestamp() at')result.rows[0].at=new Date('2026-10-10T03:00:00Z');},async()=>{
+  assert.equal((await progress(a).read(a.who)).state,'settings_changed');
+ });
+ const refs=await ref(a),fresh={userId:a.who.userId,tokenHash:tokenHash(randomUUID())};
+ await f.db.query("INSERT INTO platform_sessions(user_id,token_hash,auth_version,expires_at) VALUES($1,$2,0,clock_timestamp()+interval '1 hour')",[fresh.userId,fresh.tokenHash]);
+ await f.db.query('DELETE FROM platform_sessions WHERE user_id=$1 AND token_hash=$2',[a.who.userId,a.who.tokenHash]);
+ assert.equal((await progress(a).read(fresh)).state,'authorization_required');
+ assert.equal((await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason,null);
+ await assert.rejects(a.entry.executeNotification(refs),{code:'AUTH_REQUIRED'});assert.equal(a.calls,0);
+});
+test('damaged or missing request evidence cannot be rendered as queued work or ordinary service unavailability',async()=>{
+ const a=await actor();await a.start.choose(a.who,a.command);const refs=await ref(a),reader=progress(a);
+ const row=(await f.db.query('SELECT payload_ciphertext FROM platform_first_letter_requests WHERE id=$1',[refs.requestId])).rows[0];
+ const damaged=Buffer.from(row.payload_ciphertext);damaged[damaged.length-1]^=1;
+ await f.db.query('UPDATE platform_first_letter_requests SET payload_ciphertext=$2 WHERE id=$1',[refs.requestId,damaged]);
+ await assert.rejects(reader.read(a.who),{code:'FIRST_LETTER_REQUEST_UNAVAILABLE'});
+ await f.db.query('UPDATE platform_first_letter_requests SET payload_ciphertext=$2 WHERE id=$1',[refs.requestId,row.payload_ciphertext]);
+ await f.db.query('DELETE FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId]);
+ await assert.rejects(reader.read(a.who),{code:'FIRST_LETTER_REQUEST_UNAVAILABLE'});assert.equal(a.calls,0);
+});
+
+test('a dispatched failed call remains interrupted even when the service is now disabled; reading cannot retry it',async()=>{
+ const a=await actor();await a.start.choose(a.who,a.command);const refs=await ref(a);let calls=0;
+ const failed=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-injected-only',OPENAI_FIRST_LETTER_MODEL:model},
+  fetch:async()=>{calls++;throw Error('Fictional transport loss after dispatch');}});
+ const generation=new FirstLetterGeneration(f.db,a.config,failed,a.tasks);
+ await assert.rejects(generation.generate(a.who,{taskId:refs.taskId},await a.settings.read(a.who)));
+ const row=(await f.db.query('SELECT status,call_id FROM platform_first_letter_stages WHERE task_id=$1',[refs.taskId])).rows[0];
+ assert.equal(row.status,'failed');assert(row.call_id);assert.equal(calls,1);
+ const off=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'}});
+ const reader=new FirstLetterProgressService(f.db,a.config,a.sources,generation,{settings:a.settings,config:a.config,runtime:off});
+ for(let i=0;i<2;i++)assert.equal((await reader.read(a.who)).state,'interrupted');
+ assert.equal(calls,1);assert.equal(a.calls,0);
+ assert.equal((await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason,null);
 });

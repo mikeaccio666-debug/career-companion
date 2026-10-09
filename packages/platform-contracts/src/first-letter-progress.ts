@@ -1,5 +1,5 @@
 import {careerRecordId,careerRecordObject,CareerRecordInputError} from './career-record-values.ts';
-export const FIRST_LETTER_PROGRESS_STATES=Object.freeze(['not_started','prepared','writing','draft_saved','checking','interrupted','reviewed'] as const);
+export const FIRST_LETTER_PROGRESS_STATES=Object.freeze(['not_started','prepared','queued','service_unavailable','authorization_required','settings_changed','writing','draft_saved','checking','interrupted','reviewed'] as const);
 export interface FirstLetterProgress {
  readonly ownerId:string;readonly companionId:string;readonly welcomeId:string;
  readonly state:typeof FIRST_LETTER_PROGRESS_STATES[number];readonly capturedAt:string;

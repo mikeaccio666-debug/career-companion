@@ -1,3 +1,8 @@
+import type {PoolClient} from 'pg';
+import type {PlatformProviderRuntime} from '@companion/platform-contracts';
+import type {FirstLetterSettings} from './first-letter-settings.ts';
+import {readFirstLetterRequestStatus} from './first-letter-request-status.ts';
+import {resolveModelRoute} from './model-routing.ts';
 import type {FirstLetterProgress as Progress} from '@companion/platform-contracts';
 import {parseFirstLetterProgress} from '@companion/platform-contracts';
 import {authorizeFixedSession,type FixedSessionContext} from './auth.ts';
@@ -14,7 +19,34 @@ const unavailable=()=>new ApiError(503,'FIRST_LETTER_PROGRESS_UNAVAILABLE','The 
 export class FirstLetterProgressService{
  constructor(private readonly db:Database,private readonly config:Pick<PlatformConfig,'dataCrypto'>,
   private readonly sources:Pick<FirstLetterSources,'readInTransaction'>,
-  private readonly generation:Pick<FirstLetterGeneration,'readReviewInTransaction'>){}
+  private readonly generation:Pick<FirstLetterGeneration,'readReviewInTransaction'>,
+  private readonly execution?:{settings:Pick<FirstLetterSettings,'readInTransaction'>;
+   config:Pick<PlatformConfig,'modelRoutes'>;runtime:Pick<PlatformProviderRuntime,'capabilities'>}){}
+ private async waitingState(c:PoolClient,who:FixedSessionContext,state:Progress['state'],
+  accepted:NonNullable<Awaited<ReturnType<typeof readFirstLetterRequestStatus>>>,signal?:AbortSignal):Promise<Progress['state']>{
+  const {request,outbox}=accepted;
+  if(outbox.hold==='storage'||outbox.hold==='terminal')return 'interrupted';
+  const authorized=(await c.query(`SELECT 1 FROM platform_sessions s JOIN platform_users u ON u.id=s.user_id
+   WHERE s.user_id=$1 AND s.token_hash=$2 AND s.auth_version=u.auth_version AND u.auth_version=$3
+    AND s.expires_at>clock_timestamp()`,[request.ownerId,request.tokenHash,request.authVersion])).rowCount===1;
+  if(!authorized||outbox.hold==='authorization')return 'authorization_required';
+  if(this.execution){
+   try{
+    const current=await this.execution.settings.readInTransaction(c,who,signal);
+    if(JSON.stringify(current)!==JSON.stringify(request.settings))return 'settings_changed';
+    const route=resolveModelRoute(this.execution.config,this.execution.runtime,'first_letter_generation');
+    if(route.provider!==request.provider||route.model!==request.model)return 'settings_changed';
+   }catch(error){
+    signal?.throwIfAborted();
+    if(error instanceof ApiError&&['FIRST_LETTER_RELEASE_UNAVAILABLE','MODEL_ROUTE_UNAVAILABLE'].includes(error.code))return 'service_unavailable';
+    if(error instanceof ApiError&&error.code==='DAILY_SETTINGS_REQUIRED')return 'settings_changed';
+    throw error;
+   }
+  }
+  if(outbox.hold==='configuration')return 'service_unavailable';
+  if(outbox.hold==='source_changed')return 'settings_changed';
+  return state==='prepared'?'queued':state;
+ }
  async read(who:FixedSessionContext,signal?:AbortSignal):Promise<Readonly<Progress>>{
   return this.db.withBoundedTransaction(async c=>{
    const source=await this.sources.readInTransaction(c,who,signal);
@@ -26,6 +58,7 @@ export class FirstLetterProgressService{
     const task=readFirstLetterTaskSnapshot(tasks[0],this.config.dataCrypto,source.ownerId);
     if(task.companionId!==source.companionId||task.conversationId!==source.conversationId
      ||task.birthReceiptId!==source.trigger.birthReceiptId||task.welcomeId!==source.trigger.welcomeId)throw unavailable();
+    const accepted=await readFirstLetterRequestStatus(c,this.config.dataCrypto,task);
     const rows=(await c.query<FirstLetterStageRow>(`SELECT * FROM platform_first_letter_stages WHERE user_id=$1 AND task_id=$2
      ORDER BY CASE stage WHEN 'write_original' THEN 0 WHEN 'review_original' THEN 1 WHEN 'rewrite' THEN 2 ELSE 3 END FOR SHARE`,
      [source.ownerId,task.taskId])).rows;
@@ -50,6 +83,11 @@ export class FirstLetterProgressService{
       }
      }
     }
+    // A saved terminal result or a live lease outranks old notification metadata.
+    // Paid/uncertain failures cannot be relabeled as ordinary queued work.
+    if(accepted&&task.sourceId===source.sourceId&&!['reviewed','writing','checking'].includes(state)
+     &&!records.some(r=>r.status==='uncertain'||r.status==='failed'&&r.call))
+     state=await this.waitingState(c,who,state,accepted,signal);
 
    }
    await authorizeFixedSession(c,who,signal);signal?.throwIfAborted();

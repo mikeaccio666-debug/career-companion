@@ -31,3 +31,14 @@ test('late progress after leaving the page cannot restore an old account view',a
  const c=new JourneySectionController(f.client,s=>readFirstLetterProgress(f.client,id,id,s),()=>{});c.start();c.stop();
  resolve(value());await new Promise<void>(r=>setImmediate(r));assert.equal(c.snapshot().value,null);
 });
+
+test('queue and pause reasons remain read-only, and a later read failure clears their old explanation',async()=>{
+ const f=fixture();
+ for(const state of ['queued','service_unavailable','authorization_required','settings_changed']){
+  f.set(async()=>({...value(),state}));assert.equal((await readFirstLetterProgress(f.client,id,id)).state,state);
+ }
+ assert(f.calls.every(x=>x.init.method===undefined&&x.init.body===undefined));
+ const c=new JourneySectionController(f.client,s=>readFirstLetterProgress(f.client,id,id,s),()=>{});c.start();
+ await new Promise<void>(r=>setImmediate(r));assert.equal(c.snapshot().value?.state,'settings_changed');
+ f.set(async()=>{throw Error('Fictional read error');});await c.refresh();assert.equal(c.snapshot().value,null);assert(c.snapshot().failed);c.stop();
+});

@@ -1,3 +1,4 @@
+import {FirstLetterProgressService} from '../src/first-letter-progress.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -54,7 +55,7 @@ async function fixture(){
     }});
    const generation=new FirstLetterGeneration(f.db,config,runtime,tasks),entry=new FirstLetterDispatch(f.db,config,runtime,tasks,generation);
    const accepted=await entry.accept(who,{operationId:randomUUID(),taskId:saved.task.taskId,expectedPreparationId:saved.task.preparationId},settings);
-   result={who,saved,generation,entry,refs:{requestId:accepted.request.requestId,taskId:saved.task.taskId}};
+   result={who,saved,generation,entry,sources,refs:{requestId:accepted.request.requestId,taskId:saved.task.taskId}};
   });return result;
  }
  const queues:FirstLetterQueue[]=[],workers:Worker[]=[],control=new ProducerQueue(firstLetterQueueName(config.queueName),config.redisUrl);
@@ -111,9 +112,11 @@ for(const stage of ['write_original','review_original'] as const)test(stage+': b
   const a=await f.actor(),q=f.producer(a.entry);
   if(stage==='review_original')await a.generation.generate(a.who,{taskId:a.refs.taskId},settings);
   const priorCalls=f.calls;
+  const progress=new FirstLetterProgressService(f.db,f.config,a.sources,a.generation);
   await f.db.query('UPDATE platform_cost_user_policy SET hard_micros=1 WHERE user_id=$1',[a.who.userId]);
   await q.dispatch();f.worker(a.entry);
   await eventually(async()=>(await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[a.refs.requestId])).rows[0].held_reason==='configuration','Budget failure was not held.');
+  assert.equal((await progress.read(a.who)).state,'service_unavailable');
   const initial=(await f.db.query('SELECT * FROM platform_first_letter_stages WHERE task_id=$1 AND stage=$2',[a.refs.taskId,stage])).rows[0];
   assert.equal(initial.status,'failed');assert.equal(initial.call_id,null);assert.equal(f.calls,priorCalls);
   assert.equal((await f.db.query("SELECT count(*) AS n FROM platform_cost_reservations WHERE source_kind='job' AND source_id=$1",[stage==='write_original'?a.refs.taskId:initial.id])).rows[0].n,'0');
@@ -123,5 +126,6 @@ for(const stage of ['write_original','review_original'] as const)test(stage+': b
   assert.equal(f.calls,2);
   const original=(await f.db.query("SELECT id FROM platform_first_letter_stages WHERE task_id=$1 AND stage=$2",[a.refs.taskId,stage])).rows[0];
   assert.equal(original.id,initial.id);
+  assert.equal((await progress.read(a.who)).state,'reviewed');
  }finally{await f.close();}
 });
