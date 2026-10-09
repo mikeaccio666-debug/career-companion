@@ -128,11 +128,13 @@ test('pagination crosses the first page without duplicates, and internal archive
  const second=await service.list(owner,first.nextCursor);assert.equal(second.records.length,2);assert.equal(second.nextCursor,null);
  assert.equal(new Set([...first.records,...second.records].map(r=>r.id)).size,52);
  await service.update(authority.operator,first.records[0].id,update());
+ await service.staffGet(authority.operator,first.records[0].id);
  const password='Fictional-feedback-export-123';await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[owner.userId,await hashPassword(password)]);
  const token=(await new AccountReauthentication(f.db).verify(owner,{purpose:'account_export',password})).token;
  const archive=await new AccountCoreExport(f.db,f.config).capture(owner,token);
  assert.equal(archive.sections.productFeedback.length,52);assert.equal(archive.sections.productFeedbackOperations.length,53);
  assert(archive.sections.organizationAccessEvents.some((r:any)=>r.relation==='product_feedback'&&r.action==='product_feedback_updated'));
+ assert(archive.sections.organizationAccessEvents.some((r:any)=>r.relation==='product_feedback'&&r.action==='product_feedback_viewed'));
  assert(!JSON.stringify(archive.sections.organizationAccessEvents).includes(authority.operator.userId));
  assert.equal(archive.complete,false);assert(archive.includedTables.includes('platform_product_feedback'));
  assert(archive.includedTables.includes('platform_product_feedback_operations'));
@@ -191,4 +193,24 @@ test('read-only operation observation returns the current owner record without s
  assert.equal(seen.operation.replayed,true);assert.equal(seen.operation.appliedRevision,1);assert.equal(seen.feedback.revision,2);assert.equal(seen.feedback.status,'resolved');
  await assert.rejects(service.observe(other,body.operationId),{code:'NOT_FOUND'});
  assert.equal((await f.db.query('SELECT 1 FROM platform_product_feedback WHERE user_id=$1',[owner.userId])).rowCount,1);
+});
+
+test('targeted staff reads are audited, operation observation belongs to the original operator and retains earlier revisions',async()=>{
+ const {owner,authority,service}=await setup(),p=(await service.submit(owner,submit())).feedback;
+ const detail=await service.staffGet(authority.operator,p.id);assert.equal(detail.actorId,authority.operator.userId);assert.equal(detail.organizationId,authority.orgId);
+ const b=update(),saved=await service.update(authority.operator,p.id,b);assert.equal(saved.actorId,authority.operator.userId);
+ await service.update(authority.operator,p.id,{...update(2),status:'resolved',reply:'Final fictional response'});
+ const observed=await service.staffObserve(authority.operator,p.id,b.operationId);assert.equal(observed.operation.appliedRevision,2);assert.equal(observed.feedback.revision,3);assert.equal(observed.operation.replayed,true);
+ const second=await f.actor(true);await f.db.query("INSERT INTO platform_org_roles(org_id,user_id,role,status,granted_by,granted_at) VALUES($1,$2,'ops','active',$3,clock_timestamp())",[authority.orgId,second.userId,authority.operator.userId]);
+ assert.equal((await service.staffGet(second,p.id)).feedback.id,p.id);
+ await assert.rejects(service.staffObserve(second,p.id,b.operationId),{code:'NOT_FOUND'});
+ await assert.rejects(service.staffObserve(authority.operator,p.id,p.lastOperationId),{code:'NOT_FOUND'});
+ await assert.rejects(service.staffGet(owner,p.id),{code:'STAFF_ROLE_REQUIRED'});
+ const foreign=await f.identityAuthority();await assert.rejects(service.staffGet(foreign.operator,p.id),{code:'STAFF_ROLE_REQUIRED'});
+ const other=(await service.submit(owner,submit())).feedback;
+ await assert.rejects(service.staffObserve(authority.operator,other.id,b.operationId),{code:'NOT_FOUND'});
+ const audits=(await f.db.query("SELECT * FROM platform_staff_audit WHERE org_id=$1 AND target_id=$2 AND action='product_feedback_viewed'",[authority.orgId,p.id])).rows;
+ assert(audits.some(r=>r.outcome==='allow'));assert(!JSON.stringify(audits).includes('FICTIONAL_PRIVATE'));
+ await f.db.query("UPDATE platform_org_roles SET status='revoked',revoked_at=clock_timestamp() WHERE org_id=$1 AND user_id=$2",[authority.orgId,authority.operator.userId]);
+ await assert.rejects(service.staffObserve(authority.operator,p.id,b.operationId),{code:'STAFF_ROLE_REQUIRED'});
 });

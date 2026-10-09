@@ -9,11 +9,11 @@ import './product-feedback-view.css';
 
 type Review={category:FeedbackCategory;description:string;sharedExcerpt:string|null;recipientId:string;recipientName:string;surface:ReturnType<typeof feedbackSurface>};
 const at=(value:string)=>new Date(value).toLocaleString('zh-CN',{dateStyle:'medium',timeStyle:'short'});
-function FeedbackDetail({record}:{record:Readonly<ProductFeedback>}){
+export function FeedbackDetail({record}:{record:Readonly<ProductFeedback>}){
  return <article className="feedback-detail" aria-label="反馈详情">
   <div className="feedback-detail-heading"><h3>{feedbackCategories[record.category]}</h3><span className="feedback-status">{feedbackStatuses[record.status]}</span></div>
   <small>{at(record.createdAt)}</small><p className="feedback-verbatim">{record.description}</p>
-  {record.sharedExcerpt!==null&&<details><summary>你主动附上的片段</summary><p className="feedback-verbatim">{record.sharedExcerpt}</p></details>}
+  {record.sharedExcerpt!==null&&<details><summary>主动分享的片段</summary><p className="feedback-verbatim">{record.sharedExcerpt}</p></details>}
   <h4>处理进展</h4>
   {record.updates.length===0?<p>已进入反馈收件箱，暂时还没有处理回复。</p>:<ol className="feedback-updates">{record.updates.map(u=><li key={u.revision}>
    <div><strong>{feedbackStatuses[u.status]}</strong><small>{at(u.at)}</small></div><small>{feedbackTriage[u.triage]}</small>

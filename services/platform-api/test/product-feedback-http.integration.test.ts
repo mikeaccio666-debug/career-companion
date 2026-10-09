@@ -5,7 +5,7 @@ import {buildApp} from '../src/app.ts';import {readConfig} from '../src/config.t
 import {createCompanionNameSafetyFixture} from './fixtures/companion-name-safety.ts';import {FICTIONAL_LEGAL} from './fixtures/student-entry.ts';
 const origin='https://fictional-feedback.example.invalid',prefix='/api/platform/feedback',password='Fictional-feedback-password-123';
 let f:Awaited<ReturnType<typeof createCompanionNameSafetyFixture>>,system:Awaited<ReturnType<typeof buildApp>>,authority:Awaited<ReturnType<typeof f.identityAuthority>>,calls=0;
-before(async()=>{f=await createCompanionNameSafetyFixture();authority=await f.identityAuthority();system=await buildApp({db:f.db,legalBundle:FICTIONAL_LEGAL,config:{...readConfig(),dataCrypto:f.crypto,supportOrganizationId:authority.orgId,productEventsEnabled:true,allowedOrigins:new Set([origin])},enableQueue:false,
+before(async()=>{f=await createCompanionNameSafetyFixture();authority=await f.identityAuthority();system=await buildApp({db:f.db,legalBundle:FICTIONAL_LEGAL,config:{...readConfig(),dataCrypto:f.crypto,requireVerifiedEmail:true,supportOrganizationId:authority.orgId,productEventsEnabled:true,allowedOrigins:new Set([origin])},enableQueue:false,
  runtime:createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'},fetch:async()=>{calls++;throw Error('No provider call allowed');}})});});
 after(async()=>{await system?.app.close();assert.equal(calls,0);await f?.close();});
 async function login(who?:{userId:string}){who??=await f.actor();await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[who.userId,await hashPassword(password)]);
@@ -45,4 +45,23 @@ test('routing availability and read-only operation observation use real sessions
  const saved=await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload:body});assert.equal(saved.statusCode,200);
  const observed=await system.app.inject({url:prefix+'/operations/'+body.operationId,headers:a.headers});assert.equal(observed.statusCode,200,observed.body);assert.equal(observed.json().operation.replayed,true);assert.equal(observed.json().feedback.id,saved.json().feedback.id);
  for(const path of [prefix+'/availability',prefix+'/operations/'+body.operationId])assert.equal((await system.app.inject({url:path+'?recipientId='+authority.orgId,headers:a.headers})).statusCode,400);
+});
+
+test('staff detail and observation enforce verified email, account context, query boundaries and real operator identity',async()=>{
+ const a=await login(),staff=await login(authority.operator),body=command();
+ const saved=await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload:body}),id=saved.json().feedback.id,path='/api/platform/staff/feedback/'+id;
+ const update={operationId:randomUUID(),expectedRevision:1,status:'resolved',triage:'quality',reply:'Fictional staff HTTP reply'};
+ const detail=await system.app.inject({url:path,headers:staff.headers});assert.equal(detail.statusCode,200,detail.body);assert.equal(detail.json().actorId,staff.id);assert.equal(detail.headers['cache-control'],'private, no-store');
+ const updated=await system.app.inject({method:'PATCH',url:path,headers:staff.headers,payload:update});assert.equal(updated.statusCode,200,updated.body);
+ const opPath=path+'/operations/'+update.operationId;
+ const observed=await system.app.inject({url:opPath,headers:staff.headers});assert.equal(observed.statusCode,200,observed.body);assert.equal(observed.json().operation.replayed,true);assert.equal(observed.headers['cache-control'],'private, no-store');
+ for(const url of [path,opPath]){
+  assert.equal((await system.app.inject({url,headers:a.headers})).statusCode,403);
+  assert.equal((await system.app.inject({url,headers:{...staff.headers,[PLATFORM_ACCOUNT_HEADER]:a.id}})).statusCode,409);
+  assert.equal((await system.app.inject({url:url+'?orgId='+authority.orgId,headers:staff.headers})).statusCode,400);
+ }
+ await f.db.query('UPDATE platform_users SET email_verified_at=NULL WHERE id=$1',[staff.id]);
+ for(const url of ['/api/platform/staff/feedback',path,opPath])assert.equal((await system.app.inject({url,headers:staff.headers})).statusCode,403);
+ assert.equal((await system.app.inject({method:'PATCH',url:path,headers:staff.headers,payload:{...update,operationId:randomUUID(),expectedRevision:2}})).statusCode,403);
+ await f.db.query('UPDATE platform_users SET email_verified_at=clock_timestamp() WHERE id=$1',[staff.id]);
 });

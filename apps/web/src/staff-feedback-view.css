@@ -1,0 +1,21 @@
+.staff-feedback{min-height:100dvh;background:var(--paper);color:var(--ink);padding:clamp(20px,4vw,56px);font-family:var(--f-ui);line-height:1.65}
+.staff-feedback-header,.staff-feedback-toolbar{display:flex;gap:20px;justify-content:space-between;align-items:center;margin-bottom:28px}
+.staff-feedback-header h1{font-family:var(--f-ui);font-size:32px;margin:6px 0}
+.staff-feedback-header p,.staff-feedback-empty p{color:var(--ink-2)}
+.staff-feedback button,.staff-feedback select,.staff-feedback textarea{font:inherit}
+.staff-feedback button{border:1px solid var(--rule);background:var(--sheet);color:var(--ink);padding:10px 16px;border-radius:10px;cursor:pointer}
+.staff-feedback button:disabled{opacity:.55;cursor:default}
+.staff-feedback button:focus-visible,.staff-feedback select:focus-visible,.staff-feedback textarea:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+.staff-feedback-toolbar{justify-content:flex-start}.staff-feedback-toolbar label{display:flex;align-items:center;gap:12px}
+.staff-feedback select{padding:8px;border:1px solid var(--rule);border-radius:8px;background:var(--sheet);color:var(--ink)}
+.staff-feedback-columns{display:grid;grid-template-columns:minmax(240px,.8fr) minmax(0,1.4fr);gap:28px;max-width:1280px;margin:auto}
+.staff-feedback-columns>*{min-width:0}.staff-feedback .feedback-list{margin:0;padding:0}
+.staff-feedback .feedback-list button[aria-pressed=true]{border:2px solid var(--ink)}
+.staff-feedback-editor{background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:clamp(16px,3vw,32px)}
+.staff-feedback-empty{padding:24px 0}.staff-feedback-empty h2,.staff-feedback-editor h2{font-size:20px;font-weight:500}
+.staff-feedback .feedback-detail{padding:0;border:0;background:none}
+.staff-feedback .feedback-primary{background:var(--ink);color:var(--paper)}
+.staff-feedback .feedback-caption{font-size:13px}.staff-feedback-pending{border:1px solid var(--rule);padding:20px;border-radius:12px;margin-bottom:24px}
+@media(max-width:720px){.staff-feedback-columns{grid-template-columns:minmax(0,1fr)}.staff-feedback-header{align-items:flex-start}.staff-feedback-header h1{font-size:26px}.staff-feedback-header>button{flex-shrink:0}.staff-feedback-toolbar{flex-wrap:wrap}.staff-feedback{padding:20px 16px}}
+
+.staff-feedback *{box-sizing:border-box}.staff-feedback{overflow-wrap:anywhere}.staff-feedback textarea{width:100%;min-width:0;resize:vertical;padding:12px;border:1px solid var(--ink-4);border-radius:8px;background:var(--sheet);color:var(--ink);font-size:16px}

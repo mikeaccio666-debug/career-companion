@@ -135,7 +135,27 @@ export class ProductFeedbackService {
   return this.staff.readWithAccess(s,org,{roles:['ops','org_admin'],action:'product_feedback_viewed'},async c=>{
    const rows=(await c.query('SELECT * FROM platform_product_feedback WHERE org_id=$1 AND ($2::uuid IS NULL OR id>$2) AND ($3::text IS NULL OR status=$3) ORDER BY id LIMIT 51 FOR SHARE',[org,cursor,status])).rows;
    const records=[];for(const row of rows.slice(0,50)){signal?.throwIfAborted();records.push(await this.decode(c,row));}
-   return {value:Object.freeze({records:Object.freeze(records),nextCursor:rows.length>50?records.at(-1)!.id:null}),recordCount:records.length};
+   return {value:Object.freeze({actorId:s.userId,organizationId:org,records:Object.freeze(records),nextCursor:rows.length>50?records.at(-1)!.id:null}),recordCount:records.length};
+  },signal);
+ }
+ async staffGet(value:FixedSessionContext,id:unknown,signal?:AbortSignal){
+  const s=fixed(value),org=this.configured(),key=input(()=>careerRecordId(id));
+  return this.staff.readWithAccess(s,org,{roles:['ops','org_admin'],action:'product_feedback_viewed',targetId:key},async c=>{
+   const row=(await c.query('SELECT * FROM platform_product_feedback WHERE org_id=$1 AND id=$2 FOR SHARE',[org,key])).rows[0];if(!row)throw missing();
+   return {value:Object.freeze({actorId:s.userId,organizationId:org,feedback:await this.decode(c,row)}),recordCount:1};
+  },signal);
+ }
+ async staffObserve(value:FixedSessionContext,id:unknown,operationId:unknown,signal?:AbortSignal){
+  const s=fixed(value),org=this.configured(),key=input(()=>careerRecordId(id)),opId=input(()=>careerRecordId(operationId));
+  return this.staff.readWithAccess(s,org,{roles:['ops','org_admin'],action:'product_feedback_viewed',targetId:key},async c=>{
+   const row=(await c.query('SELECT * FROM platform_product_feedback WHERE org_id=$1 AND id=$2 FOR SHARE',[org,key])).rows[0];if(!row)throw missing();
+   const feedback=await this.decode(c,row);
+   const op=(await c.query('SELECT * FROM platform_product_feedback_operations WHERE user_id=$1 AND feedback_id=$2 AND operation_id=$3 FOR SHARE',[feedback.ownerId,key,opId])).rows[0];if(!op)throw missing();
+   const receipt=this.receipt(op),entry=feedback.updates.find(u=>u.revision===receipt.revision);
+   if(receipt.organizationId!==org||!entry)throw missing();
+   const command={operationId:opId,expectedRevision:receipt.revision-1,status:entry.status,triage:entry.triage,reply:entry.reply};
+   if(receipt.commandDigest!==digest({actor:s.userId,kind:'update',key,command}))throw missing();
+   return {value:Object.freeze({actorId:s.userId,organizationId:org,...this.result(feedback,receipt,true)}),recordCount:1};
   },signal);
  }
  async update(value:FixedSessionContext,id:unknown,body:unknown,signal?:AbortSignal){
@@ -144,12 +164,12 @@ export class ProductFeedbackService {
    const row=(await c.query('SELECT * FROM platform_product_feedback WHERE org_id=$1 AND id=$2 FOR UPDATE',[org,key])).rows[0];if(!row)throw missing();
    const current=await this.decode(c,row);
    const prior=(await c.query('SELECT * FROM platform_product_feedback_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[current.ownerId,command.operationId])).rows[0];
-   if(prior){const r=this.receipt(prior);if(r.commandDigest!==commandDigest)throw conflict();return {value:this.result(current,r,true),recordCount:1};}
+   if(prior){const r=this.receipt(prior);if(r.commandDigest!==commandDigest)throw conflict();return {value:Object.freeze({actorId:s.userId,organizationId:org,...this.result(current,r,true)}),recordCount:1};}
    if(command.expectedRevision!==current.revision)throw conflict();if(current.revision>=101)throw new ApiError(409,'FEEDBACK_CAPACITY','The feedback update limit has been reached.');
    const at=(await c.query('SELECT clock_timestamp() at')).rows[0].at.toISOString(),revision=current.revision+1;
    const p=parseProductFeedback({...current,revision,lastOperationId:command.operationId,status:command.status,triage:command.triage,updatedAt:at,
     updates:[...current.updates,{revision,status:command.status,triage:command.triage,reply:command.reply,at}]});
-   await this.persist(c,p,commandDigest);signal?.throwIfAborted();return {value:this.result(p,undefined,false),recordCount:1};
+   await this.persist(c,p,commandDigest);signal?.throwIfAborted();return {value:Object.freeze({actorId:s.userId,organizationId:org,...this.result(p,undefined,false)}),recordCount:1};
   },signal);
  }
  async *exportInTransaction(c:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
