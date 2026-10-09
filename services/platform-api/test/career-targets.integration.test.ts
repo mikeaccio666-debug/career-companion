@@ -116,3 +116,25 @@ test('pre-field canonical ciphertext and original command receipts remain readab
  const dated=await targets.mutate(who,'edit',id,{operationId:randomUUID(),expectedRevision:2,reviewOn:'2028-02-29'});assert.equal(dated.target?.reviewOn,'2028-02-29');
  assert.equal((await targets.mutate(who,'create',null,command)).target?.reviewOn,'2028-02-29');
 });
+
+test('read-only operation recovery returns current revision and verified removal, survives admission withdrawal and never writes',async()=>{
+ const who=await f.actor(),other=await f.actor(),staff=await f.actor(true),command=create(),first=await targets.mutate(who,'create',null,command),id=first.target!.id;
+ await targets.mutate(who,'edit',id,{operationId:randomUUID(),expectedRevision:1,title:'Fictional later version'});
+ await f.db.query('DELETE FROM platform_terms_consents WHERE user_id=$1',[who.userId]);
+ const before=(await f.db.query('SELECT count(*)::int n FROM platform_career_target_operations WHERE user_id=$1',[who.userId])).rows[0].n;
+ const observed=await targets.observe(who,command.operationId);assert.equal(observed.operation.replayed,true);assert.equal(observed.operation.appliedRevision,1);assert.equal(observed.target?.revision,2);
+ assert.equal((await f.db.query('SELECT count(*)::int n FROM platform_career_target_operations WHERE user_id=$1',[who.userId])).rows[0].n,before);
+ await assert.rejects(targets.observe(other,command.operationId),error(404));await assert.rejects(targets.observe(staff,command.operationId),error(403));await assert.rejects(targets.observe(who,randomUUID()),error(404));
+ await targets.mutate(who,'delete',id,{operationId:randomUUID(),expectedRevision:2});assert.equal((await targets.observe(who,command.operationId)).target,null);
+ await f.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[who.userId]);await assert.rejects(targets.observe(who,command.operationId),error(401));
+});
+test('observing a prior operation rejects a rolled-back current record or unexplained disappearance',async()=>{
+ for(const corrupt of ['rollback','disappear']){
+  const who=await f.actor(),command=create(),first=await targets.mutate(who,'create',null,command),id=first.target!.id;
+  const old=(await f.db.query('SELECT * FROM platform_career_targets WHERE id=$1',[id])).rows[0];
+  await targets.mutate(who,'status',id,{operationId:randomUUID(),expectedRevision:1,status:'active'});
+  if(corrupt==='rollback')await f.db.query('UPDATE platform_career_targets SET revision=$2,status=$3,last_operation_id=$4,record_ciphertext=$5,updated_at=$6 WHERE id=$1',[id,old.revision,old.status,old.last_operation_id,old.record_ciphertext,old.updated_at]);
+  else await f.db.query('DELETE FROM platform_career_targets WHERE id=$1',[id]);
+  await assert.rejects(targets.observe(who,command.operationId),error(503));
+ }
+});
