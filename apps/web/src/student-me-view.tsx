@@ -13,6 +13,7 @@ const sections = [
     { href: '/journey/stories', label: '项目与故事', detail: '整理经历，保留事实与出处' },
   ] },
   { title: '你的求职记录', description: '回到已保存的方向、岗位和材料，接着做下一步。', links: [
+    { href: '/journey', label: '旅程总览', detail: '一起查看方向、投递和准备材料' },
     { href: '/journey/targets', label: '目标方向', detail: '查看与调整正在探索的方向' },
     { href: '/journey/jobs', label: '收藏的岗位', detail: '回看职位资料与来源' },
     { href: '/journey/applications', label: '投递旅程', detail: '查看自己记录的投递进展' },
