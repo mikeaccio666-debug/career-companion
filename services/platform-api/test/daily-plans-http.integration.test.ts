@@ -1,0 +1,36 @@
+import { before, after, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { createProviderRuntime } from '@companion/ai-core';
+import { PLATFORM_ACCOUNT_HEADER } from '@companion/platform-contracts';
+import { buildApp } from '../src/app.ts';
+import { readConfig } from '../src/config.ts';
+import { hashPassword } from '../src/auth.ts';
+import { createPrebirthFixture, withPrebirthLoopback, type PrebirthFixture } from './fixtures/companion-prebirth.ts';
+import { readyBirth } from './fixtures/companion-birth.ts';
+import { FICTIONAL_LEGAL } from './fixtures/student-entry.ts';
+const origin = 'https://fictional-daily-settings.example.invalid', prefix = '/api/platform/today', password = 'Fictional-settings-password-123';
+let f: PrebirthFixture, system: Awaited<ReturnType<typeof buildApp>>, calls = 0;
+before(async () => { f = await createPrebirthFixture(); system = await buildApp({ db: f.db, config: { ...readConfig(), dataCrypto: f.crypto, requireVerifiedEmail: true, allowedOrigins: new Set([origin]) }, legalBundle: FICTIONAL_LEGAL, enableQueue: false, runtime: createProviderRuntime({ env: { PLATFORM_ALLOW_PROVIDER_CALLS: '0' }, fetch: async () => { calls++; throw Error('No external call'); } }) }); });
+after(async () => { await system?.app.close(); assert.equal(calls, 0); await f?.close(); });
+async function login(owner: string) { const r = await system.app.inject({ method: 'POST', url: '/api/platform/auth/login', headers: { origin }, payload: { email: owner + '@example.invalid', password } }); assert.equal(r.statusCode, 200, r.body); const raw = r.headers['set-cookie']; return { origin, cookie: (Array.isArray(raw) ? raw[0] : raw)!.split(';')[0], [PLATFORM_ACCOUNT_HEADER]: owner }; }
+test('real HTTP creates, accepts, completes and observes a saved owner task, with route and account isolation',async()=>{
+ const who=await f.actor();await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[who.userId,await hashPassword(password)]);const headers=await login(who.userId);
+ assert.equal((await system.app.inject({url:prefix,headers})).statusCode,409);
+ await withPrebirthLoopback(async runtime=>{const b=await readyBirth(f,runtime,{who});await b.service.birth(who,b.body,b.key);});
+ const setting=(await system.app.inject({url:'/api/platform/companion/settings/daily',headers})).json().settings;
+ const pref=await system.app.inject({method:'PATCH',url:'/api/platform/companion/settings/daily',headers,payload:{companionId:setting.companionId,operationId:randomUUID(),expectedRevision:0,preferences:{timeZone:'America/New_York',morningTime:'09:00',quietStart:'22:30',quietEnd:'08:30',dailyMinutes:90,webAlert:'none'}}});assert.equal(pref.statusCode,200,pref.body);
+ const read=await system.app.inject({url:prefix,headers});assert.equal(read.statusCode,200,read.body);assert.equal(read.headers['cache-control'],'private, no-store');const initial=read.json();assert.equal(initial.plan,null);
+ const cmd={operationId:randomUUID(),companionId:initial.companionId,localDate:initial.localDate,planId:null,expectedRevision:0,action:'add',title:'Fictional HTTP task',minutes:15};
+ let saved=await system.app.inject({method:'POST',url:prefix+'/plan/items',headers,payload:cmd});assert.equal(saved.statusCode,200,saved.body);let v=saved.json().view;const planId=v.plan.id,itemId=v.plan.items[0].id;
+ assert.equal((await system.app.inject({method:'POST',url:prefix+'/plan/accept',headers,payload:cmd})).statusCode,400);
+ const accept={operationId:randomUUID(),companionId:v.companionId,localDate:v.localDate,planId,expectedRevision:1,action:'accept'};
+ saved=await system.app.inject({method:'POST',url:prefix+'/plan/accept',headers,payload:accept});assert.equal(saved.statusCode,200,saved.body);assert.equal(saved.json().view.plan.items[0].state,'accepted');
+ const done={...accept,operationId:randomUUID(),expectedRevision:2,action:'done',itemId};saved=await system.app.inject({method:'PATCH',url:prefix+'/plan/items/'+itemId,headers,payload:done});assert.equal(saved.statusCode,200,saved.body);assert.equal(saved.json().view.plan.items[0].completionSource,'self_reported');
+ assert.equal((await system.app.inject({method:'PATCH',url:prefix+'/plan/items/'+randomUUID(),headers,payload:done})).statusCode,400);
+ const observed=await system.app.inject({url:prefix+'/plan/operations/'+cmd.operationId,headers:await login(who.userId)});assert.equal(observed.statusCode,200,observed.body);assert.equal(observed.json().operation.appliedRevision,1);assert.equal(observed.json().view.plan.revision,3);
+ assert.equal((await system.app.inject({url:prefix})).statusCode,401);assert.equal((await system.app.inject({url:prefix,headers:{...headers,[PLATFORM_ACCOUNT_HEADER]:randomUUID()}})).statusCode,409);
+ assert.equal((await system.app.inject({method:'POST',url:prefix+'/plan/items',headers:{...headers,origin:'https://foreign.invalid'},payload:cmd})).statusCode,403);
+ for(const extra of [{ownerId:who.userId},{completionSource:'verified'},{rule:'interview_72h'},{createdAt:'2026-01-01T00:00:00.000Z'}])assert.equal((await system.app.inject({method:'POST',url:prefix+'/plan/items',headers,payload:{...cmd,...extra}})).statusCode,400);
+ assert.equal((await system.app.inject({url:prefix+'?owner='+who.userId,headers})).statusCode,400);
+});

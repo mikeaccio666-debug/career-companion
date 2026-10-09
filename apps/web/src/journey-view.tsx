@@ -105,7 +105,7 @@ export function JourneyPage({ onLogout }: { onLogout: () => void }) {
   const client = useRequiredPlatformAccountClient();
   const available = useSyncExternalStore(subscribeVisibility, visibleOnline, () => false);
   return <main className="career-surface journey-page" aria-labelledby="journey-title">
-    <nav className="journey-nav" aria-label="旅程导航"><a href="/"><ArrowLeft size={18} aria-hidden="true"/>回到首页</a><a href="/me">我</a><span>{BRAND.name} · AI</span>
+    <nav className="journey-nav" aria-label="旅程导航"><a href="/"><ArrowLeft size={18} aria-hidden="true"/>回到首页</a><a href="/today">今天</a><a href="/me">我</a><span>{BRAND.name} · AI</span>
       {client.isCurrent() && available && <button type="button" onClick={() => { if (client.isCurrent()) onLogout(); }}>退出登录</button>}
     </nav>
     <header className="journey-heading"><h1 id="journey-title">你的求职旅程</h1><p>想清楚一点，准备好一点。回到你的记录，接着做下一步。</p></header>

@@ -13,13 +13,14 @@ export function TodayRestChoices({settings,disabled,onChoose}:{settings:Readonly
  {until&&<><p>{settings.reminders==='keep'?'这段休息期间保留：面试提醒、截止提醒。':'这段休息期间，面试和截止提醒也关闭。'}</p><button type="button" disabled={disabled||settings.reminders==='off'} onClick={()=>onChoose('reminders_off')}>都关掉</button></>}
  </>;
 }
-export function TodayRestPanel() {
+export function TodayRestPanel({onSaved}:{onSaved?:()=>void}={}) {
  const client=useRequiredPlatformAccountClient();
  const [view,setView]=useState(()=>({client,state:emptyTodayRest()}));
  const controller=useMemo(()=>new TodayRestController(client,state=>setView({client,state})),[client]);
  const state=view.client===client&&client.isCurrent()?view.state:emptyTodayRest();
  useEffect(()=>{controller.start(!navigator.onLine);const offline=()=>controller.suspend(),online=()=>controller.resume();window.addEventListener('offline',offline);window.addEventListener('online',online);return()=>{window.removeEventListener('offline',offline);window.removeEventListener('online',online);controller.stop();};},[controller]);
  useEffect(()=>{if(!state.pending||!client.isCurrent())return;const guard=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard);},[state.pending,client]);
+ useEffect(()=>{if(state.notice&&state.settings)onSaved?.();},[state.notice,state.settings?.revision,onSaved]);
  const disabled=state.busy||state.suspended||!!state.pending;
  return <section className="daily-settings-panel" aria-labelledby="today-rest-title"><h2 id="today-rest-title">先歇一会儿</h2><p>晨报和提醒尚未开放。你可以先保存休息安排；功能开放后，会遵守仍在有效期内的选择。</p>
  {state.suspended&&<p role="status">当前离线。连接恢复后会重新读取休息安排。</p>}{state.busy&&<p role="status">正在确认休息安排…</p>}{state.error&&<p role="alert">{state.error}</p>}{state.notice&&<p role="status">{state.notice}</p>}

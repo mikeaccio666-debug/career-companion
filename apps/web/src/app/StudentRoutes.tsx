@@ -6,6 +6,7 @@ import type { StudentRoute } from './student-route';
 import '../career-design-tokens.css';
 import './student-route.css';
 
+const TodayPage = lazyFeature(async () => ({ default: (await import('../today-view')).TodayPage }), '今天');
 const JourneyPage = lazyFeature(async () => ({ default: (await import('../journey-view')).JourneyPage }), '旅程');
 const StudentMePage = lazyFeature(async () => ({ default: (await import('../student-me-view')).StudentMePage }), '我');
 const CompanionPaidSettingsPage = lazyFeature(async () => ({ default: (await import('../companion-paid-settings-view')).CompanionPaidSettingsPage }), '主理人设置');
@@ -38,6 +39,7 @@ export function StudentRoutes({ route, user, onLogout }: {
   if (route.kind === 'missing') return <MissingStudentRecord route={route} />;
   if (route.kind === 'source') return <OrgSourcePage reference={orgSourceReferenceFromPath(route.pathname)} onLogout={onLogout} />;
   switch (route.page) {
+    case 'today': return <TodayPage onLogout={onLogout} />;
     case 'journey': return <JourneyPage onLogout={onLogout} />;
     case 'pending': return <ResumeReviewPage initialItemId={route.id} onLogout={onLogout} />;
     case 'stories': return <CareerStoryPage initialStoryId={route.id} onLogout={onLogout} />;

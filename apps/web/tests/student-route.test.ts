@@ -4,7 +4,7 @@ import { studentRoute } from '../src/app/student-route.ts';
 
 const id = 'ABCDEFAB-1234-4567-89AB-ABCDEFABCDEF';
 test('existing student pages retain their exact deep links, including the mentor alias', () => {
-  const routes = { '/journey': 'journey', '/pending': 'pending', '/journey/stories': 'stories',
+  const routes = { '/today': 'today', '/journey': 'journey', '/pending': 'pending', '/journey/stories': 'stories',
     '/journey/interviews': 'interviews', '/journey/applications': 'applications', '/journey/jobs': 'jobs',
     '/journey/targets': 'targets', '/me/mentors': 'mentors', '/community/mentors': 'mentors',
     '/me/profile': 'profile', '/me/companion': 'companion', '/me/memory': 'memory', '/me': 'me' };
@@ -32,6 +32,8 @@ test('institution source references remain in their domain parser including malf
     assert.deepEqual(studentRoute(pathname), { kind: 'source', pathname });
 });
 test('public, onboarding, internal and not-yet-migrated chat paths stay outside this dispatcher', () => {
-  for (const pathname of ['/', '/welcome', '/privacy', '/terms', '/workbench', '/today', '/chats', '/group', '/group/applier', '/pending-extra', '/journey/stories-extra', 'constructor', '__proto__'])
+  for (const pathname of ['/', '/welcome', '/privacy', '/terms', '/workbench', '/chats', '/group', '/group/applier', '/pending-extra', '/journey/stories-extra', 'constructor', '__proto__'])
     assert.equal(studentRoute(pathname), null);
 });
+
+test('unknown today details never fall through to ordinary chat',()=>{for(const path of ['/today/','/today/missing','/today/%2F'])assert.deepEqual(studentRoute(path),{kind:'missing',returnHref:'/today',returnLabel:'回到今天'});});
