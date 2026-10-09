@@ -1,3 +1,4 @@
+import { readIntakeModelUsagePrefix } from '../src/model-usage-prefix.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -197,4 +198,30 @@ test('a proven account lock serializes two different reservations before either 
       if (functionCreated) await db.query('DROP FUNCTION fictional_wait_safety_usage_insert() CASCADE');
     }
   }
+});
+
+test('safety accounting retains cache evidence and rejects changed or impossible final counts', async () => {
+  const f = await fixture(); await f.usage.onModelCall(f.started); await admit(f);
+  const event: ModelCallEvent = { type: 'finished', callId: f.callId, status: 'complete',
+    usage: { status: 'reported', inputTokens: 12, outputTokens: 4, cachedInputTokens: 8, cacheWriteInputTokens: 3 } };
+  await f.usage.onModelCall(event); await f.usage.onModelCall(event);
+  const saved = await row(f.callId); assert.equal(saved.cached_input_tokens, 8); assert.equal(saved.cache_write_input_tokens, 3);
+  await assert.rejects(f.usage.onModelCall({ ...event, usage: { status: 'reported', inputTokens: 12, outputTokens: 4, cachedInputTokens: 7, cacheWriteInputTokens: 3 } }), denied);
+  await assert.rejects(db.query('UPDATE platform_safety_model_usage SET cache_write_input_tokens=5 WHERE call_id=$1', [f.callId]));
+});
+
+test('fixed safety source projection matches actual pre-migration row JSON byte for byte', async () => {
+  const f = await fixture(); await complete(f);
+  const current = await db.withBoundedTransaction(client => readIntakeModelUsagePrefix(client, f.claim.submissionId, f.claim.generation));
+  assert.equal(current.length, 1);
+  const rolledBack = new Error('Fictional schema rollback'); let historical = '';
+  // Only this randomly named fixture schema is changed; rollback restores all columns and constraints.
+  await assert.rejects(db.transaction(async client => {
+    await client.query('ALTER TABLE platform_safety_model_usage DROP COLUMN cached_input_tokens, DROP COLUMN cache_write_input_tokens');
+    historical = (await client.query('SELECT row_to_json(u)::text AS value FROM platform_safety_model_usage u WHERE call_id=$1', [f.callId])).rows[0].value;
+    throw rolledBack;
+  }), error => error === rolledBack);
+  assert.equal(current[0].value, historical);
+  await db.query('UPDATE platform_safety_model_usage SET cached_input_tokens=3,cache_write_input_tokens=2 WHERE call_id=$1', [f.callId]);
+  assert.deepEqual(await db.withBoundedTransaction(client => readIntakeModelUsagePrefix(client, f.claim.submissionId, f.claim.generation)), current);
 });

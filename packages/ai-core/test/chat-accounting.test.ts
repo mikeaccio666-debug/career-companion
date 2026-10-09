@@ -230,3 +230,39 @@ test('already aborted invocations are rejected before admission and upstream HTT
     assert.equal(requests.length, 0); assert.equal(calls.length, 0);
   });
 });
+
+test('Responses and compatible transports preserve cache reads and writes as total-input subsets', async () => {
+  for (const provider of ['openai', 'ark']) {
+    const calls: ModelCallEvent[] = [];
+    await loopback((_body, response) => {
+      const cache = { cached_tokens: 4, cache_write_tokens: 3 };
+      const reported = provider === 'openai' ? { input_tokens: 10, output_tokens: 2, input_tokens_details: cache }
+        : { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: cache };
+      frames(response, provider === 'openai' ? [{ type: 'response.output_text.delta', delta: 'Synthetic cache reply' }, completed(reported), completed(reported)] : [compatible(), { usage: reported, choices: [] }]);
+    }, async ({ runtime }) => {
+      await collect(runtime.streamChat(input(provider), { onModelCall: recorder(calls) }));
+      assert.deepEqual(finish(calls).usage, { status: 'reported', inputTokens: 10, outputTokens: 2, cachedInputTokens: 4, cacheWriteInputTokens: 3 });
+    });
+  }
+});
+test('cache counters reject malformed, overflowing and conflicting snapshots, retaining absence separately from zero', async () => {
+  for (const cache of [{ cached_tokens: -1 }, { cached_tokens: 11 }, { cached_tokens: 4, cache_write_tokens: 7 },
+    { cached_tokens: null }, { cache_write_tokens: 0.5 }, 'bad']) {
+    const calls: ModelCallEvent[] = [];
+    await loopback((_body, response) => frames(response, [{ type: 'response.output_text.delta', delta: 'Synthetic cache reply' }, completed({ input_tokens: 10, output_tokens: 2, input_tokens_details: cache })]), async ({ runtime }) => {
+      await collect(runtime.streamChat(input('openai'), { onModelCall: recorder(calls) })); assert.deepEqual(finish(calls).usage, { status: 'invalid' });
+    });
+  }
+  for (const first of [undefined, { cached_tokens: 1 }]) {
+    const calls: ModelCallEvent[] = [];
+    await loopback((_body, response) => frames(response, [{ type: 'response.output_text.delta', delta: 'Synthetic cache reply' }, completed({ input_tokens: 10, output_tokens: 2, input_tokens_details: first }),
+      completed({ input_tokens: 10, output_tokens: 2, input_tokens_details: { cached_tokens: 0 } })]), async ({ runtime }) => {
+      await collect(runtime.streamChat(input('openai'), { onModelCall: recorder(calls) })); assert.deepEqual(finish(calls).usage, { status: 'invalid' });
+    });
+  }
+  const calls: ModelCallEvent[] = [];
+  await loopback((_body, response) => frames(response, [{ type: 'response.output_text.delta', delta: 'Synthetic cache reply' }, completed({ input_tokens: 0, output_tokens: 0, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } })]), async ({ runtime }) => {
+    await collect(runtime.streamChat(input('openai'), { onModelCall: recorder(calls) }));
+    assert.deepEqual(finish(calls).usage, { status: 'reported', inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0 });
+  });
+});

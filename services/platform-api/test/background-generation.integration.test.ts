@@ -818,3 +818,15 @@ test('runtime expiry immediately before final completion CAS rolls back preview 
     } finally { await gated.close(); }
   });
 });
+
+test('actual background HTTP cache evidence persists without changing historical total-token settlement', async () => {
+  await loopback((_body, reply) => respond(reply, validPreview, { usage: { input_tokens: 34, output_tokens: 21,
+    input_tokens_details: { cached_tokens: 20, cache_write_tokens: 4 } } }), async runtime => {
+    const { who, prepared } = await ready(runtime), service = generator(runtime);
+    const view = await service.generate(who, { taskId: prepared.taskId }); assertPrivatePreview(view, prepared.companionId);
+    const state = await stored(who); assert.equal(state.calls[0].cached_input_tokens, 20); assert.equal(state.calls[0].cache_write_input_tokens, 4);
+    assert.equal(state.costs[0].cost_micros, '76');
+    assertPrivatePreview(await service.read(who, { taskId: prepared.taskId }), prepared.companionId);
+    await assert.rejects(db.query('UPDATE platform_companion_generation_calls SET cache_write_input_tokens=15 WHERE call_id=$1', [state.calls[0].call_id]));
+  });
+});

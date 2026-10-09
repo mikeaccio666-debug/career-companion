@@ -220,7 +220,9 @@ export interface ChatContext extends ProviderRequestContext {
     timeoutMs: number;
   };
 }
-export type ModelCallUsage = { status: 'reported'; inputTokens: number; outputTokens: number } | { status: 'missing' | 'invalid' };
+import type { ModelCallUsage } from './model-call-usage.ts';
+export type { ModelCallUsage } from './model-call-usage.ts';
+export { parseModelCallUsage } from './model-call-usage.ts';
 export type ModelCallEvent =
   | { type: 'started'; callId: string; index: number; provider: string; model: string; purpose?: string }
   | { type: 'finished'; callId: string; status: 'complete' | 'failed' | 'cancelled' | 'interrupted'; usage: ModelCallUsage;
