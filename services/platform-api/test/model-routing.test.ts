@@ -159,3 +159,20 @@ test('companion generation needs its own explicit internal model and stays outsi
       models: ['fictional-flat'], modelsByCapability: { chat: ['fictional-chat'] } })]), 'companion_generation'));
   }
 });
+
+test('first-letter generation is an independently configured internal route without preview or chat fallback',()=>{
+ const internal=readConfig({PLATFORM_FIRST_LETTER_PROVIDER:'openai'});
+ const status=provider({id:'openai',capabilities:['chat'],modelsByPurpose:{first_letter_generation:['fictional-letter'],companion_generation:['fictional-preview']}});
+ assert.deepEqual(resolveModelRoute(internal,runtime([status]),'first_letter_generation'),
+  {purpose:'first_letter_generation',provider:'openai',model:'fictional-letter'});
+ assert.deepEqual(modelRouteAvailability(internal,runtime([status])),
+  {chat:false,agent:false,realtime:false,transcription:false,speech:false});
+ for(const modelsByPurpose of [undefined,{}, {companion_generation:['fictional-preview']},
+  {first_letter_generation:[]},{first_letter_generation:['one','two']},{first_letter_generation:[' fictional-letter']}]){
+  unavailable(()=>resolveModelRoute(internal,runtime([provider({id:'openai',capabilities:['chat'],modelsByPurpose,
+   models:['fictional-flat'],modelsByCapability:{chat:['fictional-chat']}})]),'first_letter_generation'));
+ }
+ unavailable(()=>resolveModelRoute(readConfig({PLATFORM_COMPANION_GENERATION_PROVIDER:'openai'}),runtime([status]),'first_letter_generation'));
+ unavailable(()=>resolveModelRoute(internal,runtime([{...status,enabled:false}]),'first_letter_generation'));
+ unavailable(()=>resolveModelRoute(readConfig({PLATFORM_FIRST_LETTER_PROVIDER:'other'}),runtime([{...status,id:'other'}]),'first_letter_generation'));
+});

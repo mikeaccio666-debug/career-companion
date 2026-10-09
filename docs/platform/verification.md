@@ -1232,3 +1232,18 @@ JSON 覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；既有
 - C2–C6/超时触发、当前档案与记忆修订、人格/队员/费用绑定、信件生成/整段输出验证、租约恢复/持久化/展示和可信完成回执尚未接入；学生入口门槛及主对话真实模型评测门槛保持未完成。
 
 日志：远端忽略目录 .local/verification/ci-regression-20261008/first-letter-source-targeted.log（首轮失败）、first-letter-source-types.log、first-letter-source-final-types.log、first-letter-source-regression.log。
+
+
+## 2026-10-09：第一封信独立后台模型通道
+
+新增 [first_letter_generation](first-letter-runtime.md) 服务端用途及独立 provider/model 配置，复用现有单次结构化后台传输、准入和记账回调。默认未绑定，无普通聊天/人格预览回退；示例配置未启用任何真实服务。未实现第一封信业务任务、正式提示词或消息发布。
+
+- AI runtime 全量：**353 项中 342 通过、0 失败、11 跳过**。跳过均为原有外部 Chromium/断网 Docker harness 依赖用例（浏览器动作 6、浏览器执行 3、浏览器取消 1、真实 CLI harness 1）；本轮不以它们证明浏览器/CLI 可用。
+- 最终后台专项（first-letter-background + background-chat）**67/67 通过**，无跳过；其中新增第一封信 17 项，包含在上述全量内，不重复加总。覆盖独立模型/用途、缺配/错配/禁用、惰性流前冻结、终态和记账完成前不放出内容、坏 JSON/空正文/超长/错误引用枚举/额外字段、拒绝、断流、输出上限、工具输出、准入与记账失败、取消、未知用途及原有请求上限。
+- 平台模型路由/配置/安全路由/学生契约 **32/32 通过**，其中新增 2 项；共享契约全量 **76/76 通过**。配置不能开启其他能力，内部用途不增加学生可选模型。
+- 真实隔离数据库的后台生成、SIGKILL/租约恢复和模型准入回归 **53/53 通过**。它们验证原人格预览仍正确结算、拒绝不明支出重放、恢复检查点并维持租约；不能当作尚未实现的第一封信持久化证明。所有供应商 I/O 为虚构传输/拥有的 loopback。
+- contracts、ai-core、platform-api 三包 TypeScript 最终均通过；首轮 ai-core 类型检查发现测试对数组作 deepEqual([]) 后被收窄为 never[]，改为长度断言，再跑上述专项和完整类型检查。没有放松 runtime 检查。git diff --check 通过。
+- 现有顺序提案更正了过期的“禁止任何付费调用”说明：用户已授权 Luna/Haiku 隔离预试；真实结果和开发顺序门仍未因此通过。没有修改产品文档、PR3 门槛或解锁学生页面。
+- 未修改数据库结构、真实环境、密钥或价格配置；没有付费模型、主库迁移、主预览重启、通知、部署或合并。首封信的来源/人格/队员/费用组合、正式输出规则、任务恢复、唯一消息保存和展示仍待接通。
+
+日志位于远端忽略目录 .local/verification/ci-regression-20261008：first-letter-runtime-ai.log、first-letter-runtime-types.log（首轮类型失败）、first-letter-runtime-final-types.log、first-letter-runtime-routing.log、first-letter-runtime-contracts.log、first-letter-runtime-focused.log、first-letter-runtime-backend.log。

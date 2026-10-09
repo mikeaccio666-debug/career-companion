@@ -74,6 +74,7 @@ function modelRoutes(env: NodeJS.ProcessEnv): PlatformConfig['modelRoutes'] {
     realtime: 'PLATFORM_REALTIME_PROVIDER', transcription: 'PLATFORM_TRANSCRIPTION_PROVIDER', speech: 'PLATFORM_SPEECH_PROVIDER',
     safety_classify: 'PLATFORM_SAFETY_CLASSIFY_PROVIDER',
     companion_generation: 'PLATFORM_COMPANION_GENERATION_PROVIDER',
+    first_letter_generation: 'PLATFORM_FIRST_LETTER_PROVIDER',
   };
   const routes: PlatformConfig['modelRoutes'] = {};
   for (const purpose of Object.keys(variables) as ModelRoutePurpose[]) {

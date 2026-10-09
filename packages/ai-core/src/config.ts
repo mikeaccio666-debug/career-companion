@@ -48,12 +48,14 @@ export function providerStatuses(env:NodeJS.ProcessEnv):ProviderStatus[]{
   const openai = statuses.find(provider => provider.id === 'openai')!;
   const safetyModel = env.OPENAI_SAFETY_CLASSIFY_MODEL;
   const generationModel = env.OPENAI_COMPANION_GENERATION_MODEL;
+  const firstLetterModel = env.OPENAI_FIRST_LETTER_MODEL;
   const explicitModel = (value: string | undefined) => value && value.trim() === value && value.length <= 150 && !/[\x00-\x1f\x7f]/.test(value) ? [value] : [];
   // Keep an absent generation binding absent from the legacy public metadata.
   // Background requests still require the dedicated explicit value below.
   openai.modelsByPurpose = { safety_classify: explicitModel(safetyModel),
-    ...(generationModel !== undefined ? { companion_generation: explicitModel(generationModel) } : {}) };
-  openai.envVariables.push('OPENAI_SAFETY_CLASSIFY_MODEL', 'OPENAI_COMPANION_GENERATION_MODEL');
+    ...(generationModel !== undefined ? { companion_generation: explicitModel(generationModel) } : {}),
+    ...(firstLetterModel !== undefined ? { first_letter_generation: explicitModel(firstLetterModel) } : {}) };
+  openai.envVariables.push('OPENAI_SAFETY_CLASSIFY_MODEL', 'OPENAI_COMPANION_GENERATION_MODEL', 'OPENAI_FIRST_LETTER_MODEL');
   setModels('elevenlabs',{speech:elevenLabs?[elevenLabs.model]:[]});
   setModels('openrouter',{chat:env.OPENROUTER_CHAT_MODEL?[env.OPENROUTER_CHAT_MODEL]:[],agent:env.OPENROUTER_CHAT_MODEL?[env.OPENROUTER_CHAT_MODEL]:[]});
   setModels('ollama',{chat:env.OLLAMA_CHAT_MODEL?[env.OLLAMA_CHAT_MODEL]:[],agent:env.OLLAMA_CHAT_MODEL?[env.OLLAMA_CHAT_MODEL]:[]});

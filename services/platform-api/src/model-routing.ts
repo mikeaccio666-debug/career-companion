@@ -1,10 +1,10 @@
-import type { PlatformProviderRuntime, ProviderStatus } from '@companion/platform-contracts';
+import type { PlatformProviderRuntime, ProviderStatus, BackgroundGenerationPurpose } from '@companion/platform-contracts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
 export const MODEL_ROUTE_PURPOSES = ['chat', 'agent', 'realtime', 'transcription', 'speech'] as const;
 export type PublicModelRoutePurpose = typeof MODEL_ROUTE_PURPOSES[number];
-export type ModelRoutePurpose = PublicModelRoutePurpose | 'safety_classify' | 'companion_generation';
+export type ModelRoutePurpose = PublicModelRoutePurpose | 'safety_classify' | BackgroundGenerationPurpose;
 export interface ResolvedModelRoute {
   purpose: ModelRoutePurpose; provider: string; model: string; voice?: string;
 }
@@ -31,7 +31,7 @@ function catalogue(runtime: RouteRuntime): ProviderStatus[] {
 }
 
 function selectedRoute(config: RouteConfig, statuses: ProviderStatus[], purpose: ModelRoutePurpose): ResolvedModelRoute | undefined {
-  const internal = purpose === 'safety_classify' || purpose === 'companion_generation';
+  const internal = purpose === 'safety_classify' || purpose === 'companion_generation' || purpose === 'first_letter_generation';
   if (!internal && !(MODEL_ROUTE_PURPOSES as readonly string[]).includes(purpose)) return undefined;
   const providerId = config.modelRoutes[purpose]?.provider;
   if (typeof providerId !== 'string' || /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.exec(providerId)?.[0] !== providerId) return undefined;
