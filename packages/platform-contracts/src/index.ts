@@ -351,3 +351,5 @@ export * from './today-rest.ts';
 export * from './daily-plans.ts';
 
 export * from './today-agenda.ts';
+
+export * from './today-weekly.ts';

@@ -3,6 +3,7 @@ import type {DailyPlanView} from '@companion/platform-contracts';
 import {useRequiredPlatformAccountClient} from './account-client';
 import {DailyPlanController,emptyDailyPlan,type DailyPlanIntent} from './daily-plans-controller';
 import {BRAND} from './brand';
+import {TodayWeeklyPanel} from './today-weekly-view';
 import {TodayAgendaPanel} from './today-agenda-view';
 import {TodayRestPanel} from './today-rest-view';
 import './career-design-tokens.css';import './companion-paid-settings-view.css';import './today-view.css';
@@ -29,5 +30,5 @@ export function TodayPage({onLogout}:{onLogout:()=>void}){
  {state.error&&<p role="alert">{state.error}</p>}{state.notice&&<p role="status">{state.notice}</p>}{state.busy&&<p role="status">正在确认今天的安排…</p>}{state.suspended&&<p role="status">当前离线，恢复连接后重新读取。</p>}
  {state.loaded&&state.view&&<DailyPlanContent key={state.view.localDate+':'+(state.view.plan?.revision??0)} view={state.view} disabled={state.busy||state.suspended||!!state.pending} onChoose={intent=>controller.begin(intent)}/>}
  <div className="companion-settings-actions"><button type="button" disabled={state.busy||state.suspended} onClick={()=>void controller.refresh()}>重新读取安排</button>{state.pending&&<><button type="button" disabled={state.busy||state.suspended} onClick={()=>void controller.observe()}>核对这次操作</button><button type="button" disabled={state.busy||state.suspended} onClick={()=>void controller.retry()}>用原操作重试</button></>}<a href="/me/companion">时区与每日预算</a></div>
- </section><TodayAgendaPanel key={agendaRevision} suspended={state.suspended} hidePending={state.view?.paused??false}/><TodayRestPanel onSaved={restSaved}/></main>;
+ </section><TodayAgendaPanel key={agendaRevision} suspended={state.suspended} hidePending={state.view?.paused??false}/><TodayWeeklyPanel suspended={state.suspended}/><TodayRestPanel onSaved={restSaved}/></main>;
 }
