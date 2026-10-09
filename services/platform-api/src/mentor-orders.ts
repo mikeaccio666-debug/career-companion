@@ -16,6 +16,10 @@ export class MentorOrders {
  private readonly crypto:MentorLedgerCrypto;private readonly financial:MentorFinancialLedger;
  constructor(config:Pick<PlatformConfig,'dataCrypto'>){this.crypto=new MentorLedgerCrypto(config);this.financial=new MentorFinancialLedger(config);}
  async readInTransaction(c:PoolClient,owner:string,id:string,quoteOperationId?:string):Promise<Readonly<MentorOrder>>{
+  return (await this.readHistoryInTransaction(c,owner,id,quoteOperationId)).order;
+ }
+ /** Validated immutable history; callers must authorize the owner and project private staff fields. */
+ async readHistoryInTransaction(c:PoolClient,owner:string,id:string,quoteOperationId?:string){
   try{
    const row=(await c.query('SELECT * FROM platform_mentor_orders WHERE id=$1 AND user_id=$2 FOR SHARE',[id,owner])).rows[0];if(!row)throw Error();
    const r=parseMentorOrder(this.crypto.open('mentor_order',row.id,row.user_id,row.revision,row.payload_ciphertext));
@@ -24,9 +28,9 @@ export class MentorOrders {
     r.revision!==row.revision||r.lastOperationId!==row.last_operation_id||r.createdAt!==row.created_at.toISOString()||r.updatedAt!==row.updated_at.toISOString()||handoffHash(r.handoffCode)!==row.handoff_code_hash||handoffHash(r.paymentRef)!==(row.payment_ref_hash??null))throw Error();
    const rows=(await c.query('SELECT * FROM platform_mentor_order_proofs WHERE order_id=$1 ORDER BY revision FOR SHARE',[r.id])).rows;
    if(rows.length!==r.revision)throw Error();
-   const accepted:MentorPaymentCommand[]=[];
+   const accepted:MentorPaymentCommand[]=[],operations:{orderId:string;sessionId:string;ownerId:string;organizationId:string;revision:number;operationId:string;createdAt:string;action:'quote'|'void'|'pay'|'refund';command:Readonly<MentorPaymentCommand>|null}[]=[];
    for(let i=0;i<rows.length;i++){
-    const proof=rows[i];if(proof.revision!==i+1||proof.user_id!==r.ownerId||proof.org_id!==r.organizationId)throw Error();
+    const proof=rows[i];if(proof.order_id!==r.id||proof.revision!==i+1||proof.user_id!==r.ownerId||proof.org_id!==r.organizationId)throw Error();
     const v=careerRecordObject(this.crypto.open('mentor_order_proof',r.id,r.ownerId,proof.revision,proof.proof_ciphertext),
      ['orderId','sessionId','ownerId','orgId','revision','operationId','createdAt','digest'],['finance']);
     if(v.orderId!==r.id||v.sessionId!==r.sessionId||v.ownerId!==r.ownerId||v.orgId!==r.organizationId||v.revision!==proof.revision||
@@ -36,7 +40,8 @@ export class MentorOrders {
      const cmd=this.financeProof(proof,v);accepted.push(cmd);
      if(i===0||cmd.expectedRevision!==i||cmd.sessionId!==r.sessionId||cmd.occurredAt>(v.createdAt as string)||cmd.occurredAt<r.createdAt||
       cmd.action==='pay'&&(i!==1||cmd.amountCents!==r.priceCents)||cmd.action==='refund'&&(i<2||cmd.occurredAt<accepted[0].occurredAt))throw Error();
-    }else if(v.finance!==undefined||i>1||i===1&&r.status!=='void')throw Error();
+    }else if(v.finance!==undefined||proof.operator_id!==null||proof.external_ref_hash!==null||i>1||i===1&&r.status!=='void')throw Error();
+    operations.push({orderId:r.id,sessionId:r.sessionId,ownerId:r.ownerId,organizationId:r.organizationId,revision:proof.revision,operationId:proof.operation_id,createdAt:proof.created_at.toISOString(),action:proof.action??(i===0?'quote':'void'),command:proof.action?accepted.at(-1)!:null});
    }
    if(r.payment){
     const paid=accepted[0],total=accepted.slice(1).reduce((n,x)=>n+x.amountCents,0);
@@ -44,7 +49,7 @@ export class MentorOrders {
      r.payment.paidAt!==paid.occurredAt||r.payment.refundedCents!==total)throw Error();
     await this.financial.verifyInTransaction(c,r);
    }else if(accepted.length)throw Error();
-   return r;
+   return {order:r,operations};
   }catch{throw unavailable();}
  }
  private financeProof(row:any,proof:Record<string,unknown>):Readonly<MentorPaymentCommand>{

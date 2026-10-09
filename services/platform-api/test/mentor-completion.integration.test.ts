@@ -222,7 +222,7 @@ test('account archive preserves actual completed service, original offer and pri
  for(const secret of [s.operator.userId,s.mentor.userId,s.ref,s.profile.recordId,s.slot.recordId,other.owner.userId,other.intent.session.id,pair.order.handoffCode!,s.owner.tokenHash,exportPassword])assert(!JSON.stringify(result).includes(secret));
  assert(!queries.some(sql=>/\b(?:FROM|JOIN)\s+platform_mentor_capacity_(?:records|proofs)\b/i.test(sql)));
  assert(!queries.some(sql=>/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+platform_mentor_/i.test(sql)));
- assert(Object.isFrozen(session.assignment));assert.equal(result.includedTables.length,72);assert.equal(result.remainingTables.length,87);assert(result.remainingTables.includes('platform_mentor_orders'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+ assert(Object.isFrozen(session.assignment));assert.equal(result.includedTables.length,78);assert.equal(result.remainingTables.length,81);assert(result.includedTables.includes('platform_mentor_orders'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
 });
 
 test('all saved intent phases and both cancellation routes retain their own original operation histories',async()=>{
@@ -295,9 +295,12 @@ test('recorded payment and refund validate historical service without exporting 
  await payments.record(s.operator,s.org,paid);
  const refund={action:'refund',operationId:randomUUID(),sessionId:s.intent.session.id,expectedRevision:2,amountCents:2500,externalRef:'Fictional_export_refund_'+randomUUID(),occurredAt:new Date().toISOString(),evidenceRef:s.ref,confirmRecorded:true};
  await payments.record(s.operator,s.org,refund);const pair=await s.service.getOrder(s.owner,s.intent.session.id),before=await mentorSnapshot(s.owner),data=await archive(s.owner);
+ assert.equal((data.sections.mentorOrders[0] as any).status,'refunded_partial');assert.equal((data.sections.mentorOrders[0] as any).payment.refundedCents,2500);
+ const money=data.sections.mentorOrderOperations as any[];assert.equal(money.length,3);assert.equal(money.find(x=>x.action==='refund').command.externalRef,refund.externalRef);assert.equal(money.find(x=>x.action==='pay').command.occurredAt,paid.occurredAt);
+ assert.equal(data.sections.mentorFinancialRecords.length,1);assert.equal(data.sections.mentorFinancialOperations.length,2);
  assert.equal(pair.order.status,'refunded_partial');assert.equal((data.sections.mentorSessions[0] as any).status,'completed');assert.deepEqual(await mentorSnapshot(s.owner),before);
- for(const value of [paid.externalRef,refund.externalRef,paid.operationId,refund.operationId,s.ref,s.operator.userId,pair.order.handoffCode!])assert(!JSON.stringify(data).includes(value));
- for(const table of ['platform_mentor_orders','platform_mentor_order_proofs','platform_mentor_financial_records','platform_mentor_financial_proofs'])assert(data.remainingTables.includes(table));
+ for(const value of [s.ref,s.operator.userId,pair.order.handoffCode!])assert(!JSON.stringify(data).includes(value));
+ for(const table of ['platform_mentor_orders','platform_mentor_order_proofs','platform_mentor_financial_records','platform_mentor_financial_proofs'])assert(data.includedTables.includes(table));
 });
 
 test('actual concurrent owner cancellation waits for the export snapshot without mixing old and new intent receipts',async()=>{
@@ -306,4 +309,154 @@ test('actual concurrent owner cancellation waits for the export snapshot without
   pending=s.service.cancel(s.owner,s.intent.session.id,{operationId:randomUUID(),expectedRevision:1}).then(()=>{},error=>{failure=error;});}}),f.config).capture(s.owner,await exportProof(s.owner));
  await pending;assert.equal(failure,undefined);assert(changed);assert.equal((data.sections.mentorSessions[0] as any).status,'requested');assert.equal(data.sections.mentorIntentOperations.length,1);
  assert.equal((await s.service.get(s.owner,s.intent.session.id)).status,'cancelled');
+});
+
+const orderIndex=(sql:string)=>sql.startsWith('SELECT id,user_id,session_id,org_id,revision FROM platform_mentor_orders');
+const orderProofIndex=(sql:string)=>sql.startsWith('SELECT order_id,user_id,org_id,revision,operation_id,created_at,action FROM platform_mentor_order_proofs');
+const reservationIndex=(sql:string)=>sql.startsWith('SELECT session_id,user_id,org_id,revision FROM platform_mentor_slot_reservations');
+const reservationProofIndex=(sql:string)=>sql.startsWith('SELECT session_id,user_id,org_id,revision,operation_id,created_at FROM platform_mentor_reservation_proofs');
+const financialIndex=(sql:string)=>sql.startsWith('SELECT f.id,f.revision FROM platform_mentor_financial_records');
+const financialProofIndex=(sql:string)=>sql.startsWith('SELECT f.record_id,f.revision,f.action FROM platform_mentor_financial_proofs');
+async function paidHistory(){
+ const s=await completed(),payments=new MentorPayments(f.db,{...s.config,mentorRetentionDays:365,mentorRetentionEvidenceRef:s.ref},s.service,offers,capacity,blobs);
+ const payment={action:'pay' as const,operationId:randomUUID(),sessionId:s.intent.session.id,expectedRevision:1,amountCents:9500,externalRef:'Fictional_archived_pay_'+randomUUID(),occurredAt:new Date().toISOString(),evidenceRef:s.ref,confirmRecorded:true as const};
+ await payments.record(s.operator,s.org,payment);return {...s,payments,payment};
+}
+async function refundHistory(s:Awaited<ReturnType<typeof paidHistory>>,expectedRevision:number,amountCents:number){
+ const command={action:'refund' as const,operationId:randomUUID(),sessionId:s.intent.session.id,expectedRevision,amountCents,externalRef:'Fictional_archived_refund_'+randomUUID(),occurredAt:new Date().toISOString(),evidenceRef:s.ref,confirmRecorded:true as const};
+ await s.payments.record(s.operator,s.org,command);return command;
+}
+async function financialSnapshot(){return {
+ records:(await f.db.query('SELECT row_to_json(t)::text AS value FROM platform_mentor_financial_records t ORDER BY id')).rows,
+ proofs:(await f.db.query('SELECT row_to_json(t)::text AS value FROM platform_mentor_financial_proofs t ORDER BY record_id,revision')).rows,
+};}
+
+test('archive preserves the shown price, actual quote and full held window; cancellation exports a void and released history without inferring a refund',async()=>{
+ const s=await futureIntent();await match(s);let data=await archive(s.owner);
+ const order=data.sections.mentorOrders[0] as any,reservation=data.sections.mentorSlotReservations[0] as any;
+ assert.equal(order.priceCents,9500);assert.equal(order.shownOffer.priceCents,9900);assert.equal(order.shownOffer.refundRules,s.source.terms.refundRules);
+ assert.equal(order.status,'quoted');assert.equal(order.payment,null);assert.equal(order.paymentRef,null);
+ assert.equal(reservation.endsAt,s.slot.endsAt);assert.notEqual(reservation.endsAt,(data.sections.mentorSessions[0] as any).assignment.endsAt);
+ assert.deepEqual((data.sections.mentorOrderOperations as any[]).map(o=>o.action),['quote']);assert.equal(data.sections.mentorFinancialRecords.length,0);
+ const cancelled=await s.service.cancel(s.owner,s.intent.session.id,{operationId:randomUUID(),expectedRevision:2});data=await archive(s.owner);
+ assert.equal((data.sections.mentorOrders[0] as any).status,'void');assert.deepEqual((data.sections.mentorOrderOperations as any[]).map(o=>o.action),['quote','void']);
+ assert.deepEqual((data.sections.mentorReservationOperations as any[]).map(o=>o.status),['held','released']);
+ assert.equal((data.sections.mentorReservationOperations[1] as any).operationId,cancelled.session.lastOperationId);
+ assert.deepEqual(data.sections.mentorFinancialRecords,[]);assert.deepEqual(data.sections.mentorFinancialOperations,[]);
+ assert(Object.isFrozen((data.sections.mentorOrders[0] as any).shownOffer));
+});
+
+test('paid, partial and full refunds retain original transaction references and stored retention dates without staff evidence or writes',async context=>{
+ const s=await paidHistory();context.mock.method(globalThis,'fetch',async()=>{throw Error('No external requests');});
+ let data=await archive(s.owner);assert.equal((data.sections.mentorOrders[0] as any).status,'paid');
+ assert.equal((data.sections.mentorFinancialRecords[0] as any).revision,1);assert.equal((data.sections.mentorFinancialRecords[0] as any).paidAt,s.payment.occurredAt);
+ const partial=await refundHistory(s,2,2500);data=await archive(s.owner);assert.equal((data.sections.mentorOrders[0] as any).status,'refunded_partial');
+ const full=await refundHistory(s,3,7000),pair=await s.service.getOrder(s.owner,s.intent.session.id),before=await mentorSnapshot(s.owner),financeBefore=await financialSnapshot();
+ const queries:string[]=[];data=await new AccountCoreExport(exportDb(sql=>{queries.push(sql);}),f.config).capture(s.owner,await exportProof(s.owner));
+ const order=data.sections.mentorOrders[0] as any,finance=data.sections.mentorFinancialRecords[0] as any;
+ assert.equal(order.status,'refunded_full');assert.equal(order.paymentRef,s.payment.externalRef);assert.equal(order.payment.refundedCents,9500);
+ assert.equal(finance.status,'refunded_full');assert.equal(finance.revision,3);assert.equal(finance.updatedAt,order.updatedAt);
+ assert.equal(finance.retentionUntil,(await f.db.query('SELECT retention_until FROM platform_mentor_financial_records WHERE id=$1',[order.id])).rows[0].retention_until.toISOString());
+ const commands=(data.sections.mentorOrderOperations as any[]).filter(o=>o.command).map(o=>o.command);
+ for(const [i,cmd] of [s.payment,partial,full].entries())assert.deepEqual(commands[i],{action:cmd.action,operationId:cmd.operationId,sessionId:cmd.sessionId,expectedRevision:cmd.expectedRevision,amountCents:cmd.amountCents,externalRef:cmd.externalRef,occurredAt:cmd.occurredAt});
+ assert.deepEqual((data.sections.mentorFinancialOperations as any[]).map(o=>o.orderOperationId),[s.payment.operationId,partial.operationId,full.operationId]);
+ assert.deepEqual(await mentorSnapshot(s.owner),before);assert.deepEqual(await financialSnapshot(),financeBefore);
+ for(const secret of [s.ref,s.operator.userId,s.mentor.userId,s.profile.recordId,s.slot.recordId,pair.order.handoffCode!,'commandDigest','externalRefHash','policyEvidence','evidenceRef','acceptedAuthVersion'])assert(!JSON.stringify(data).includes(secret));
+ assert(!queries.some(sql=>/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+platform_mentor_/i.test(sql)));
+});
+
+test('other owners and actually detached financial retention records never enter the owner archive',async()=>{
+ const mine=await paidHistory(),other=await paidHistory(),deleted=await paidHistory();
+ const otherPair=await other.service.getOrder(other.owner,other.intent.session.id),deletedPair=await deleted.service.getOrder(deleted.owner,deleted.intent.session.id);
+ await f.db.query('DELETE FROM platform_users WHERE id=$1',[deleted.owner.userId]);
+ assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_mentor_financial_records WHERE id=$1',[deletedPair.order.id])).rows[0].n,1);
+ assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_mentor_orders WHERE id=$1',[deletedPair.order.id])).rows[0].n,0);
+ const before=await financialSnapshot(),data=await archive(mine.owner);assert.equal(data.sections.mentorOrders.length,1);assert.equal(data.sections.mentorFinancialRecords.length,1);
+ for(const secret of [otherPair.order.id,deletedPair.order.id,other.payment.externalRef,deleted.payment.externalRef,other.owner.userId,deleted.owner.userId])assert(!JSON.stringify(data).includes(secret));
+ assert.deepEqual(await financialSnapshot(),before);
+});
+
+test('own order and reservation indexes and proof indexes reject wrong owners, missing parents, wrong revisions and extra records atomically',async()=>{
+ const s=await paidHistory(),token=await exportProof(s.owner);
+ const cases:[(sql:string)=>boolean,(row:any)=>void][]=[
+  [orderIndex,r=>{r.user_id=randomUUID();}], [orderIndex,r=>{r.session_id=randomUUID();}], [orderIndex,r=>{r.revision++;}],
+  [orderProofIndex,r=>{r.order_id=randomUUID();}], [orderProofIndex,r=>{r.org_id=randomUUID();}],
+  [reservationIndex,r=>{r.session_id=randomUUID();}], [reservationIndex,r=>{r.user_id=randomUUID();}],
+  [reservationProofIndex,r=>{r.session_id=randomUUID();}], [reservationProofIndex,r=>{r.operation_id=randomUUID();}],
+  [financialIndex,r=>{r.id=randomUUID();}], [financialIndex,r=>{r.revision++;}], [financialProofIndex,r=>{r.record_id=randomUUID();}], [financialProofIndex,r=>{r.action='refund';}],
+ ];
+ for(const [matches,mutate] of cases){let reached=false;await assert.rejects(new AccountCoreExport(exportDb((sql,rows)=>{if(matches(sql)&&rows.length){reached=true;mutate(rows[0]);}}),f.config).capture(s.owner,token),{code:'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE'});assert(reached);assert.equal(await exportConsumed(s.owner),null);}
+ for(const matches of [orderIndex,orderProofIndex,reservationIndex,reservationProofIndex,financialIndex,financialProofIndex]){
+  let reached=false;await assert.rejects(new AccountCoreExport(exportDb((sql,rows)=>{if(matches(sql)&&rows.length){reached=true;rows.pop();}}),f.config).capture(s.owner,token),{code:'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE'});assert(reached);assert.equal(await exportConsumed(s.owner),null);
+ }
+ assert.equal((await new AccountCoreExport(f.db,f.config).capture(s.owner,token)).sections.mentorOrders.length,1);
+});
+
+test('corrupted encrypted orders, reservations and old financial proofs fail closed; authenticated unknown finance fields cannot leak',async()=>{
+ const s=await paidHistory();await refundHistory(s,2,1500);const token=await exportProof(s.owner);
+ const cases:[(sql:string)=>boolean,string][]=[
+  [sql=>sql.startsWith('SELECT * FROM platform_mentor_orders WHERE'),'payload_ciphertext'],
+  [sql=>sql.startsWith('SELECT * FROM platform_mentor_order_proofs WHERE order_id='),'proof_ciphertext'],
+  [sql=>sql.startsWith('SELECT * FROM platform_mentor_slot_reservations WHERE'),'payload_ciphertext'],
+  [sql=>sql.startsWith('SELECT * FROM platform_mentor_reservation_proofs WHERE'),'proof_ciphertext'],
+  [sql=>sql.startsWith('SELECT * FROM platform_mentor_financial_records WHERE'),'payload_ciphertext'],
+  [sql=>sql==='SELECT * FROM platform_mentor_financial_proofs WHERE record_id=$1 ORDER BY revision FOR SHARE','proof_ciphertext'],
+ ];
+ for(const [matches,column] of cases){let reached=false;await assert.rejects(new AccountCoreExport(exportDb((sql,rows)=>{if(matches(sql)&&rows.length){reached=true;rows[0][column]=Buffer.from(rows[0][column]);rows[0][column][rows[0][column].length-1]^=1;}}),f.config).capture(s.owner,token),{code:'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE'});assert(reached);assert.equal(await exportConsumed(s.owner),null);}
+ let reached=false;await assert.rejects(new AccountCoreExport(exportDb((sql,rows)=>{if(sql.startsWith('SELECT * FROM platform_mentor_financial_records WHERE')&&rows.length){reached=true;const r=rows[0],context={table:'mentor_financial',column:'payload',rowId:r.id,ownerId:r.id,revision:r.revision};
+  const payload=JSON.parse(f.crypto.openUtf8(r.payload_ciphertext,context));payload.staffPrivateNote='Fictional unknown private note';r.payload_ciphertext=f.crypto.sealUtf8(JSON.stringify(payload),context);}}),f.config).capture(s.owner,token),{code:'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE'});assert(reached);assert.equal(await exportConsumed(s.owner),null);
+ assert.equal((await new AccountCoreExport(f.db,f.config).capture(s.owner,token)).sections.mentorFinancialOperations.length,2);
+});
+
+test('full reservation proof chain prevents an authentic old held state or a missing initial hold from replacing released history',async()=>{
+ const s=await futureIntent();await match(s);const old=(await f.db.query('SELECT * FROM platform_mentor_slot_reservations WHERE session_id=$1',[s.intent.session.id])).rows[0];
+ await s.service.cancel(s.owner,s.intent.session.id,{operationId:randomUUID(),expectedRevision:2});const token=await exportProof(s.owner);
+ for(const rollback of [true,false]){let reached=false;
+  await assert.rejects(new AccountCoreExport(exportDb((sql,rows)=>{
+   if(rollback&&sql.startsWith('SELECT * FROM platform_mentor_slot_reservations WHERE')&&rows.length){reached=true;rows[0]={...old};}
+   if(!rollback&&sql==='SELECT * FROM platform_mentor_reservation_proofs WHERE session_id=$1 ORDER BY revision FOR SHARE'&&rows.length){reached=true;rows.shift();}
+  }),f.config).capture(s.owner,token),{code:'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE'});assert(reached);assert.equal(await exportConsumed(s.owner),null);
+ }
+ assert.deepEqual(((await new AccountCoreExport(f.db,f.config).capture(s.owner,token)).sections.mentorReservationOperations as any[]).map(x=>x.status),['held','released']);
+});
+
+test('105 real matched and cancelled orders cross order, reservation and both proof pages without truncation',async()=>{
+ const s=await futureIntent(),ids:string[]=[];
+ for(let i=0;i<105;i++){
+  const session=i===0?s.intent.session:(await s.service.create(s.owner,{...s.command,operationId:randomUUID()})).session;
+  await s.service.match(s.operator,s.org,{...s.match,sessionId:session.id,operationId:randomUUID()});ids.push((await s.service.getOrder(s.owner,session.id)).order.id);
+  await s.service.cancel(s.owner,session.id,{operationId:randomUUID(),expectedRevision:2});
+ }
+ const queries:string[]=[],data=await new AccountCoreExport(exportDb(sql=>{queries.push(sql);}),f.config).capture(s.owner,await exportProof(s.owner));
+ assert.deepEqual((data.sections.mentorOrders as any[]).map(x=>x.id),ids.sort());assert.equal(data.sections.mentorSlotReservations.length,105);
+ assert.equal(data.sections.mentorOrderOperations.length,210);assert.equal(data.sections.mentorReservationOperations.length,210);
+ for(const match of [orderIndex,reservationIndex])assert.equal(queries.filter(match).length,2);
+ for(const match of [orderProofIndex,reservationProofIndex])assert.equal(queries.filter(match).length,3);
+});
+
+test('103 original payment and refund operations cross proof pages preserving every amount and operation',async()=>{
+ const s=await paidHistory(),operationIds=[s.payment.operationId];for(let i=0;i<102;i++)operationIds.push((await refundHistory(s,i+2,1)).operationId);
+ const queries:string[]=[],data=await new AccountCoreExport(exportDb(sql=>{queries.push(sql);}),f.config).capture(s.owner,await exportProof(s.owner));
+ assert.equal(data.sections.mentorOrderOperations.length,104);assert.equal(data.sections.mentorFinancialOperations.length,103);
+ assert.deepEqual((data.sections.mentorFinancialOperations as any[]).map(x=>x.orderOperationId),operationIds);
+ assert.equal((data.sections.mentorOrders[0] as any).payment.refundedCents,102);assert.equal((data.sections.mentorFinancialRecords[0] as any).refundedCents,102);
+ assert.equal(queries.filter(orderProofIndex).length,2);assert.equal(queries.filter(financialProofIndex).length,2);
+});
+
+test('aborting after financial proof enumeration rolls back the entire archive and leaves the proof usable',async()=>{
+ const s=await paidHistory(),token=await exportProof(s.owner),abort=new AbortController();let reached=false;
+ await assert.rejects(new AccountCoreExport(exportDb(sql=>{if(financialProofIndex(sql)){reached=true;abort.abort();}}),f.config).capture(s.owner,token,abort.signal),{code:'ACCOUNT_EXPORT_CANCELLED'});
+ assert(reached);assert.equal(await exportConsumed(s.owner),null);assert.equal((await new AccountCoreExport(f.db,f.config).capture(s.owner,token)).sections.mentorFinancialRecords.length,1);
+});
+
+
+test('actual concurrent refund waits for the captured order and financial snapshot without mixing revisions',async()=>{
+ const s=await paidHistory();let entered=false,pending:Promise<void>|undefined,failure:unknown;
+ const data=await new AccountCoreExport(exportDb(sql=>{if(!entered&&financialIndex(sql)){entered=true;
+  pending=refundHistory(s,2,2500).then(()=>{},error=>{failure=error;});}}),f.config).capture(s.owner,await exportProof(s.owner));
+ await pending;assert(entered);assert.equal(failure,undefined);
+ assert.equal((data.sections.mentorOrders[0] as any).status,'paid');assert.equal((data.sections.mentorFinancialRecords[0] as any).status,'paid');
+ assert.equal(data.sections.mentorFinancialOperations.length,1);
+ const after=await archive(s.owner);assert.equal((after.sections.mentorOrders[0] as any).status,'refunded_partial');
+ assert.equal((after.sections.mentorFinancialRecords[0] as any).refundedCents,2500);assert.equal(after.sections.mentorFinancialOperations.length,2);
 });

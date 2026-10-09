@@ -1,3 +1,4 @@
+import {AccountMentorLedgerExport,MENTOR_LEDGER_EXPORT_TABLES,type MentorLedgerExportSection} from './account-mentor-ledger-export.ts';
 import type {PoolClient} from 'pg';
 import {careerRecordId as id,careerRecordObject as object,parseMentorIntentCommand,parseMentorMatchCommand,parseMentorSchedulingCommand,type MentorIntent} from '@companion/platform-contracts';
 import {authorizeFixedSession,type FixedSessionContext} from './auth.ts';
@@ -7,8 +8,8 @@ import {decodeMentorRating,type MentorRatingRow} from './mentor-ratings.ts';
 import {MentorLedgerCrypto} from './mentor-ledger-crypto.ts';
 import {ApiError} from './errors.ts';
 
-export const MENTOR_EXPORT_TABLES=Object.freeze(['platform_mentor_sessions','platform_mentor_intent_operations','platform_mentor_ratings'] as const);
-export type MentorExportSection='mentorSessions'|'mentorIntentOperations'|'mentorRatings';
+export const MENTOR_EXPORT_TABLES=Object.freeze(['platform_mentor_sessions','platform_mentor_intent_operations','platform_mentor_ratings',...MENTOR_LEDGER_EXPORT_TABLES] as const);
+export type MentorExportSection='mentorSessions'|'mentorIntentOperations'|'mentorRatings'|MentorLedgerExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE','The saved mentor service history could not be confirmed.');
 function sessionRecord(r:MentorIntent){
  const a=r.assignment;
@@ -34,10 +35,10 @@ function operationRecord(r:Receipt){
 }
 /** Owner history, independent of current catalog/mentor availability and model
  * consent. Historical integrity readers are shared with normal fulfillment;
- * their internal staff proofs, capacity and financial data are not serialized. */
+ * their internal staff proofs, capacity coordinates and attribution codes are not serialized. */
 export class AccountMentorExport {
- private readonly history:MentorIntentHistory;private readonly crypto:MentorLedgerCrypto;
- constructor(config:Pick<PlatformConfig,'dataCrypto'>){this.history=new MentorIntentHistory(config);this.crypto=new MentorLedgerCrypto(config);}
+ private readonly ledgers:AccountMentorLedgerExport;private readonly history:MentorIntentHistory;private readonly crypto:MentorLedgerCrypto;
+ constructor(config:Pick<PlatformConfig,'dataCrypto'>){this.ledgers=new AccountMentorLedgerExport(config);this.history=new MentorIntentHistory(config);this.crypto=new MentorLedgerCrypto(config);}
  async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal):AsyncGenerator<{section:MentorExportSection;record:unknown}>{
   const v=object(value,['userId','tokenHash']),who=Object.freeze({userId:id(v.userId),tokenHash:v.tokenHash as string});
   if(typeof who.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(who.tokenHash))throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');
@@ -72,6 +73,7 @@ export class AccountMentorExport {
     }
     if(rows.length<100)break;after=id(rows.at(-1)!.session_id);
    }
+   yield* this.ledgers.exportInTransaction(client,who.userId,sessions,signal);
   }catch{signal?.throwIfAborted();throw unavailable();}
   await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
  }

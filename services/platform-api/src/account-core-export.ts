@@ -81,6 +81,7 @@ export class AccountCoreExport {
       const sections:{account:Record<string,unknown>}&Record<ArraySection,unknown[]>={
         account:{...account,createdAt:account.createdAt.toISOString(),emailVerifiedAt:account.emailVerifiedAt?.toISOString()??null},
         mentorSessions:[],mentorIntentOperations:[],mentorRatings:[],
+        mentorOrders:[],mentorOrderOperations:[],mentorSlotReservations:[],mentorReservationOperations:[],mentorFinancialRecords:[],mentorFinancialOperations:[],
         goalPlans:[],goalPlanRevisions:[],goalPlanSteps:[],goalPlanProposals:[],
         mcpConnections:[],mcpReceipts:[],
         privateKnowledgeSources:[],privateKnowledgePassages:[],

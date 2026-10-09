@@ -43,7 +43,7 @@ test('actual C1, begin and direct-letter choices export the saved introduction a
   const {birthReceiptId,...state}=saved;assert.deepEqual(state,p.state);assert.match(birthReceiptId,/^[a-f0-9-]{36}$/);
   assert.equal(result.sections.companionWelcomeOperations.length,choice?1:0);
   if(choice)assert.deepEqual(result.sections.companionWelcomeOperations[0],{id:p.command.operationId,welcomeId:p.state.id,companionId:p.state.companionId,expectedRevision:1,appliedRevision:2,choice,createdAt:p.state.updatedAt});
-  assert.equal(result.includedTables.length,72);assert(!result.remainingTables.includes('platform_companion_welcome'));assert(!result.remainingTables.includes('platform_companion_welcome_operations'));
+  assert.equal(result.includedTables.length,78);assert(!result.remainingTables.includes('platform_companion_welcome'));assert(!result.remainingTables.includes('platform_companion_welcome_operations'));
   assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(Object.isFrozen(saved.intro.speaker));
   const text=JSON.stringify(result);for(const secret of [p.who.tokenHash,encoded,password,token,'acceptedAuthVersion','accepted_auth_version','request_ciphertext','intro_ciphertext'])assert(!text.includes(secret));
   assert.deepEqual(await p.service.read(p.who),p.state,'Export must not advance or reopen the welcome.');

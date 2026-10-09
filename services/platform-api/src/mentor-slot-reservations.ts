@@ -22,18 +22,28 @@ export class MentorSlotReservations {
    slotId:careerRecordId(v.slotId),slotRevision:mentorServiceInteger(v.slotRevision,1),startsAt,endsAt,status:v.status as Reservation['status'],revision,
    lastOperationId:careerRecordId(v.lastOperationId),updatedAt:mentorServiceTime(v.updatedAt)};
  }
- private async decode(c:PoolClient,row:Row):Promise<Readonly<Reservation>>{
+ private async decode(c:PoolClient,row:Row):Promise<Readonly<Reservation>>{return (await this.decodeHistory(c,row)).reservation;}
+ private async decodeHistory(c:PoolClient,row:Row){
   try{
    const r=this.parse(this.crypto.open('mentor_reservation',row.session_id,row.user_id,row.revision,row.payload_ciphertext));
    if(r.sessionId!==row.session_id||r.ownerId!==row.user_id||r.orgId!==row.org_id||r.mentorId!==row.mentor_id||r.slotId!==row.slot_id||r.slotRevision!==row.slot_revision||
     r.startsAt!==row.starts_at.toISOString()||r.endsAt!==row.ends_at.toISOString()||r.status!==row.status||r.revision!==row.revision||
     r.lastOperationId!==row.last_operation_id||r.updatedAt!==row.updated_at.toISOString())throw Error();
-   const latest=(await c.query('SELECT * FROM platform_mentor_reservation_proofs WHERE session_id=$1 ORDER BY revision DESC LIMIT 1 FOR SHARE',[r.sessionId])).rows[0];
-   if(!latest||latest.revision!==r.revision||latest.user_id!==r.ownerId||latest.org_id!==r.orgId||latest.operation_id!==r.lastOperationId||latest.created_at.toISOString()!==r.updatedAt)throw Error();
-   const p=careerRecordObject(this.crypto.open('mentor_reservation_proof',r.sessionId,r.ownerId,r.revision,latest.proof_ciphertext),
-    ['sessionId','ownerId','orgId','revision','operationId','createdAt','digest']);
-   if(p.sessionId!==r.sessionId||p.ownerId!==r.ownerId||p.orgId!==r.orgId||p.revision!==r.revision||p.operationId!==r.lastOperationId||p.createdAt!==r.updatedAt||p.digest!==digest(r))throw Error();
-   return Object.freeze(r);
+   const proofs=(await c.query('SELECT * FROM platform_mentor_reservation_proofs WHERE session_id=$1 ORDER BY revision FOR SHARE',[r.sessionId])).rows;
+   if(proofs.length!==r.revision)throw Error();
+   const operations=[];
+   for(let i=0;i<proofs.length;i++){
+    const row=proofs[i],revision=i+1;
+    if(row.session_id!==r.sessionId||row.user_id!==r.ownerId||row.org_id!==r.orgId||row.revision!==revision)throw Error();
+    const p=careerRecordObject(this.crypto.open('mentor_reservation_proof',r.sessionId,r.ownerId,revision,row.proof_ciphertext),
+     ['sessionId','ownerId','orgId','revision','operationId','createdAt','digest']);
+    const operationId=careerRecordId(p.operationId),createdAt=mentorServiceTime(p.createdAt),status=revision===1?'held' as const:'released' as const;
+    if(p.sessionId!==r.sessionId||p.ownerId!==r.ownerId||p.orgId!==r.orgId||p.revision!==revision||operationId!==row.operation_id||createdAt!==row.created_at.toISOString()||
+     createdAt>r.updatedAt||p.digest!==digest({...r,status,revision,lastOperationId:operationId,updatedAt:createdAt})||
+     revision===r.revision&&(operationId!==r.lastOperationId||createdAt!==r.updatedAt))throw Error();
+    operations.push({sessionId:r.sessionId,ownerId:r.ownerId,organizationId:r.orgId,revision,operationId,createdAt,status});
+   }
+   return {reservation:Object.freeze(r),operations};
   }catch{throw unavailable();}
  }
  async overlapInTransaction(c:PoolClient,mentorId:string,startsAt:string,endsAt:string,signal?:AbortSignal){
@@ -59,8 +69,11 @@ export class MentorSlotReservations {
   await this.write(c,r,true);signal?.throwIfAborted();return Object.freeze(r);
  }
  async readInTransaction(c:PoolClient,owner:string,id:string){
+  return (await this.readHistoryInTransaction(c,owner,id)).reservation;
+ }
+ async readHistoryInTransaction(c:PoolClient,owner:string,id:string){
   const row=(await c.query<Row>('SELECT * FROM platform_mentor_slot_reservations WHERE user_id=$1 AND session_id=$2',[owner,id])).rows[0];
-  if(!row)throw unavailable();return this.decode(c,row);
+  if(!row)throw unavailable();return this.decodeHistory(c,row);
  }
  private async write(c:PoolClient,r:Reservation,update:boolean){
   const proof={sessionId:r.sessionId,ownerId:r.ownerId,orgId:r.orgId,revision:r.revision,operationId:r.lastOperationId,createdAt:r.updatedAt,digest:digest(r)};
