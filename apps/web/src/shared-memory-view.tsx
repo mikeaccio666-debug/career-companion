@@ -1,3 +1,4 @@
+import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { useEffect,useMemo,useRef,useState } from 'react';
 import { SHARED_MEMORY_CATEGORIES,type SharedMemoryRecord,type SharedMemoryCategory,type SharedMemorySensitivity,type AgentSpeakerKey,type SharedMemoryCommandKind } from '@companion/platform-contracts';
 import { useRequiredPlatformAccountClient } from './account-client';
@@ -101,4 +102,4 @@ export default function SharedMemoryPanel(){
   })}{nextCursor&&<button type="button" aria-disabled={busy} onClick={()=>!busy&&void controller.refresh(true)}>读取更多记忆</button>}
  </section>;
 }
-export function SharedMemoryPage({onLogout}:{onLogout:()=>void}){return <main className="shared-memory-page career-surface"><nav><a href="/">回到对话</a><button type="button" onClick={onLogout}>退出登录</button></nav><SharedMemoryPanel/></main>;}
+export function SharedMemoryPage({onLogout}:{onLogout:()=>void}){return <main className="shared-memory-page career-surface"><StudentPageNavigation><a href="/">回到对话</a><button type="button" onClick={onLogout}>退出登录</button></StudentPageNavigation><SharedMemoryPanel/></main>;}

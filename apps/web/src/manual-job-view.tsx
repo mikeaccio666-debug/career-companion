@@ -1,3 +1,4 @@
+import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { emptyJobDeadline, jobDeadlineFields, resolveJobDeadline } from './manual-job-deadline';
 import { JobDeadlineInput } from './manual-job-deadline-view';
 import { displayZonedTime } from './zoned-date-time';
@@ -34,7 +35,7 @@ export function ManualJobPage({onLogout}:{onLogout:()=>void}){
   const {deadline,...values}=form;start('create',null,{...values,expectedRevision:0,...jobDeadlineFields(deadline),allowDuplicate});
  }catch{setInputError('请核对日期、时区及重复时刻的选择。');}}
  if(!client.isCurrent())return null;
- return <main className="career-target-page manual-job-page"><nav><a href="/">回到对话</a><a href="/journey/targets">目标方向</a><a href="/journey/applications">投递旅程</a><button type="button" onClick={onLogout}>退出登录</button></nav><section className="career-target-panel"><header><h1>你收藏的岗位</h1><p>把想投的 JD 留下来，再逐条核对资料和准备材料。</p></header>
+ return <main className="career-target-page manual-job-page"><StudentPageNavigation><a href="/">回到对话</a><a href="/journey/targets">目标方向</a><a href="/journey/applications">投递旅程</a><button type="button" onClick={onLogout}>退出登录</button></StudentPageNavigation><section className="career-target-panel"><header><h1>你收藏的岗位</h1><p>把想投的 JD 留下来，再逐条核对资料和准备材料。</p></header>
   <div className="career-target-actions"><button type="button" disabled={locked} onClick={()=>{setForm({...blank});controller.dismissDuplicate();setInputError('');}}>收藏一个岗位</button><button type="button" disabled={busy||suspended} onClick={()=>void controller.refresh()}>重新读取</button></div>
   {busy&&<p role="status">正在读取或保存…</p>}{!suspended&&error&&<p role="alert" className="career-target-notice">{error}</p>}{suspended&&<p role="status">没网了，私人内容已隐藏。联网后会重新读取，不会自动重发保存。</p>}
   {!suspended&&state.notice&&<p role="status">{state.notice}</p>}

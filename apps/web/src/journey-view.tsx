@@ -1,3 +1,4 @@
+import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ArrowLeft, ArrowUpRight } from 'lucide-react';
 import type { BoundPlatformClient } from './api';
@@ -105,9 +106,9 @@ export function JourneyPage({ onLogout }: { onLogout: () => void }) {
   const client = useRequiredPlatformAccountClient();
   const available = useSyncExternalStore(subscribeVisibility, visibleOnline, () => false);
   return <main className="career-surface journey-page" aria-labelledby="journey-title">
-    <nav className="journey-nav" aria-label="旅程导航"><a href="/"><ArrowLeft size={18} aria-hidden="true"/>回到首页</a><a href="/today">今天</a><a href="/me">我</a><span>{BRAND.name} · AI</span>
+    <StudentPageNavigation className="journey-nav" aria-label="旅程导航"><a href="/"><ArrowLeft size={18} aria-hidden="true"/>回到首页</a><a href="/today">今天</a><a href="/me">我</a><span>{BRAND.name} · AI</span>
       {client.isCurrent() && available && <button type="button" onClick={() => { if (client.isCurrent()) onLogout(); }}>退出登录</button>}
-    </nav>
+    </StudentPageNavigation>
     <header className="journey-heading"><h1 id="journey-title">你的求职旅程</h1><p>想清楚一点，准备好一点。回到你的记录，接着做下一步。</p></header>
     {!client.isCurrent() ? <p role="status">账号状态已变化，请<a href="/">重新确认账号</a>。</p> : !available ? <p role="status">回到页面并恢复连接后，再读取你的旅程。</p> : <JourneyRecords/>}
   </main>;

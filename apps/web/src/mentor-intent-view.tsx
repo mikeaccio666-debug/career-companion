@@ -1,3 +1,4 @@
+import {StandaloneStudentHeader} from './app/StudentPageNavigation';
 import { MentorRatingProvider } from './mentor-rating-scope-view';
 import { MentorRatingPanel } from './mentor-rating-view';
 import { useEffect, useMemo, useState } from 'react';
@@ -200,7 +201,7 @@ export function MentorIntentPage({onLogout}: {onLogout:() => void}) {
   return <div className="mentor-page career-surface">
     <aside className="mentor-sidebar"><nav aria-label="个人导航"><a href="/">回到主理人 · AI</a><a href="/me/profile">我</a></nav>
       <section className="mentor-human-group" aria-label="真人与社区"><h2>真人与社区</h2><MentorHumanEntry current /></section></aside>
-    <main><header className="mentor-page-header"><span>AI 主理人与队伍 · 真人服务入口</span>
-      <button type="button" onClick={onLogout}>退出登录</button></header><MentorIntentPanel /></main>
+    <main><StandaloneStudentHeader className="mentor-page-header"><span>AI 主理人与队伍 · 真人服务入口</span>
+      <button type="button" onClick={onLogout}>退出登录</button></StandaloneStudentHeader><MentorIntentPanel /></main>
   </div>;
 }

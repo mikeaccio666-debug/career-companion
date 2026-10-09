@@ -1,3 +1,4 @@
+import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { applicationHref } from './career-application-route';
 import { useEffect, useMemo, useState } from 'react';
 import { CAREER_INTERVIEW_ROUND_TYPES, type CareerInterview } from '@companion/platform-contracts';
@@ -151,7 +152,7 @@ export function CareerInterviewScene({ state, initialInterviewId, editor, setEdi
   </section>;
 }
 export function CareerInterviewPage({ initialInterviewId, onLogout }: { initialInterviewId?: string; onLogout: () => void }) {
-  return <main className="interview-page"><nav aria-label="旅程导航"><a href="/">回到对话</a><a href="/journey/applications">投递旅程</a>
-    <a href="/journey/interviews">面试安排</a><a href="/journey/stories">故事库</a><button type="button" onClick={onLogout}>退出登录</button></nav>
+  return <main className="interview-page"><StudentPageNavigation aria-label="旅程导航"><a href="/">回到对话</a><a href="/journey/applications">投递旅程</a>
+    <a href="/journey/interviews">面试安排</a><a href="/journey/stories">故事库</a><button type="button" onClick={onLogout}>退出登录</button></StudentPageNavigation>
     <p className="interview-ai">AI 主理人和队伍 · 你的旅程</p><CareerInterviewPanel initialInterviewId={initialInterviewId} /></main>;
 }
