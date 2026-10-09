@@ -36,7 +36,7 @@ test('real denied access and stored memberships export only owner metadata and n
  assert.equal(data.sections.organizationMemberships.length,1);assert.equal(data.sections.organizationAccessEvents.length,2);
  const r=data.sections.organizationMemberships[0] as any;assert.equal(r.kind,'stored_membership_metadata');assert.equal(r.status,'active');
  for(const r of data.sections.organizationAccessEvents as any[]){assert.equal(r.actor,'self');assert.equal(r.relation,'own_action');assert.equal(r.outcome,'deny');assert.equal(r.recordCount,0);}
- assert.equal(data.includedTables.length,142);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
+ assert.equal(data.includedTables.length,143);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
  for(const t of tables){assert(data.includedTables.includes(t));assert(!data.remainingTables.includes(t));}
  const json=JSON.stringify(data);
  for(const secret of [s.other.userId,s.operator.userId,token,s.who.tokenHash,password,encoded,'granted_by'])assert(!json.includes(secret),secret);
