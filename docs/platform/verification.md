@@ -1120,3 +1120,18 @@ API 类型检查与 git diff --check 通过。没有 schema 变更、主库/主�
 - JSON 当前覆盖 117 表、剩余 47；带文件覆盖 120、剩余 44；另有 7 项既有豁免，总清单仍 171。共享安全提问、命名流程及其他剩余资料、自助下载和完整删除协调仍未全部完成，`complete=false` 与整体 P0 goal 保持。
 
 私人日志位于远端忽略目录 `.local/verification/ci-regression-20261008/`：`intake-delivery-integration-fixed`、`intake-delivery-regression`、`intake-delivery-l1-recover`、`intake-delivery-final-types`。
+
+## 主理人命名原始来源与采用凭据的私有导出（2026-10-09 UTC）
+
+依据产品 09 §11 与 13 §4.5，新增 AccountNameSourceExport，接入命名 entry、submission、identity receipt 与 provenance 四表。原始用户输入、原生成预览、检测状态／结果、采用结果、原身份快照和各版本凭据按实际历史保留；关键词结果没有模型调用时保持用量 null。采用结果必须匹配原身份操作和原资源，旧名字不因当前名字变化而丢失；令牌、密文和内部审核人资料不进入导出。
+
+验证包括真实写入的 applied／name_rejected／superseded／not_eligible、pending／running／failed 来源；全部七类密文的损坏和跨账户替换、缺失或重复关联、已认证旧 entry 回滚、变更的原预览／身份快照、缺失模型用量、当前政策／同意／邮箱状态变化、取消／身份失效／超限后的整份回滚。只读取已验证的历史，不执行分类、改名、任务恢复或共享记忆写入。身份资源缓存仍限 8 份，正常运行的分类来源读锁默认值不变。
+
+- **383 个不同用例分批通过**：账户导出／覆盖及命名和安全资源回归 382 项，另加同一身份 105 次真实采用的跨页验证 1 项。新增 7 项常规集成测试和 1 项独立压力测试。
+- 回归命令使用的负向名称匹配意外仍包含批量用例，因此出现两个相同压力场景；通过到期重复实例的虚构会话主动取消其中一个，该测试按预期报 AUTH_REQUIRED 后清理自己的 schema。该回归批次原始结果是 382 通过、1 失败（主动取消的重复用例），不能称为整条命令零失败。保留的独立分页批次 1/1 通过、零跳过；合起来覆盖全部 383 项，未重新重复已通过的回归。后续排除长场景应使用 --test-skip-pattern，而不是该负向匹配。
+- 105 次原命名写入的准备过程反复核对既有全部历史；初次准备碰到默认短时限。最终只在测试准备阶段放宽时钟，并使用协议允许的 60 秒租约，导出前恢复全部覆盖。该批次约 980 秒，包含准备和清理，不代表导出耗时；实际导出仍通过原 5 秒事务边界，所有原记录跨页完整且模型请求数不增加。这个压力场景不证明原命名检测／写入的 1 秒 SLA，重复历史读取仍需专门优化。
+- 最终 API 类型检查与 git diff --check 通过。压力用例随后原样移到 account-name-source-export-pagination.stress.ts，共用 fixture；它不匹配日常 test/*.test.ts，避免每次回归重复约 16 分钟的准备。拆分后常规集成测试再次 7/7 通过，类型检查通过；压力主体没有更改，不重复运行。独立最小运行器也验证了 --test-skip-pattern 能排除匹配场景。测试仅使用隔离 schema 和 loopback 模拟供应商；相关测试库均由各 fixture 清理并确认不存在。没有主库迁移、主预览重启、真实付费模型、真实申请或部署。
+
+私有证据：ci-regression-20261008 下 name-source-regression.log、name-source-pagination-bulk.log、name-source-types-final.log、name-source-separated-types.log、name-source-separated-integration.log，及重复实例识别／取消日志。早期失败日志保留，未用通过结果覆盖原失败记录。
+
+JSON 当前覆盖 121 表、剩余 43；带私有文件覆盖 124、剩余 40；另有 7 项既有豁免，总清单 171。命名提示发布／展示／处理、其他剩余资料、自助下载和删除协调仍未全部交付，complete=false；整体 P0 goal 继续。
