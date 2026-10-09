@@ -1,3 +1,4 @@
+import { StudentFeedback } from './product-feedback-view';
 import { lazyFeature } from './LazyFeature';
 
 import { studentRoute } from './app/student-route';
@@ -776,5 +777,6 @@ function AccountEntryApp() {
     {user && !workbench && accountClient?.isCurrent() && accountClient.account.accountId === user.id
       ? <StudentSafetyResources refreshVersion={supportVersion} onSourcesChanged={supportChanged} onBlockersChanged={supportBlockersChanged} /> : null}
     {renderPage()}
+    {user && !workbench && accountClient?.isCurrent() && accountClient.account.accountId === user.id ? <StudentFeedback blocked={supportBlocked || initializing || connectionUnavailable} /> : null}
   </PlatformAccountClientProvider>;
 }

@@ -890,6 +890,15 @@ export async function buildApp(options:AppOptions={}) {
     targetQuery(request);const cancel=requestSignal(request,reply);
     try{reply.header('Cache-Control','private, no-store');return await productFeedback.submit(fixedRequestSession(request,userId(request)),request.body,cancel.signal);}finally{cancel.dispose();}
   });
+
+  app.get(`${prefix}/feedback/availability`,limitedAccount,async(request,reply)=>{
+    targetQuery(request);const cancel=requestSignal(request,reply);
+    try{reply.header('Cache-Control','private, no-store');return await productFeedback.availability(fixedRequestSession(request,userId(request)),cancel.signal);}finally{cancel.dispose();}
+  });
+  app.get(`${prefix}/feedback/operations/:id`,limitedAccount,async(request,reply)=>{
+    targetQuery(request);const cancel=requestSignal(request,reply);
+    try{reply.header('Cache-Control','private, no-store');return await productFeedback.observe(fixedRequestSession(request,userId(request)),params(request),cancel.signal);}finally{cancel.dispose();}
+  });
   app.get(`${prefix}/feedback/:id`,limitedAccount,async(request,reply)=>{
     targetQuery(request);const cancel=requestSignal(request,reply);
     try{reply.header('Cache-Control','private, no-store');return await productFeedback.get(fixedRequestSession(request,userId(request)),params(request),cancel.signal);}finally{cancel.dispose();}

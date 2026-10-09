@@ -12,9 +12,9 @@ function text(v:unknown,max:number,required=false):string{if(typeof v!=='string'
 function revision(v:unknown):number{if(!Number.isSafeInteger(v)||(v as number)<1||(v as number)>2147483647)return fail();return v as number;}
 function date(v:unknown):string{if(typeof v!=='string'||!Number.isFinite(Date.parse(v))||new Date(v).toISOString()!==v)return fail();return v;}
 export function parseFeedbackSubmission(value:unknown){
- const v=careerRecordObject(value,['operationId','category','surface','description','sharedExcerpt','shareWithSupport']);
+ const v=careerRecordObject(value,['operationId','recipientId','category','surface','description','sharedExcerpt','shareWithSupport']);
  if(v.shareWithSupport!==true)return fail();
- return Object.freeze({operationId:careerRecordId(v.operationId),category:choice(v.category,FEEDBACK_CATEGORIES),surface:choice(v.surface,FEEDBACK_SURFACES),
+ return Object.freeze({operationId:careerRecordId(v.operationId),recipientId:careerRecordId(v.recipientId),category:choice(v.category,FEEDBACK_CATEGORIES),surface:choice(v.surface,FEEDBACK_SURFACES),
  description:text(v.description,4000,true),sharedExcerpt:v.sharedExcerpt===null?null:text(v.sharedExcerpt,12000,true),shareWithSupport:true as const});
 }
 export function parseFeedbackUpdate(value:unknown){
@@ -32,7 +32,7 @@ export interface ProductFeedback {
 }
 export function parseProductFeedback(value:unknown):Readonly<ProductFeedback>{
  const v=careerRecordObject(value,['id','ownerId','organizationId','revision','lastOperationId','category','surface','description','sharedExcerpt','shareWithSupport','status','triage','createdAt','updatedAt','updates']);
- const s=parseFeedbackSubmission({operationId:v.lastOperationId,category:v.category,surface:v.surface,description:v.description,sharedExcerpt:v.sharedExcerpt,shareWithSupport:v.shareWithSupport});
+ const s=parseFeedbackSubmission({operationId:v.lastOperationId,recipientId:v.organizationId,category:v.category,surface:v.surface,description:v.description,sharedExcerpt:v.sharedExcerpt,shareWithSupport:v.shareWithSupport});
  const rev=revision(v.revision),status=choice(v.status,FEEDBACK_STATUSES),triage=v.triage===null?null:choice(v.triage,FEEDBACK_TRIAGE),createdAt=date(v.createdAt),updatedAt=date(v.updatedAt);
  if(!Array.isArray(v.updates)||v.updates.length>100||v.updates.length!==rev-1||updatedAt<createdAt)return fail();
  let lastAt=createdAt;
