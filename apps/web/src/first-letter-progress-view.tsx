@@ -5,7 +5,11 @@ import {JourneySectionController,type JourneySectionState} from './journey-secti
 import {readFirstLetterProgress} from './first-letter-progress-api';
 export const firstLetterProgressText:Record<FirstLetterProgress['state'],string>={
  not_started:'已记下：用已有信息写第一封信。写信前的准备还没有开始。',
- prepared:'写信前的准备已保存，等待开始写信。',
+ prepared:'写信前的准备已保存，尚未安排后台写信。',
+ queued:'写信请求已保存，等待后台处理。',
+ service_unavailable:'写信服务暂时不可用，你已填写的内容仍然保留。',
+ authorization_required:'这次写信的登录或同意状态已变化，任务已暂停。重新登录不会自动继续这次请求。',
+ settings_changed:'写信使用的资料或设置已变化，任务已暂停。已保存的内容仍然保留。',
  writing:'正在写第一封信。',
  draft_saved:'信稿已保存，等待继续核对。',
  checking:'正在核对和调整信稿。',

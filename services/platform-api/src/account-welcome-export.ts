@@ -1,3 +1,4 @@
+import {readFirstLetterRequestStatus} from './first-letter-request-status.ts';
 import {decodeFirstLetterRequest,projectFirstLetterRequest,firstLetterRequestUnavailable,type FirstLetterRequestRow} from './first-letter-request.ts';
 import {readFirstLetterStageRecord,type FirstLetterStageRow} from './first-letter-stage-record.ts';
 import {readFirstLetterTaskSnapshot,type FirstLetterTaskRow} from './first-letter-tasks.ts';
@@ -63,14 +64,10 @@ export class AccountWelcomeExport {
     const taskRow=(await client.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND id=$2',[who.userId,saved.taskId])).rows[0];
     if(!taskRow)throw firstLetterRequestUnavailable();
     const task=readFirstLetterTaskSnapshot(taskRow,this.crypto,who.userId);
-    if(task.preparationId!==saved.preparationId||task.sourceId!==saved.sourceId||task.companionId!==saved.companionId
-     ||task.welcomeId!==saved.welcomeId||JSON.stringify(task.settings)!==JSON.stringify(saved.settings))throw firstLetterRequestUnavailable();
-    const outbox=(await client.query('SELECT * FROM platform_first_letter_outbox WHERE request_id=$1 AND user_id=$2 AND task_id=$3',[row.id,who.userId,saved.taskId])).rows[0];
-    if(!outbox||outbox.created_at.toISOString()!==saved.acceptedAt
-     ||outbox.held_reason!==null&&!['authorization','configuration','source_changed','storage','terminal'].includes(outbox.held_reason))throw firstLetterRequestUnavailable();
-    yield {section:'firstLetterRequests',record:projectFirstLetterRequest(saved)};
-    yield {section:'firstLetterOutbox',record:{requestId:saved.requestId,taskId:saved.taskId,createdAt:saved.acceptedAt,
-     dispatchedAt:outbox.dispatched_at?.toISOString()??null,hold:outbox.held_reason}};
+    const status=await readFirstLetterRequestStatus(client,this.crypto,task);
+    if(!status||status.request.requestId!==saved.requestId)throw firstLetterRequestUnavailable();
+    yield {section:'firstLetterRequests',record:projectFirstLetterRequest(status.request)};
+    yield {section:'firstLetterOutbox',record:status.outbox};
    }
    if(requests.length<100)break;after=requests.at(-1)!.id;
   }
