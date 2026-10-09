@@ -72,6 +72,7 @@ export class AccountCoreExport {
       const sections:{account:Record<string,unknown>}&Record<ArraySection,unknown[]>={
         account:{...account,createdAt:account.createdAt.toISOString(),emailVerifiedAt:account.emailVerifiedAt?.toISOString()??null},
         onboardingDrafts:[],onboardingOperations:[],onboardingSafetySubmissions:[],
+        companionGenerationRequests:[],companionGenerationOutbox:[],companionGenerationCheckpoints:[],
         companionAnswers:[],companionGenerationTasks:[],companionRevisions:[],companionGenerationCalls:[],companionOutputBlocks:[],
         companions:[],companionPaidSettingOperations:[],
         companionBirthReceipts:[],companionBirthAssetMetadata:[],
