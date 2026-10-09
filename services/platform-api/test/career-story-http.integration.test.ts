@@ -35,3 +35,37 @@ test('application assembly reads actual records written through password-authent
  await assert.rejects(system.db.withBoundedTransaction(client=>system.careerPreparationSources.assertCurrentInTransaction(client,who,{ownerId:b.id,indexId:index.indexId})),(e:any)=>e.status===404);
  assert.equal(calls,0);
 });
+
+test('owner can observe a committed story operation without another write, including a later edit or deletion',async()=>{
+ const a=await actor(),b=await actor(),body=story();
+ const created=await system.app.inject({method:'POST',url:root+'stories',headers:a.headers,payload:body});assert.equal(created.statusCode,201);
+ const id=created.json().record.id,url=root+'stories/operations/'+body.operationId;
+ const count=async()=>Number((await f.db.query('SELECT count(*) n FROM platform_career_library_operations WHERE user_id=$1',[a.id])).rows[0].n);
+ const read=()=>system.app.inject({url,headers:a.headers});
+ for(let i=0;i<2;i++){const r=await read();assert.equal(r.statusCode,200);assert.equal(r.headers['cache-control'],'private, no-store');assert.equal(r.json().operation.replayed,true);assert.equal(r.json().operation.appliedRevision,1);assert.equal(r.json().record.id,id);}
+ assert.equal(await count(),1);
+ assert.equal((await system.app.inject({url,headers:b.headers})).statusCode,404);
+ assert.equal((await system.app.inject({url})).statusCode,401);
+ assert.equal((await system.app.inject({url:url+'?ownerId='+a.id,headers:a.headers})).statusCode,400);
+ assert.equal((await system.app.inject({url:root+'projects/operations/'+body.operationId,headers:a.headers})).statusCode,404);
+ const edit=await system.app.inject({method:'PATCH',url:root+'stories/'+id,headers:a.headers,payload:{...story(),expectedRevision:1,title:'Fictional revised story'}});assert.equal(edit.statusCode,200);
+ const updated=await read();assert.equal(updated.json().record.revision,2);assert.equal(updated.json().operation.appliedRevision,1);assert.equal(await count(),2);
+ const removal=await system.app.inject({method:'DELETE',url:root+'stories/'+id,headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:2}});assert.equal(removal.statusCode,200);
+ const deleted=await read();assert.equal(deleted.statusCode,200);assert.equal(deleted.json().record,null);assert.equal(deleted.json().evidenceAvailability,null);assert.equal(await count(),3);
+});
+test('observation cannot infer deletion from an absent row or manufacture an operation; project receipt stays privately readable after email admission is withdrawn',async()=>{
+ const a=await actor(),body=project(),saved=await system.app.inject({method:'POST',url:root+'projects',headers:a.headers,payload:body});assert.equal(saved.statusCode,201);
+ const url=root+'projects/operations/'+body.operationId;
+ await f.db.query('UPDATE platform_users SET email_verified_at=NULL WHERE id=$1',[a.id]);
+ const r=await system.app.inject({url,headers:a.headers});assert.equal(r.statusCode,200);assert.equal(r.json().record.id,saved.json().record.id);
+ assert.equal((await system.app.inject({url:root+'projects/operations/'+randomUUID(),headers:a.headers})).statusCode,404);
+ assert.equal((await system.app.inject({url:root+'projects/operations/not-an-id',headers:a.headers})).statusCode,404);
+ // Administrative fault injection into this test's private schema: no delete receipt exists.
+ await f.db.query('DELETE FROM platform_career_evidence WHERE user_id=$1 AND id=$2',[a.id,saved.json().record.id]);
+ const missing=await system.app.inject({url,headers:a.headers});assert.equal(missing.statusCode,503);assert.equal(missing.json().error.code,'REQUEST_FAILED');
+ const fixed={userId:a.id,tokenHash:tokenHash(decodeURIComponent(a.headers.cookie.slice(a.headers.cookie.indexOf('=')+1)))};
+ await assert.rejects(system.careerStories.observe(fixed,'project',body.operationId),(error:any)=>error.status===503&&error.code==='CAREER_LIBRARY_STORAGE_UNAVAILABLE');
+ assert.equal((await f.db.query('SELECT count(*)::int n FROM platform_career_library_operations WHERE user_id=$1',[a.id])).rows[0].n,1);
+ await f.db.query('DELETE FROM platform_sessions WHERE user_id=$1',[a.id]);
+ assert.equal((await system.app.inject({url,headers:a.headers})).statusCode,401);
+});
