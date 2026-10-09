@@ -49,7 +49,7 @@ test('actual published uploads and generated material produce a private JSON plu
  const result=await capture(who);
  try{
   const snapshot=result.snapshot,files=snapshot.sections.privateFiles as any[],uploads=snapshot.sections.uploads as any[];
-  assert.equal(snapshot.complete,false);assert.equal(snapshot.filesIncluded,true);assert.equal(snapshot.includedTables.length,91);assert.equal(snapshot.remainingTables.length,68);
+  assert.equal(snapshot.complete,false);assert.equal(snapshot.filesIncluded,true);assert.equal(snapshot.includedTables.length,96);assert.equal(snapshot.remainingTables.length,63);
   assert.equal(files.length,2);assert.deepEqual(uploads.map(x=>x.id).sort(),[a.id,b.id].sort());
   for(const expected of [a,b]){const file=files.find(x=>x.sourceId===expected.id);assert.equal(file.path,'uploads/'+expected.id);assert.deepEqual(await fs.readFile(path.join(result.directory,file.path)),expected.bytes);assert.equal(file.sha256,createHash('sha256').update(expected.bytes).digest('hex'));assert.equal(file.size,expected.bytes.length);assert.equal((await fs.stat(path.join(result.directory,file.path))).mode&0o777,0o600);}
   assert.equal((await fs.stat(result.directory)).mode&0o777,0o700);assert.equal((await fs.stat(path.join(result.directory,'account.json'))).mode&0o777,0o600);

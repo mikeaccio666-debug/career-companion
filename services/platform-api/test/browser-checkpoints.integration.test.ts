@@ -23,7 +23,9 @@ const schema=`browser_journal_test_${randomUUID().replaceAll('-','')}`,base=read
 const db=new Database(url.toString()),origin='http://localhost:4321',prefix='/api/platform';
 const requireCore=createRequire(new URL('../../../packages/ai-core/package.json',import.meta.url));
 const {chromium}=requireCore('playwright') as {chromium:{executablePath():string}};
-const browserExecutable=existsSync(chromium.executablePath())?chromium.executablePath():existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':undefined;
+// Honor the same explicit executable override as the runtime; a bad override
+// must fail the real-browser checks rather than silently skip them.
+const browserExecutable=process.env.PLATFORM_BROWSER_EXECUTABLE || (existsSync(chromium.executablePath())?chromium.executablePath():existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':undefined);
 let directory:string,storage:LocalBlobStorage,system:Awaited<ReturnType<typeof buildApp>>,fixture:Server,fixtureOrigin:string,actors=0,actionsEnabled=true;
 let execute:(input:CreateJobInput,ctx:JobExecutionContext)=>Promise<JobExecutionResult>=async()=>({artifacts:[]});
 let toolRequest:{name:string;args:Record<string,unknown>}|undefined,lastToolResult:unknown,lastChat:ChatInput|undefined,toolNames:string[]=[];
