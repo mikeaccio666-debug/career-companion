@@ -16,7 +16,7 @@ import type { AssistantTurnOrigin } from '../src/assistant-turn-origin.ts';
 import { ApiError } from '../src/errors.ts';
 import { authorizeGoalPlanToolFeedback, goalPlanToolResult } from '../src/goal-plan-tool-feedback.ts';
 
-const base=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'}),prefix='/api/platform',origin='http://localhost:4321',schema=`goal_proposals_${randomUUID().replaceAll('-','')}`;
+const base=readConfig({ ...process.env, PLATFORM_DATA_KEY:'d8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1', PLATFORM_CHAT_PROVIDER: 'synthetic', PLATFORM_AGENT_PROVIDER: 'synthetic' ,PLATFORM_REQUIRE_INVITE:'1'}),prefix='/api/platform',origin='http://localhost:4321',schema=`goal_proposals_${randomUUID().replaceAll('-','')}`;
 const admin=new Database(base.databaseUrl),databaseUrl=new URL(base.databaseUrl);databaseUrl.searchParams.set('options',`-c search_path=${schema}`);const db=new Database(databaseUrl.toString());
 let system:Awaited<ReturnType<typeof buildApp>>,directory:string,httpOrigin:string,executedJobs=0;
 interface Actor {id:string;cookie:string}

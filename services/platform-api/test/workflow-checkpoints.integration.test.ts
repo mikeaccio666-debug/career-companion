@@ -15,7 +15,7 @@ import { JobService, processJob, recoverInterrupted } from '../src/jobs.ts';
 import { LocalBlobStorage } from '../src/storage.ts';
 import { applyWorkflowCheckpoint, loadWorkflowCheckpoint, readWorkflowArtifact, type WorkflowBinding } from '../src/workflow-checkpoints.ts';
 
-const schema=`workflow_checkpoints_test_${randomUUID().replaceAll('-','')}`,config=readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(config.databaseUrl),url=new URL(config.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
+const schema=`workflow_checkpoints_test_${randomUUID().replaceAll('-','')}`,config=readConfig({ ...process.env, PLATFORM_DATA_KEY:'d8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '1' ,PLATFORM_REQUIRE_INVITE:'1'}),admin=new Database(config.databaseUrl),url=new URL(config.databaseUrl);url.searchParams.set('options',`-c search_path=${schema}`);
 const db=new Database(url.toString());let directory:string,storage:LocalBlobStorage,jobs:JobService;
 let execute:(input:CreateJobInput,context:JobExecutionContext)=>Promise<JobExecutionResult>=async()=>({artifacts:[]});
 const unused=async()=>{throw new Error('No commercial model calls are permitted in checkpoint fixtures.');};
@@ -31,7 +31,7 @@ const code=(expected:string)=>(cause:unknown)=>cause instanceof ApiError&&cause.
 async function user(){const id=randomUUID();await db.query("INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,'Synthetic workflow tester','fictional-not-used')",[id,`workflow-${id}@example.invalid`]); await seedFictionalConsent(db,id);return id;}
 function input(steps:unknown[]=[{kind:'chat',provider:'synthetic',prompt:'Draft {{input}}'},{kind:'image',provider:'synthetic',prompt:'Draw {{previous}}'}]):CreateJobInput{return {kind:'workflow',provider:'workflow',prompt:'Fictional input only',options:{steps}};}
 async function created(uid?:string,definition=input()){const userId=uid??await user(),result=await jobs.create(userId,definition);await jobs.decide(userId,result.approval.id,'approved');return {userId,...result};}
-async function claim(item:Awaited<ReturnType<typeof created>>,generation=1):Promise<WorkflowBinding>{const leaseToken=randomUUID();await db.query("UPDATE platform_jobs SET status='running',lease_token=$2,lease_until=now()+interval '60 seconds' WHERE id=$1",[item.job.id,leaseToken]);return {jobId:item.job.id,userId:item.userId,generation,leaseToken,definitionHash:workflowDefinitionHash(item.job),signal:new AbortController().signal};}
+async function claim(item:Awaited<ReturnType<typeof created>>,generation=1):Promise<WorkflowBinding>{const leaseToken=randomUUID();await db.query("UPDATE platform_jobs SET status='running',lease_token=$2,lease_until=now()+interval '60 seconds' WHERE id=$1",[item.job.id,leaseToken]);return {authVersion:String((await db.query('SELECT auth_version FROM platform_users WHERE id=$1',[item.userId])).rows[0].auth_version),jobId:item.job.id,userId:item.userId,generation,leaseToken,definitionHash:workflowDefinitionHash(item.job),signal:new AbortController().signal};}
 const result=(text='Synthetic completed output'):JobExecutionResult=>({text,artifacts:[{name:'step.txt',mime:'text/plain',bytes:new TextEncoder().encode(text)}]});
 
 test('creation freezes capability-specific models, definitions and approval and rejects invalid direct plans',async()=>{
@@ -49,41 +49,41 @@ test('checkpoint transitions require owner, approval, generation, active lease, 
   for(const changed of [{userId:randomUUID()},{generation:2},{leaseToken:randomUUID()}])await assert.rejects(loadWorkflowCheckpoint(db,{...binding,...changed}),code('WORKFLOW_AUTH_REVOKED'));
   await assert.rejects(loadWorkflowCheckpoint(db,{...binding,definitionHash:'0'.repeat(64)}),code('WORKFLOW_DEFINITION_CHANGED'));
   await db.query("UPDATE platform_approvals SET args=jsonb_set(args,'{workflowDefinitionHash}',to_jsonb('forged'::text)) WHERE job_id=$1",[binding.jobId]);await assert.rejects(loadWorkflowCheckpoint(db,binding),code('WORKFLOW_AUTH_REVOKED'));await db.query("UPDATE platform_approvals SET args=jsonb_set(args,'{workflowDefinitionHash}',to_jsonb($2::text)) WHERE job_id=$1",[binding.jobId,binding.definitionHash]);
-  await assert.rejects(applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:1,inputHash:hash,expectedRevision:0}),code('WORKFLOW_STEP_ORDER'));
-  const events=await Promise.allSettled([0,1].map(()=>applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0})));assert.equal(events.filter(event=>event.status==='fulfilled').length,1);assert.equal(events.filter(event=>event.status==='rejected'&&code('WORKFLOW_CHECKPOINT_CONFLICT')(event.reason)).length,1);
-  await assert.rejects(applyWorkflowCheckpoint(db,storage,binding,{type:'completed',index:0,inputHash:'1'.repeat(64),expectedRevision:1,result:result()}),code('WORKFLOW_INPUT_CHANGED'));
-  await assert.rejects(applyWorkflowCheckpoint(db,storage,binding,{type:'provider_task',index:0,inputHash:hash,expectedRevision:1,providerTaskId:'cannot-resume-chat'}),code('INVALID_INPUT'));
+  await assert.rejects(applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:1,inputHash:hash,expectedRevision:0}),code('WORKFLOW_STEP_ORDER'));
+  const events=await Promise.allSettled([0,1].map(()=>applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0})));assert.equal(events.filter(event=>event.status==='fulfilled').length,1);assert.equal(events.filter(event=>event.status==='rejected'&&code('WORKFLOW_CHECKPOINT_CONFLICT')(event.reason)).length,1);
+  await assert.rejects(applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'completed',index:0,inputHash:'1'.repeat(64),expectedRevision:1,result:result()}),code('WORKFLOW_INPUT_CHANGED'));
+  await assert.rejects(applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'provider_task',index:0,inputHash:hash,expectedRevision:1,providerTaskId:'cannot-resume-chat'}),code('INVALID_INPUT'));
   assert.deepEqual((await fs.readdir(directory)).filter(file=>!file.includes('workspaces')&&file!=='synthetic-template.json'),[]);
 });
 
 test('completed step artifacts persist as private partial results and cannot be read through another job',async()=>{
-  const item=await created(),binding=await claim(item),hash=workflowHash({step:0});await applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});
-  const complete=await applyWorkflowCheckpoint(db,storage,binding,{type:'completed',index:0,inputHash:hash,expectedRevision:1,result:result()});assert.equal(complete.steps[0].state,'completed');assert.equal(complete.steps[0].text,'Synthetic completed output');const id=complete.steps[0].artifacts![0].attachmentId;
+  const item=await created(),binding=await claim(item),hash=workflowHash({step:0});await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});
+  const complete=await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'completed',index:0,inputHash:hash,expectedRevision:1,result:result()});assert.equal(complete.steps[0].state,'completed');assert.equal(complete.steps[0].text,'Synthetic completed output');const id=complete.steps[0].artifacts![0].attachmentId;
   assert.equal(new TextDecoder().decode((await readWorkflowArtifact(db,storage,binding,id)).bytes),'Synthetic completed output');
   const visible=await jobs.get(item.userId,item.job.id);assert.equal(visible.status,'running');assert.equal(visible.artifacts.length,1);assert.equal(visible.workflowSteps![0].state,'completed');assert.equal(visible.workflowSteps![1].state,'pending');
-  await assert.rejects(applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:0,inputHash:hash,expectedRevision:2}),code('WORKFLOW_STEP_COMPLETE'));
+  await assert.rejects(applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:hash,expectedRevision:2}),code('WORKFLOW_STEP_COMPLETE'));
   const other=await created(item.userId),otherBinding=await claim(other);await assert.rejects(readWorkflowArtifact(db,storage,otherBinding,id),code('NOT_FOUND'));
   const metadata=(await db.query('SELECT metadata FROM platform_artifacts WHERE job_id=$1',[item.job.id])).rows[0].metadata;assert.equal(metadata.partialCompleted,true);assert.equal(metadata.workflowStep,0);
 });
 
 test('cancellation while storing a step prevents publishing and cleans unpublished bytes',async()=>{
-  const item=await created(),binding=await claim(item),hash=workflowHash({step:'cancel'});await applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});
-  let started!:()=>void,release!:()=>void;const began=new Promise<void>(resolve=>{started=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});const delayed={get:storage.get.bind(storage),stat:storage.stat.bind(storage),openRead:storage.openRead.bind(storage),delete:storage.delete.bind(storage),put:async(key:string,bytes:Uint8Array,mime:string)=>{await storage.put(key,bytes);started();await gate;}};
-  const saving=applyWorkflowCheckpoint(db,delayed,binding,{type:'completed',index:0,inputHash:hash,expectedRevision:1,result:result('Synthetic cancelled output')});await began;await jobs.cancel(item.userId,item.job.id);release();await assert.rejects(saving,code('WORKFLOW_AUTH_REVOKED'));
+  const item=await created(),binding=await claim(item),hash=workflowHash({step:'cancel'});await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});
+  let started!:()=>void,release!:()=>void;const began=new Promise<void>(resolve=>{started=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});const delayed={scope:storage.scope,get:storage.get.bind(storage),stat:storage.stat.bind(storage),openRead:storage.openRead.bind(storage),delete:storage.delete.bind(storage),put:async(key:string,bytes:Uint8Array,mime:string)=>{await storage.put(key,bytes);started();await gate;}};
+  const saving=applyWorkflowCheckpoint(db,delayed,config.dataCrypto,binding,{type:'completed',index:0,inputHash:hash,expectedRevision:1,result:result('Synthetic cancelled output')});await began;await jobs.cancel(item.userId,item.job.id);release();await assert.rejects(saving,code('WORKFLOW_AUTH_REVOKED'));
   assert.equal((await db.query('SELECT id FROM platform_artifacts WHERE job_id=$1',[item.job.id])).rowCount,0);const checkpoint=(await db.query('SELECT steps FROM platform_workflow_checkpoints WHERE job_id=$1',[item.job.id])).rows[0].steps;assert.equal(checkpoint[0].state,'started');
 });
 
 test('a lost checkpoint commit acknowledgement retains already published private artifacts',async()=>{
-  const item=await created(),binding=await claim(item),hash=workflowHash({step:'ack'});await applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});
-  const ackLost={query:db.query.bind(db),transaction:async(run:any)=>{await db.transaction(run);throw new Error('Synthetic lost COMMIT acknowledgement');}} as unknown as Database;
-  await assert.rejects(applyWorkflowCheckpoint(ackLost,storage,binding,{type:'completed',index:0,inputHash:hash,expectedRevision:1,result:result('Synthetic retained output')}));
+  const item=await created(),binding=await claim(item),hash=workflowHash({step:'ack'});await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});
+  const ackLost={query:db.query.bind(db),withBoundedTransaction:db.withBoundedTransaction.bind(db),transaction:async(run:any)=>{await db.transaction(run);throw new Error('Synthetic lost COMMIT acknowledgement');}} as unknown as Database;
+  await assert.rejects(applyWorkflowCheckpoint(ackLost,storage,config.dataCrypto,binding,{type:'completed',index:0,inputHash:hash,expectedRevision:1,result:result('Synthetic retained output')}));
   const checkpoint=await loadWorkflowCheckpoint(db,binding);assert.equal(checkpoint.steps[0].state,'completed');const owned=await readWorkflowArtifact(db,storage,binding,checkpoint.steps[0].artifacts![0].attachmentId);assert.equal(new TextDecoder().decode(owned.bytes),'Synthetic retained output');
 });
 
 test('unknown workflow calls remain held for review and interrupted steps are recorded without replay',async()=>{
   const item=await created();execute=async(_input,context)=>{assert(context.onWorkflowCheckpoint);await context.onWorkflowCheckpoint({type:'started',index:0,inputHash:workflowHash({step:'unknown'}),expectedRevision:0});throw new ProviderError('PROVIDER_UNREACHABLE','Synthetic lost response',502);};
   await processJob(jobs,item.job.id,1);const job=await jobs.get(item.userId,item.job.id);assert.equal(job.status,'uncertain');assert.equal(job.workflowResumeAvailable,false);assert.equal(job.artifacts.length,0);await assert.rejects(jobs.retry(item.userId,item.job.id),code('WORKFLOW_REVIEW_REQUIRED'));
-  const interrupted=await created(),binding=await claim(interrupted);await applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:0,inputHash:workflowHash({step:'interrupted'}),expectedRevision:0});await db.query("UPDATE platform_jobs SET lease_until=now()-interval '1 second' WHERE id=$1",[interrupted.job.id]);await recoverInterrupted(jobs);
+  const interrupted=await created(),binding=await claim(interrupted);await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:workflowHash({step:'interrupted'}),expectedRevision:0});await db.query("UPDATE platform_jobs SET lease_until=now()-interval '1 second' WHERE id=$1",[interrupted.job.id]);await recoverInterrupted(jobs);
   assert.equal((await jobs.get(interrupted.userId,interrupted.job.id)).workflowSteps![0].state,'uncertain');await assert.rejects(jobs.retry(interrupted.userId,interrupted.job.id),code('WORKFLOW_REVIEW_REQUIRED'));
   const ledger=await db.query("SELECT event_type FROM platform_workflow_step_ledger WHERE job_id=$1 ORDER BY revision",[interrupted.job.id]);assert.deepEqual(ledger.rows.map(row=>row.event_type),['started','uncertain']);
 });
@@ -110,12 +110,12 @@ test('final workflow publication rechecks the live lease, current approval and f
   }
 });
 
-test('an expired ordinary model-job lease prevents publication and removes its unpublished blob',async()=>{
+test('an expired ordinary model-job lease is rejected before writing any artifact bytes',async()=>{
   const uid=await user(),item=await jobs.create(uid,{kind:'video',provider:'ark',prompt:'Synthetic video publication gate'});let unpublishedKey='';
   const put=storage.put.bind(storage);storage.put=async(key,bytes)=>{unpublishedKey=key;await put(key,bytes);};
   execute=async()=>{await db.query("UPDATE platform_jobs SET lease_until=now()-interval '1 second' WHERE id=$1",[item.job.id]);return {artifacts:[{name:'unpublished.mp4',mime:'video/mp4',bytes:new TextEncoder().encode('Synthetic expired result')}]};};
   try{await processJob(jobs,item.job.id,1);}finally{storage.put=put;}
-  const rejected=await jobs.get(uid,item.job.id);assert.equal(rejected.status,'uncertain');assert.equal(rejected.error?.code,'JOB_LEASE_EXPIRED');assert.equal(rejected.artifacts.length,0);assert(unpublishedKey);await assert.rejects(storage.get(unpublishedKey));
+  const rejected=await jobs.get(uid,item.job.id);assert.equal(rejected.status,'uncertain');assert.equal(rejected.error?.code,'JOB_LEASE_EXPIRED');assert.equal(rejected.artifacts.length,0);assert.equal(unpublishedKey,'');assert.equal((await db.query('SELECT 1 FROM platform_upload_writes WHERE user_id=$1',[uid])).rowCount,0);
 });
 
 test('known async steps resume in a new reviewed attempt and keep completed steps and the old ledger',async()=>{
@@ -157,7 +157,7 @@ test('actual image output is privately checkpointed and bound to the next Ark re
     if(target.endsWith('/contents/generations/tasks')&&init.method==='POST'){
       videoCreates++;const body=JSON.parse(String(init.body));assert.equal(body.content[1].role,'first_frame');assert.equal(body.content[1].image_url.url,`data:image/png;base64,${Buffer.from(png).toString('base64')}`);
       const row=(await db.query('SELECT j.*,c.definition_hash FROM platform_jobs j JOIN platform_workflow_checkpoints c ON c.job_id=j.id WHERE j.id=$1',[createdId])).rows[0];
-      const binding:WorkflowBinding={jobId:createdId,userId:uid,generation:1,leaseToken:row.lease_token,definitionHash:row.definition_hash,signal:new AbortController().signal};
+      const binding:WorkflowBinding={authVersion:String((await db.query('SELECT auth_version FROM platform_users WHERE id=$1',[uid])).rows[0].auth_version),jobId:createdId,userId:uid,generation:1,leaseToken:row.lease_token,definitionHash:row.definition_hash,signal:new AbortController().signal};
       await assert.rejects(readWorkflowArtifact(db,storage,binding,ordinaryId),code('NOT_FOUND'));return Response.json({id:'synthetic-referenced-video'});
     }
     if(target.endsWith('/contents/generations/tasks/synthetic-referenced-video'))return Response.json({status:'succeeded',content:{video_url:'https://synthetic.volces.com/bound.mp4'}});
@@ -171,9 +171,60 @@ test('actual image output is privately checkpointed and bound to the next Ark re
 
 test('confirmed terminal media failure requires new approval to clear its handle while preserving older ledger',async()=>{
   const item=await created(undefined,input([{kind:'video',provider:'ark',prompt:'Synthetic terminal video'}])),binding=await claim(item),hash=workflowHash({step:'terminal'});
-  let checkpoint=await applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});checkpoint=await applyWorkflowCheckpoint(db,storage,binding,{type:'provider_task',index:0,inputHash:hash,expectedRevision:checkpoint.revision,providerTaskId:'failed-synthetic-provider-task'});checkpoint=await applyWorkflowCheckpoint(db,storage,binding,{type:'failed',index:0,inputHash:hash,expectedRevision:checkpoint.revision,errorCode:'VIDEO_GENERATION_FAILED'});
-  await assert.rejects(applyWorkflowCheckpoint(db,storage,binding,{type:'started',index:0,inputHash:hash,expectedRevision:checkpoint.revision}),code('WORKFLOW_REVIEW_REQUIRED'));
+  let checkpoint=await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});checkpoint=await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'provider_task',index:0,inputHash:hash,expectedRevision:checkpoint.revision,providerTaskId:'failed-synthetic-provider-task'});checkpoint=await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'failed',index:0,inputHash:hash,expectedRevision:checkpoint.revision,errorCode:'VIDEO_GENERATION_FAILED'});
+  await assert.rejects(applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:hash,expectedRevision:checkpoint.revision}),code('WORKFLOW_REVIEW_REQUIRED'));
   await db.query("UPDATE platform_jobs SET status='failed',lease_token=NULL,lease_until=NULL,error_code='VIDEO_GENERATION_FAILED' WHERE id=$1",[item.job.id]);await jobs.retry(item.userId,item.job.id);const approval=(await db.query('SELECT id FROM platform_approvals WHERE job_id=$1 AND generation=2',[item.job.id])).rows[0];await jobs.decide(item.userId,approval.id,'approved');const next=await claim(item,2);
-  const restarted=await applyWorkflowCheckpoint(db,storage,next,{type:'started',index:0,inputHash:hash,expectedRevision:checkpoint.revision});assert.equal(restarted.steps[0].providerTaskId,undefined);
+  const restarted=await applyWorkflowCheckpoint(db,storage,config.dataCrypto,next,{type:'started',index:0,inputHash:hash,expectedRevision:checkpoint.revision});assert.equal(restarted.steps[0].providerTaskId,undefined);
   const ledger=await db.query('SELECT generation,event_type,provider_task_id FROM platform_workflow_step_ledger WHERE job_id=$1 ORDER BY revision',[item.job.id]);assert.deepEqual(ledger.rows.map(row=>row.event_type),['started','provider_task','failed','started']);assert.equal(ledger.rows[2].provider_task_id,'failed-synthetic-provider-task');assert.equal(ledger.rows[3].generation,2);
+});
+
+test('ordinary job lease expiry during physical writing rolls back publication and removes the staged file',async()=>{
+  const uid=await user(),item=await jobs.create(uid,{kind:'video',provider:'ark',prompt:'Fictional during-write lease expiry'});let key='';
+  execute=async()=>({artifacts:[{name:'Fictional.mp4',mime:'video/mp4',bytes:Buffer.from('Fictional artifact')}]});
+  const put=storage.put.bind(storage);storage.put=async(k,bytes,...args)=>{key=k;await put(k,bytes,...args);await db.query("UPDATE platform_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",[item.job.id]);};
+  try{await processJob(jobs,item.job.id,1);}finally{storage.put=put;}
+  const result=await jobs.get(uid,item.job.id);assert.equal(result.artifacts.length,0);assert.equal(result.error?.code,'JOB_LEASE_EXPIRED');assert(key);await assert.rejects(storage.stat(key));
+  assert.equal((await db.query('SELECT 1 FROM platform_upload_writes WHERE user_id=$1',[uid])).rowCount,0);
+});
+
+test('account deletion during ordinary job output storage cannot republish owner data',async()=>{
+  const uid=await user(),item=await jobs.create(uid,{kind:'video',provider:'ark',prompt:'Fictional account deletion while storing output'});let key='';
+  execute=async()=>({artifacts:[{name:'Fictional.mp4',mime:'video/mp4',bytes:Buffer.from('Fictional private artifact')}]});
+  const put=storage.put.bind(storage);storage.put=async(k,bytes,...args)=>{key=k;await put(k,bytes,...args);await db.query('DELETE FROM platform_users WHERE id=$1',[uid]);};
+  try{await processJob(jobs,item.job.id,1);}finally{storage.put=put;}
+  assert(key);await assert.rejects(storage.stat(key));
+  for(const table of ['platform_uploads','platform_artifacts','platform_upload_writes'])assert.equal((await db.query(`SELECT 1 FROM ${table} WHERE user_id=$1`,[uid])).rowCount,0);
+});
+
+test('a worker with unconfigured durable storage fails before invoking any provider',async()=>{
+  const uid=await user(),item=await jobs.create(uid,{kind:'video',provider:'ark',prompt:'Fictional unavailable storage'});let calls=0;
+  execute=async()=>{calls++;return {artifacts:[]};};
+  const unavailable=new JobService(db,{...config,dataCrypto:undefined,storageDir:directory},runtime,storage,undefined,undefined,FICTIONAL_LEGAL);
+  await processJob(unavailable,item.job.id,1);const result=await jobs.get(uid,item.job.id);
+  assert.equal(calls,0);assert.equal(result.status,'failed');assert.equal(result.error?.code,'UPLOAD_WRITE_UNAVAILABLE');
+  assert.equal((await db.query('SELECT 1 FROM platform_upload_writes WHERE user_id=$1',[uid])).rowCount,0);
+});
+
+test('workflow account auth-version change during storage revokes checkpoint publication and cleans the staged file',async()=>{
+  const item=await created(),binding=await claim(item),hash=workflowHash({step:'fictional-auth-change'});
+  await applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'started',index:0,inputHash:hash,expectedRevision:0});
+  let key='';const put=storage.put.bind(storage);storage.put=async(k,bytes,...args)=>{key=k;await put(k,bytes,...args);await db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[item.userId]);};
+  try{await assert.rejects(applyWorkflowCheckpoint(db,storage,config.dataCrypto,binding,{type:'completed',index:0,inputHash:hash,expectedRevision:1,result:result('Fictional revoked output')}),code('WORKFLOW_AUTH_REVOKED'));}finally{storage.put=put;}
+  assert(key);await assert.rejects(storage.stat(key));assert.equal((await db.query('SELECT 1 FROM platform_upload_writes WHERE user_id=$1',[item.userId])).rowCount,0);
+});
+
+test('a lost final job COMMIT acknowledgement preserves its actual completed artifact and bytes',async()=>{
+  const uid=await user(),item=await jobs.create(uid,{kind:'video',provider:'ark',prompt:'Fictional lost final publication acknowledgement'});
+  execute=async()=>({artifacts:[{name:'Fictional.mp4',mime:'video/mp4',bytes:Buffer.from('Fictional committed artifact')}]});
+  let transactions=0;
+  const lost=new Proxy(db,{get(target,key){
+    if(key==='transaction')return async(run:any)=>{const n=++transactions,value=await db.transaction(run);if(n===2)throw Error('Fictional lost final COMMIT acknowledgement');return value;};
+    const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+  }});
+  const worker=new JobService(lost,{...config,storageDir:directory},runtime,storage,undefined,undefined,FICTIONAL_LEGAL);
+  await processJob(worker,item.job.id,1);const current=await jobs.get(uid,item.job.id);
+  assert.equal(current.status,'succeeded');assert.equal(current.artifacts.length,1);
+  const row=(await db.query('SELECT storage_key FROM platform_uploads WHERE user_id=$1',[uid])).rows[0];
+  assert.equal(Buffer.from(await storage.get(row.storage_key)).toString(),'Fictional committed artifact');
+  assert.equal((await db.query('SELECT 1 FROM platform_upload_writes WHERE user_id=$1',[uid])).rowCount,0);
 });

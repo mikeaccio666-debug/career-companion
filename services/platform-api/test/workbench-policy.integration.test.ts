@@ -22,7 +22,7 @@ import { mcpSchemaHash } from '../src/mcp-config.ts';
 import type { McpTransport } from '../src/mcp-transport-port.ts';
 import { createStorage } from '../src/storage.ts';
 
-const base = readConfig({ ...process.env, PLATFORM_ENABLE_WORKBENCH: '0', PLATFORM_CHAT_PROVIDER: 'policy-fixture', PLATFORM_AGENT_PROVIDER: 'policy-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `workbench_policy_${randomUUID().replaceAll('-', '')}`;
+const base = readConfig({ ...process.env, PLATFORM_DATA_KEY:'d8'.repeat(32), PLATFORM_ENABLE_WORKBENCH: '0', PLATFORM_CHAT_PROVIDER: 'policy-fixture', PLATFORM_AGENT_PROVIDER: 'policy-fixture' ,PLATFORM_REQUIRE_INVITE:'1'}), schema = `workbench_policy_${randomUUID().replaceAll('-', '')}`;
 const admin = new Database(base.databaseUrl), url = new URL(base.databaseUrl);
 url.searchParams.set('options', `-c search_path=${schema}`);
 const db = new Database(url.toString());

@@ -1,3 +1,4 @@
+import { authorizeFixedSession } from '../src/auth.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp,rm,readdir } from 'node:fs/promises';
@@ -113,5 +114,28 @@ test('cleanup verifies scope, encrypted state and latest event before touching a
   await assert.rejects(f.future(()=>f.writes.recover()));await f.storage.stat(key);
   await f.db.query('UPDATE platform_upload_writes SET status=$2,revision=$3,last_event_id=$4,lease_until=$5,record_ciphertext=$6 WHERE id=$1',[row.id,row.status,row.revision,row.last_event_id,row.lease_until,row.record_ciphertext]);
   await f.future(()=>f.writes.recover());await f.empty();
+ }finally{await f.close();}
+});
+
+test('staged handles cannot be forged or transferred and recheck the original live authority at publication',async()=>{
+ const f=await fixture();try{
+  const stage=await f.writes.stage(f.who.userId,file(),c=>authorizeFixedSession(c,f.who));
+  await assert.rejects(f.db.withBoundedTransaction(c=>f.writes.publishInTransaction(c,{...stage})));
+  await assert.rejects(f.db.withBoundedTransaction(c=>new UploadWrites(f.db,f.crypto,f.storage).publishInTransaction(c,stage)));
+  await f.db.query('DELETE FROM platform_sessions WHERE token_hash=$1',[f.who.tokenHash]);
+  await assert.rejects(f.db.withBoundedTransaction(c=>f.writes.publishInTransaction(c,stage)));
+  await f.writes.abandon(stage);await f.empty();assert.equal((await f.db.query('SELECT 1 FROM platform_uploads')).rowCount,0);
+ }finally{await f.close();}
+});
+
+test('artifact transaction rollback preserves recoverable staging and a retry cannot duplicate publication',async()=>{
+ const f=await fixture();try{
+  const stage=await f.writes.stage(f.who.userId,file(),c=>authorizeFixedSession(c,f.who));
+  await assert.rejects(f.db.withBoundedTransaction(async c=>{await f.writes.publishInTransaction(c,stage);throw Error('Fictional downstream artifact failure');}));
+  assert.equal((await f.rows()).length,1);assert.equal((await f.db.query('SELECT 1 FROM platform_uploads')).rowCount,0);
+  await f.db.withBoundedTransaction(c=>f.writes.publishInTransaction(c,stage));
+  await assert.rejects(f.db.withBoundedTransaction(c=>f.writes.publishInTransaction(c,stage)));
+  await f.writes.abandon(stage);const row=(await f.db.query('SELECT storage_key FROM platform_uploads WHERE id=$1',[stage.id])).rows[0];await f.storage.stat(row.storage_key);
+  assert.equal((await f.rows()).length,0);
  }finally{await f.close();}
 });
