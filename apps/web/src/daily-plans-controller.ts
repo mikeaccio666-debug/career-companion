@@ -1,5 +1,6 @@
+import {dailyEditMatches,type DailyEditBasis} from './daily-plan-editor.ts';
 import { parseDailyPlanCommand, type DailyPlanView, type DailyPlanCommand } from '@companion/platform-contracts';
-export type DailyPlanIntent={action:'add';title:string;minutes:number}|{action:'accept'}|{action:'done'|'move'|'drop';itemId:string};
+export type DailyPlanIntent={action:'add';title:string;minutes:number}|{action:'edit';itemId:string;title:string;minutes:number;basis:DailyEditBasis}|{action:'accept'}|{action:'done'|'move'|'drop';itemId:string};
 import { readDailyPlanView, changeDailyPlan, type DailyPlanClient } from './daily-plans-api.ts';
 import { ApiError } from './api-error.ts';
 export interface DailyPlanSnapshot {
@@ -73,7 +74,9 @@ export class DailyPlanController {
         }
     }
     begin(intent:DailyPlanIntent) { if (!this.current() || this.request || this.state.pending || !this.state.loaded || !this.state.view || this.state.suspended || this.state.view.paused) return;
-      let pending:Readonly<DailyPlanCommand>;try{const v=this.state.view;pending=parseDailyPlanCommand({...intent,companionId:v.companionId,operationId:crypto.randomUUID(),localDate:v.localDate,planId:v.plan?.id??null,expectedRevision:v.plan?.revision??0});}catch{this.publish({error:'请填写事项和预计分钟数。'});return;}
+      if(intent.action==='edit'&&!dailyEditMatches(this.state.view,intent.itemId,intent.basis)){this.publish({error:'安排已有变化，请核对当前内容后再保存修改。'});return;}
+      const fields=intent.action==='edit'?{action:intent.action,itemId:intent.itemId,title:intent.title,minutes:intent.minutes}:intent;
+      let pending:Readonly<DailyPlanCommand>;try{const v=this.state.view;pending=parseDailyPlanCommand({...fields,companionId:v.companionId,operationId:crypto.randomUUID(),localDate:v.localDate,planId:v.plan?.id??null,expectedRevision:v.plan?.revision??0});}catch{this.publish({error:'请填写事项和预计分钟数。'});return;}
       this.publish({pending,uncertain:false,error:'',notice:''});void this.execute(false);
     }
     retry() { return this.execute(false); }

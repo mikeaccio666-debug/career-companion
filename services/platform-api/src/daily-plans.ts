@@ -46,6 +46,13 @@ export class DailyPlans {
   const current=await this.load(c,s,ctx.localDate);if((current?.id??null)!==command.planId||(current?.revision??0)!==command.expectedRevision)throw conflict();
   const base:PlanDraft=current??await this.empty(c,s,ctx,ctx.localDate);let draft:PlanDraft={...base,items:[...base.items]};let tomorrow:PlanDraft|undefined;
   if(command.action==='add'){const item:DailyPlanItem={id:randomUUID(),candidateId:randomUUID(),title:command.title,minutes:command.minutes,rule:'user',state:'proposed',completedAt:null,completionSource:null,movedTo:null};draft={...draft,items:[...draft.items,item]};this.capacity(draft,ctx.dailyMinutes);await this.marker(c,s,draft.id,item,ctx.at);}
+  else if(command.action==='edit'){
+   const selected=draft.items.find(i=>i.id===command.itemId);if(!selected)throw new ApiError(404,'NOT_FOUND','The daily item was not found.');
+   if(selected.rule!=='user'||!['proposed','accepted'].includes(selected.state))throw conflict();
+   // Keep item/candidate lineage and prior revisions; changed work needs acceptance again.
+   draft={...draft,items:draft.items.map(i=>i.id===selected.id?{...i,title:command.title,minutes:command.minutes,state:'proposed'}:i)};
+   this.capacity(draft,ctx.dailyMinutes);
+  }
   else if(command.action==='accept'){if(!draft.items.some(i=>i.state==='proposed'))throw conflict();this.capacity(draft,ctx.dailyMinutes);draft={...draft,acceptedAt:ctx.at,items:draft.items.map(i=>i.state==='proposed'?{...i,state:'accepted'}:i)};}
   else {const selected=draft.items.find(i=>i.id===command.itemId);if(!selected)throw new ApiError(404,'NOT_FOUND','The daily item was not found.');if(selected.state!=='accepted')throw conflict();
    let updated:DailyPlanItem={...selected,state:command.action==='done'?'done':command.action==='drop'?'dropped':'moved',completedAt:command.action==='done'?ctx.at:null,completionSource:command.action==='done'?'self_reported':null};
