@@ -1,1 +1,9 @@
 .manual-job-page textarea{font:inherit;color:inherit;width:100%;min-height:120px;border:1px solid var(--line,#d9d9d1);border-radius:8px;padding:12px;background:var(--paper,#f7f6f2);resize:vertical}.manual-job-page pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.7}.manual-job-page blockquote{white-space:pre-wrap;overflow-wrap:anywhere;border-left:2px solid var(--ink-3,#696e60);padding:12px;margin:16px 0}.manual-job-page .career-target-actions a{display:inline-flex;align-items:center;min-height:44px;padding:10px}.manual-job-page details{margin:20px 0}.manual-job-page summary{cursor:pointer;min-height:44px}
+
+.manual-job-page .job-deadline-editor{min-width:0;margin:12px 0;padding:16px;border:1px solid var(--rule);border-radius:8px}
+.manual-job-page .job-deadline-editor legend{font-weight:600}.manual-job-page .job-deadline-editor p{overflow-wrap:anywhere}
+.manual-job-page .job-deadline-editor input{min-width:0;max-width:100%;box-sizing:border-box;border-color:var(--rule);accent-color:var(--air)}
+.manual-job-page .job-deadline-offsets{min-width:0;border:0;padding:0;margin:12px 0}
+.manual-job-page .job-deadline-offsets label{display:flex;flex-direction:row;align-items:center;gap:8px;min-height:44px;overflow-wrap:anywhere}
+.manual-job-page .job-deadline-offsets input{width:auto;flex-shrink:0}
+.manual-job-page .job-deadline-preview{font-variant-numeric:tabular-nums}
