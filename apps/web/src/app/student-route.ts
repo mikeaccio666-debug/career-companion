@@ -1,13 +1,13 @@
 /** Page identity only. The account gate and each API still enforce access.
  * Unmigrated chat routes remain with the existing app until the engine gate passes. */
-export type StudentPage = 'journey' | 'pending' | 'stories' | 'interviews' | 'applications'
+export type StudentPage = 'today' | 'journey' | 'pending' | 'stories' | 'interviews' | 'applications'
   | 'jobs' | 'targets' | 'mentors' | 'profile' | 'companion' | 'memory' | 'me';
 export type StudentRoute =
   | { kind: 'page'; page: StudentPage; id?: string }
   | { kind: 'source'; pathname: string }
-  | { kind: 'missing'; returnHref: '/journey' | '/pending' | '/me'; returnLabel: string };
+  | { kind: 'missing'; returnHref: '/today' | '/journey' | '/pending' | '/me'; returnLabel: string };
 const pages: Readonly<Record<string, StudentPage>> = Object.freeze({
-  '/journey': 'journey', '/pending': 'pending', '/journey/stories': 'stories',
+  '/today': 'today', '/journey': 'journey', '/pending': 'pending', '/journey/stories': 'stories',
   '/journey/interviews': 'interviews', '/journey/applications': 'applications',
   '/journey/jobs': 'jobs', '/journey/targets': 'targets',
   '/me/mentors': 'mentors', '/community/mentors': 'mentors', '/me/profile': 'profile',
@@ -19,6 +19,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function studentRoute(pathname: string): StudentRoute | null {
   // Do not decode arbitrary paths, accept encoded slashes or echo paths into UI.
   const page = Object.hasOwn(pages, pathname) ? pages[pathname] : undefined;
+  if (pathname.startsWith('/today/')) return {kind:'missing',returnHref:'/today',returnLabel:'回到今天'};
   if (page) return { kind: 'page', page };
   for (const [base, detail] of details) {
     if (!pathname.startsWith(base + '/')) continue;

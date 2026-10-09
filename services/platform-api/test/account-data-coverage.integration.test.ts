@@ -18,11 +18,11 @@ async function rolledBack(run:(client:PoolClient)=>Promise<void>){
   await assert.rejects(f.db.transaction(async client=>{await run(client);throw rollback;}),error=>error===rollback);
 }
 
-test('all 168 migrated tables are reviewed, but the inventory does not claim a complete account export',async()=>{
+test('all 171 migrated tables are reviewed, but the inventory does not claim a complete account export',async()=>{
   const inventory=await readAccountSchemaInventory(f.db),report=auditAccountDataCoverage(inventory);
   assert.equal(new Set(ACCOUNT_DATA_SCHEMA.map(entry=>entry.table)).size,ACCOUNT_DATA_SCHEMA.length);
   assert.equal(report.schemaStatus,'reviewed',JSON.stringify(report.tables.filter(row=>row.schemaStatus!=='reviewed')));
-  assert.equal(report.tableCount,168);assert.equal(report.excludedTables,7);assert.equal(report.requiredProjections,161);
+  assert.equal(report.tableCount,171);assert.equal(report.excludedTables,7);assert.equal(report.requiredProjections,164);
   assert.equal(report.exportReady,false);assert.equal(report.exportStatus,'not_implemented');
   for(const column of inventory.columns.filter(column=>column.column_name==='user_id')){
     const entry=report.tables.find(entry=>entry.table===column.table_name)!;
@@ -85,7 +85,7 @@ test('missing tables and an empty schema cannot be mistaken for zero personal da
     assert.equal(report.tables.find(entry=>entry.table==='platform_worker_heartbeats')!.schemaStatus,'missing');
   });
   const empty=auditAccountDataCoverage({columns:[],fks:[]});
-  assert.equal(empty.tableCount,168);assert.equal(empty.schemaStatus,'blocked');assert.equal(empty.exportReady,false);
+  assert.equal(empty.tableCount,171);assert.equal(empty.schemaStatus,'blocked');assert.equal(empty.exportReady,false);
 });
 
 test('reviewed indirect, credential, orphan file and financial tables retain their explicit coverage requirements',async()=>{
@@ -107,7 +107,7 @@ test('real CLI reads the migrated fixture schema and still reports export not im
   const output=execFileSync(process.execPath,['--import','tsx',cli],{encoding:'utf8',timeout:10000,
     env:{...process.env,PLATFORM_DATABASE_URL:url.toString(),PLATFORM_ALLOW_PROVIDER_CALLS:'0'}});
   const report=JSON.parse(output);
-  assert.equal(report.tableCount,168);assert.equal(report.schemaStatus,'reviewed');assert.equal(report.exportReady,false);
+  assert.equal(report.tableCount,171);assert.equal(report.schemaStatus,'reviewed');assert.equal(report.exportReady,false);
   assert.equal(report.exportStatus,'not_implemented');assert(!output.includes(url.toString()));
 });
 

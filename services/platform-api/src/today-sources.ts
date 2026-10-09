@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { careerRecordId, careerRecordObject } from '@companion/platform-contracts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
+import type { DailyPlans } from './daily-plans.ts';
 import type { TodayRestService } from './today-rest.ts';
 import type { CompanionDailySettingsService } from './companion-daily-settings.ts';
 import type { CareerTargets } from './career-targets.ts';
@@ -23,6 +24,7 @@ function localDate(at: string, timeZone: string) {
   return ['year', 'month', 'day'].map(k => parts.find(p => p.type === k)!.value).join('-');
 }
 export interface TodaySourcePorts {
+  plans: Pick<DailyPlans, 'readHistoryInTransaction'>;
   rest: Pick<TodayRestService, 'readForPolicyInTransaction'>;
   settings: Pick<CompanionDailySettingsService, 'readForPolicyInTransaction'>;
   targets: Pick<CareerTargets, 'readForPreparationInTransaction'>;
@@ -47,6 +49,7 @@ export class TodaySources {
     const capturedAt = (await c.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
     const rest = await this.ports.rest.readForPolicyInTransaction(c, s, signal);
     if (rest.ownerId !== s.userId || rest.companionId !== settings.companionId) throw new ApiError(503, 'TODAY_SOURCES_UNAVAILABLE', 'The owned rest choice could not be confirmed.');
+    const dailyHistory = await this.ports.plans.readHistoryInTransaction(c, s, capturedAt, settings.preferences.timeZone, signal);
     const targets = await this.ports.targets.readForPreparationInTransaction(c, s, signal);
     const library = await this.ports.library.readPreparationIndexInTransaction(c, s, signal);
     const resumes = await this.ports.resumes.readForDailyPlanningInTransaction(c, s, signal);
@@ -92,9 +95,9 @@ export class TodaySources {
       // Genuine immutable events survive application removal. This does not
       // claim that the separately missing crisis/other overlay source is empty.
       rejectionWindows: Object.freeze(rejectionWindows.filter(v => v.until > capturedAt)),
-      coverage: Object.freeze(['rest_choices', 'daily_preferences', 'target_coordinates', 'normal_project_coordinates', 'confirmed_story_coordinates', 'resume_reviews', 'manual_job_deadlines', 'application_states', 'interview_schedules', 'post_rejection_events'] as const),
+      coverage: Object.freeze(['daily_plan_history', 'rest_choices', 'daily_preferences', 'target_coordinates', 'normal_project_coordinates', 'confirmed_story_coordinates', 'resume_reviews', 'manual_job_deadlines', 'application_states', 'interview_schedules', 'post_rejection_events'] as const),
       // Missing data stays missing, never [] / false / an unearned plan grant.
-      companionBehavior: null, companionOverlays: null, journeyFocus: null, dailyHistory: null, practiceReceipts: null,
+      companionBehavior: null, companionOverlays: null, journeyFocus: null, dailyHistory, practiceReceipts: null,
     });
     await authorizeFixedSession(c, s, signal); signal?.throwIfAborted();
     return Object.freeze({ ...content, capturedAt, sourceId: 'today_source_' + createHash('sha256').update(canonical(content)).digest('hex') });

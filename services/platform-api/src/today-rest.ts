@@ -63,6 +63,11 @@ export class TodayRestService {
     }
     await authorizeFixedSession(c, s, signal); signal?.throwIfAborted();
   }
+  /** Owner-private same-transaction read, including after model/legal admission withdrawal. */
+  async readOwnedInTransaction(c: PoolClient, context: FixedSessionContext, signal?: AbortSignal) {
+    const s=this.fixed(context);await this.authorize(c,s,signal);const settings=await this.current(c,s);
+    await authorizeFixedSession(c,s,signal);signal?.throwIfAborted();return settings;
+  }
   async read(context: FixedSessionContext, signal?: AbortSignal) {
     const s = this.fixed(context); return this.db.withBoundedTransaction(async c => { await this.authorize(c, s, signal); const settings = await this.current(c, s); await authorizeFixedSession(c, s, signal); signal?.throwIfAborted(); return Object.freeze({ settings }); });
   }
