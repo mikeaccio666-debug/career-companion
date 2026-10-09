@@ -1,3 +1,4 @@
+import {knowledgeAccessFixture} from './fixtures/knowledge-access-retention.ts';
 import { workerProcessFixture } from './fixtures/first-letter-worker-process.ts';
 import {FirstLetterProgressService} from '../src/first-letter-progress.ts';
 import {beforeEach,afterEach,test} from 'node:test';
@@ -289,4 +290,21 @@ test('SIGTERM deadline exits the real stalled worker once and preserves the admi
   assert.notEqual((await f.db.query('SELECT held_reason FROM platform_first_letter_outbox WHERE request_id=$1',[refs.requestId])).rows[0].held_reason,'terminal');
   assert.equal(a.calls,0,'the loopback response has not completed or been retried');
  }finally{release();await processes.close();}
+});
+
+test('actual worker-main cleans expired knowledge access at startup and on maintenance while model calls are disabled',{timeout:35000},async()=>{
+ const a=await actor(),library=await knowledgeAccessFixture(f);
+ let processes:Awaited<ReturnType<typeof workerProcessFixture>>|undefined;
+ try{
+  const old=await library.access(),current=await library.access();
+  await f.db.query("UPDATE platform_knowledge_access_log SET created_at=statement_timestamp()-interval '181 days',retention_until=statement_timestamp()-interval '1 day' WHERE id=$1",[old]);
+  processes=await workerProcessFixture(f,a,model);
+  const child=await processes.start(false);
+  assert.equal((await f.db.query('SELECT id FROM platform_knowledge_access_log WHERE id=$1',[old])).rowCount,0);
+  const later=await library.access();
+  await f.db.query("UPDATE platform_knowledge_access_log SET created_at=statement_timestamp()-interval '181 days',retention_until=statement_timestamp()-interval '1 day' WHERE id=$1",[later]);
+  await processes.until(async()=> (await f.db.query('SELECT id FROM platform_knowledge_access_log WHERE id=$1',[later])).rowCount===0,22000);
+  assert.equal((await f.db.query('SELECT id FROM platform_knowledge_access_log WHERE id=$1',[current])).rowCount,1);
+  assert.equal(a.calls,0);await child.stop();
+ }finally{try{await processes?.close();}finally{await library.close();}}
 });
