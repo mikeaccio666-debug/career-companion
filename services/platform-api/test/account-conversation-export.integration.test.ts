@@ -47,7 +47,7 @@ test('export includes owned legacy content, excluded messages, raw statuses, aud
  assert.equal((s.audioTranscriptions[0] as any).text,'Fictional 原始转录 🚀');assert.equal((s.chatCalls[0] as any).cachedInputTokens,20);
  assert.equal((s.messages as any[]).find(x=>x.id===running).status,'streaming');
  for(const table of CONVERSATION_EXPORT_TABLES){assert(result.includedTables.includes(table));assert(!result.remainingTables.includes(table));}
- assert.equal(result.includedTables.length,100);assert(result.includedTables.includes('platform_companion_welcome'));assert(result.remainingTables.includes('platform_companion_birth_assets'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+ assert.equal(result.includedTables.length,102);assert(result.includedTables.includes('platform_companion_welcome'));assert(result.remainingTables.includes('platform_companion_birth_assets'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
  const text=JSON.stringify(result);for(const secret of [a.tokenHash,encoded,password,b.userId,foreignRoom,foreignMessage,'Fictional foreign secret',source.storageKey,'lease_until'])assert(!text.includes(secret));
  assert(Object.isFrozen(exported.audioTranscripts));
 });

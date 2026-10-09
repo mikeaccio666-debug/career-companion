@@ -1068,3 +1068,15 @@ API 类型检查与 git diff --check 通过。没有 schema 变更、主库/主�
 - 现有 171 表清单未更改：核心覆盖 100 表、剩余 64；带文件覆盖 103、剩余 61；另有 7 个既有豁免。`complete=false` 保留，完整下载/删除和其他 P0 功能不以此宣称完成。
 
 私人运行证据保留在远端忽略目录 `.local/verification/ci-regression-20261008/`，日志标签为 `account-memory-safety-export`、`memory-safety-protocol-regression`、`account-memory-export-regression`、`memory-export-retained-full`、`memory-export-final`、`memory-export-final-check`。
+
+## 模型调用记录账户导出：2026-10-09
+
+新增 `safetyModelUsage` / `modelRelayRequests` 两个区段，详见 [数据范围与边界](account-model-audit-export.md)。保留三类安全来源、原代次、真实状态、未知用量和缓存计数；读转发历史额外检查实际任务的用户、CLI 种类和代次范围。没有执行模型或任务、没有变更安全结论、没有数据库迁移。
+
+- 账户导出、覆盖清单、导师履约和组织知识回归 **277/277** 通过，无失败或跳过。新增 9 个模型调用导出案例已包含在该总数中；其中未来代次拒绝/旧代次保留案例也单独通过，不重复计数。API 最终 TypeScript 检查通过。
+- 覆盖实际协议产生的 prepared/admitted/complete/failed/cancelled/interrupted 记录、已报告零与未知缓存的区别、命名真实服务路径、记忆真实分类及删除保留期、真正未结束的转发请求和成功/拒绝/不确定结果。分页使用 105 次实际分类计账和 105 条保留转发历史夹具；测试不将历史 reserved 夹具视为发生过外部请求。
+- 实际插入旧单列外键允许的跨用户任务引用，导出拒绝；未来任务代次、坏计数/状态、失效会话、取消和容量超限均不返回部分捕获，密码再验证凭据保持可重试。撤回模型同意和邮箱验证后仍能取回本人历史。
+- 全部使用独立 PostgreSQL schema、虚构资料、注入响应或 loopback；schema 清理已确认，无付费调用、真实个人数据、生产迁移或部署。主应用商业调用未开启。
+- JSON 当前覆盖 102 表、剩余 62；带文件 105、剩余 59；另有 7 个既有豁免。两个模式的 `complete=false` 保持不变，其余导出类别、自助下载、删除协调和 P0 主对话不因此宣称完成。
+
+私人运行日志位于远端忽略目录 `.local/verification/ci-regression-20261008/`：`model-audit-export-integration`、`model-audit-generations`、`model-audit-export-regression`、`model-audit-final-types`。

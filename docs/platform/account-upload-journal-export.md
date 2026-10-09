@@ -1,6 +1,6 @@
 # 文件写入与删除日志的账户归档
 
-依据产品 09 §11，账户 JSON 新增 `uploadWrites`、`uploadWriteEvents`、`uploadRemovals`、`uploadRemovalEvents`，覆盖现有四张写入与删除日志表。普通 JSON 当前为 100 张已投影、7 张明确排除、64 张待处理；带私有文件模式为 103 / 7 / 61。当前计数包括后续加入的[任务历史](account-task-export.md)及[执行历史](account-execution-export.md)。两者仍 `complete=false`；文件字节仅由 AccountFileArchive 捕获，这四类日志本身不会读取或恢复文件。
+依据产品 09 §11，账户 JSON 新增 `uploadWrites`、`uploadWriteEvents`、`uploadRemovals`、`uploadRemovalEvents`，覆盖现有四张写入与删除日志表。普通 JSON 当前为 102 张已投影、7 张明确排除、62 张待处理；带私有文件模式为 105 / 7 / 59。当前计数包括后续加入的[任务历史](account-task-export.md)及[执行历史](account-execution-export.md)。两者仍 `complete=false`；文件字节仅由 AccountFileArchive 捕获，这四类日志本身不会读取或恢复文件。
 
 ## 保存哪些内容
 
@@ -30,4 +30,4 @@
 
 定向测试 32/32 通过（包含新 10 项和现有写入/删除生命周期测试），API 类型检查通过。最终 24 份账户导出、覆盖检查、组织知识、导师履约及原上传/删除服务测试共 265/265 通过，无跳过；隔离 schema 已清理，git diff --check 通过。没有付费模型、第三方服务或主数据库调用。
 
-覆盖计数核对于 2026-10-09，包含日常偏好、休息和计划记录，以及本轮加入的[共享记忆分类与待处理记录](account-memory-safety-export.md)。
+覆盖计数核对于 2026-10-09，包含日常偏好、休息和计划记录，以及[共享记忆分类与待处理记录](account-memory-safety-export.md)和[模型调用记录](account-model-audit-export.md)。
