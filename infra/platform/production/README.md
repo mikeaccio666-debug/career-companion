@@ -70,3 +70,7 @@ web的pre-deploy只阻塞该web服务，不保证worker先等迁移完成。首�
 `readConfig` 在生产拒绝非空的 `KOKORO_*`、`FASTER_WHISPER_*`、`OLLAMA_*` 和 `PLATFORM_CLI_OLLAMA_*` 配置，也拒绝把任一模型用途或 CLI 模型绑定到 `kokoro`、`faster-whisper`、`ollama`。显式空字符串仅视为未配置；空白字符串仍拒绝。此限制与商业调用开关无关，关闭付费调用不能让开发服务进入生产。错误只显示固定说明，不回显变量值；删除这些配置后重新启动，不自动改选供应商。开发和测试环境保留原有接入方式。
 
 API、worker、迁移和只读运维入口共用这项启动检查。2026-10-09 以虚构配置启动这四个真实入口，均在连接 PostgreSQL／Redis 之前退出；本地 TCP 监听器观察到零连接。相关配置检查 24 项通过，平台 API 类型检查通过。这只证明应用启动边界，不证明云端环境组、模型质量或部署已经验收。
+
+### HTTP 响应安全策略
+
+API 与同源网页现在共用启动时确定的 CSP、防嵌套、nosniff、Referrer-Policy 与浏览器能力策略；生产配置另发送 HSTS。私有文件保留原有更严格的沙箱。分离 API 时，提供 HTML 的平台进程需把 `PLATFORM_WEB_API_ORIGIN` 与构建的 `VITE_PLATFORM_API_ORIGIN` 对齐；独立网页主机需要自己的响应头配置。缓存外壳和实际云端 TLS 的验收范围见 [HTTP 安全策略](../../../docs/platform/http-security-policy.md)。
