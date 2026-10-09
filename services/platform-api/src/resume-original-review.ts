@@ -169,7 +169,7 @@ export class ResumeOriginalReview {
  }
  /** Actual owner-confirmed source coordinates only. The private label and
   * every original body stay out of preparation metadata and model summaries. */
- async readForPreparationInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal):Promise<readonly Readonly<OwnedCareerResume>[]>{
+ private async readPreparationAndDailySources(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
   const context=this.fixed(value);await this.authorize(client,context,signal);await this.storage.authorizeSession(client,context,signal);
   const rows=(await client.query('SELECT * FROM platform_pending_items WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[context.userId])).rows;
   if(rows.length>500)throw unavailable();
@@ -186,14 +186,19 @@ export class ResumeOriginalReview {
   const approvals=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND operation_id=ANY($2::uuid[]) FOR SHARE',[context.userId,approvalIds])).rows;
   const proofs:PreparationProofs={latest:new Map(latest.map(r=>[r.item_id,r])),resumes:new Map(versions.map(r=>[r.id,r])),payloads:new Map(payloads.map(r=>[r.item_id+':'+r.revision,r])),decisions:new Map(decisions.map(r=>[r.operation_id,r])),approvals:new Map(approvals.map(r=>[r.operation_id,r]))};
   const labels={swe:'软件工程',mle:'机器学习工程',ds:'数据科学',da:'数据分析',de:'数据工程',hw:'硬件等本专业方向',other:'其他方向'};
-  const records:Readonly<OwnedCareerResume>[]=[];
+  const records:Readonly<OwnedCareerResume>[]=[];const reviews=[];
   for(const row of rows){
    signal?.throwIfAborted();const {item}=await this.decode(client,context,row,proofs);
+   reviews.push(Object.freeze({id:item.id,ownerId:context.userId,resumeVersionId:item.resumeVersionId,revision:item.revision,generation:item.generation,status:item.status,resumeStatus:item.resumeStatus,track:item.track,expiresAt:item.expiresAt,approvedRevision:item.approvedRevision,approvedAt:item.approvedAt,approvalOperationId:item.approvalOperationId,lastOperationId:item.lastOperationId,sensitivity:item.sensitivity}));
    if(item.status!=='approved'||item.resumeStatus!=='active')continue;
    records.push(Object.freeze({ownerId:context.userId,id:item.resumeVersionId,revision:item.revision,state:'current',status:'active',track:item.track,approvedAt:item.approvedAt!,normalSummary:'本人已确认的简历；岗位方向：'+labels[item.track]+'。'}));
   }
-  await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return Object.freeze(records);
+  await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return Object.freeze({resumes:Object.freeze(records),reviews:Object.freeze(reviews)});
  }
+ async readForPreparationInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal):Promise<readonly Readonly<OwnedCareerResume>[]>{return (await this.readPreparationAndDailySources(client,value,signal)).resumes;}
+ /** All authenticated review states, not only approved resumes; no source text. */
+ async readForDailyPlanningInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){return this.readPreparationAndDailySources(client,value,signal);}
+
  async get(value:FixedSessionContext,key:unknown,byResume=false,signal?:AbortSignal){const context=this.fixed(value);let id:string;try{id=careerRecordId(key);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{const auth=await this.authorize(client,context,signal),row=await this.row(client,context,id,byResume);if(!row)throw missing();return this.current(client,context,row,auth,signal);});
  }

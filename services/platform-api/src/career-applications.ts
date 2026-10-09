@@ -226,6 +226,13 @@ export class CareerApplications {
         signal?.throwIfAborted();
         return Object.freeze({ applications: Object.freeze(applications), savedJobs });
     }
+    /** Real ledger states for daily planning; free text and old JD bodies stay private. */
+    async readForDailyPlanningInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal) {
+      const context=this.fixed(value);await this.authorize(client,context,signal);await this.storage.authorizeSession(client,context,signal);
+      const records=await this.currentRecords(client,context,signal);
+      const result=records.map(v=>Object.freeze({id:v.id,ownerId:context.userId,revision:v.revision,stage:v.stage,offerState:v.offerState,closedReason:v.closedReason,closedAtStage:v.closedAtStage,submittedVia:v.submittedVia,job:Object.freeze({id:v.job.id,revision:v.job.revision,track:v.job.roleFamily}),lastOperationId:v.lastOperationId}));
+      await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return Object.freeze(result);
+    }
     /** Current owned source verified within its actual consuming transaction. */
     async readInTransaction(client: PoolClient, value: FixedSessionContext, key: unknown, signal?: AbortSignal) {
         const context = this.fixed(value);

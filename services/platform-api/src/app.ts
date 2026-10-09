@@ -1,3 +1,4 @@
+import { TodaySources } from './today-sources.ts';
 import { CompanionDailySettingsService } from './companion-daily-settings.ts';
 import { UploadWrites } from './upload-writes.ts';
 import { AccountReauthentication } from './account-reauthentication.ts';
@@ -136,6 +137,7 @@ export async function buildApp(options:AppOptions={}) {
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage),uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
   const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview,careerApplications);
+  const todaySources=new TodaySources(db,{settings:companionDailySettings,targets:careerTargets,library:careerStories,resumes:resumeReview,jobs:manualJobs,applications:careerApplications,interviews:careerInterviews});
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
@@ -986,5 +988,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }
