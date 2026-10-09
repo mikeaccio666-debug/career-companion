@@ -37,9 +37,9 @@ function scalars(row:Record<string,unknown>,skip:readonly string[]=[]){
   else if(!id(value))fail();
  }
 }
-export interface EvalRunManifest {
+export type EvalRunManifest=({provider:'openai';model:'gpt-6-luna';serviceTier:'default'}|{provider:'anthropic';model:'claude-haiku-5-5';serviceTier:'standard_only'})&{
  schemaVersion:1;scope:'isolated_provider_loop_pilot';runId:string;studyDigest:string;promptDigest:string;corpusDigest:string;
- provider:'openai';model:'gpt-6-luna';serviceTier:'default';capMicroUsd:number;priceSnapshotId:string;createdAt:string;
+ capMicroUsd:number;priceSnapshotId:string;createdAt:string;
  pilotCaseIds:readonly string[];productGate:'not_evaluated';qualityStatus:'not_scored';
 }
 /** One private directory per run, never reopened. Each bounded content-free JSON
@@ -52,7 +52,7 @@ export async function createEvalJournal(root:string,manifest:EvalRunManifest){
  const own=(stat:Stats)=>stat.isDirectory()&&(stat.mode&0o077)===0&&(process.getuid===undefined||stat.uid===process.getuid());
  try{
   closed(manifest,recordKeys);scalars(manifest as unknown as Record<string,unknown>,['pilotCaseIds','createdAt']);
-  if(manifest.schemaVersion!==1||manifest.provider!=='openai'||manifest.model!=='gpt-6-luna'||manifest.serviceTier!=='default'||
+  if(manifest.schemaVersion!==1||!((manifest.provider==='openai'&&manifest.model==='gpt-6-luna'&&manifest.serviceTier==='default')||(manifest.provider==='anthropic'&&manifest.model==='claude-haiku-5-5'&&manifest.serviceTier==='standard_only'))||
    !/^[a-z0-9][a-z0-9-]{0,63}$/.test(runId)||!Array.isArray(manifest.pilotCaseIds)||manifest.pilotCaseIds.length!==12||
    manifest.pilotCaseIds.some(x=>!id(x))||new Set(manifest.pilotCaseIds).size!==12||!Number.isFinite(Date.parse(manifest.createdAt))||
    !isAbsolute(root)||resolve(root)!==root)fail();

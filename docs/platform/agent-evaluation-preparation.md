@@ -47,7 +47,7 @@
 
 ## 已授权的 Luna 隔离试跑入口（2026-10-08）
 
-产品负责人确认使用 OpenAI，允许 Luna，并把预算控制交给代理；随后补充允许 Claude Haiku 5.5。因此不再等待服务商或预算金额确认。Luna 入口固定 `gpt-6-luna`、全球 Standard、low reasoning、每段最多 2048 输出 token 和一次模型调用；首轮程序上限 $1，只运行固定的 12 段开发试跑。失败不切模型，不自动扩大到 120 段或旧规格的正式档。Haiku 5.5 的型号 `claude-haiku-5-5` 已从官方文档核对，但本次尚未实现其原生适配器，命令不会假装可用。
+产品负责人确认使用 OpenAI，允许 Luna，并把预算控制交给代理；随后补充允许 Claude Haiku 5.5。因此不再等待服务商或预算金额确认。Luna 入口固定 `gpt-6-luna`、全球 Standard、low reasoning、每段最多 2048 输出 token 和一次模型调用；首轮程序上限 $1，只运行固定的 12 段开发试跑。失败不切模型，不自动扩大到 120 段或旧规格的正式档。当时 Haiku 适配器尚未实现；后续接入见下节。
 
 新命令 `pnpm --filter @companion/platform-api eval:pilot --live openai-luna --run-id <唯一运行名>` 需要独立的 `CAREER_EVAL_ALLOW_PAID_CALLS=1`、`CAREER_EVAL_OPENAI_API_KEY` 和绝对路径 `CAREER_EVAL_RESULTS_DIR`。缺配置时不会发请求。原有 `eval:plan` 仍不加载密钥或发请求，`--live` 仍被它拒绝；规划结果仅声明另有试跑命令。不得复用主应用的商业开关；试跑创建的 runtime 只获得这一把 key 和这一型号，最终传输仅接受官方 Responses 地址，显式 `service_tier=default`，不读取其他供应商配置或自定义 API 地址。
 
@@ -61,3 +61,22 @@
 在远端私有 env 文件填写专用 key 后，可通过 `./scripts/project.sh --filter @companion/platform-api exec node --env-file=/absolute/private/credentials.env --import tsx evals/live-main.ts --live openai-luna --run-id luna-pilot-001` 加载。私有文件的调用开关默认仍为 0；只在获授权的这次试跑进程设为 1，不改主服务环境。文件不要放进仓库，也不要把 key 当作 CLI 参数或聊天消息。run id 不含私人信息。
 
 验证：7 个评测测试文件 66/66 项通过、无跳过，API 类型检查通过。新增 8 项经过实际 OpenAI runtime 与模拟 SSE 传输，验证先写预留后发请求、每段结果先落盘、精确型号和 Standard 请求配置、未知用量／HTTP 错误停止、同名并发拒绝、写盘失败保留预留、取消中断、缺密钥和过期价格零传输、拒绝不安全输出目录及误入正文。首轮类型检查暴露边界 narrowing 和可选 runtime 方法问题，已收紧后复验。测试没有访问模型服务；真实模型调用仍为 0。
+
+
+## Haiku 5.5 隔离试跑入口（2026-10-09 UTC）
+
+现在同一条 `eval:pilot` 命令也接受 `--live anthropic-haiku`。需要专用 `CAREER_EVAL_ANTHROPIC_API_KEY`，其余独立开关、结果目录与唯一 run id 规则相同。用户只需配置想试跑的供应商；OpenAI key 不会被拿来启动 Claude，两者不会自动互相回退。官方 `@anthropic-ai/sdk@0.132.1` 只在隔离适配器中使用，未扩展主应用的 Anthropic runtime 或工具执行能力。
+
+请求固定 `claude-haiku-5-5`、`service_tier=standard_only`、`inference_geo=global`、adaptive thinking + low effort、2048 输出上限。SDK 自动重试设为 0，最终传输仅接受官方 `/v1/messages` 地址，拒绝重定向，不使用环境中的其他地址或凭据。错误、取消、断流、输出到上限、未知用量和落盘失败均停止整批。此入口没有工具、缓存控制或自动扩大样本的选项。
+
+12 段样本、草案人格、共享 agent 指令文字与 study 摘要保持不变。SDK 使用原生 Messages 协议：普通历史保留 user/assistant 顺序，system 指令合入顶层 system，包括共享循环追加的禁止工具指令。因此保留指令内容，但在协议中的位置与 OpenAI 不同，不声称供应商请求字节相同。思考块不作为可见文字、不保存；首次 delta 指标只计可见文字，输出计费用量仍含思考消耗。原有通用指令函数仅抽取到 `packages/ai-core/src/chat-instructions.ts`，没有改文字。
+
+价格核对时间为 2026-10-09 04:40:10 UTC，依据 [Haiku 5.5 官方模型页](https://platform.claude.com/docs/en/models/haiku-5-5/overview)，快照 7 天后失效。程序首轮预算 $2，每次按 1M 共享上下文窗口作输入预留上界、2048 输出，以及长上下文最高缓存写入 $1/M 和输出 $2.50/M 保守计价，单次预留 $1.005120；这不是预计每段会花一美元。收到有效用量且账本落盘后释放未用预留。真实账单通常低于这一上界；本地 `actualSpentMicroUsd` 字段表示已报告 token 按保守费率结算的估计额，并非供应商发票。全球推理配置避免套用 US 区域加价，供应商未确认标准档或全球区域时不释放预留。
+
+原生 `input_tokens` 不含缓存；适配器把普通输入、缓存读取与缓存写入相加后交给共享计费器，不把缓存 token 漏计或默认为零。任何一项缺失保留预留并停止。采用最高输入单价统一计价，暂不宣称精确缓存折扣或缓存命中指标。
+
+远端私有配置示例调用：`./scripts/project.sh --filter @companion/platform-api exec node --env-file=/absolute/private/credentials.env --import tsx evals/live-main.ts --live anthropic-haiku --run-id haiku-pilot-001`。仍需只在本次已授权进程中设置 `CAREER_EVAL_ALLOW_PAID_CALLS=1`，私有文件默认开关为 0；不得启动主网页商业调用。真实 key、结果与运行日志不进入仓库。
+
+新增测试覆盖 SDK 原生流、思考块隔离、缓存计费、完整的 12 段落盘顺序、型号／计价不符、缺用量、断流、工具返回拒绝、限流和服务器错误不重试、输出上限、取消、首个可见文字超时、预算写入失败零传输及专用 key 隔离。全部传输使用模拟响应；真实模型调用和质量评分仍未执行，PR3 产品前置门保持未通过。
+
+验证结果：8 个评测测试文件 74/74 项通过，共享模型步骤、agent 循环与计费回归 52/52 项通过，均无跳过；API 类型检查通过。未保存或调用真实模型输出。

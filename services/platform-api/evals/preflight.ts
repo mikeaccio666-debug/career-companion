@@ -27,7 +27,7 @@ export function buildEvalPreflight() {
     cases.filter(item => item.speaker === speaker).length]));
   return {
     version: 1, scope: 'provider_loop_baseline_preparation', mode: 'dry_run',
-    status: 'prepared_not_executed', providerCalls: 0, liveCommandAvailable: true, liveCommand: 'eval:pilot', liveProviders: ['openai'], pendingAdapters: ['anthropic'],
+    status: 'prepared_not_executed', providerCalls: 0, liveCommandAvailable: true, liveCommand: 'eval:pilot', liveProviders: ['openai','anthropic'], pendingAdapters: [],
     caseSetDigest: study.corpusDigest, studyDigest: study.digest, promptDigest: study.promptDigest,
     inputScope: study.scope, toolExecution: 'not_exercised', priceCandidateDigest: evalDigest(PROPOSED_EVAL_PRICES),
     languageScripts: cases.length, semanticScenarios: new Set(cases.map(item => item.pairId)).size,
