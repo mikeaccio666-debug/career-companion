@@ -1162,3 +1162,16 @@ JSON 当前覆盖 121 表、剩余 43；带私有文件覆盖 124、剩余 40；
 JSON 覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；既有豁免 7 项，总清单 171。独立核对当前覆盖常量和 schema 清单：剩余为 5 张本人记录、22 张待审阅组织资料、3 张文件表（文件模式已有读取）。完整自助下载、归档 worker、删除协调、主对话评测及 P0 仍未完成，complete=false 保持。
 
 私有证据在 ci-regression-20261008：shared-safety-regression.log、shared-safety-core-coverage-fixed.log、shared-safety-final-types.log、shared-safety-resealed-read.log、remaining-export-inventory.log；早期专项日志保留。PR151 的独立采用压力脚本本轮未更改或运行。
+
+## 2026-10-09：入门原始索引与命名 dispatch 本人导出
+
+本批接入五张剩余 owner_projection 表；来源、字段边界和剩余覆盖见 [说明](account-prebirth-dispatch-export.md)。当前 JSON 139 / 剩余 25；带文件 142 / 剩余 22；既有豁免 7，总清单 171。原 schema 不变，完整导出仍 complete=false。
+
+- 整组真实隔离数据库回归：@companion/platform-api exec tsx --test --test-concurrency=1 test/account-*export*.test.ts test/account-data-coverage.integration.test.ts test/companion-name-*.test.ts test/companion-prebirth-composition.integration.test.ts test/companion-safety-resource-v2.integration.test.ts。原命令结果 **440 通过 / 1 失败 / 0 跳过，共 441**；失败是旧入门分页查询次数断言仍计为 2，新增原 inventory 校验后实际为 4。修正为分别统计原导出分页，并增加 106 条 inventory 内容断言；按原测试名复跑 **1/1 通过**，未重跑整组。
+- 另补实际 worker 子进程完成 claim 后被终止、导出未开始记录、真实租约到期后恢复执行的用例，独立运行 **1/1 通过**。两个阶段均从同一真实服务数据库读出；恢复保持原 generation，claim/recover/start/detected/application 不合并，不暴露旧租约 token，导出不增加 provider 请求。
+- 因而本批 **442 个不同用例均已在上述批次通过**，不是一次命令 442/442。新增专项 10 个：真实排队/完成、L2 原资源绑定、配置暂停与旧登录删除、legacy 空账户不采用、缺失整段/锚点、密文损坏/跨用户坐标/旧根、取消/鉴权/大小回滚、105 条实际暂停日志、106 条真实入门索引跨页、实际 worker 中断恢复。
+- API TypeScript 检查通过；git diff --check 通过。剩余清单由实际导出常量和 ACCOUNT_DATA_SCHEMA 重算，确认仅余 22 张 organization_review 与 JSON 模式下 3 张文件表。清单覆盖不替代功能完成或产品质量门槛。
+- 初次专项原始结果 7/9：测试错误调用 insertSession 导致无效日期；另一个空账户测试将无 crypto 传给整个 AccountCoreExport，提前被既有 career reader 拒绝。分别改成真实 session API 和只对新增空 inventory reader 验证无需 crypto，同时完整捕获仍带正常 crypto。修正后的 9 个专项已全部在上述整组回归中通过。TypeScript 也发现共用测试 helper 过度约束完整 PrebirthFixture（两套 fixture 的 ready 定义不同）；缩窄为实际使用的 db/config 字段后通过，无运行语义变化。
+- 所有资料虚构，provider 为拥有的 loopback endpoint；隔离 schema 清理确认。没有付费模型、主库迁移、主预览重启、真实申请、部署或合并。未重复耗时的旧 .stress.ts。无网页/视觉验证主张，也不把协议用例当作真实模型质量结果。
+
+原始日志保存在远端忽略目录 .local/verification/ci-regression-20261008/：prebirth-dispatch-targeted.log、prebirth-dispatch-regression.log、prebirth-dispatch-intake-pages-fixed.log、prebirth-dispatch-recovery.log、prebirth-dispatch-final-types.log（中间类型失败）、prebirth-dispatch-types-fixed.log、prebirth-dispatch-inventory.log。

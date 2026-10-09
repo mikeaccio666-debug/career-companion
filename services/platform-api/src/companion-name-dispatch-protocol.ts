@@ -56,11 +56,11 @@ function sealState(crypto:DataCrypto,row:DispatchRow,digest:string) {
   return crypto.sealUtf8(JSON.stringify(state(row,digest)),{table:'platform_companion_name_dispatches',column:'state_ciphertext',rowId:row.id,ownerId:row.user_id,revision:row.revision});
 }
 function requireCrypto(crypto:DataCrypto|undefined):DataCrypto {if(!crypto)throw nameDispatchUnavailable();return crypto;}
-export async function readNameDispatchInTransaction(client:PoolClient,maybeCrypto:DataCrypto|undefined,value:CompanionNameNotification,signal?:AbortSignal):Promise<AuthenticatedNameDispatch> {
+export async function readNameDispatchInTransaction(client:PoolClient,maybeCrypto:DataCrypto|undefined,value:CompanionNameNotification,signal?:AbortSignal,lock=true):Promise<AuthenticatedNameDispatch> {
   const crypto=requireCrypto(maybeCrypto), notification=companionNameNotification(value);
-  const raw=await readNameRawSourceInTransaction(client,crypto,notification.submissionId,signal);
+  const raw=await readNameRawSourceInTransaction(client,crypto,notification.submissionId,signal,lock);
   const source=raw.source as CompanionNameSubmissionRow&{first_name_dispatch_id:string|null};
-  const row=(await client.query<DispatchRow>('SELECT * FROM platform_companion_name_dispatches WHERE id=$1 AND user_id=$2 AND task_id=$3 AND submission_id=$4 FOR UPDATE',
+  const row=(await client.query<DispatchRow>('SELECT * FROM platform_companion_name_dispatches WHERE id=$1 AND user_id=$2 AND task_id=$3 AND submission_id=$4'+(lock?' FOR UPDATE':''),
     [notification.dispatchId,source.user_id,notification.taskId,source.id])).rows[0];
   if(!row || source.first_name_dispatch_id!==row.id || JSON.stringify(coordinates(source))!==JSON.stringify([row.submission_id,row.user_id,row.operation_id,row.entry_id,row.task_id,row.companion_id,row.preview_revision,row.submitted_revision,row.expected_identity_revision,String(row.submitted_auth_version),row.application_operation_id]))throw nameDispatchUnavailable();
   let capture:Readonly<DispatchSnapshot>;
@@ -71,7 +71,13 @@ export async function readNameDispatchInTransaction(client:PoolClient,maybeCrypt
     if(text!==JSON.stringify(expected)||sha(text)!==row.payload_digest || data.originalSessionHash!==raw.sourceCapture.submittedSessionHash)throw nameDispatchUnavailable();
     capture=Object.freeze(expected);
   } catch {throw nameDispatchUnavailable();}
-  const rows=(await client.query<OperationRow>('SELECT * FROM platform_companion_name_dispatch_operations WHERE dispatch_id=$1 AND user_id=$2 ORDER BY revision,id FOR SHARE',[row.id,row.user_id])).rows;
+  const rows:OperationRow[]=[];
+  if(lock) rows.push(...(await client.query<OperationRow>('SELECT * FROM platform_companion_name_dispatch_operations WHERE dispatch_id=$1 AND user_id=$2 ORDER BY revision,id FOR SHARE',[row.id,row.user_id])).rows);
+  else for(;;){
+    signal?.throwIfAborted();
+    const page=(await client.query<OperationRow>('SELECT * FROM platform_companion_name_dispatch_operations WHERE dispatch_id=$1 AND user_id=$2 AND revision>$3 ORDER BY revision,id LIMIT 100',[row.id,row.user_id,rows.at(-1)?.revision??0])).rows;
+    rows.push(...page);if(page.length<100)break;
+  }
   const ops:DispatchOperation[]=[];let digest=initialDigest(row),hold:NameDispatchHold|null=null;
   try {
     if(rows.length!==row.revision)throw nameDispatchUnavailable();
@@ -80,7 +86,7 @@ export async function readNameDispatchInTransaction(client:PoolClient,maybeCrypt
       const data=closed(JSON.parse(text),['schemaVersion','id','dispatchId','userId','submissionId','revision','kind','generation','leaseToken','executionToken','previousDigest','evidence']);
       const item:DispatchOperation={schemaVersion:1,id:op.id,dispatchId:row.id,userId:row.user_id,submissionId:row.submission_id,revision:op.revision,
         kind:op.kind,generation:op.generation,leaseToken:op.lease_token,executionToken:op.execution_token,previousDigest:digest,evidence:data.evidence as Record<string,unknown>};
-      if(op.revision!==ops.length+1||op.previous_digest!==digest||sha(text)!==op.payload_digest||text!==JSON.stringify(item))throw nameDispatchUnavailable();
+      if(op.dispatch_id!==row.id||op.user_id!==row.user_id||op.submission_id!==row.submission_id||op.revision!==ops.length+1||op.previous_digest!==digest||sha(text)!==op.payload_digest||text!==JSON.stringify(item))throw nameDispatchUnavailable();
       validateOperation(item,capture,ops);
       if(item.kind==='hold')hold=item.evidence.reason as NameDispatchHold;
       else hold=null;
@@ -88,16 +94,16 @@ export async function readNameDispatchInTransaction(client:PoolClient,maybeCrypt
     }
     if(row.last_operation_id!==(ops.at(-1)?.id??null) || crypto.openUtf8(row.state_ciphertext,{table:'platform_companion_name_dispatches',column:'state_ciphertext',rowId:row.id,ownerId:row.user_id,revision:row.revision})!==JSON.stringify(state(row,digest)))throw nameDispatchUnavailable();
   } catch {throw nameDispatchUnavailable();}
-  await verifyActualSource(client,source,ops,hold);
-  const outbox=(await client.query('SELECT dispatch_id FROM platform_companion_name_dispatch_outbox WHERE dispatch_id=$1 AND user_id=$2 AND task_id=$3 AND submission_id=$4 FOR UPDATE',[row.id,row.user_id,row.task_id,row.submission_id])).rows;
+  await verifyActualSource(client,source,ops,hold,lock);
+  const outbox=(await client.query('SELECT dispatch_id FROM platform_companion_name_dispatch_outbox WHERE dispatch_id=$1 AND user_id=$2 AND task_id=$3 AND submission_id=$4'+(lock?' FOR UPDATE':''),[row.id,row.user_id,row.task_id,row.submission_id])).rows;
   if(outbox.length!==1)throw nameDispatchUnavailable();
   signal?.throwIfAborted();return {row,snapshot:capture,source,operations:ops,journalDigest:digest,hold};
 }
-async function verifyActualSource(client:PoolClient,source:CompanionNameSubmissionRow,ops:readonly DispatchOperation[],hold:NameDispatchHold|null) {
+async function verifyActualSource(client:PoolClient,source:CompanionNameSubmissionRow,ops:readonly DispatchOperation[],hold:NameDispatchHold|null,lock=true) {
   const claimed=ops.filter(x=>x.kind==='claim'||x.kind==='recover').at(-1),started=ops.find(x=>x.kind==='start'),classified=ops.filter(x=>x.kind==='detected').at(-1);
   if(!claimed) {
     if(source.status!=='pending'||source.generation!==0||source.claim_ciphertext||source.auth_version!==null||source.detector_revision!==null||source.execution_token
-      ||(await client.query("SELECT call_id FROM platform_safety_model_usage WHERE source_kind='companion_name' AND submission_id=$1 LIMIT 1 FOR SHARE",[source.id])).rowCount)throw nameDispatchUnavailable();
+      ||(await client.query("SELECT call_id FROM platform_safety_model_usage WHERE source_kind='companion_name' AND submission_id=$1 LIMIT 1"+(lock?' FOR SHARE':''),[source.id])).rowCount)throw nameDispatchUnavailable();
     return;
   }
   const claim=parseCompanionNameSafetyClaim(claimed.evidence.claim);

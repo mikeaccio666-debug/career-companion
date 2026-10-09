@@ -48,7 +48,7 @@ test('original text, decoded answer and classified result retain their separate 
  const result=await new AccountCoreExport(db,config).capture(p.who,token),draft=result.sections.onboardingDrafts[0] as any,operations=result.sections.onboardingOperations as any[],submissions=result.sections.onboardingSafetySubmissions as any[];
  const {createdAt,...saved}=draft;assert.deepEqual(saved,current);assert.equal(typeof createdAt,'string');assert.equal(draft.answersPartial.study.value.degreeField,'ds_statistics');assert.equal(draft.answersPartial.study.textId,p.input.operationId);
  assert.equal(operations.length,2);assert.deepEqual(operations.find(x=>x.command.operationId===p.input.operationId).command,p.input);assert.equal(submissions.length,1);assert.equal(submissions[0].operationId,p.input.operationId);assert.equal(submissions[0].result.textId,p.input.operationId);assert.equal(submissions[0].result.resolution.kind,'answer');assert.equal(submissions[0].status,'detected');
- assert.equal(result.includedTables.length,134);assert(result.includedTables.includes('platform_onboarding_safety_responses'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+ assert.equal(result.includedTables.length,139);assert(result.includedTables.includes('platform_onboarding_safety_responses'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
  const text=JSON.stringify(result);for(const secret of [p.who.tokenHash,foreign.who.userId,foreign.raw,foreign.input.operationId,password,encoded,token,claim.leaseToken,'auth_version','lease_token','execution_token','request_ciphertext','result_ciphertext','payload_ciphertext'])assert(!text.includes(secret));
  assert(Object.isFrozen(draft.answersPartial.study));assert(Object.isFrozen(submissions[0].result));assert.deepEqual(await counts(p.who),before);
 });
@@ -72,8 +72,8 @@ test('replaced pending text is retained across operation and submission pages wi
  for(let n=1;n<105;n++){const input=command(draft.revision,{kind:'text',questionId:'study',text:`Synthetic replaced pending text ${n}.`});inputs.push(input);draft=(await store.save(p.who,input)).draft;}
  const before=await counts(p.who),queries:string[]=[],database=instrument(sql=>{queries.push(sql);}),result=await new AccountCoreExport(database,config).capture(p.who,await proof(p.who));
  const operations=result.sections.onboardingOperations as any[],submissions=result.sections.onboardingSafetySubmissions as any[];
- assert.equal(operations.length,106);assert.equal(submissions.length,105);assert.deepEqual(operations.filter(x=>x.command.action.kind==='text').map(x=>x.command.operationId).sort(),inputs.map(x=>x.operationId).sort());
- assert(submissions.every(x=>x.status==='pending'&&x.result===null));assert.equal((result.sections.onboardingDrafts[0] as any).pendingText.id,inputs.at(-1)!.operationId);assert.equal(queries.filter(x=>table(x,'operations')).length,2);assert.equal(queries.filter(x=>table(x,'safety_submissions')).length,2);assert.deepEqual(await counts(p.who),before);
+ assert.equal(operations.length,106);assert.equal(submissions.length,105);assert.equal(result.sections.prebirthInventory.length,106);assert.deepEqual(operations.filter(x=>x.command.action.kind==='text').map(x=>x.command.operationId).sort(),inputs.map(x=>x.operationId).sort());
+ assert(submissions.every(x=>x.status==='pending'&&x.result===null));assert.equal((result.sections.onboardingDrafts[0] as any).pendingText.id,inputs.at(-1)!.operationId);assert.equal(queries.filter(x=>table(x,'operations')&&!x.includes(' OFFSET ')).length,2);assert.equal(queries.filter(x=>table(x,'safety_submissions')&&!x.includes(' OFFSET ')).length,2);assert.deepEqual(await counts(p.who),before);
 });
 
 test('controlled pre-inbox legacy raw input remains exportable without inbox adoption or fabricated safety rows',async()=>{

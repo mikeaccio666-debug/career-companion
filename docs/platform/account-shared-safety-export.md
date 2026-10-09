@@ -30,8 +30,8 @@ reserved 表示已预留，claimed 表示已领取展示许可，declared 表示
 
 ## 覆盖范围
 
-JSON 现覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；既有豁免 7 项，总清单 171。两种模式仍 complete=false。无数据库迁移或 UI 变更；其余资料、完整自助下载、可持续归档任务及删除协调仍需完成。
+JSON 现覆盖 139 表、剩余 25；带私有文件覆盖 142、剩余 22；既有豁免 7 项，总清单 171。两种模式仍 complete=false。无数据库迁移或 UI 变更；其余资料、完整自助下载、可持续归档任务及删除协调仍需完成。
 
 专项验证包括两类来源、同一实际用户的混合 scope、真实预留/领取/展示、旧版可能展示、当前政策撤回、105 条实际事件/occurrence/operation 跨页、密文损坏或串户、缺失整段、旧 scope 回滚、操作后缀截断、来源不一致，以及取消/鉴权/容量回滚。资料全部虚构，使用隔离 PostgreSQL schema 与 loopback provider；展示声明只来自测试客户端，不声称做过浏览器视觉或真人阅读验证。最终结果见 [验证记录](verification.md)。
 
-按实际覆盖常量与 ACCOUNT_DATA_SCHEMA 核对，30 张剩余表由 5 张 owner_projection（命名 dispatch operations/outbox/dispatches，以及 prebirth heads/inventory）、22 张 organization_review 和 3 张 file_projection 组成。带私有文件模式已覆盖后者；组织数据须按学生/员工归属、授权与许可单独决定导出字段，不能直接复制整份共享知识或员工权限资料。
+按实际覆盖常量与 ACCOUNT_DATA_SCHEMA 核对，25 张剩余表由 22 张 organization_review 和 3 张 file_projection 组成。5 张命名任务与入门索引已由[原记录导出](account-prebirth-dispatch-export.md)覆盖。带私有文件模式已覆盖后者；组织数据须按学生/员工归属、授权与许可单独决定导出字段，不能直接复制整份共享知识或员工权限资料。

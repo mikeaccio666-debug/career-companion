@@ -2,7 +2,7 @@
 
 对应 09 §11 的本人数据覆盖要求，账户捕获新增六个区段：jobs、jobApprovals、jobAttempts、jobDispatches、conversationTasks、jobOutcomeReviews。它们读取底座中已经保存的用户历史，不向学生开放通用工作台，也不改变 03 §9 对产品待确认卡和内部任务审批的区分。
 
-普通 JSON 当前覆盖 134 张已投影、7 张明确排除、30 张待处理；带私有文件模式为 137 / 7 / 27。两者仍 complete=false。当前计数包含后续加入的[浏览器/工作流执行历史](account-execution-export.md)。其他个人数据表、持久化归档任务、公开下载及删除协调仍未全部交付。
+普通 JSON 当前覆盖 139 张已投影、7 张明确排除、25 张待处理；带私有文件模式为 142 / 7 / 22。两者仍 complete=false。当前计数包含后续加入的[浏览器/工作流执行历史](account-execution-export.md)。其他个人数据表、持久化归档任务、公开下载及删除协调仍未全部交付。
 
 ## 历史内容
 

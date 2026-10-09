@@ -35,7 +35,7 @@ test('actual names and explicit seal choices retain their independent revisions,
   const draft=data.sections.companionIdentityDrafts[0] as any,selection=data.sections.companionIdentitySelections[0] as any,history=data.sections.companionIdentitySelectionOperations as any[];
   assert.equal(draft.name,'Juno');assert.equal(draft.revision,3);assert.equal(selection.revision,2);assert.equal(selection.identityRevision,2);assert.equal(selection.currentForIdentity,false);assert.equal(selection.identitySnapshot.name,'舟');
   assert.equal(data.sections.companionIdentityOperations.length,3);assert.equal(history.length,2);assert.equal(history.find(x=>x.appliedRevision===1).identitySnapshot.name,'Juno');assert(Object.isFrozen(selection.identitySnapshot.sealCandidates));
-  assert.equal(data.includedTables.length,134);assert.equal(data.remainingTables.length,30);assert(data.remainingTables.includes('platform_companion_identity_assets'));assert.equal(data.complete,false);
+  assert.equal(data.includedTables.length,139);assert.equal(data.remainingTables.length,25);assert(data.remainingTables.includes('platform_companion_identity_assets'));assert.equal(data.complete,false);
   const text=JSON.stringify(data);for(const secret of [foreign.who.userId,p.who.tokenHash,password,encoded,p.authority.reviewer.userId,p.authority.operator.userId,'bundle_json','review_json','request_ciphertext','payload_ciphertext','坏词甲'])assert(!text.includes(secret));
   assert(!sqls.filter(sql=>/FROM platform_companion_identity_/.test(sql)).some(sql=>/FOR (SHARE|UPDATE)/.test(sql)));
   assert.deepEqual(await snapshot(p.who),before);assert.equal(calls.length,requests);

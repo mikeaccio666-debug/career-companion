@@ -48,7 +48,7 @@ test('real uncertain execution, human observations and retries preserve old gene
  const count=executions,before=await snapshot(who);context.mock.method(globalThis,'fetch',forbidden);context.mock.method(jobs,'get',forbidden);context.mock.method(runtime,'capabilities',()=>{throw Error('No live capability lookup');});
  const data=await capture(who),job=data.sections.jobs[0] as any;assert.equal(job.storedStatus,'uncertain');assert.equal(job.generation,2);assert.equal(job.definition.prompt,'Fictional original task 原文');assert.equal(data.sections.jobAttempts.length,2);assert.equal(data.sections.jobDispatches.length,2);
  const history=data.sections.jobOutcomeReviews as any[];assert.equal(history.length,2);assert.equal(history[0].id,saved.record.id);assert(history.every(r=>r.outcome==='observed_effect'&&r.verified===false&&r.provenance==='user_reported'));assert.equal(executions,count);assert.deepEqual(await snapshot(who),before);
- assert.equal(data.includedTables.length,134);assert.equal(data.remainingTables.length,30);assert.equal(data.complete,false);
+ assert.equal(data.includedTables.length,139);assert.equal(data.remainingTables.length,25);assert.equal(data.complete,false);
  for(const secret of [foreign,other.userId,who.tokenHash,encoded,password,'execution_policy','lease_token','provider_task_id','request_hash'])assert(!JSON.stringify(data).includes(secret));assert(Object.isFrozen(job.definition));
 });
 
