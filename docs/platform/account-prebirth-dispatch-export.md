@@ -28,6 +28,6 @@
 
 ## 当前交付边界
 
-JSON 当前覆盖 139 表、剩余 25；带私有文件覆盖 142、剩余 22；既有豁免 7，总清单 171。owner_projection 项已全部有捕获路径。剩余为 22 张 organization_review 与 JSON 模式下 3 张 file_projection；组织内容涉及本人资料、他人资料、员工身份及许可，仍要逐项实现或按产品规则给出明确豁免。两种模式维持 complete=false。
+JSON 当前覆盖 141 表、剩余 23；带私有文件覆盖 144、剩余 20；既有豁免 7，总清单 171。owner_projection 项已全部有捕获路径。剩余为 20 张 organization_review 与 JSON 模式下 3 张 file_projection；组织内容涉及本人资料、他人资料、员工身份及许可，仍要逐项实现或按产品规则给出明确豁免。两种模式维持 complete=false。
 
 无数据库迁移、网页变更、付费模型调用或部署。完整自助导出/下载、持久化归档任务、删除协调以及整个 P0 仍未完成。专项和原流程回归结果见 [验证记录](verification.md)。

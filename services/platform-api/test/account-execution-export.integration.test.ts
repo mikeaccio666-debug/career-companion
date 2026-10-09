@@ -52,7 +52,7 @@ async function snapshot(who:FixedSessionContext){const result:Record<string,unkn
 
 test('actual template create, update and soft deletion export the last saved snapshot including deleted templates',async()=>{
  const who=await actor(),other=await actor(),foreign=await createWorkflowTemplate(f.db,other.userId,{name:'Fictional foreign',steps:[step]});const t=await createWorkflowTemplate(f.db,who.userId,{name:'Fictional original',description:'Fictional description',steps:[step]});await updateWorkflowTemplate(f.db,who.userId,t.id,{revision:1,name:'Fictional revised',description:'Fictional revised description',steps:[step]});await deleteWorkflowTemplate(f.db,who.userId,t.id);
- const data=await capture(who),saved=data.sections.workflowTemplates[0] as any;assert.equal(saved.name,'Fictional revised');assert.equal(saved.revision,2);assert(saved.deletedAt);assert.equal(data.sections.workflowTemplates.length,1);assert(!JSON.stringify(data).includes(foreign.id));assert.equal(data.includedTables.length,139);assert.equal(data.remainingTables.length,25);assert.equal(data.complete,false);
+ const data=await capture(who),saved=data.sections.workflowTemplates[0] as any;assert.equal(saved.name,'Fictional revised');assert.equal(saved.revision,2);assert(saved.deletedAt);assert.equal(data.sections.workflowTemplates.length,1);assert(!JSON.stringify(data).includes(foreign.id));assert.equal(data.includedTables.length,141);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);
 });
 
 test('real workflow completion and interruption preserve full saved text and private file references without resume or file reads',async context=>{

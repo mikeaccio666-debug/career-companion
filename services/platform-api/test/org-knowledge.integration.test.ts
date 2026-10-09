@@ -485,11 +485,13 @@ test('account archive applies 04 exclusions to real entitlements and access logs
     assert.deepEqual(archive.exclusions.filter(row=>row.status==='excluded_product_policy').map(row=>row.table),['platform_knowledge_access_log','platform_user_entitlements']);
     assert(archive.exclusions.filter(row=>row.status==='excluded_product_policy').every(row=>row.policyReference&&row.reason.includes('4.11')));
     const partition=[...archive.includedTables,...archive.remainingTables,...archive.exclusions.map(row=>row.table)];
-    assert.equal(partition.length,171);assert.equal(new Set(partition).size,171);assert.equal(archive.includedTables.length,117);
-    assert.equal(archive.remainingTables.length,47);assert.equal(archive.complete,false);assert.equal(archive.filesIncluded,false);
+    assert.equal(partition.length,171);assert.equal(new Set(partition).size,171);assert.equal(archive.includedTables.length,141);
+    assert.equal(archive.remainingTables.length,23);assert.equal(archive.complete,false);assert.equal(archive.filesIncluded,false);
     assert(archive.remainingTables.includes('platform_org_content_state_proofs'));assert(Object.isFrozen(archive.exclusions[0]));
+    assert.equal(archive.sections.organizationAccessEvents.length,revoked?2:1);
+    assert(archive.sections.organizationAccessEvents.every((row:any)=>row.organizationId===s.org&&row.targetId===s.owner.userId&&row.action==='org_entitlement_changed'));
     const serialized=JSON.stringify(archive);
-    for(const secret of [s.entitlement.entitlementId,s.org,p.source,s.operator.userId,s.editor.userId,s.reviewer.userId,s.agreementRef,q().prompt_en])assert(!serialized.includes(secret));
+    for(const secret of [s.entitlement.entitlementId,p.source,s.operator.userId,s.editor.userId,s.reviewer.userId,s.agreementRef,q().prompt_en])assert(!serialized.includes(secret));
   }
   // The catalog inspection uses names, not row contents. There must be no
   // domain reads, decryption, retrieval or quota/access-log side effects here.

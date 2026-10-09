@@ -218,11 +218,14 @@ test('account archive preserves actual completed service, original offer and pri
  assert.equal(result.sections.mentorSessions.length,1);assert.equal(session.intentNote,s.command.intentNote);assert.equal(session.contactName,s.command.contactName);assert.equal(session.contactEmail,s.owner.userId+'@example.invalid');
  assert.equal(session.status,'completed');assert.equal(session.completedAt,s.slot.endsAt);assert.equal(session.assignment.mentorDisplayName,'Fictional mentor');assert.equal(session.scheduled.meetingUrl,'https://meet.google.com/fictional-completed');
  assert.deepEqual(ops.map(x=>x.action).sort(),['complete','create','match','schedule']);assert.equal(ops.find(x=>x.action==='create').acceptedOffer.refundRules,s.source.terms.refundRules);assert.equal(ops.find(x=>x.action==='match').command.priceCents,9500);
+ const access=result.sections.organizationAccessEvents as any[];
+ assert(access.some(r=>r.action==='mentor_intent_matched'));assert(access.some(r=>r.action==='mentor_schedule_recorded'));
+ assert(access.every(r=>r.relation==='mentor_session'&&r.targetId===s.intent.session.id&&r.actor==='other_account'));
  assert.deepEqual(result.sections.mentorRatings,[rated.rating]);assert.deepEqual(await mentorSnapshot(s.owner),before);
  for(const secret of [s.operator.userId,s.mentor.userId,s.ref,s.profile.recordId,s.slot.recordId,other.owner.userId,other.intent.session.id,pair.order.handoffCode!,s.owner.tokenHash,exportPassword])assert(!JSON.stringify(result).includes(secret));
  assert(!queries.some(sql=>/\b(?:FROM|JOIN)\s+platform_mentor_capacity_(?:records|proofs)\b/i.test(sql)));
  assert(!queries.some(sql=>/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+platform_mentor_/i.test(sql)));
- assert(Object.isFrozen(session.assignment));assert.equal(result.includedTables.length,117);assert.equal(result.remainingTables.length,47);assert(result.includedTables.includes('platform_mentor_orders'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+ assert(Object.isFrozen(session.assignment));assert.equal(result.includedTables.length,141);assert.equal(result.remainingTables.length,23);assert(result.includedTables.includes('platform_mentor_orders'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
 });
 
 test('all saved intent phases and both cancellation routes retain their own original operation histories',async()=>{
@@ -354,6 +357,8 @@ test('paid, partial and full refunds retain original transaction references and 
  const full=await refundHistory(s,3,7000),pair=await s.service.getOrder(s.owner,s.intent.session.id),before=await mentorSnapshot(s.owner),financeBefore=await financialSnapshot();
  const queries:string[]=[];data=await new AccountCoreExport(exportDb(sql=>{queries.push(sql);}),f.config).capture(s.owner,await exportProof(s.owner));
  const order=data.sections.mentorOrders[0] as any,finance=data.sections.mentorFinancialRecords[0] as any;
+ const paymentEvents=(data.sections.organizationAccessEvents as any[]).filter(r=>r.action==='mentor_payment_recorded');
+ assert.equal(paymentEvents.length,3);assert(paymentEvents.every(r=>r.targetId===s.intent.session.id&&r.relation==='mentor_session'));
  assert.equal(order.status,'refunded_full');assert.equal(order.paymentRef,s.payment.externalRef);assert.equal(order.payment.refundedCents,9500);
  assert.equal(finance.status,'refunded_full');assert.equal(finance.revision,3);assert.equal(finance.updatedAt,order.updatedAt);
  assert.equal(finance.retentionUntil,(await f.db.query('SELECT retention_until FROM platform_mentor_financial_records WHERE id=$1',[order.id])).rows[0].retention_until.toISOString());

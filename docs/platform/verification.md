@@ -1175,3 +1175,18 @@ JSON 覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；既有
 - 所有资料虚构，provider 为拥有的 loopback endpoint；隔离 schema 清理确认。没有付费模型、主库迁移、主预览重启、真实申请、部署或合并。未重复耗时的旧 .stress.ts。无网页/视觉验证主张，也不把协议用例当作真实模型质量结果。
 
 原始日志保存在远端忽略目录 .local/verification/ci-regression-20261008/：prebirth-dispatch-targeted.log、prebirth-dispatch-regression.log、prebirth-dispatch-intake-pages-fixed.log、prebirth-dispatch-recovery.log、prebirth-dispatch-final-types.log（中间类型失败）、prebirth-dispatch-types-fixed.log、prebirth-dispatch-inventory.log。
+
+
+## 2026-10-09：学生组织关联与入口审计导出
+
+本批接入 platform_org_roles 和 platform_staff_audit；具体归属与范围见 [组织历史导出](account-organization-history-export.md)。当前 JSON 覆盖 141 表、剩余 23；带文件覆盖 144、剩余 20；既有豁免 7，共 171。完整捕获仍 complete=false。
+
+- 最终组合回归 **398/398 通过**，零失败、零取消、零跳过：账户导出及覆盖清单、OrgKnowledge、StaffAccess 与其 HTTP 路由、真人服务完成/退款。命令为 @companion/platform-api exec tsx --test --test-concurrency=1 test/account-*export*.test.ts test/account-data-coverage.integration.test.ts test/org-knowledge.integration.test.ts test/staff-access.integration.test.ts test/staff-access-routes.integration.test.ts test/mentor-completion.integration.test.ts。
+- 新专项 9 个均包含在 398 项中，不重复计数。早期 8/8 专项用于基础验证；随后自审发现 target_id 是多种对象共用的 UUID，新增动作类型限定与组织 ID 恰等于学生 ID 的回归。付款审计实际指向 sessionId，最终测试核对真实匹配、排期和退款动作，不猜测 orderId。
+- 105 条真实拒绝访问及 105 条存储角色分别验证 ID / 复合键分页；学生即使残留 active role 也仍被真实 StaffAccess 拒绝。撤销角色、停用组织、撤回同意与邮箱状态变化不改写历史。缺页、串户、损坏元数据、取消、晚到认证失效和大小限制均拒绝整份捕获并回滚再验证凭据消费。
+- 知识库原用例继续断言不查询、解密或写入被排除的权益与知识访问日志；审计只输出明确关联本人的元数据，不含权益对象 ID、授权内容、员工身份或共享正文。旧知识库与真人服务覆盖计数从过期的 117/47 更新到当前 141/23，并增加实际审计内容断言。
+- API TypeScript 检查通过。前两次类型检查暴露分页变量推断与 at(-1) 空值问题，修正后通过。git diff --check 通过；覆盖常量与实际 schema 清单独立重算，剩余为 20 张 organization_review 和 JSON 模式下 3 张文件表。
+- 混合权益历史凭据是否继承 04 §4.11 的排除规则仍待产品决定，具体提案见 [组织记录审阅](organization-export-review.md)。本批不读取或导出这两张表，不更改产品规格或整体豁免；18 张其他共享/员工表继续审阅。实验草稿只在忽略目录。
+- 测试使用虚构资料和隔离 PostgreSQL schema，fixture 清理确认；不含任意规模 worker 或线上 SLA 保证。没有付费模型、真实申请、schema 变更、主库迁移、主预览重启、UI 变更、合并或部署。
+
+私有日志位于 ci-regression-20261008：organization-history-targeted.log、organization-history-regression.log、organization-history-types.log、organization-history-types-fixed.log、organization-history-final-types.log、organization-history-inventory.log。旧 .stress.ts 本轮未修改或重跑。模型评测入口的协议验证与本批数据库回归均不代替真实模型质量评测。
