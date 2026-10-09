@@ -737,3 +737,16 @@ Publishing limitation: GitHub rejected the combined branch because the current O
 导出沿用捕获事务的同一 PostgreSQL 快照，解码不加生产写流程的行锁，不触发 current companion 查询、模型、外部工具或任何旅程推进。消息段仍忠实保留原表的空正文及 welcomeId，新增欢迎段按该引用提供原始正文。尚未接入的诞生快照、其他领域与私有文件仍列在 remainingTables；complete=false、filesIncluded=false 保留，没有新增下载 HTTP/UI 或修改主预览。
 
 验证结果：欢迎服务与账户导出／覆盖检查共七份文件合计 57/57 项通过、无跳过，API 类型检查通过。新增 6 项真实 PostgreSQL 测试，包含从真实虚构诞生到欢迎和选择的完整服务路径。首轮 fixture 将名字设得超过现有 16 字符约束，并误用了复核表的 created_at 字段；按真实约束和 verified_at 修正后复验。未放宽产品限制，所有临时 schema 已确认清理。
+
+
+## 主理人诞生来源导出读取（2026-10-09 UTC）
+
+`CompanionBirthOriginStore.exportInTransaction` 在既有身份复核捕获事务内分页读取本人的诞生回执，复用原有完整密文、主理人／房间／系统事件与 SVG/PNG 印章校验。新增 `companionBirthReceipts` 段，包含诞生时确认的身份、名字、印章、事件与房间，以及人格生成任务、问卷／命名／选印来源的 id 和版本；这些是来源坐标，不冒充完整问卷或人格版本正文。历史回执不从当前姓名或关系状态重建，退休及撤回模型同意后仍可由本人读取。
+
+来源字段逐项投影，认证版本、原始请求与快照密文、内部请求摘要、加密包摘要不进入输出。原有普通读取仍保留行锁；导出使用外层同一 REPEATABLE READ 快照，不添加交互读取的 FOR SHARE 锁，也不调用当前模型／字形配置或重新渲染。读后复核会话，取消、缺失或校验失败不返回部分结果，身份复核凭证由外层事务回滚。
+
+附加 `companionBirthAssetMetadata` 提供经过实际字节校验的尺寸、内容摘要、渲染版本和原始印章身份，明确 `bytesVerified=true`、`bytesIncluded=false`。本次未打包 SVG/PNG 文件，`platform_companion_birth_assets` 继续留在 remainingTables；累计仅 34 张表计入已接字段投影。filesIncluded=false、complete=false，完整 HTTP/UI 下载、文件包、其他人格与来源正文仍待实现。
+
+新增测试通过实际虚构诞生路径保存数据后捕获，验证另一账户隔离、未诞生空结果、退休／改名后原始身份、源记录坐标、PNG/SVG 摘要，以及图像字节和凭据不会混入 JSON。故障注入仅修改实际 SQL 读取后的内存行，分别破坏请求／快照密文、跨账号移植密文、印章密文／摘要／大小、明文来源字段，验证整体失败及复核凭证回滚；没有禁用数据库的不可变记录触发器或改写真实保存的诞生内容。取消后重试沿用未消耗凭证。模型请求均限制为 loopback fixture。
+
+验证：新增诞生导出 7 项和既有来源读取 15 项先行通过；扩大到 10 份相关文件共 84 项时，83 通过、1 项发现基础段已超过小容量测试上限时错误代码过于笼统。修复为同一 ACCOUNT_EXPORT_TOO_LARGE 提示后，受影响的基础／聊天／诞生导出 25/25 项复验通过，API 类型检查通过，均无跳过。没有调大容量上限或绕过失败；其余 59 项的已通过结果不重复相加。临时数据库 schema 已清理，无主库迁移、部署或付费模型调用。

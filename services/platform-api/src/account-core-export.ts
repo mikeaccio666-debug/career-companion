@@ -1,3 +1,4 @@
+import {CompanionBirthOriginStore,BIRTH_EXPORT_TABLES,type BirthExportSection} from './companion-birth-origin-store.ts';
 import {AccountWelcomeExport,WELCOME_EXPORT_TABLES,type WelcomeExportSection} from './account-welcome-export.ts';
 import {exportConversationsInTransaction,CONVERSATION_EXPORT_TABLES,type ConversationExportSection} from './account-conversation-export.ts';
 import { ResumeOriginalReview,RESUME_EXPORT_TABLES,type ResumeExportSection } from './resume-original-review.ts';
@@ -17,9 +18,10 @@ import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
-const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES]);
-type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection;
+const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES]);
+type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
+const tooLarge=()=>new ApiError(503,'ACCOUNT_EXPORT_TOO_LARGE','This export requires the archive worker. No partial export was returned.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
   try{const row=careerRecordObject(value,['userId','tokenHash']);
     if(typeof row.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(row.tokenHash))throw unavailable();
@@ -34,11 +36,13 @@ function freeze<T>(value:T):T{
 export class AccountCoreExport {
   private readonly memories:SharedMemories;
   private readonly welcomes:AccountWelcomeExport;
+  private readonly births:CompanionBirthOriginStore;
   private readonly maxBytes:number;
   private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords|ResumeOriginalReview)[];
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number}={}){
     this.memories=new SharedMemories(db,config,null);
     this.welcomes=new AccountWelcomeExport(config);
+    this.births=new CompanionBirthOriginStore(config.dataCrypto);
     const jobs=new ManualJobs(db,config,null),applications=new CareerApplications(db,config,null,jobs);
     this.careerReaders=Object.freeze([new CareerTargets(db,config,null),new CareerStories(db,config,null),jobs,applications,
       new CareerInterviews(db,config,null,applications),new CareerIdentityRecords(db,config,null),new ResumeOriginalReview(db,config,null)]);
@@ -58,6 +62,7 @@ export class AccountCoreExport {
       const capturedAt=(await client.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
       const sections:{account:Record<string,unknown>}&Record<ArraySection,unknown[]>={
         account:{...account,createdAt:account.createdAt.toISOString(),emailVerifiedAt:account.emailVerifiedAt?.toISOString()??null},
+        companionBirthReceipts:[],companionBirthAssetMetadata:[],
         conversations:[],messages:[],chatCalls:[],audioTranscriptions:[],companionWelcomes:[],companionWelcomeOperations:[],
         termsConsents:[],sessions:[],memories:[],memoryOperations:[],memoryEvents:[],memoryUses:[],
         careerTargets:[],careerTargetOperations:[],careerProjects:[],careerStories:[],careerLibraryOperations:[],
@@ -68,10 +73,10 @@ export class AccountCoreExport {
       let bytes=Buffer.byteLength(JSON.stringify(sections));
       const append=(section:Exclude<keyof typeof sections,'account'>,record:unknown)=>{
         signal?.throwIfAborted();bytes+=Buffer.byteLength(JSON.stringify(record))+1;
-        if(bytes>this.maxBytes)throw new ApiError(503,'ACCOUNT_EXPORT_TOO_LARGE','This export requires the archive worker. No partial export was returned.');
+        if(bytes>this.maxBytes)throw tooLarge();
         sections[section].push(record);
       };
-      if(bytes>this.maxBytes)throw unavailable();
+      if(bytes>this.maxBytes)throw tooLarge();
       let consentAfter:readonly[string,string]|null=null;
       for(;;){
         const rows:{version:string;contentDigest:string;consentedAt:Date}[]=(await client.query(`SELECT terms_version AS version,content_digest AS "contentDigest",consented_at AS "consentedAt"
@@ -91,6 +96,7 @@ export class AccountCoreExport {
       for(const reader of this.careerReaders)for await(const item of reader.exportInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of exportConversationsInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.welcomes.exportInTransaction(client,who,signal))append(item.section,item.record);
+      for await(const item of this.births.exportInTransaction(client,who,signal))append(item.section,item.record);
       await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
       return freeze({schemaVersion:1 as const,scope:'account_core_export_sections' as const,complete:false as const,
         ownerId:who.userId,capturedAt,sections,
