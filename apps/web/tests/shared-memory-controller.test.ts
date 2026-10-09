@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {SharedMemoryController} from '../src/shared-memory-controller.ts';
-import {readSharedMemoryPage,readSharedMemoryUses,changeSharedMemory,type SharedMemoryClient} from '../src/shared-memory-api.ts';
+import {readSharedMemoryPage,readSharedMemoryUses,readSharedMemoryOperation,changeSharedMemory,type SharedMemoryClient} from '../src/shared-memory-api.ts';
 import {ApiError} from '../src/api-error.ts';
 const owner=randomUUID(),id=randomUUID(),at='2026-10-09T00:00:00.000Z';
 const command=()=>({operationId:randomUUID(),content:'Fictional preference',category:'communication',sensitivity:'normal',usePolicy:'normal',speakerScope:null,validUntil:null});
@@ -75,11 +75,63 @@ test('use observations cannot reappear after lifecycle suspension',async()=>{
 });
 test('all memory transports reject invalid accounts before sending and after empty or valid responses',async()=>{
  let calls=0;const h=harness(()=>{calls++;return page();});h.invalidate();
- await assert.rejects(readSharedMemoryPage(h.client));await assert.rejects(readSharedMemoryUses(h.client,id));await assert.rejects(changeSharedMemory(h.client,'create',null,command()));assert.equal(calls,0);
- for(const action of ['list','uses','change']){
-  const body=command(),late=harness(()=>{late.invalidate();return action==='list'?page():action==='uses'?{memoryId:id,uses:[]}:receipt(body);});
+ await assert.rejects(readSharedMemoryPage(h.client));await assert.rejects(readSharedMemoryUses(h.client,id));await assert.rejects(changeSharedMemory(h.client,'create',null,command()));await assert.rejects(readSharedMemoryOperation(h.client,'create',null,command()));assert.equal(calls,0);
+ for(const action of ['list','uses','change','observe']){
+  const body=command(),late=harness(()=>{late.invalidate();return action==='list'?page():action==='uses'?{memoryId:id,uses:[]}:action==='observe'?observed(body):receipt(body);});
   if(action==='list')await assert.rejects(readSharedMemoryPage(late.client));
   else if(action==='uses')await assert.rejects(readSharedMemoryUses(late.client,id));
+  else if(action==='observe')await assert.rejects(readSharedMemoryOperation(late.client,'create',null,body));
   else await assert.rejects(changeSharedMemory(late.client,'create',null,body));
  }
+});
+
+function observed(body:any,kind='create',patch:Record<string,unknown>={}){
+ const saved=receipt(body);return {ownerId:owner,memory:saved.memory,removal:null,operation:{...saved.operation,replayed:true,memoryId:id,action:kind},...patch};
+}
+test('explicit observation settles a lost acknowledgement with a GET and no second mutation',async()=>{
+ let body:any,writes=0;const paths:string[]=[];
+ const h=harness((path,init)=>{paths.push(path);if(path.startsWith('/memories/operations/'))return observed(body);if(!init.method)return page();body=JSON.parse(String(init.body));writes++;throw Error('Lost acknowledgement');});
+ await ready(h);h.controller.begin('create',null,command());await until(()=>!h.controller.snapshot().busy);
+ await h.controller.observe();assert.equal(writes,1);assert(paths.includes('/memories/operations/'+body.operationId));
+ assert.equal(h.controller.snapshot().pending,null);assert.equal(h.controller.snapshot().settledOperationId,body.operationId);
+ assert.equal(h.controller.snapshot().memories[0].id,id);h.controller.stop();
+});
+test('missing, mismatched or failed observations preserve the exact pending command until proven',async()=>{
+ let body:any,response:any;
+ const h=harness((path,init)=>{if(path.startsWith('/memories/operations/')){if(response instanceof Error)throw response;return response;}if(!init.method)return page();body=JSON.parse(String(init.body));throw Error('Lost');});
+ await ready(h);h.controller.begin('create',null,command());await until(()=>!h.controller.snapshot().busy);const pending=h.controller.snapshot().pending;
+ for(const bad of [new ApiError('Not found',404,'MEMORY_NOT_FOUND'),observed(body,'edit'),observed(body,'create',{ownerId:randomUUID()}),observed({...body,operationId:randomUUID()}),observed(body,'create',{memory:memory({revision:0})})]){
+  response=bad;await h.controller.observe();assert.equal(h.controller.snapshot().pending,pending);assert.equal(h.controller.snapshot().settledOperationId,null);
+ }
+ response=observed(body);await h.controller.observe();assert.equal(h.controller.snapshot().pending,null);h.controller.stop();
+});
+test('observing a later deletion removes the old row without exposing content or recreating it',async()=>{
+ let body:any,writes=0;const deletion=randomUUID();
+ const h=harness((path,init)=>{
+  if(path.startsWith('/memories/operations/'))return observed(body,'edit',{memory:null,removal:{id,revision:3,deletedAt:at,undoUntil:'2026-10-09T00:00:10.000Z',deletionOperationId:deletion,purged:true}});
+  if(!init.method)return page([memory()]);writes++;body=JSON.parse(String(init.body));throw Error('Lost');
+ });
+ await ready(h);h.controller.begin('edit',id,{operationId:randomUUID(),expectedRevision:1,content:'Fictional edit'});await until(()=>!h.controller.snapshot().busy);
+ await h.controller.observe();assert.equal(writes,1);assert.equal(h.controller.snapshot().pending,null);assert.deepEqual(h.controller.snapshot().memories,[]);assert.equal(h.controller.snapshot().undo,null);assert.match(h.controller.snapshot().notice,/已删除/);h.controller.stop();
+});
+test('observed current deletion retains only live undo coordinates, and stale observation after suspension is ignored',async()=>{
+ let body:any,resolve!:(v:any)=>void,delayed=false;const now=new Date().toISOString();
+ const h=harness((path,init)=>{
+  if(path.startsWith('/memories/operations/')){
+   const value=observed(body,'delete',{memory:null,removal:{id,revision:2,deletedAt:now,undoUntil:new Date(Date.parse(now)+10000).toISOString(),deletionOperationId:body.operationId,purged:false}});
+   return delayed?new Promise(r=>resolve=()=>r(value)):value;
+  }
+  if(!init.method)return page([memory()]);body=JSON.parse(String(init.body));throw Error('Lost');
+ });
+ await ready(h);h.controller.begin('delete',id,{operationId:randomUUID(),expectedRevision:1});await until(()=>!h.controller.snapshot().busy);
+ delayed=true;const reading=h.controller.observe();h.controller.suspend();resolve(null);await reading;assert(h.controller.snapshot().pending);assert.equal(h.controller.snapshot().undo,null);
+ delayed=false;h.controller.resume();await until(()=>h.controller.snapshot().loaded);await h.controller.observe();
+ assert.deepEqual(Object.keys(h.controller.snapshot().undo!).sort(),['deletionOperationId','id','revision','undoUntil']);assert.equal(h.controller.snapshot().pending,null);h.controller.stop();
+});
+test('a newer observed version is adopted, while an unloaded list still requires a full reread',async()=>{
+ let body:any,fail=false,reads=0;
+ const h=harness((path,init)=>{if(path.startsWith('/memories/operations/'))return observed(body,'create',{memory:memory({revision:3})});if(!init.method){reads++;if(fail)throw Error('Offline');return page([memory({revision:3})]);}body=JSON.parse(String(init.body));throw Error('Lost');});
+ await ready(h);h.controller.begin('create',null,command());await until(()=>!h.controller.snapshot().busy);
+ fail=true;await h.controller.refresh();assert.equal(h.controller.snapshot().loaded,false);fail=false;const before=reads;await h.controller.observe();
+ assert.equal(reads,before+1);assert.equal(h.controller.snapshot().loaded,true);assert.equal(h.controller.snapshot().memories[0].revision,3);assert.match(h.controller.snapshot().notice,/新版本/);h.controller.stop();
 });

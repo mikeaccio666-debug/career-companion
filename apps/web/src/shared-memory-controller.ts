@@ -1,5 +1,5 @@
 import {parseSharedMemoryCommand,type SharedMemoryRecord,type SharedMemoryCommandKind} from '@companion/platform-contracts';
-import {readSharedMemoryPage,changeSharedMemory,readSharedMemoryUses,type SharedMemoryClient} from './shared-memory-api.ts';
+import {readSharedMemoryPage,readSharedMemoryOperation,changeSharedMemory,readSharedMemoryUses,type SharedMemoryClient} from './shared-memory-api.ts';
 import {ApiError} from './api-error.ts';
 type Pending=Readonly<{kind:SharedMemoryCommandKind;id:string|null;body:ReturnType<typeof parseSharedMemoryCommand>}>;
 type Undo=Pick<SharedMemoryRecord,'id'|'revision'|'deletionOperationId'|'undoUntil'>;
@@ -57,25 +57,30 @@ export class SharedMemoryController {
   this.publish({pending:Object.freeze({kind,id,body}),error:'',notice:''});void this.execute();return true;
  }
  retry(){return this.execute();}
- private async execute(){
+ observe(){return this.execute(true);}
+ private async execute(observe=false){
   const operation=this.state.pending;if(!this.current()||this.request||this.state.suspended||!operation)return;
   const g=this.generation;this.publish({busy:true,error:'',notice:''});
   try{
-   const result=await this.timed(s=>changeSharedMemory(this.client,operation.kind,operation.id,operation.body,s));if(!this.current(g))return;
-   const loaded=this.state.loaded,m=result.memory;
-   const undo=operation.kind==='delete'&&m.deletedAt!==null&&m.deletionOperationId===operation.body.operationId?
-    Object.freeze({id:m.id,revision:m.revision,deletionOperationId:m.deletionOperationId,undoUntil:m.undoUntil}):operation.kind==='undo'?null:this.state.undo;
+   const result=await this.timed(async s=>observe?readSharedMemoryOperation(this.client,operation.kind,operation.id,operation.body,s):changeSharedMemory(this.client,operation.kind,operation.id,operation.body,s));if(!this.current(g))return;
+   const loaded=this.state.loaded,m=result.memory,removal='removal' in result?result.removal:null;
+   const target=m?.id??removal!.id,revision=m?.revision??removal!.revision;
+   const deleted=removal??(m?.deletedAt?{...m,purged:false}:null);
+   let undo=this.state.undo;
+   if(undo?.id===target)undo=null;
+   if(operation.kind==='delete'&&deleted&&!deleted.purged&&deleted.deletionOperationId===operation.body.operationId&&Date.parse(deleted.undoUntil!)>Date.now())
+    undo=Object.freeze({id:deleted.id,revision:deleted.revision,deletionOperationId:deleted.deletionOperationId,undoUntil:deleted.undoUntil});
    this.publish({busy:false,pending:null,settledOperationId:operation.body.operationId,undo,uses:Object.freeze({}),
-    memories:loaded?Object.freeze([...(!m.deletedAt?[m]:[]),...this.state.memories.filter(x=>x.id!==m.id)]):Object.freeze([]),
-    notice:m.revision>result.operation.appliedRevision?'已核对原操作；现在显示之后保存的新版本。':m.deletedAt?'已删除这条记忆。':'记忆已保存。'});
+    memories:loaded?Object.freeze([...(m&&!m.deletedAt?[m]:[]),...this.state.memories.filter(x=>x.id!==target)]):Object.freeze([]),
+    notice:deleted?'已核对原操作；这条记忆目前已删除。':revision>result.operation.appliedRevision?'已核对原操作；现在显示之后保存的新版本。':'记忆已保存。'});
    if(!loaded)await this.refresh();
   }catch(error){
    if(!this.current(g))return;
-   if(error instanceof ApiError&&[400,401,403,404,409,413,422,429].includes(error.status)&&typeof error.code==='string'){
+   if(!observe&&error instanceof ApiError&&[400,401,403,404,409,413,422,429].includes(error.status)&&typeof error.code==='string'){
     this.publish({busy:false,pending:null,loaded:false,memories:Object.freeze([]),uses:Object.freeze({}),nextCursor:null,
      ...(error.code==='MEMORY_UNDO_EXPIRED'||error.code==='MEMORY_REMOVED'?{undo:null}:{}),
      error:'这次操作未确认。请重新读取最新记忆，再核对你的修改。'});
-   }else this.publish({busy:false,error:'还不能确认这次操作是否完成。可以重新读取列表，或由你选择用原操作重试。'});
+   }else this.publish({busy:false,error:'还不能确认这次操作是否完成。可以核对这次操作，或由你选择用原操作重试。'});
   }
  }
 }

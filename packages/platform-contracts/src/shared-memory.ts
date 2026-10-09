@@ -80,3 +80,32 @@ export function parseSharedMemoryCommand(kind: SharedMemoryCommandKind,value: un
   if(kind==='edit'&&Object.keys(v).length===2 || out.speakerScope!==undefined&&out.speakerScope!==null&&out.category!==undefined&&out.category!=='communication') fail();
   return Object.freeze(out);
 }
+
+/** Current removal coordinates only; never includes the deleted memory text. */
+export interface SharedMemoryRemoval {
+ readonly id:string;readonly revision:number;readonly deletedAt:string;readonly undoUntil:string;
+ readonly deletionOperationId:string;readonly purged:boolean;
+}
+export interface SharedMemoryObservation {
+ readonly ownerId:string;readonly memory:Readonly<SharedMemoryRecord>|null;readonly removal:Readonly<SharedMemoryRemoval>|null;
+ readonly operation:Readonly<{id:string;memoryId:string;action:SharedMemoryCommandKind;appliedRevision:number;replayed:true}>;
+}
+export function parseSharedMemoryObservation(value:unknown):Readonly<SharedMemoryObservation>{
+ const v=object(value,['ownerId','memory','removal','operation']),ownerId=sharedMemoryId(v.ownerId);
+ const o=object(v.operation,['id','memoryId','action','appliedRevision','replayed']);
+ if(o.replayed!==true)fail();
+ const operation=Object.freeze({id:sharedMemoryId(o.id),memoryId:sharedMemoryId(o.memoryId),action:enumeration(o.action,['create','confirm','edit','delete','undo']),
+  appliedRevision:revision(o.appliedRevision),replayed:true as const});
+ if(operation.appliedRevision<1||(v.memory===null)===(v.removal===null))fail();
+ const memory=v.memory===null?null:parseSharedMemoryRecord(v.memory);let removal:Readonly<SharedMemoryRemoval>|null=null;
+ if(memory&&(memory.ownerId!==ownerId||memory.id!==operation.memoryId||memory.revision<operation.appliedRevision||memory.deletedAt!==null))fail();
+ if(v.removal!==null){
+  const r=object(v.removal,['id','revision','deletedAt','undoUntil','deletionOperationId','purged']);
+  if(typeof r.purged!=='boolean')fail();
+  removal=Object.freeze({id:sharedMemoryId(r.id),revision:revision(r.revision),deletedAt:date(r.deletedAt),undoUntil:date(r.undoUntil),deletionOperationId:sharedMemoryId(r.deletionOperationId),purged:r.purged as boolean});
+  if(removal.id!==operation.memoryId||removal.revision<operation.appliedRevision||Date.parse(removal.undoUntil)-Date.parse(removal.deletedAt)!==10000)fail();
+  if(removal.revision===operation.appliedRevision&&(operation.action!=='delete'||removal.deletionOperationId!==operation.id))fail();
+ }
+ if(memory&&memory.revision===operation.appliedRevision&&(memory.lastOperationId!==operation.id||operation.action==='delete'))fail();
+ return Object.freeze({ownerId,memory,removal,operation});
+}

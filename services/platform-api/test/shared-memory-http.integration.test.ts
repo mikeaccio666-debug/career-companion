@@ -49,3 +49,25 @@ test('foreign account, stale window identity, bad query and CSRF origin cannot d
  assert.equal((await system.app.inject({method:'POST',url:prefix,headers:{...a.headers,origin:'https://evil.invalid'},payload:command()})).statusCode,403);
  assert.equal((await system.app.inject({url:prefix})).statusCode,401);
 });
+
+test('operation observation authenticates the original receipt and current state without writing or leaking deleted content',async()=>{
+ const a=await actor(),b=await actor(),payload=command();
+ const saved=await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload});assert.equal(saved.statusCode,201);
+ const id=saved.json().memory.id,url=prefix+'/operations/'+payload.operationId;
+ const snapshot=async()=>({records:(await f.db.query('SELECT * FROM platform_memories WHERE user_id=$1',[a.id])).rows,
+  operations:(await f.db.query('SELECT * FROM platform_memory_operations WHERE user_id=$1 ORDER BY applied_revision',[a.id])).rows,
+  events:(await f.db.query('SELECT * FROM platform_memory_events WHERE user_id=$1 ORDER BY id',[a.id])).rows});
+ const before=await snapshot(),seen=await system.app.inject({url,headers:a.headers});
+ assert.equal(seen.statusCode,200,seen.body);assert.equal(seen.headers['cache-control'],'private, no-store');
+ assert.equal(seen.json().operation.id,payload.operationId);assert.deepEqual(seen.json().memory,saved.json().memory);assert.deepEqual(await snapshot(),before);
+ const foreign=await system.app.inject({url,headers:b.headers}),missing=await system.app.inject({url:prefix+'/operations/'+randomUUID(),headers:b.headers});
+ assert.equal(foreign.statusCode,404);assert.deepEqual(foreign.json(),missing.json());
+ assert.equal((await system.app.inject({url,headers:{...a.headers,[PLATFORM_ACCOUNT_HEADER]:b.id}})).statusCode,409);
+ assert.equal((await system.app.inject({url:url+'?ownerId='+a.id,headers:a.headers})).statusCode,400);
+ assert.equal((await system.app.inject({url})).statusCode,401);
+ const edit=await system.app.inject({method:'PATCH',url:prefix+'/'+id,headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:1,content:'Fictional later content'}});assert.equal(edit.statusCode,200);
+ const later=await system.app.inject({url,headers:a.headers});assert.equal(later.json().memory.revision,2);assert.equal(later.json().operation.appliedRevision,1);
+ const deletion=await system.app.inject({method:'DELETE',url:prefix+'/'+id,headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:2}});assert.equal(deletion.statusCode,200);
+ const removed=await system.app.inject({url,headers:a.headers});assert.equal(removed.statusCode,200);assert.equal(removed.json().memory,null);assert.equal(removed.json().removal.purged,false);assert.equal(removed.json().removal.revision,3);
+ assert(!removed.body.includes(payload.content));assert(!removed.body.includes('Fictional later content'));assert(!removed.body.includes('commandDigest'));
+});
