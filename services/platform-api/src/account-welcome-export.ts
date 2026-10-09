@@ -1,3 +1,4 @@
+import {readFirstLetterTaskSnapshot,type FirstLetterTaskRow} from './first-letter-tasks.ts';
 import type {PoolClient} from 'pg';
 import {careerRecordId,careerRecordObject} from '@companion/platform-contracts';
 import {authorizeFixedSession,type FixedSessionContext} from './auth.ts';
@@ -5,8 +6,8 @@ import type {PlatformConfig} from './config.ts';
 import {readWelcomeSnapshot,type WelcomeRow} from './companion-welcome-snapshot.ts';
 import {ApiError} from './errors.ts';
 
-export const WELCOME_EXPORT_TABLES=Object.freeze(['platform_companion_welcome','platform_companion_welcome_operations'] as const);
-export type WelcomeExportSection='companionWelcomes'|'companionWelcomeOperations';
+export const WELCOME_EXPORT_TABLES=Object.freeze(['platform_companion_welcome','platform_companion_welcome_operations','platform_first_letter_tasks'] as const);
+export type WelcomeExportSection='companionWelcomes'|'companionWelcomeOperations'|'firstLetterTasks';
 /** Owner export reads retained snapshots, including non-current companions.
  * It does not reopen C1, advance onboarding or require active model consent. */
 export class AccountWelcomeExport {
@@ -26,6 +27,20 @@ export class AccountWelcomeExport {
     if(snapshot.operation)yield {section:'companionWelcomeOperations',record:snapshot.operation};
    }
    if(rows.length<100)break;after=rows.at(-1)!.id;
+  }
+  after=null;
+  for(;;){
+   signal?.throwIfAborted();
+   const tasks:FirstLetterTaskRow[]=(await client.query<FirstLetterTaskRow>(
+    'SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100',[who.userId,after])).rows;
+   for(const row of tasks){
+    signal?.throwIfAborted();
+    const task=readFirstLetterTaskSnapshot(row,this.crypto,who.userId);
+    // Export preparation metadata/configuration only. No prompt, source-body
+    // duplication, ciphertext, credentials or execution permission is stored.
+    yield {section:'firstLetterTasks',record:task};
+   }
+   if(tasks.length<100)break;after=tasks.at(-1)!.id;
   }
   await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
  }

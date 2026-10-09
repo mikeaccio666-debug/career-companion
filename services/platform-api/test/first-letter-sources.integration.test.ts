@@ -192,6 +192,9 @@ test('real app composition exposes only an internal source service and adds no p
    runtime:createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'}})});
   try{
    assert.equal((await system.firstLetterSources.read(a.who)).sourceId,(await a.sources.read(a.who)).sourceId);
+   const task=await system.firstLetterTasks.prepare(a.who,settings);
+   assert.equal(task.task.sourceId,(await a.sources.read(a.who)).sourceId);
+   assert.equal(system.app.hasRoute({method:'POST',url:'/api/platform/first-letter/tasks'}),false);
    assert.equal(calls.length,count);
    assert.equal(system.app.hasRoute({method:'POST',url:'/api/platform/first-letter/sources'}),false);
    assert.equal(system.app.hasRoute({method:'GET',url:'/api/platform/first-letter/sources'}),false);

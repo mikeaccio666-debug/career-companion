@@ -1,6 +1,6 @@
 import type { AccountDataPolicy } from './account-data-coverage.ts';
 
-// Reviewed against migrations 001–080, using catalog metadata only. This is a
+// Reviewed against migrations 001–084, using catalog metadata only. This is a
 // fixed review baseline, not a runtime auto-classifier or completed export map.
 // Re-review the actual columns and relationships before changing a fingerprint.
 export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: AccountDataPolicy; fingerprint: string}>[] = Object.freeze([
@@ -89,6 +89,9 @@ export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: Acco
   Object.freeze({ table: 'platform_job_attempts', policy: 'indirect_owner_projection', fingerprint: '12300573de3fd1f921f0bdd7be91b22ea2d83942d207a0f1a267a454212eab80' }),
   Object.freeze({ table: 'platform_job_outbox', policy: 'indirect_owner_projection', fingerprint: '21849649c8de0225776bf3bab5cb1cb0a393d6ab9930b44c1e257371ceeecbcd' }),
   Object.freeze({ table: 'platform_job_outcome_reviews', policy: 'owner_projection', fingerprint: '25b8b77a9516ce67f0c827c933fef34e9dfe1c859473c139968653ed7f492eee' }),
+  // Owner-owned encrypted preparation metadata; user, welcome and conversation composite FKs cascade.
+  // No credential, copied source body, model response or execution authority is retained.
+  Object.freeze({ table: 'platform_first_letter_tasks', policy: 'owner_projection', fingerprint: 'd26bc7a7e2c722af2150adc3bf9d11f16124dd8283612199ae4e0601b069b78e' }),
   Object.freeze({ table: 'platform_jobs', policy: 'owner_projection', fingerprint: '12b57179cf30f106ed55c643dde76e4635531e9abf77bde98d86bc2e6b6bdc42' }),
   Object.freeze({ table: 'platform_knowledge_access_log', policy: 'product_exclusion', fingerprint: '6b798034e3b294032d992336db27c70f6a65816d72cf7fda611bd86a7ef27aa0' }),
   Object.freeze({ table: 'platform_knowledge_passages', policy: 'indirect_owner_projection', fingerprint: 'c10f9f1c12aa1d0fde2d34779c4d4ba6abcafa8c58d009bfb39014e825b3fa57' }),
