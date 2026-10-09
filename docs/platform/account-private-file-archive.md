@@ -12,7 +12,7 @@
 
 出生印章从已认证的出生回执和加密资产中读取原 SVG/PNG，复核对应 JSON 中的摘要和长度；不重新渲染，也不依赖当前模型或字库。只有确实写入这些字节，`companionBirthAssetMetadata.bytesIncluded` 才变为 true。
 
-普通 `AccountCoreExport.capture` 继续只生成 JSON：93 张表已有投影、7 张排除、66 张待处理，`filesIncluded=false`。通过 `AccountFileArchive.capture` 成功捕获文件时，额外覆盖 uploads、artifacts、companion_birth_assets 三张表，即 96 张已投影、7 张排除、63 张待处理，`filesIncluded=true`。两种方式始终 `complete=false`，不会把其余数据表的缺口藏起来。以上当前计数包含后续加入的五张[执行历史表](account-execution-export.md)、六张[任务历史表](account-task-export.md)及四张[文件写入与删除日志](account-upload-journal-export.md)，这些日志在两种模式中都只导出元数据。
+普通 `AccountCoreExport.capture` 继续只生成 JSON：100 张表已有投影、7 张排除、64 张待处理，`filesIncluded=false`。通过 `AccountFileArchive.capture` 成功捕获文件时，额外覆盖 uploads、artifacts、companion_birth_assets 三张表，即 103 张已投影、7 张排除、61 张待处理，`filesIncluded=true`。两种方式始终 `complete=false`，不会把其余数据表的缺口藏起来。以上当前计数包含后续加入的五张[执行历史表](account-execution-export.md)、六张[任务历史表](account-task-export.md)及四张[文件写入与删除日志](account-upload-journal-export.md)，这些日志在两种模式中都只导出元数据。
 
 ## 身份、事务与临时文件
 
@@ -33,3 +33,5 @@
 首轮新增 13 项测试通过；进一步加入 JSON 已物化后的实际事务回滚、S3 条件读取与版本变化，以及 105 个生成材料的分页核对。测试使用隔离 PostgreSQL、真实 UploadWrites/UploadRemovals、本地文件及真实 S3 适配器配虚构 SDK 响应；出生资源使用仅访问 loopback 的虚构运行时。没有真实对象存储、付费模型或第三方请求。
 
 最终新增 15/15 项通过。相关回归共 271 项不同测试均已有通过结果：首轮 270/271，唯一失败是测试 ETag 恰与虚构法律条款版本相同；换用独立随机 ETag 后，文件归档 15/15 定向复跑通过。API 类型检查与 git diff --check 通过，无跳过。生产代码未因该夹具问题改动。
+
+覆盖计数核对于 2026-10-09，包含日常偏好、休息和计划记录，以及本轮加入的[共享记忆分类与待处理记录](account-memory-safety-export.md)。

@@ -32,27 +32,26 @@ export function openMemorySource(crypto:DataCrypto,row:any):Readonly<MemorySafet
  if(memoryCanonical(v)!==text||v.id!==row.id||v.ownerId!==row.user_id||v.memoryId!==row.memory_id||v.operationId!==row.operation_id||v.submittedAtRevision!==row.submitted_revision||v.capturedAt!==row.created_at.toISOString()||v.policyRevision!==row.captured_detector_revision||![v.contentDigest,v.policyDigest,v.policyReviewDigest].every(x=>typeof x==='string'&&/^[0-9a-f]{64}$/.test(x)))throw memorySafetyUnavailable();
  return Object.freeze(v) as Readonly<MemorySafetySource>;}catch{throw memorySafetyUnavailable();}
 }
-export async function memoryCompletedUsage(client:PoolClient,row:any){
+export async function memoryCompletedUsage(client:PoolClient,row:any,lock=true){
  const found=await client.query(`SELECT call_id,provider,model,usage_status,input_tokens,output_tokens,EXTRACT(EPOCH FROM admitted_at)::text admitted_exact,EXTRACT(EPOCH FROM finished_at)::text finished_exact
   FROM platform_safety_model_usage WHERE source_kind='shared_memory' AND submission_id=$1 AND user_id=$2 AND operation_id=$3 AND memory_id=$4
    AND submitted_revision=$5 AND generation=$6 AND auth_version=$7 AND detector_revision=$8 AND memory_execution_token=$9
-   AND purpose='safety_classify' AND call_index=1 AND status='complete' AND admitted_at IS NOT NULL AND finished_at IS NOT NULL AND admitted_at<=finished_at AND finished_at<=clock_timestamp() FOR SHARE`,
+   AND purpose='safety_classify' AND call_index=1 AND status='complete' AND admitted_at IS NOT NULL AND finished_at IS NOT NULL AND admitted_at<=finished_at AND finished_at<=clock_timestamp() ${lock?"FOR SHARE":""}`,
  [row.id,row.user_id,row.operation_id,row.memory_id,row.submitted_revision,row.generation,row.auth_version,row.detector_revision,row.execution_token]);
  if(found.rows.length!==1)throw memorySafetyUnavailable();const u=found.rows[0];return {callId:u.call_id,provider:u.provider,model:u.model,usageStatus:u.usage_status,inputTokens:u.input_tokens,outputTokens:u.output_tokens,admittedAt:u.admitted_exact,finishedAt:u.finished_exact};
 }
-export async function memorySafetyResult(client:PoolClient,crypto:DataCrypto,row:any,source:MemorySafetySource){
+export async function memorySafetyResult(client:PoolClient,crypto:DataCrypto,row:any,source:MemorySafetySource,lock=true){
  try{if(row.status!=='detected')throw memorySafetyUnavailable();const text=crypto.openUtf8(row.result_ciphertext,{table:'platform_memory_safety_sources',column:'result_ciphertext',rowId:row.id,ownerId:row.user_id,revision:row.generation});
  const v=memoryObject(JSON.parse(text),['claim','executionToken','source','decision','policy','modelUsage']);const claim=memoryClaim(row),decision=parseMemorySafetyDecision(v.decision);
  if(memoryCanonical(v)!==text||memoryCanonical(v.claim)!==memoryCanonical(claim)||v.executionToken!==row.execution_token||memoryCanonical(v.source)!==memoryCanonical(source)||decision.level!==row.level||decision.mode!==row.detector_mode)throw memorySafetyUnavailable();
- const usage=decision.mode==='full'?await memoryCompletedUsage(client,row):null;if(memoryCanonical(v.modelUsage)!==memoryCanonical(usage))throw memorySafetyUnavailable();
+ const usage=decision.mode==='full'?await memoryCompletedUsage(client,row,lock):null;if(memoryCanonical(v.modelUsage)!==memoryCanonical(usage))throw memorySafetyUnavailable();
  const policy=memoryObject(v.policy,['revision','digest','reviewDigest']);if(policy.revision!==row.detector_revision||policy.revision!==source.policyRevision||policy.digest!==source.policyDigest||policy.reviewDigest!==source.policyReviewDigest||![policy.digest,policy.reviewDigest].every(x=>typeof x==='string'&&/^[0-9a-f]{64}$/.test(x)))throw memorySafetyUnavailable();
  return Object.freeze({decision,policy:Object.freeze(policy)});}catch{throw memorySafetyUnavailable();}
 }
-/** Historical content-free risk receipts remain blocking after edits or forgetting.
- * Only the future genuine presentation/followup path can establish handling. */
-export async function memorySafetyBlockedInTransaction(client:PoolClient,crypto:DataCrypto,ownerId:string,signal?:AbortSignal):Promise<boolean>{
- const rows=(await client.query('SELECT * FROM platform_memory_safety_blocks WHERE user_id=$1 ORDER BY detected_at,id FOR SHARE',[ownerId])).rows;
- for(const row of rows){signal?.throwIfAborted();try{
+/** Authenticates a retained block without requiring its original memory to still exist.
+ * Archive readers use lock=false within their repeatable-read snapshot. */
+export async function readMemorySafetyBlock(client:PoolClient,crypto:DataCrypto,ownerId:string,row:any,lock=true){
+ try{
   const text=crypto.openUtf8(row.receipt_ciphertext,{table:'platform_memory_safety_blocks',column:'receipt_ciphertext',rowId:row.id,ownerId,revision:1});
   const v=memoryObject(JSON.parse(text),['id','ownerId','memoryId','operationId','sourceId','detectedAt','result']);
   if(memoryCanonical(v)!==text||v.id!==row.id||v.ownerId!==ownerId||v.memoryId!==row.memory_id||v.operationId!==row.operation_id||v.sourceId!==row.source_id||v.detectedAt!==row.detected_at.toISOString())throw memorySafetyUnavailable();
@@ -62,11 +61,19 @@ export async function memorySafetyBlockedInTransaction(client:PoolClient,crypto:
   const policy=memoryObject(result.policy,['revision','digest','reviewDigest']);
   if(source.id!==claim.submissionId||source.ownerId!==ownerId||source.memoryId!==claim.memoryId||source.operationId!==claim.operationId||source.submittedAtRevision!==claim.submittedAtRevision
    ||source.policyRevision!==claim.detectorRevision||policy.revision!==source.policyRevision||policy.digest!==source.policyDigest||policy.reviewDigest!==source.policyReviewDigest)throw memorySafetyUnavailable();
-  const op=(await client.query('SELECT applied_revision FROM platform_memory_operations WHERE user_id=$1 AND memory_id=$2 AND operation_id=$3 FOR SHARE',[ownerId,claim.memoryId,claim.operationId])).rows[0];
+  const op=(await client.query(`SELECT applied_revision FROM platform_memory_operations WHERE user_id=$1 AND memory_id=$2 AND operation_id=$3 ${lock?"FOR SHARE":""}`,[ownerId,claim.memoryId,claim.operationId])).rows[0];
   if(op?.applied_revision!==claim.submittedAtRevision)throw memorySafetyUnavailable();
-  const usage=decision.mode==='full'?await memoryCompletedUsage(client,{id:claim.submissionId,user_id:ownerId,operation_id:claim.operationId,memory_id:claim.memoryId,submitted_revision:claim.submittedAtRevision,generation:claim.generation,auth_version:claim.authVersion,detector_revision:claim.detectorRevision,execution_token:result.executionToken}):null;
+  const usage=decision.mode==='full'?await memoryCompletedUsage(client,{id:claim.submissionId,user_id:ownerId,operation_id:claim.operationId,memory_id:claim.memoryId,submitted_revision:claim.submittedAtRevision,generation:claim.generation,auth_version:claim.authVersion,detector_revision:claim.detectorRevision,execution_token:result.executionToken},lock):null;
   if(memoryCanonical(usage)!==memoryCanonical(result.modelUsage))throw memorySafetyUnavailable();
- }catch{throw memorySafetyUnavailable();}}
+  return {id:v.id,ownerId,memoryId:v.memoryId,operationId:v.operationId,sourceId:v.sourceId,detectedAt:v.detectedAt,
+   source,decision,policy,modelUsage:usage};
+ }catch{throw memorySafetyUnavailable();}
+}
+/** Historical content-free risk receipts remain blocking after edits or forgetting.
+ * Only the future genuine presentation/followup path can establish handling. */
+export async function memorySafetyBlockedInTransaction(client:PoolClient,crypto:DataCrypto,ownerId:string,signal?:AbortSignal):Promise<boolean>{
+ const rows=(await client.query('SELECT * FROM platform_memory_safety_blocks WHERE user_id=$1 ORDER BY detected_at,id FOR SHARE',[ownerId])).rows;
+ for(const row of rows){signal?.throwIfAborted();await readMemorySafetyBlock(client,crypto,ownerId,row);}
  return rows.length>0;
 }
 /** Actual current state comes only from SharedMemories' authenticated owner reader.

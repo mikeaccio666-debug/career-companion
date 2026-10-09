@@ -1056,3 +1056,15 @@ API 类型检查与 git diff --check 通过。没有 schema 变更、主库/主�
 ### 2026-10-09：Today 日程与待确认简历
 
 真实日程服务 6 项、Today 来源 11 项及 HTTP 1 项通过；契约 76/76、Web 848/848，API 类型与网页生产构建通过。显示检查覆盖 390×844 / 1440×900、休息和空状态；宽屏内容 680px，链接触控 44px，无横向溢出。仅组件 SSR 显示检查，不冒充完整登录浏览器 E2E。无主库迁移、主预览重启、付费调用或部署；详见 [Today 日程](today-agenda.md)。
+
+## 共享记忆分类与待处理记录账户导出：2026-10-09
+
+补齐 `memorySafetySources` / `memorySafetyBlocks` 两个私有区段，见 [设计与边界](account-memory-safety-export.md)。历史来源、策略、结果及保留的处理记录随账户事务导出；不重新分类、不清除处理状态、不恢复已删除正文，也不授予共享上下文权限。没有数据库迁移或网页改动。
+
+- 账户导出、覆盖清单、导师履约与组织知识组共 268 个案例，首次 267 通过、1 个失败：原测试仍要求 `platform_memory_safety_sources` 出现在未覆盖清单。更新为检查两张表实际已覆盖、`platform_safety_model_usage` 仍未覆盖后，受影响的核心导出和新增导出两文件 **18/18** 通过。其余 250 个案例已在前述整组运行通过；没有反复重跑无变化的组。
+- 原共享记忆分类协议 **14/14** 通过，涵盖默认锁行为、模型禁用、策略变化、并发编辑、鉴权重置、真实删除和账户费用限制。API 最终 TypeScript 检查通过。
+- 新增 8 个案例已包含在上述账户组与 18 项定向复验中，不重复计数。实际覆盖完整分类及关键词降级、失败 pending、过期 running、105 条双表分页、删除保留期后模型用量仍可核对、串户/损坏密文、缺失处理记录、错误用量、晚到失效、取消与大小限制的整事务回滚。删除案例后来增强为完整模型协议分类，并单独复验通过，再包含在最终 18 项中。
+- 全部使用隔离 schema、虚构账户、loopback 协议；没有真实模型调用、真实个人资料、生产迁移或部署。测试 schema 清理已确认。
+- 现有 171 表清单未更改：核心覆盖 100 表、剩余 64；带文件覆盖 103、剩余 61；另有 7 个既有豁免。`complete=false` 保留，完整下载/删除和其他 P0 功能不以此宣称完成。
+
+私人运行证据保留在远端忽略目录 `.local/verification/ci-regression-20261008/`，日志标签为 `account-memory-safety-export`、`memory-safety-protocol-regression`、`account-memory-export-regression`、`memory-export-retained-full`、`memory-export-final`、`memory-export-final-check`。
