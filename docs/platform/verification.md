@@ -1190,3 +1190,17 @@ JSON 覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；既有
 - 测试使用虚构资料和隔离 PostgreSQL schema，fixture 清理确认；不含任意规模 worker 或线上 SLA 保证。没有付费模型、真实申请、schema 变更、主库迁移、主预览重启、UI 变更、合并或部署。
 
 私有日志位于 ci-regression-20261008：organization-history-targeted.log、organization-history-regression.log、organization-history-types.log、organization-history-types-fixed.log、organization-history-final-types.log、organization-history-inventory.log。旧 .stress.ts 本轮未修改或重跑。模型评测入口的协议验证与本批数据库回归均不代替真实模型质量评测。
+
+
+## 2026-10-09：学生外观选择与配色一致性
+
+按 08 §2.5 / §7.13 接通 [外观偏好](student-appearance.md)。选择为浏览器级 system/light/dark，不保存账号或业务数据；在 React 渲染前应用，支持跨标签同步、页面恢复、存储不可用时的临时选择与明确提示。共享记忆改用统一 token，浏览器主题色与 PWA 默认背景按产品纸色配置。
+
+- 最终 Web 全量 **855/855 通过**，零失败、零取消、零跳过；含新增 7 项。首轮 848 项通过，新测试文件因 Node 原生 TypeScript strip 模式不支持构造器 parameter property 而无法加载；改为显式字段赋值后，新外观与 PWA 专项 15/15 通过，再对最终改动跑上述完整 855 项。保留原失败日志。
+- Web TypeScript 检查与生产构建通过；实际生成的 PWA precache 继续通过原完整性与私有路径测试。未修改 API、鉴权或数据库。
+- 独立预览用真实 StudentMePage 和 AppearanceSettings，虚构账号上下文，零后端请求。实际点击深色、刷新恢复、第二标签切浅色同步到第一标签、方向键切回跟随系统均通过；根属性、选择状态和浏览器 chrome 颜色一致。
+- 390×844 与 1440×900 显示检查无横向溢出（滚动条内文档宽分别 375 / 1425，scrollWidth 等于 clientWidth）；手机选项高 50px，桌面 48px。浅色背景为 rgb(241,243,247)，深色为 rgb(13,19,30)；共享记忆 CSS 色板对应 sheet 为 rgb(252,253,254) / rgb(20,28,42)。未把色板验证当作账号记忆读写测试。浏览器 console 未见 error/warn。
+- 浏览器系统设置切换、高对比度与真实手机安装后启动屏未做设备实测；系统偏好由既有 CSS 媒体查询驱动。旧工作台和登录/协议页的整体视觉迁移、五个界面及完整 P0 仍未完成。
+- 临时页面、视口覆盖、拥有的预览进程和 SSH 转发已清理；主预览未重启，无付费模型、真实申请、主库迁移、部署或合并。
+
+证据：远端忽略目录 ci-regression-20261008/appearance-web-check.log、appearance-web-tests.log（首轮失败）、appearance-focused.log、appearance-build.log、appearance-web-final.log；交互预览构建在 .local/verification/appearance-20261009。截图仅含虚构资料，保存在本地临时文件 career-companion-appearance-mobile.jpg / career-companion-appearance-desktop.jpg，不进仓库。

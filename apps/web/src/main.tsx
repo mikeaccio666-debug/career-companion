@@ -4,8 +4,10 @@ import App from './App';
 import { PwaShell } from './PwaStatus';
 import { pwaRuntime } from './pwa-runtime';
 import { startSessionNotifications } from './session-events';
+import { getAppearanceStore } from './appearance-browser';
 import './styles.css';
 import './student-entry.css';
+const appearance = getAppearanceStore();
 const stopSessionNotifications = startSessionNotifications();
 pwaRuntime.start({
   production: import.meta.env.PROD,
@@ -20,4 +22,4 @@ pwaRuntime.start({
   clearTimer: (timer) => window.clearTimeout(timer as number),
 });
 createRoot(document.getElementById('root')!).render(<React.StrictMode><PwaShell><App /></PwaShell></React.StrictMode>);
-if (import.meta.hot) import.meta.hot.dispose(() => { pwaRuntime.dispose(); stopSessionNotifications(); });
+if (import.meta.hot) import.meta.hot.dispose(() => { pwaRuntime.dispose(); stopSessionNotifications(); appearance.stop(); });

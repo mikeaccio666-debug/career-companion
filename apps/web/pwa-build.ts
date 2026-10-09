@@ -53,7 +53,7 @@ export function platformPwaOptions(directory: () => string): Partial<VitePWAOpti
     manifest: {
       name: BRAND.name, short_name: BRAND.name, description: BRAND.description,
       id: '/', start_url: '/', scope: '/', display: 'standalone',
-      background_color: '#f7f8f2', theme_color: BRAND.themeColor,
+      background_color: '#F1F3F7', theme_color: BRAND.themeColor,
       icons: [
         { src: BRAND.mark, sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
         { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },

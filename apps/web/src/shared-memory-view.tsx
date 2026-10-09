@@ -3,6 +3,7 @@ import { SHARED_MEMORY_CATEGORIES,type SharedMemoryRecord,type SharedMemoryCateg
 import { useRequiredPlatformAccountClient } from './account-client';
 import { ApiError,errorText } from './api';
 import { readSharedMemoryPage,changeSharedMemory,readSharedMemoryUses } from './shared-memory-api';
+import './career-design-tokens.css';
 import './shared-memory-view.css';
 const categoryLabels:Record<SharedMemoryCategory,string>={agreement:'约定',communication:'沟通偏好',goal_preference:'目标与偏好',experience:'经历与证据',identity_timeline:'时间线',emotion_rhythm:'情绪与节奏'};
 const sourceLabels={user_saved:'你保存的',user_stated:'你纠正过',companion_proposed:'主理人提议',expert_proposed:'队员提议',imported:'导入内容'};
@@ -61,7 +62,7 @@ export default function SharedMemoryPanel(){
   else begin('edit',m.id,{...fields,content:editor.content,expectedRevision:m.revision});
  }
  const busy=writing||loading||uncertain;
- return <section className="shared-memory-panel" aria-labelledby="shared-memory-title"><header><h2 id="shared-memory-title">它记得的你</h2><span className="shared-memory-ai">AI 主理人和队伍</span></header>
+ return <section className="shared-memory-panel career-surface" aria-labelledby="shared-memory-title"><header><h2 id="shared-memory-title">它记得的你</h2><span className="shared-memory-ai">AI 主理人和队伍</span></header>
   <p>这里是你选择保存的长期信息。由你决定保存什么，以及谁可以使用。</p><p className="shared-memory-caption">旧记忆先由你逐条检查内容、类别和敏感度；确认前仅你可见。</p>
   <div className="shared-memory-actions"><button type="button" className="memory-primary" aria-disabled={busy} onClick={()=>!busy&&setEditor(draft(null))}>记一条</button><button type="button" aria-disabled={writing||loading} onClick={()=>!writing&&!loading&&void load()}>重新读取</button></div>
   {loading&&<p role="status">正在读取你的记忆…</p>}{error&&<p role="alert" className="shared-memory-notice">{error}</p>}{uncertain&&<button type="button" aria-disabled={writing||loading} onClick={()=>!writing&&!loading&&void execute()}>用原操作重试</button>}
@@ -88,4 +89,4 @@ export default function SharedMemoryPanel(){
   })}{nextCursor&&<button type="button" aria-disabled={busy} onClick={()=>!busy&&void load(nextCursor)}>读取更多记忆</button>}
  </section>;
 }
-export function SharedMemoryPage({onLogout}:{onLogout:()=>void}){return <main className="shared-memory-page"><nav><a href="/">回到对话</a><button type="button" onClick={onLogout}>退出登录</button></nav><SharedMemoryPanel/></main>;}
+export function SharedMemoryPage({onLogout}:{onLogout:()=>void}){return <main className="shared-memory-page career-surface"><nav><a href="/">回到对话</a><button type="button" onClick={onLogout}>退出登录</button></nav><SharedMemoryPanel/></main>;}
