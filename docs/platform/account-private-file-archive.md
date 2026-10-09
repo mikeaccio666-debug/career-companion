@@ -12,7 +12,7 @@
 
 出生印章从已认证的出生回执和加密资产中读取原 SVG/PNG，复核对应 JSON 中的摘要和长度；不重新渲染，也不依赖当前模型或字库。只有确实写入这些字节，`companionBirthAssetMetadata.bytesIncluded` 才变为 true。
 
-普通 `AccountCoreExport.capture` 继续只生成 JSON：106 张表已有投影、7 张排除、58 张待处理，`filesIncluded=false`。通过 `AccountFileArchive.capture` 成功捕获文件时，额外覆盖 uploads、artifacts、companion_birth_assets 三张表，即 109 张已投影、7 张排除、55 张待处理，`filesIncluded=true`。两种方式始终 `complete=false`，不会把其余数据表的缺口藏起来。以上当前计数包含后续加入的五张[执行历史表](account-execution-export.md)、六张[任务历史表](account-task-export.md)及四张[文件写入与删除日志](account-upload-journal-export.md)，这些日志在两种模式中都只导出元数据。
+普通 `AccountCoreExport.capture` 继续只生成 JSON：109 张表已有投影、7 张排除、55 张待处理，`filesIncluded=false`。通过 `AccountFileArchive.capture` 成功捕获文件时，额外覆盖 uploads、artifacts、companion_birth_assets 三张表，即 112 张已投影、7 张排除、52 张待处理，`filesIncluded=true`。两种方式始终 `complete=false`，不会把其余数据表的缺口藏起来。以上当前计数包含后续加入的五张[执行历史表](account-execution-export.md)、六张[任务历史表](account-task-export.md)及四张[文件写入与删除日志](account-upload-journal-export.md)，这些日志在两种模式中都只导出元数据。
 
 ## 身份、事务与临时文件
 

@@ -38,7 +38,7 @@ test('exports actual full classification and keyword-only blocks privately witho
  const sources=data.sections.memorySafetySources as any[],blocks=data.sections.memorySafetyBlocks as any[];
  assert.equal(sources.length,2);assert.equal(blocks.length,1);assert.deepEqual(sources.find(x=>x.memoryId===a.memory.id).result.decision,{level:'L0',mode:'full'});
  assert.deepEqual(blocks[0].decision,{level:'L2',mode:'keyword_only'});assert.equal(blocks[0].modelUsage,null);assert(Object.isFrozen(blocks[0].source));
- assert.equal(data.includedTables.length,106);assert.equal(data.remainingTables.length,58);assert.equal(data.complete,false);
+ assert.equal(data.includedTables.length,109);assert.equal(data.remainingTables.length,55);assert.equal(data.complete,false);
  assert(data.includedTables.includes('platform_memory_safety_sources'));assert(data.includedTables.includes('platform_memory_safety_blocks'));
  const text=JSON.stringify(data);for(const secret of [who.tokenHash,other.userId,password,encoded,token,'sessionTokenHash','authVersion','leaseToken','executionToken','ciphertext'])assert(!text.includes(secret));
  for(const source of (await f.db.query('SELECT * FROM platform_memory_safety_sources WHERE user_id=$1',[who.userId])).rows)
