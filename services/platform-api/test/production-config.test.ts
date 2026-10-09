@@ -123,3 +123,65 @@ test('runtime identities and database budgets are explicit and bounded without d
   for (const value of [undefined, 'development', 'DEVELOPMENT', 'unknown', 'UNKNOWN']) assert.throws(() => readConfig({ ...production, PLATFORM_BUILD_ID: value }), /PLATFORM_BUILD_ID/);
   assert.equal(readConfig(production).codeVersion, 'synthetic-release-20261006');
 });
+
+test('production rejects local provider configuration even when commercial calls are disabled', () => {
+  const names = ['KOKORO_BASE_URL', 'KOKORO_TTS_MODEL', 'KOKORO_TTS_VOICE', 'FASTER_WHISPER_BASE_URL',
+    'FASTER_WHISPER_MODEL', 'OLLAMA_BASE_URL', 'OLLAMA_CHAT_MODEL', 'OLLAMA_API_KEY',
+    'OLLAMA_REASONING_EFFORT', 'PLATFORM_CLI_OLLAMA_BASE_URL', 'KOKORO_FUTURE_OPTION'];
+  for (const name of names) {
+    for (const value of ['fictional-private-setting', ' ', '0']) {
+      for (const gate of ['0', '1']) assert.throws(() => readConfig({
+        ...production, [name]: value, PLATFORM_ALLOW_PROVIDER_CALLS: gate,
+      }), error => error instanceof Error && error.message === 'Production cannot configure development-only local providers. Remove KOKORO_*, FASTER_WHISPER_*, OLLAMA_* and PLATFORM_CLI_OLLAMA_* settings.'
+        && !error.message.includes('fictional-private-setting') && !Object.hasOwn(error, 'cause'), name);
+    }
+    // Empty template entries do not configure a runtime; local development remains usable.
+    assert.doesNotThrow(() => readConfig({ ...production, [name]: '' }));
+    assert.doesNotThrow(() => readConfig({ ...production, [name]: undefined }));
+    for (const NODE_ENV of [undefined, 'development', 'test']) {
+      assert.doesNotThrow(() => readConfig({ NODE_ENV, [name]: 'fictional-private-setting' }));
+    }
+  }
+});
+
+test('production rejects every local provider route without requiring provider credentials', () => {
+  const names = ['PLATFORM_CHAT_PROVIDER', 'PLATFORM_AGENT_PROVIDER', 'PLATFORM_REALTIME_PROVIDER',
+    'PLATFORM_TRANSCRIPTION_PROVIDER', 'PLATFORM_SPEECH_PROVIDER', 'PLATFORM_SAFETY_CLASSIFY_PROVIDER',
+    'PLATFORM_COMPANION_GENERATION_PROVIDER', 'PLATFORM_FIRST_LETTER_PROVIDER', 'PLATFORM_CLI_MODEL_PROVIDER'];
+  for (const name of names) for (const provider of ['ollama', 'kokoro', 'faster-whisper']) {
+    assert.throws(() => readConfig({ ...production, [name]: provider }),
+      /Production cannot route requests to development-only local providers/, name);
+    assert.doesNotThrow(() => readConfig({ NODE_ENV: 'development', [name]: provider }));
+  }
+  assert.equal(readConfig({ ...production, PLATFORM_CHAT_PROVIDER: 'openai',
+    OPENAI_API_KEY: 'fictional-provider-key', PLATFORM_ALLOW_PROVIDER_CALLS: '0' }).modelRoutes.chat?.provider, 'openai');
+});
+
+test('real API, worker, migration and operations entrypoints reject local settings before connecting', async () => {
+  const { createServer } = await import('node:net');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  let connections = 0;
+  const trap = createServer(socket => { connections++; socket.destroy(); });
+  await new Promise<void>((resolve, reject) => { trap.once('error', reject); trap.listen(0, '127.0.0.1', resolve); });
+  const address = trap.address(); assert.ok(address && typeof address === 'object');
+  try {
+    for (const entry of ['main.ts', 'worker-main.ts', 'migrate.ts', 'operations-main.ts']) {
+      await assert.rejects(promisify(execFile)(process.execPath, ['--import', 'tsx', path.join(workspaceRoot, 'services/platform-api/src', entry)], {
+        cwd: path.join(workspaceRoot, 'services/platform-api'), timeout: 15_000, maxBuffer: 128 * 1024,
+        env: { ...production, PATH: process.env.PATH,
+          PLATFORM_DATABASE_URL: `postgresql://fictional:fictional@127.0.0.1:${address.port}/fictional`,
+          PLATFORM_REDIS_URL: `redis://127.0.0.1:${address.port}/0`,
+          KOKORO_BASE_URL: 'fictional-private-setting', PLATFORM_ALLOW_PROVIDER_CALLS: '0' },
+      }), (error: unknown) => {
+        assert.ok(error instanceof Error && 'code' in error && 'signal' in error && 'stdout' in error && 'stderr' in error, entry);
+        assert.equal(error.code, 1, entry); assert.equal(error.signal, null, entry);
+        assert.equal(error.stdout, '', entry); assert.equal(typeof error.stderr, 'string', entry);
+        assert.match(String(error.stderr), /Production cannot configure development-only local providers/, entry);
+        assert.equal(String(error.stderr).includes('fictional-private-setting'), false, entry);
+        return true;
+      });
+      assert.equal(connections, 0, entry);
+    }
+  } finally { await new Promise<void>((resolve, reject) => trap.close(error => error ? reject(error) : resolve())); }
+});

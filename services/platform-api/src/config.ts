@@ -92,6 +92,12 @@ function modelRoutes(env: NodeJS.ProcessEnv): PlatformConfig['modelRoutes'] {
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig {
   const production = env.NODE_ENV === 'production';
+  // Development-only runtimes must never become available through inherited
+  // environment groups, even while commercial provider calls are disabled.
+  if (production && Object.entries(env).some(([name, value]) =>
+    /^(KOKORO_|FASTER_WHISPER_|OLLAMA_|PLATFORM_CLI_OLLAMA_)/.test(name) && value !== undefined && value !== '')) {
+    throw new Error('Production cannot configure development-only local providers. Remove KOKORO_*, FASTER_WHISPER_*, OLLAMA_* and PLATFORM_CLI_OLLAMA_* settings.');
+  }
   if (env.PLATFORM_REQUIRE_INVITE !== undefined && !['0','1'].includes(env.PLATFORM_REQUIRE_INVITE)) throw new Error('PLATFORM_REQUIRE_INVITE must be 0 or 1');
   if (production && env.PLATFORM_REQUIRE_INVITE === '0') throw new Error('Production requires invitations');
   const requireInvite = production || env.PLATFORM_REQUIRE_INVITE !== '0';
@@ -131,6 +137,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   // Deployment diagnostics never grant a caller model-selection or staff rights.
   const exposeProviderDetails = env.NODE_ENV === 'development' && workbenchEnabled && env.PLATFORM_EXPOSE_PROVIDER_DETAILS === '1';
   const configuredModelRoutes = modelRoutes(env);
+  if (production && [...Object.values(configuredModelRoutes).map(route => route.provider), env.PLATFORM_CLI_MODEL_PROVIDER]
+    .some(provider => provider !== undefined && ['kokoro', 'faster-whisper', 'ollama'].includes(provider))) {
+    throw new Error('Production cannot route requests to development-only local providers.');
+  }
   const databasePoolMax = boundedInteger(env.PLATFORM_DATABASE_POOL_MAX, 'PLATFORM_DATABASE_POOL_MAX', 12, 1, 100);
   const databaseConnectTimeoutMs = boundedInteger(env.PLATFORM_DATABASE_CONNECT_TIMEOUT_MS, 'PLATFORM_DATABASE_CONNECT_TIMEOUT_MS', 5000, 100, 5000);
   const codeVersion = runtimeIdentifier(env.PLATFORM_BUILD_ID, 'PLATFORM_BUILD_ID', 'development');
