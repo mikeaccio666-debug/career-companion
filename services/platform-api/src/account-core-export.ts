@@ -1,3 +1,4 @@
+import {AccountCompanionExport,COMPANION_EXPORT_TABLES,type CompanionExportSection} from './account-companion-export.ts';
 import {CompanionBirthOriginStore,BIRTH_EXPORT_TABLES,type BirthExportSection} from './companion-birth-origin-store.ts';
 import {AccountWelcomeExport,WELCOME_EXPORT_TABLES,type WelcomeExportSection} from './account-welcome-export.ts';
 import {exportConversationsInTransaction,CONVERSATION_EXPORT_TABLES,type ConversationExportSection} from './account-conversation-export.ts';
@@ -18,8 +19,8 @@ import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
-const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES]);
-type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection;
+const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES,...COMPANION_EXPORT_TABLES]);
+type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
 const tooLarge=()=>new ApiError(503,'ACCOUNT_EXPORT_TOO_LARGE','This export requires the archive worker. No partial export was returned.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
@@ -36,12 +37,14 @@ function freeze<T>(value:T):T{
 export class AccountCoreExport {
   private readonly memories:SharedMemories;
   private readonly welcomes:AccountWelcomeExport;
+  private readonly companions:AccountCompanionExport;
   private readonly births:CompanionBirthOriginStore;
   private readonly maxBytes:number;
   private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords|ResumeOriginalReview)[];
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number}={}){
     this.memories=new SharedMemories(db,config,null);
     this.welcomes=new AccountWelcomeExport(config);
+    this.companions=new AccountCompanionExport(config);
     this.births=new CompanionBirthOriginStore(config.dataCrypto);
     const jobs=new ManualJobs(db,config,null),applications=new CareerApplications(db,config,null,jobs);
     this.careerReaders=Object.freeze([new CareerTargets(db,config,null),new CareerStories(db,config,null),jobs,applications,
@@ -62,6 +65,7 @@ export class AccountCoreExport {
       const capturedAt=(await client.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
       const sections:{account:Record<string,unknown>}&Record<ArraySection,unknown[]>={
         account:{...account,createdAt:account.createdAt.toISOString(),emailVerifiedAt:account.emailVerifiedAt?.toISOString()??null},
+        companions:[],companionPaidSettingOperations:[],
         companionBirthReceipts:[],companionBirthAssetMetadata:[],
         conversations:[],messages:[],chatCalls:[],audioTranscriptions:[],companionWelcomes:[],companionWelcomeOperations:[],
         termsConsents:[],sessions:[],memories:[],memoryOperations:[],memoryEvents:[],memoryUses:[],
@@ -97,6 +101,7 @@ export class AccountCoreExport {
       for await(const item of exportConversationsInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.welcomes.exportInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.births.exportInTransaction(client,who,signal))append(item.section,item.record);
+      for await(const item of this.companions.exportInTransaction(client,who,signal))append(item.section,item.record);
       await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
       return freeze({schemaVersion:1 as const,scope:'account_core_export_sections' as const,complete:false as const,
         ownerId:who.userId,capturedAt,sections,
