@@ -6,6 +6,7 @@ import type { Database } from './database.ts';
 import type { DataCrypto } from './data-crypto.ts';
 import type { BlobStorage } from './storage.ts';
 import { ApiError } from './errors.ts';
+import { AccountReauthentication } from './account-reauthentication.ts';
 const unavailable=()=>new ApiError(503,'UPLOAD_REMOVAL_UNAVAILABLE','文件清理状态暂时无法确认，请重新查看。');
 const missing=()=>new ApiError(404,'NOT_FOUND','这份文件或清理记录不存在。');
 const canonical=(value:unknown)=>JSON.stringify(value,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
@@ -58,10 +59,34 @@ export class UploadRemovals {
    await authorizeFixedSession(client,who,signal);const user=(await client.query('SELECT auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[who.userId])).rows[0];if(!user)throw missing();
    const byOperation=(await client.query('SELECT upload_id FROM platform_upload_removals WHERE user_id=$1 AND operation_id=$2',[who.userId,operationId])).rows[0];if(byOperation&&byOperation.upload_id!==id)throw new ApiError(409,'UPLOAD_REMOVAL_OPERATION_CONFLICT','这个操作已用于另一份文件。');
    const prior=(await client.query('SELECT * FROM platform_upload_removals WHERE upload_id=$1 AND user_id=$2 FOR UPDATE',[id,who.userId])).rows[0];if(prior){const r=await this.decode(client,prior);await authorizeFixedSession(client,who,signal);return this.public(r);}
-   const file=(await client.query('SELECT storage_key,filename FROM platform_uploads WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,who.userId])).rows[0];if(!file)throw missing();if(typeof file.storage_key!=='string'||!(/^[A-Za-z0-9_-]{1,240}$/).test(file.storage_key))throw unavailable();
-   const at=(await client.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();const r:Record={schemaVersion:1,ownerId:who.userId,name:String(file.filename).replace(/[\x00-\x1f\x7f]/g,'').slice(0,200)||'文件',uploadId:id,operationId,status:'pending',requestedAt:at,removedAt:null,acceptedAuthVersion:String(user.auth_version),scope:this.storage.scope!,storageKey:file.storage_key,generation:1,lastEventId:randomUUID(),leaseToken:null,leaseUntil:null};
-   await this.save(client,r,at);await client.query('UPDATE platform_artifacts SET upload_id=NULL WHERE upload_id=$1 AND user_id=$2',[id,who.userId]);await client.query('DELETE FROM platform_uploads WHERE id=$1 AND user_id=$2',[id,who.userId]);await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();return this.public(r);
+   const receipt=await this.enqueueFile(client,who.userId,id,operationId,String(user.auth_version));await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();return receipt;
   });
+ }
+ /** Internal part of the account-deletion transaction, not a public deletion
+  * endpoint. The caller must complete every other deletion domain and remove
+  * the account in this SAME transaction, rolling everything back on failure.
+  * No storage I/O occurs here: committed journals survive the owner cascade.
+  * A fresh password proof is consumed atomically with the file revocations. */
+ async prepareAccountDeletion(client:PoolClient,value:FixedSessionContext,proof:string,signal?:AbortSignal):Promise<{queuedFiles:number}>{
+  const who=fixed(value);this.configured();
+  await new AccountReauthentication(this.db).consumeInTransaction(client,who,'account_delete',proof,signal);
+  const user=(await client.query('SELECT auth_version FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[who.userId])).rows[0];if(!user)throw missing();
+  // The owner lock is also taken by UploadWrites publication. A concurrent
+  // publication either finishes before this inventory or fails after deletion.
+  const files=(await client.query('SELECT id FROM platform_uploads WHERE user_id=$1 ORDER BY id FOR UPDATE',[who.userId])).rows;
+  for(const file of files){
+   signal?.throwIfAborted();
+   // A live upload and an earlier revocation for the same id cannot coexist
+   // legitimately. Never silently reuse a receipt for different stored bytes.
+   if((await client.query('SELECT 1 FROM platform_upload_removals WHERE upload_id=$1',[file.id])).rowCount)throw unavailable();
+   await this.enqueueFile(client,who.userId,file.id,randomUUID(),String(user.auth_version));
+  }
+  await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();return {queuedFiles:files.length};
+ }
+ private async enqueueFile(client:PoolClient,ownerId:string,id:string,operationId:string,authVersion:string){
+  const file=(await client.query('SELECT storage_key,filename FROM platform_uploads WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,ownerId])).rows[0];if(!file)throw missing();if(typeof file.storage_key!=='string'||!(/^[A-Za-z0-9_-]{1,240}$/).test(file.storage_key))throw unavailable();
+  const at=(await client.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();const r:Record={schemaVersion:1,ownerId,name:String(file.filename).replace(/[\x00-\x1f\x7f]/g,'').slice(0,200)||'文件',uploadId:id,operationId,status:'pending',requestedAt:at,removedAt:null,acceptedAuthVersion:authVersion,scope:this.storage.scope!,storageKey:file.storage_key,generation:1,lastEventId:randomUUID(),leaseToken:null,leaseUntil:null};
+  await this.save(client,r,at);await client.query('UPDATE platform_artifacts SET upload_id=NULL WHERE upload_id=$1 AND user_id=$2',[id,ownerId]);await client.query('DELETE FROM platform_uploads WHERE id=$1 AND user_id=$2',[id,ownerId]);return this.public(r);
  }
  /** Internal recovery can finish a previously authorized privacy deletion even
   * after its session or account is gone. It cannot enqueue a new request. */
