@@ -1080,3 +1080,16 @@ API 类型检查与 git diff --check 通过。没有 schema 变更、主库/主�
 - JSON 当前覆盖 102 表、剩余 62；带文件 105、剩余 59；另有 7 个既有豁免。两个模式的 `complete=false` 保持不变，其余导出类别、自助下载、删除协调和 P0 主对话不因此宣称完成。
 
 私人运行日志位于远端忽略目录 `.local/verification/ci-regression-20261008/`：`model-audit-export-integration`、`model-audit-generations`、`model-audit-export-regression`、`model-audit-final-types`。
+
+## 主理人名字与印章选择历史导出：2026-10-09
+
+新增四个私有区段，详见 [归档来源与边界](account-companion-identity-export.md)。复用同事务已验证的生成历史作为归档输入，核对原名字、原资源、明确选择和独立版本历史。改名使旧选择失效时仍保留旧记录；不重选、不生成、不授予执行权限。无数据库迁移或网页改动。
+
+- 账户导出、覆盖清单、导师履约和组织知识组合回归 **285/285** 通过，无失败或跳过，其中包含最初 8 个名字/印章导出测试。
+- 审查后给不计入输出字节的共享资源缓存增加 8 份上限，并加入跨 11 个资源版本的历史案例；最终本模块 **9/9** 复验通过，涵盖此前 8 个案例和该补充案例。总计 286 个不同案例有通过结果，复验不重复计数。API 最终 TypeScript 检查通过。
+- 真实服务路径验证了改名、改选、改回名字后旧选择仍失效、105 次实际命名和选择跨页、原资源撤换及用户显示名/邮箱/同意变动。四类密文损坏或串户、丢失/重复历史、真实旧快照回滚、旧命令与选择快照不一致、资源缺失/损坏、晚到会话失效、取消和容量上限全部拒绝半份捕获，并保留密码再验证凭据供重试。
+- 未导出员工审核身份、共享资源全文、原始密文或会话/执行凭据。组织 identity assets/policy 表没有因用于核验而被算作已覆盖。
+- 全部使用虚构账号、隔离 PostgreSQL schema 和 loopback 生成协议，清理已确认；没有付费调用、真实用户资料、生产迁移或部署。
+- 当前 JSON 覆盖 106 表、剩余 58；带文件覆盖 109、剩余 55；另有 7 个既有豁免。总清单仍为 171 表，`complete=false` 保持。完整自助下载、其他资料投影、删除协调与主对话评测仍不在本轮完成范围内。
+
+私人运行证据保留在远端忽略目录 `.local/verification/ci-regression-20261008/`：`companion-identity-export-integration`、`companion-identity-export-regression`、`companion-identity-final`、`companion-identity-final-types`。

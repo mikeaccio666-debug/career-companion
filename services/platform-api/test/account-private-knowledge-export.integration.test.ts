@@ -35,7 +35,7 @@ test('actual personal source and passage export preserves exact multilingual byt
  assert.equal(parts.length,saved.passageCount);assert.equal(parts.map(p=>p.text).join(''),content);assert(parts.every((p,i)=>p.sourceId===saved.id&&p.ownerId===who.userId&&p.passageIndex===i&&p.passageId===`1:${i}`&&p.provenance==='untrusted_knowledge'));
  const json=JSON.stringify(result);for(const secret of [foreign.id,other.userId,foreign.content,who.tokenHash,password,encoded,'han_search_vector','search_vector'])assert(!json.includes(secret));
  assert(!queries.some(sql=>/FROM platform_org_knowledge|INSERT INTO platform_knowledge|UPDATE platform_knowledge/.test(sql)));assert(!queries.filter(sql=>sourceRead(sql)||passageRead(sql)).some(sql=>/FOR UPDATE|FOR SHARE/.test(sql)));assert.deepEqual(await snapshot(who),before);assert(Object.isFrozen(row));assert(Object.isFrozen(parts));
- assert.equal(result.includedTables.length,102);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(result.remainingTables.includes('platform_org_knowledge_sources'));
+ assert.equal(result.includedTables.length,106);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(result.remainingTables.includes('platform_org_knowledge_sources'));
 });
 
 test('real updates export only the retained revision; real deletion exports a content-free tombstone without resurrecting prior notes',async()=>{

@@ -53,7 +53,7 @@ test('accepted request and pending outbox preserve original intent but exclude o
  assert.equal(outbox.requestId,p.operationId);assert.equal(outbox.taskId,p.prepared.taskId);assert.equal(outbox.dispatchedAt,null);assert.equal(outbox.heldReason,null);
  assert.deepEqual(result.sections.companionGenerationCheckpoints,[]);assert.deepEqual(result.sections.companionRevisions,[]);
  const text=JSON.stringify(result);for(const secret of [p.who.tokenHash,other.who.userId,other.operationId,password,encoded,token,'authVersion','payload_digest','payload_ciphertext','fictional-loopback-only'])assert(!text.includes(secret));
- assert(Object.isFrozen(request.command));assert.equal(result.includedTables.length,102);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+ assert(Object.isFrozen(request.command));assert.equal(result.includedTables.length,106);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
  for(const name of ['requests','outbox','checkpoints'])assert(!result.remainingTables.includes(`platform_companion_generation_${name}`));
  assert(result.includedTables.includes('platform_cost_ledger'));
 });

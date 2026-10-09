@@ -45,7 +45,7 @@ test('real committed birth exports its immutable identity and reviewed provenanc
  const bytes=await f.db.transaction(client=>new CompanionBirthOriginStore(f.crypto).readSealAsset(client,p.who.userId,p.receipt.identity.sealAssetId));assert(bytes);
  assert.equal(asset.svgDigest,createHash('sha256').update(bytes.svg).digest('hex'));assert.equal(asset.pngDigest,createHash('sha256').update(bytes.png).digest('hex'));
  assert.equal(asset.svgSizeBytes,bytes.svg.length);assert.equal(asset.pngSizeBytes,bytes.png.length);assert.equal(asset.bytesVerified,true);assert.equal(asset.bytesIncluded,false);
- assert.equal(result.includedTables.length,102);assert(result.includedTables.includes('platform_companion_birth_receipts'));assert(!result.remainingTables.includes('platform_companion_birth_receipts'));
+ assert.equal(result.includedTables.length,106);assert(result.includedTables.includes('platform_companion_birth_receipts'));assert(!result.remainingTables.includes('platform_companion_birth_receipts'));
  assert(result.remainingTables.includes('platform_companion_birth_assets'));assert(result.includedTables.includes('platform_companions'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
  const text=JSON.stringify(result);for(const secret of [p.who.tokenHash,encoded,password,token,foreign.who.userId,foreign.receipt.id,'acceptedAuthVersion','accepted_auth_version','request_digest','request_ciphertext','snapshot_ciphertext','svgCipherDigest','pngCipherDigest',bytes.png.toString('base64'),bytes.svg.toString()])assert(!text.includes(secret));
  assert(Object.isFrozen(saved.source.identity.sealCandidates));assert(Object.isFrozen(asset));
