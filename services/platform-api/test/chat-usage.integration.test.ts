@@ -199,3 +199,16 @@ test('month aggregation excludes other periods and realtime session placeholders
   assert.equal(january.chat.calls, 1); assert.equal(february.chat.calls, 0); assert.equal(february.chat.inputTokens, null);
   assert.equal((await summary(actor)).chat.legacyReports, 0);
 });
+
+test('cache evidence persists under the actual chat binding and repeated finishes cannot change it', async () => {
+  for (const details of [{}, { cachedInputTokens: 0, cacheWriteInputTokens: 0 }, { cachedInputTokens: 4, cacheWriteInputTokens: 3 }]) {
+    const who = await register(), f = await activeBinding(who), callId = randomUUID();
+    await f.record({ type: 'started', callId, index: 1, provider: 'usage-fixture', model: 'synthetic-model' });
+    const event = { type: 'finished' as const, callId, status: 'complete' as const, usage: { status: 'reported' as const, inputTokens: 10, outputTokens: 2, ...details } };
+    await f.record(event); await f.record(event);
+    const row = (await db.query('SELECT cached_input_tokens,cache_write_input_tokens FROM platform_chat_calls WHERE id=$1', [callId])).rows[0];
+    assert.deepEqual(row, { cached_input_tokens: details.cachedInputTokens ?? null, cache_write_input_tokens: details.cacheWriteInputTokens ?? null });
+    await assert.rejects(f.record({ ...event, usage: { ...event.usage, cachedInputTokens: 5 } }));
+    await assert.rejects(db.query('UPDATE platform_chat_calls SET cached_input_tokens=11 WHERE id=$1', [callId]));
+  }
+});

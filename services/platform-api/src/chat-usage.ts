@@ -1,3 +1,4 @@
+import { parseModelCallUsage } from '@companion/platform-contracts';
 import type { AccountUsage, ModelCallEvent } from '@companion/platform-contracts';
 import type { PoolClient } from 'pg';
 import type { Database } from './database.ts';
@@ -40,7 +41,9 @@ export function chatAccounting(db: Database, binding: Binding) {
     }
     if (event.type !== 'finished' || !terminalStatuses.has(event.status) || !event.usage ||
         !['reported', 'missing', 'invalid'].includes(event.usage.status)) throw accountingError();
-    const usage = event.usage, reported = usage.status === 'reported';
+    let usage; try { usage = parseModelCallUsage(event.usage); } catch { throw accountingError(); }
+    const reported = usage.status === 'reported';
+    const cached = usage.status === 'reported' ? usage.cachedInputTokens ?? null : null, written = usage.status === 'reported' ? usage.cacheWriteInputTokens ?? null : null;
     const input = usage.status === 'reported' ? usage.inputTokens : null, output = usage.status === 'reported' ? usage.outputTokens : null;
     if (reported && (!validTokenCount(input) || !validTokenCount(output))) throw accountingError();
     await db.transaction(async client => {
@@ -50,12 +53,12 @@ export function chatAccounting(db: Database, binding: Binding) {
           row.message_id !== binding.messageId && !(row.message_id === null && startedCalls.has(callId)) ||
           row.conversation_id !== binding.conversationId && !(row.conversation_id === null && startedCalls.has(callId))) throw accountingError();
       if (row.status !== 'running') {
-        if (row.status === event.status && row.usage_status === event.usage.status && row.input_tokens === input && row.output_tokens === output) return;
+        if (row.status === event.status && row.usage_status === event.usage.status && row.input_tokens === input && row.output_tokens === output && row.cached_input_tokens === cached && row.cache_write_input_tokens === written) return;
         // Recovery may have marked a live stream interrupted before its actual final report arrives.
         if (row.status !== 'interrupted' || !startedCalls.has(callId)) throw accountingError();
       }
-      await client.query(`UPDATE platform_chat_calls SET status=$2,usage_status=$3,input_tokens=$4,output_tokens=$5,finished_at=now() WHERE id=$1`,
-        [callId, event.status, event.usage.status, input, output]);
+      await client.query(`UPDATE platform_chat_calls SET status=$2,usage_status=$3,input_tokens=$4,output_tokens=$5,cached_input_tokens=$6,cache_write_input_tokens=$7,finished_at=now() WHERE id=$1`,
+        [callId, event.status, usage.status, input, output, cached, written]);
     });
   };
 }

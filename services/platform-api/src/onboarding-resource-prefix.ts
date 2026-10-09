@@ -1,3 +1,4 @@
+import { readIntakeModelUsagePrefix } from './model-usage-prefix.ts';
 import type { PoolClient } from 'pg';
 import { OnboardingStorage, type SafetySubmissionRow } from './onboarding-storage.ts';
 import { readIntakeResourceCaptureInTransaction } from './onboarding-resource-source.ts';
@@ -81,7 +82,7 @@ export async function intakeResourcePrefixProofs(client:PoolClient,storage:Onboa
     const state:IntakeSafetyStateRow={publication_id:pub.id,user_id:userId,revision:journalRevision,latest_operation_id:operations.at(-1)!.operation_id,journal_digest:journalDigest,payload_ciphertext:Buffer.alloc(0)};
     const publicationOperation=(await client.query<{payload_ciphertext:Buffer}>('SELECT payload_ciphertext FROM platform_onboarding_delivery_v2_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[userId,pub.publication_operation_id])).rows[0];
     if(!publicationOperation)throw deliveryStorageUnavailable();
-    const usage=(await client.query<{value:string}>("SELECT row_to_json(u)::text AS value FROM platform_safety_model_usage u WHERE u.source_kind='onboarding' AND u.submission_id=$1 AND u.generation=$2 ORDER BY u.call_id FOR SHARE",[source.id,source.generation])).rows;
+    const usage=await readIntakeModelUsagePrefix(client,source.id,source.generation);
     if(source.detector_mode==='full'&&usage.length!==1)throw deliveryStorageUnavailable();
     const proof:IntakeResourcePrefixProof={sourceKind:'onboarding',submissionId:source.id,sourceGeneration:source.generation,publicationId:pub.id,
       publicationDigest:deliveryDigest(JSON.stringify(actual.capture)),publicationOperationId:pub.publication_operation_id,

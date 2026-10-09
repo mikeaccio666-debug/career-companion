@@ -1,3 +1,4 @@
+import { parseModelCallUsage } from '@companion/platform-contracts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { COMPANION_PREVIEW_JSON_SCHEMA, checkCompanionOutput, compileFallbackCompanionStyle,
@@ -124,10 +125,7 @@ function recoveryInput(value: unknown): Readonly<{ taskId: string; expectedGener
 }
 const invalid = () => new ApiError(400, 'INVALID_INPUT', 'Use the prepared companion task.');
 function usageSnapshot(usage: ModelCallUsage): ModelCallUsage {
-  if (!usage || !['reported', 'missing', 'invalid'].includes(usage.status)) throw unavailable();
-  if (usage.status !== 'reported') return Object.freeze({ status: usage.status });
-  if (![usage.inputTokens, usage.outputTokens].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 2147483647 && !Object.is(n, -0))) throw unavailable();
-  return Object.freeze({ status: 'reported', inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+  try { return parseModelCallUsage(usage); } catch { throw unavailable(); }
 }
 function outputRules(preview: CompanionModelPreview, claim: Claim) {
   return [preview.summary, ...preview.samples].map((text, i) => checkCompanionOutput({
@@ -778,14 +776,15 @@ export class BackgroundGeneration {
         if (!user.rowCount) throw unavailable();
         const row = (await client.query<CallRow>('SELECT * FROM platform_companion_generation_calls WHERE call_id=$1 FOR UPDATE', [callId])).rows[0];
         if (!matches(row) || !['prepared', 'admitted'].includes(row.status) || (status === 'complete' || outcome !== undefined) && row.admitted_at === null) throw unavailable();
-        if (launched) await this.costs.settleDispatchRiskInTransaction(client, binding!, actual);
+        if (launched) await this.costs.settleDispatchRiskInTransaction(client, binding!, actual.status === 'reported' ? { status: 'reported', inputTokens: actual.inputTokens, outputTokens: actual.outputTokens } : actual);
         else {
           if (actual.status === 'reported' && (actual.inputTokens !== 0 || actual.outputTokens !== 0)) throw unavailable();
           await this.costs.releaseRiskInTransaction(client, binding!);
         }
         await client.query(`UPDATE platform_companion_generation_calls SET status=$2,usage_status=$3,input_tokens=$4,output_tokens=$5,
-          structured_outcome=$6,finished_at=clock_timestamp() WHERE call_id=$1`, [callId, status, actual.status,
-        actual.status === 'reported' ? actual.inputTokens : null, actual.status === 'reported' ? actual.outputTokens : null, outcome ?? null]);
+          structured_outcome=$6,cached_input_tokens=$7,cache_write_input_tokens=$8,finished_at=clock_timestamp() WHERE call_id=$1`, [callId, status, actual.status,
+        actual.status === 'reported' ? actual.inputTokens : null, actual.status === 'reported' ? actual.outputTokens : null, outcome ?? null,
+        actual.status === 'reported' ? actual.cachedInputTokens ?? null : null, actual.status === 'reported' ? actual.cacheWriteInputTokens ?? null : null]);
       });
       finished = status; structuredOutcome = outcome;
     };

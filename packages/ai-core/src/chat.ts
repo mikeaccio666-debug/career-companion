@@ -1,3 +1,4 @@
+import { parseModelCallUsage } from '@companion/platform-contracts';
 import { randomUUID } from 'node:crypto';
 import type { ChatInput, ChatContext, ChatStreamEvent, ModelCallEvent, ModelCallUsage, ProviderAttachment, ModelStepContext, ModelStepEvent, ModelStepResult, ModelToolCall, ModelToolResult } from '@companion/platform-contracts';
 import { ProviderError, invalid } from './errors.ts';
@@ -6,7 +7,6 @@ import { localBase, model } from './config.ts';
 
 const OLLAMA_REASONING_TURN_BYTES = 256 * 1024;
 const OLLAMA_REASONING_STREAM_BYTES = 512 * 1024;
-const MAX_REPORTED_TOKENS = 2_147_483_647;
 const STRUCTURED_BYTES = 32 * 1024;
 const SCHEMA_TYPES = ['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'];
 type JsonSchema = Record<string, any>;
@@ -114,22 +114,25 @@ function structuredResponse(text: string, format: NonNullable<ModelStepContext['
   return text;
 }
 
-function usageCollector(inputKey:string,outputKey:string){
-  let usage:ModelCallUsage={status:'missing'};
+function usageCollector(inputKey: string, outputKey: string, detailsKey: string) {
+  let usage: ModelCallUsage = { status: 'missing' };
   return {
-    observe(value:unknown){
-      // Compatible streams use null on ordinary chunks. Absence is not a zero report.
-      if(value===undefined||value===null||usage.status==='invalid')return;
-      if(typeof value!=='object'||Array.isArray(value)){usage={status:'invalid'};return;}
-      const inputTokens=(value as Record<string,unknown>)[inputKey],outputTokens=(value as Record<string,unknown>)[outputKey];
-      const valid=(count:unknown):count is number=>typeof count==='number'&&Number.isSafeInteger(count)&&count>=0&&count<=MAX_REPORTED_TOKENS;
-      if(!valid(inputTokens)||!valid(outputTokens)){usage={status:'invalid'};return;}
-      // Reports are whole-call snapshots. Identical repeats do not add tokens;
-      // conflicting snapshots cannot be presented as a trustworthy final count.
-      if(usage.status==='reported'&&(usage.inputTokens!==inputTokens||usage.outputTokens!==outputTokens)){usage={status:'invalid'};return;}
-      usage={status:'reported',inputTokens,outputTokens};
+    observe(value: unknown) {
+      if (value === undefined || value === null || usage.status === 'invalid') return;
+      try {
+        if (typeof value !== 'object' || Array.isArray(value)) throw new Error();
+        const data = value as Record<string, unknown>, details = data[detailsKey];
+        if (details !== undefined && details !== null && (typeof details !== 'object' || Array.isArray(details))) throw new Error();
+        const cache = (details ?? {}) as Record<string, unknown>;
+        const next = parseModelCallUsage({ status: 'reported', inputTokens: data[inputKey], outputTokens: data[outputKey],
+          ...(Object.hasOwn(cache, 'cached_tokens') ? { cachedInputTokens: cache.cached_tokens } : {}),
+          ...(Object.hasOwn(cache, 'cache_write_tokens') ? { cacheWriteInputTokens: cache.cache_write_tokens } : {}) });
+        // Whole-call snapshots, never deltas. Changed cache coverage is also a conflicting report.
+        if (usage.status === 'reported' && JSON.stringify(usage) !== JSON.stringify(next)) throw new Error();
+        usage = next;
+      } catch { usage = { status: 'invalid' }; }
     },
-    get result(){return usage;},
+    get result() { return usage; },
   };
 }
 function failedCallStatus(error:unknown,signal?:AbortSignal):Extract<ModelCallEvent,{type:'finished'}>['status']{
@@ -242,7 +245,7 @@ function finishEvent(callId: string, status: Extract<ModelCallEvent, { type: 'fi
 }
 async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: ChatInput, ctx: ModelStepContext, legacy: boolean, backgroundCompletionEvidence = false): AsyncGenerator<ModelStepEvent, ParsedStepResult> {
   const selectedModel = legacy ? model(env, 'OPENAI_CHAT_MODEL', input.model, 'gpt-6-astra') : input.model!;
-  const state = resumeState(http, input, selectedModel, ctx), timing = stepSignal(ctx), callId = randomUUID(), usage = usageCollector('input_tokens', 'output_tokens');
+  const state = resumeState(http, input, selectedModel, ctx), timing = stepSignal(ctx), callId = randomUUID(), usage = usageCollector('input_tokens', 'output_tokens', 'input_tokens_details');
   let status: Extract<ModelCallEvent, { type: 'finished' }>['status'] = 'interrupted';
   const tools = ctx.tools.map(tool => ({ type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: false }));
   let output: any[] = [], completed = false, visible = false, text = '';
@@ -317,7 +320,7 @@ async function* compatibleStep(http: HttpClient, env: NodeJS.ProcessEnv, input: 
   const reasoningEffort = ctx.reasoningEffort ?? (input.provider === 'ollama' ? env.OLLAMA_REASONING_EFFORT : undefined);
   if (reasoningEffort !== undefined && !['none', 'low', 'medium', 'high'].includes(reasoningEffort)) throw new ProviderError('INVALID_PROVIDER_CONFIG', 'Use a supported Ollama reasoning effort or leave it unset.', 503);
   const selectedModel = legacy ? model(env, config.modelKey, input.model) : input.model!;
-  const state = resumeState(http, input, selectedModel, ctx), timing = stepSignal(ctx), callId = randomUUID(), usage = usageCollector('prompt_tokens', 'completion_tokens');
+  const state = resumeState(http, input, selectedModel, ctx), timing = stepSignal(ctx), callId = randomUUID(), usage = usageCollector('prompt_tokens', 'completion_tokens', 'prompt_tokens_details');
   let status: Extract<ModelCallEvent, { type: 'finished' }>['status'] = 'interrupted';
   const tools = ctx.tools.filter(tool => !ctx.allowedToolNames || ctx.allowedToolNames.includes(tool.name)).map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
   const functions = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>(), started = new Set<number>();

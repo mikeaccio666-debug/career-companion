@@ -1,3 +1,4 @@
+import { parseModelCallUsage } from '@companion/platform-contracts';
 import { parseMemorySafetyClaim,type MemorySafetyClaim } from './shared-memory-safety-protocol.ts';
 import type { ModelCallEvent } from '@companion/platform-contracts';
 import type { PoolClient } from 'pg';
@@ -39,7 +40,7 @@ interface UsageRow {
   preview_revision: number | null; expected_identity_revision: number | null; name_execution_token: string | null;
   submitted_revision: number; generation: number; auth_version: string; detector_revision: number; call_index: number;
   provider: string; model: string; purpose: string; status: string; usage_status: string; input_tokens: number | null; output_tokens: number | null;
-  admitted_at: Date | null; finished_at: Date | null;
+  admitted_at: Date | null; finished_at: Date | null; cached_input_tokens: number | null; cache_write_input_tokens: number | null;
 }
 /** Server-owned execution context emitted by the concrete naming source after its real execution-token COMMIT. */
 export interface CompanionNameSafetyExecution {
@@ -149,14 +150,12 @@ function createBoundSafetyModelUsage(db: Database, binding: Binding, route: Reso
     }
     const finish = record(input, ['type', 'callId', 'status', 'usage']);
     if (finish.type !== 'finished' || typeof finish.status !== 'string' || !terminal.includes(finish.status)) throw unavailable();
-    const usage = record(finish.usage, ['status'], ['inputTokens', 'outputTokens']);
-    if (usage.status === 'reported') {
-      record(finish.usage, ['status', 'inputTokens', 'outputTokens']);
-      return { type: 'finished' as const, callId, status: finish.status, usage: 'reported', input: tokens(usage.inputTokens), output: tokens(usage.outputTokens) };
-    }
-    record(finish.usage, ['status']);
-    if (!['missing', 'invalid'].includes(usage.status as string)) throw unavailable();
-    return { type: 'finished' as const, callId, status: finish.status, usage: usage.status as string, input: null, output: null };
+    const usage = parseModelCallUsage(finish.usage);
+    return { type: 'finished' as const, callId, status: finish.status, usage: usage.status,
+      input: usage.status === 'reported' ? usage.inputTokens : null, output: usage.status === 'reported' ? usage.outputTokens : null,
+      cached: usage.status === 'reported' ? usage.cachedInputTokens ?? null : null,
+      written: usage.status === 'reported' ? usage.cacheWriteInputTokens ?? null : null };
+
   }
   return Object.freeze({
     async onModelCall(input: ModelCallEvent): Promise<void> {
@@ -212,12 +211,12 @@ function createBoundSafetyModelUsage(db: Database, binding: Binding, route: Reso
           const found = await client.query<UsageRow>('SELECT * FROM platform_safety_model_usage WHERE call_id=$1 AND user_id=$2 FOR UPDATE', [snapshot.callId, claim.userId]);
           const row = found.rows[0]; if (!matches(row, snapshot.callId)) throw unavailable();
           if (terminal.includes(row.status)) {
-            if (row.status !== snapshot.status || row.usage_status !== snapshot.usage || row.input_tokens !== snapshot.input || row.output_tokens !== snapshot.output) throw unavailable();
+            if (row.status !== snapshot.status || row.usage_status !== snapshot.usage || row.input_tokens !== snapshot.input || row.output_tokens !== snapshot.output || row.cached_input_tokens !== snapshot.cached || row.cache_write_input_tokens !== snapshot.written) throw unavailable();
             return;
           }
           if (!['prepared', 'admitted'].includes(row.status) || snapshot.status === 'complete' && row.admitted_at === null) throw unavailable();
-          await client.query(`UPDATE platform_safety_model_usage SET status=$2,usage_status=$3,input_tokens=$4,output_tokens=$5,finished_at=clock_timestamp()
-            WHERE call_id=$1`, [snapshot.callId, snapshot.status, snapshot.usage, snapshot.input, snapshot.output]);
+          await client.query(`UPDATE platform_safety_model_usage SET status=$2,usage_status=$3,input_tokens=$4,output_tokens=$5,cached_input_tokens=$6,cache_write_input_tokens=$7,finished_at=clock_timestamp()
+            WHERE call_id=$1`, [snapshot.callId, snapshot.status, snapshot.usage, snapshot.input, snapshot.output, snapshot.cached, snapshot.written]);
         });
       } catch { throw unavailable(); }
     },
