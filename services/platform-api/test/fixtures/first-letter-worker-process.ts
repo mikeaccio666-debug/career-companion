@@ -44,11 +44,12 @@ export async function workerProcessFixture(f:PrebirthFixture,a:{
    const end=Date.now()+timeout;
    while(!await check()){assert(Date.now()<end,'Actual worker process observation timed out');await new Promise(r=>setTimeout(r,40));}
   }
-  async function start(enabled:boolean){
+  async function start(enabled:boolean,shutdownTimeoutMs?:number){
    const appName='fictional-worker-'+randomUUID(),connection=new URL(db);connection.searchParams.set('application_name',appName);
    // Explicit allowlist: never inherit keys, NODE_OPTIONS or production configuration.
    // Fictional mail configuration satisfies verified-email startup; the child denies mail fetch.
    const env:NodeJS.ProcessEnv={PATH:process.env.PATH,NODE_ENV:'test',...files,
+    ...(shutdownTimeoutMs===undefined?{}:{PLATFORM_WORKER_SHUTDOWN_TIMEOUT_MS:String(shutdownTimeoutMs)}),
     PLATFORM_DATABASE_URL:connection.toString(),PLATFORM_REDIS_URL:a.config.redisUrl,
     PLATFORM_QUEUE_NAME:a.config.queueName,PLATFORM_BUILD_ID:'fictional-process-test',
     PLATFORM_STORAGE_DIR:join(directory,'blobs'),PLATFORM_DATA_KEY:'e5'.repeat(32),
@@ -70,8 +71,9 @@ export async function workerProcessFixture(f:PrebirthFixture,a:{
    async function dispose(){if(!ended)child.kill('SIGKILL');await closed;}
    children.push({dispose});
    await until(async()=>{assert(!ended&&!failed,'Actual worker failed before startup: '+errors.replace(/(?:postgres(?:ql)?|redis|https?):\/\/[^\s]+/g,'[redacted URL]').replace(/[a-f0-9]{64}/g,'[redacted digest]'));return output.includes('Platform task worker started.');});
-   return {signal,exited:()=>ended,async stop(){
-    signal();await until(async()=>ended);await closed;assert.equal(exitCode,0);assert.equal(exitSignal,null);assert.equal(errors,'');
+   return {signal,repeatSignal(){assert(!ended);assert(child.kill('SIGTERM'));},exited:()=>ended,async stop(expected:0|1=0){
+    signal();await until(async()=>ended);await closed;assert.equal(exitCode,expected);assert.equal(exitSignal,null);
+    assert.equal(errors,expected===0?'':'Worker shutdown deadline exceeded; unfinished work is not confirmed.\n');
     await until(async()=> (await f.db.query('SELECT pid FROM pg_stat_activity WHERE application_name=$1',[appName])).rowCount===0);
    }};
   }

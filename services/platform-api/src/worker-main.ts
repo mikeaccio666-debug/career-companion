@@ -1,3 +1,4 @@
+import {createWorkerShutdownHandler} from './worker-shutdown.ts';
 import {purgeExpiredProductEvents} from './product-events.ts';
 import {FirstLetterSettings} from './first-letter-settings.ts';
 import {FirstLetterSources} from './first-letter-sources.ts';
@@ -53,24 +54,31 @@ companionNameQueue.start();
 const accountEmailWorker=startAccountEmailWorker(db,config.accountEmail);
 worker.on('error',()=>{process.stderr.write('Worker connection interrupted; waiting for recovery.\n');});
 const heartbeat=startWorkerHeartbeat({db,worker,queueName:config.queueName,codeVersion:config.codeVersion});
-let closing=false,recovering:Promise<void>|undefined,shutdown:Promise<void>|undefined;
+let closing=false,recovering:Promise<void>|undefined;
 const recovery=setInterval(()=>{
   if(closing||recovering)return;
   const current=Promise.allSettled([recoverInterrupted(jobs),reconcileCompanionAccounting(companion),purgeExpiredMemoryDeletions(db),purgeExpiredProductEvents(db).catch(()=>{process.stderr.write('Product event retention maintenance failed.\n');}),...(mentorFinancialRetention?[mentorFinancialRetention.purgeExpired(db).catch(()=>{process.stderr.write('Mentor financial retention maintenance failed.\n');})]:[]),...(config.dataCrypto?[uploadRemovals.recover(),uploadWrites.recover()]:[])]).then(()=>{}).finally(()=>{if(recovering===current)recovering=undefined;});
   recovering=current;
 },15_000);recovery.unref();
 process.stdout.write('Platform task worker started.\n');
-for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{
-  if(shutdown)return;
-  closing=true;clearInterval(recovery);
-  shutdown=(async()=>{
-    await heartbeat.stop();
-    await recovering;
-    // BullMQ close waits for processors and has no built-in deadline. A stopping report is not proof of shutdown.
-    const results=await Promise.allSettled([worker.close(),accountEmailWorker.close(),companionWorker.close(),companionQueue.close(),
-      companionNameWorker.close(),companionNameQueue.close(),letterQueue?.close(),letterWorker?.close()]);
+const shutdown=createWorkerShutdownHandler({
+  timeoutMs:config.workerShutdownTimeoutMs??25000,
+  stopIntake(){closing=true;clearInterval(recovery);},
+  async drain(){
+    // Ask every producer/consumer to stop now, rather than waiting for a
+    // heartbeat or maintenance operation before closing intake.
+    const closeAll=[
+      ()=>heartbeat.stop(),async()=>{await recovering;},
+      ()=>worker.close(),()=>accountEmailWorker.close(),
+      ()=>companionWorker.close(),()=>companionQueue.close(),
+      ()=>companionNameWorker.close(),()=>companionNameQueue.close(),
+      async()=>{await letterQueue?.close();},async()=>{await letterWorker?.close();},
+    ];
+    const results=await Promise.allSettled(closeAll.map(close=>Promise.resolve().then(close)));
     await db.close();
     if(results.some(result=>result.status==='rejected'))throw new Error('Worker shutdown could not be confirmed.');
-  })();
-  void shutdown.then(()=>process.exit(0),()=>{process.stderr.write('Worker shutdown could not be confirmed.\n');process.exit(1);});
+  },
+  diagnostic(message){process.stderr.write(message);},
+  exit(code){process.exit(code);},
 });
+for(const signal of ['SIGINT','SIGTERM'] as const)process.on(signal,shutdown);
