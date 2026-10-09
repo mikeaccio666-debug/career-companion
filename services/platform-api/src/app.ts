@@ -1,4 +1,5 @@
 import { TodaySources } from './today-sources.ts';
+import { TodayRestService } from './today-rest.ts';
 import { CompanionDailySettingsService } from './companion-daily-settings.ts';
 import { UploadWrites } from './upload-writes.ts';
 import { AccountReauthentication } from './account-reauthentication.ts';
@@ -127,6 +128,7 @@ export async function buildApp(options:AppOptions={}) {
   const careerTargets=new CareerTargets(db,config,bundle);
   const companionPaidSettings=new CompanionPaidSettingsService(db,config,bundle);
   const companionDailySettings=new CompanionDailySettingsService(db,config,bundle);
+  const todayRest=new TodayRestService(db,config,bundle);
   const careerIdentity=new CareerIdentityRecords(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerApplications=new CareerApplications(db,config,bundle,manualJobs);
@@ -137,7 +139,7 @@ export async function buildApp(options:AppOptions={}) {
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage),uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
   const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview,careerApplications);
-  const todaySources=new TodaySources(db,{settings:companionDailySettings,targets:careerTargets,library:careerStories,resumes:resumeReview,jobs:manualJobs,applications:careerApplications,interviews:careerInterviews});
+  const todaySources=new TodaySources(db,{rest:todayRest,settings:companionDailySettings,targets:careerTargets,library:careerStories,resumes:resumeReview,jobs:manualJobs,applications:careerApplications,interviews:careerInterviews});
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
@@ -817,6 +819,9 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/companion/settings`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/companion/settings/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.operation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
   app.patch(`${prefix}/companion/settings`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.change(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/today/pause`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await todayRest.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/today/pause/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await todayRest.operation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
+  app.post(`${prefix}/today/pause`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await todayRest.change(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/companion/settings/daily`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/companion/settings/daily/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.operation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
   app.patch(`${prefix}/companion/settings/daily`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.change(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}});

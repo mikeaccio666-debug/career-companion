@@ -1,3 +1,4 @@
+import { TodayRestPanel } from './today-rest-view';
 import { CompanionDailySettingsPanel } from './companion-daily-settings-view';
 import './career-design-tokens.css';
 import { useEffect, useMemo, useState } from 'react';
@@ -27,5 +28,5 @@ export function CompanionPaidSettingsPage({ onLogout }: {
  <label><input type="radio" name="paid-suggestions" value="only_when_asked" checked={selected === 'only_when_asked'} onChange={() => setDraft({ source: state.settings, choice: 'only_when_asked' })}/><span>只在我问的时候<small>由我主动开启这类话题。</small></span></label>
  </fieldset>{state.settings.revision === 0 && <p className="settings-default">这是默认选项，尚未记录你的选择。</p>}<button type="submit" disabled={disabled}>保存选择</button></form>}
  <div className="companion-settings-actions"><button type="button" disabled={state.busy || state.suspended || !client.isCurrent()} onClick={() => void controller.refresh()}>重新读取</button>{state.pending && <><button type="button" disabled={state.busy || state.suspended} onClick={() => void controller.observe()}>核对这次保存</button><button type="button" disabled={state.busy || state.suspended} onClick={() => void controller.retry()}>用原操作重试</button></>}</div>
- </section><CompanionDailySettingsPanel /></main>;
+ </section><CompanionDailySettingsPanel /><TodayRestPanel /></main>;
 }
