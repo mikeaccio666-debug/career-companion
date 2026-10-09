@@ -43,7 +43,7 @@ export class ManualJobs {
  private async row(client:PoolClient,context:FixedSessionContext,id:string){return (await client.query('SELECT * FROM platform_career_job_observations WHERE user_id=$1 AND id=$2 FOR UPDATE',[context.userId,id])).rows[0];}
  async readInTransaction(client:PoolClient,value:FixedSessionContext,key:unknown,signal?:AbortSignal){const context=this.fixed(value);let id:string;try{id=careerRecordId(key);}catch{throw bad();}await this.authorize(client,context,signal);const row=await this.row(client,context,id);if(!row)throw missing();const job=await this.record(client,context,row);await authorizeFixedSession(client,context,signal);return job;}
     /** Complete authenticated metadata, never a page of user-entered body. */
-    async readForPreparationInTransaction(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal): Promise<readonly Readonly<OwnedCareerSavedJob>[]> {
+    private async readPreparationAndDailySources(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal) {
         const context = this.fixed(value);
         await this.authorize(client, context, signal);
         await this.storage.authorizeSession(client, context, signal);
@@ -62,18 +62,24 @@ export class ManualJobs {
             receipts.set(r.observationId, r);
         }
         const metadata: Readonly<OwnedCareerSavedJob>[] = [];
+        const daily = [];
         for (const row of rows) {
             signal?.throwIfAborted();
             const proof = receipts.get(row.id);
             if (!proof)
                 throw unavailable();
             const job = await this.record(client, context, row, proof);
+            daily.push(Object.freeze({id:job.id,ownerId:context.userId,revision:job.revision,track:job.roleFamily,observedAt:job.observedAt,deadlineAt:job.deadlineAt,deadlineTimeZone:job.deadlineTimeZone,source:job.source}));
             metadata.push(Object.freeze({ ownerId: context.userId, id: job.id, revision: job.revision, state: 'current', source: 'manual', track: job.roleFamily, observedAt: job.observedAt,
                 normalSummary: '本人粘贴的岗位 · ' + job.roleFamily + ' · 未核实是否仍开放。' }));
         }
         await authorizeFixedSession(client, context, signal);
-        return Object.freeze(metadata);
+        return Object.freeze({preparation:Object.freeze(metadata),daily:Object.freeze(daily)});
     }
+    async readForPreparationInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal) { return (await this.readPreparationAndDailySources(client,value,signal)).preparation; }
+    /** Verified coordinates/deadlines only. Never promises the job is open. */
+    async readForDailyPlanningInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal) { return (await this.readPreparationAndDailySources(client,value,signal)).daily; }
+
  /** Internal reader for the account-export transaction: the coordinator
   * consumes the fresh password proof and commits before exposing any section. */
  async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
