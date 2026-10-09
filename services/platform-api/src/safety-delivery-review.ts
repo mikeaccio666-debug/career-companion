@@ -79,9 +79,10 @@ function assertAssetTimes(bundle:SafetyResponseBundle,review:SafetyDeliveryRevie
   const approved=Date.parse(bundle.review.approvedAt),reviewed=Date.parse(review.reviewedAt);
   if(approved>reviewed||reviewed>at.getTime()||bundle.resources.contacts.some(c=>Date.parse(c.verifiedAt)>reviewed))throw deliveryUnavailable();
 }
-/** Original authorized decision snapshot only: later role/config changes do not redraw or invalidate an existing valid publication. */
-export async function readArchivedDeliveryAssets(client:PoolClient,crypto:DataCrypto,id:string):Promise<ArchivedDeliveryAssets> {
-  const row=(await client.query<AssetRow>('SELECT * FROM platform_safety_delivery_assets WHERE id=$1 FOR SHARE',[deliveryUuid(id)])).rows[0];
+/** Original authorized decision snapshot only: later role/config changes do not redraw or invalidate an existing valid publication.
+ * Bounded REPEATABLE READ archives may disable locks; execution callers retain the default. */
+export async function readArchivedDeliveryAssets(client:PoolClient,crypto:DataCrypto,id:string,lock=true):Promise<ArchivedDeliveryAssets> {
+  const row=(await client.query<AssetRow>(`SELECT * FROM platform_safety_delivery_assets WHERE id=$1${lock?' FOR SHARE':''}`,[deliveryUuid(id)])).rows[0];
   try{
     if(!row)throw deliveryStorageUnavailable();const bundle=parseSafetyResponseBundle(JSON.parse(row.bundle_json)),review=parseSafetyDeliveryReview(JSON.parse(row.review_json));
     if(bundle.revision!==row.bundle_revision||bundle.contentDigest!==row.content_digest||bundle.reviewDigest!==row.bundle_review_digest
@@ -97,8 +98,8 @@ function operationCapture(row:ReviewOperation,sessionHash:string,authVersion:str
   return {schemaVersion:1,userId:row.user_id,operationId:row.operation_id,assetId:row.asset_id,kind:row.kind,inputDigest:row.input_digest,
     sessionHash,authVersion,request,at:row.created_at.toISOString()};
 }
-export async function readArchivedDeliveryActivation(client:PoolClient,crypto:DataCrypto,assetId:string,userId:string,operationId:string) {
-  const row=(await client.query<ReviewOperation>('SELECT * FROM platform_safety_delivery_review_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[userId,operationId])).rows[0];
+export async function readArchivedDeliveryActivation(client:PoolClient,crypto:DataCrypto,assetId:string,userId:string,operationId:string,lock=true) {
+  const row=(await client.query<ReviewOperation>(`SELECT * FROM platform_safety_delivery_review_operations WHERE user_id=$1 AND operation_id=$2${lock?' FOR SHARE':''}`,[userId,operationId])).rows[0];
   try{
     if(!row||row.kind!=='activate'||row.asset_id!==assetId)throw deliveryStorageUnavailable();
     const text=crypto.openUtf8(row.capture_ciphertext,{table:'platform_safety_delivery_review_operations',column:'capture_ciphertext',rowId:row.operation_id,ownerId:row.user_id,revision:1});

@@ -44,7 +44,7 @@ test('actual verification and reset requests export owner metadata without crede
  for(const key of ['ciphertext','proof_hash','token_hash','session_hash','lease_token','target_hash','email_digest','invited_by','auth_version','provider_message_id'])assert(!json.includes('"'+key+'"'));
  const securityQueries=queries.filter(sql=>['account_actions','account_email_outbox','account_action_limits','account_reauthentications','request_limits','runtime_leases','invites'].some(t=>reads(sql,t)));
  assert(securityQueries.every(sql=>!/(ciphertext|proof_hash|token_hash|lease_token|provider_message_id)/.test(sql)));
- assert.deepEqual(await snapshot(who),before);assert.equal(result.includedTables.length,109);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(Object.isFrozen(s.accountEmailDeliveries[0]));
+ assert.deepEqual(await snapshot(who),before);assert.equal(result.includedTables.length,117);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(Object.isFrozen(s.accountEmailDeliveries[0]));
 });
 
 test('recipient matching includes redeemed historical addresses and pending current email, but excludes other recipients and invitations merely issued by owner',async()=>{

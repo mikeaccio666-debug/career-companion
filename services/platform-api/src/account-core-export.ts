@@ -1,3 +1,4 @@
+import {AccountIntakeDeliveryExport,INTAKE_DELIVERY_EXPORT_TABLES,type IntakeDeliveryExportSection} from './account-intake-delivery-export.ts';
 import {AccountOnboardingResponseExport,ONBOARDING_RESPONSE_EXPORT_TABLES,type OnboardingResponseExportSection} from './account-onboarding-response-export.ts';
 import {AccountCompanionIdentityExport,COMPANION_IDENTITY_EXPORT_TABLES,type CompanionIdentityExportSection} from './account-companion-identity-export.ts';
 import {exportModelAuditInTransaction,MODEL_AUDIT_EXPORT_TABLES,type ModelAuditExportSection} from './account-model-audit-export.ts';
@@ -39,8 +40,8 @@ import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
-const projectedTables=Object.freeze(['platform_daily_plans','platform_daily_plan_items','platform_daily_plan_operations','platform_today_rest','platform_companion_daily_settings','platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES,...COMPANION_EXPORT_TABLES,...COMPANION_GENERATION_EXPORT_TABLES,...ONBOARDING_EXPORT_TABLES,...COST_EXPORT_TABLES,...SECURITY_EXPORT_TABLES,...VOICE_USAGE_EXPORT_TABLES,...PRIVATE_KNOWLEDGE_EXPORT_TABLES,...MCP_EXPORT_TABLES,...PLAN_EXPORT_TABLES,...MENTOR_EXPORT_TABLES,...UPLOAD_JOURNAL_EXPORT_TABLES,...TASK_EXPORT_TABLES,...EXECUTION_EXPORT_TABLES,...MEMORY_SAFETY_EXPORT_TABLES,...MODEL_AUDIT_EXPORT_TABLES,...COMPANION_IDENTITY_EXPORT_TABLES,...ONBOARDING_RESPONSE_EXPORT_TABLES]);
-type ArraySection='dailyPlans'|'dailyPlanHistory'|'todayRest'|'companionDailySettings'|'termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection|CompanionGenerationExportSection|OnboardingExportSection|CostExportSection|SecurityExportSection|VoiceUsageExportSection|PrivateKnowledgeExportSection|McpExportSection|PlanExportSection|MentorExportSection|AccountFileSection|UploadJournalExportSection|TaskExportSection|ExecutionExportSection|MemorySafetyExportSection|ModelAuditExportSection|CompanionIdentityExportSection|OnboardingResponseExportSection;
+const projectedTables=Object.freeze(['platform_daily_plans','platform_daily_plan_items','platform_daily_plan_operations','platform_today_rest','platform_companion_daily_settings','platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES,...COMPANION_EXPORT_TABLES,...COMPANION_GENERATION_EXPORT_TABLES,...ONBOARDING_EXPORT_TABLES,...COST_EXPORT_TABLES,...SECURITY_EXPORT_TABLES,...VOICE_USAGE_EXPORT_TABLES,...PRIVATE_KNOWLEDGE_EXPORT_TABLES,...MCP_EXPORT_TABLES,...PLAN_EXPORT_TABLES,...MENTOR_EXPORT_TABLES,...UPLOAD_JOURNAL_EXPORT_TABLES,...TASK_EXPORT_TABLES,...EXECUTION_EXPORT_TABLES,...MEMORY_SAFETY_EXPORT_TABLES,...MODEL_AUDIT_EXPORT_TABLES,...COMPANION_IDENTITY_EXPORT_TABLES,...ONBOARDING_RESPONSE_EXPORT_TABLES,...INTAKE_DELIVERY_EXPORT_TABLES]);
+type ArraySection='dailyPlans'|'dailyPlanHistory'|'todayRest'|'companionDailySettings'|'termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection|CompanionGenerationExportSection|OnboardingExportSection|CostExportSection|SecurityExportSection|VoiceUsageExportSection|PrivateKnowledgeExportSection|McpExportSection|PlanExportSection|MentorExportSection|AccountFileSection|UploadJournalExportSection|TaskExportSection|ExecutionExportSection|MemorySafetyExportSection|ModelAuditExportSection|CompanionIdentityExportSection|OnboardingResponseExportSection|IntakeDeliveryExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
 const tooLarge=()=>new ApiError(503,'ACCOUNT_EXPORT_TOO_LARGE','This export requires the archive worker. No partial export was returned.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
@@ -66,6 +67,7 @@ export class AccountCoreExport {
   private readonly welcomes:AccountWelcomeExport;
   private readonly onboarding:AccountOnboardingExport;
   private readonly onboardingResponses:AccountOnboardingResponseExport;
+  private readonly intakeDelivery:AccountIntakeDeliveryExport;
   private readonly generations:AccountCompanionGenerationExport;
   private readonly companions:AccountCompanionExport;
   private readonly identities:AccountCompanionIdentityExport;
@@ -84,6 +86,7 @@ export class AccountCoreExport {
     this.welcomes=new AccountWelcomeExport(config);
     this.onboarding=new AccountOnboardingExport(config);
     this.onboardingResponses=new AccountOnboardingResponseExport(config);
+    this.intakeDelivery=new AccountIntakeDeliveryExport(config);
     this.generations=new AccountCompanionGenerationExport(config);
     this.companions=new AccountCompanionExport(config);
     this.identities=new AccountCompanionIdentityExport(config);
@@ -122,6 +125,7 @@ export class AccountCoreExport {
         costPolicies:[],costReservations:[],costLedger:[],
         onboardingDrafts:[],onboardingOperations:[],onboardingSafetySubmissions:[],
         onboardingSafetyResponses:[],onboardingSafetyPublications:[],onboardingSafetyFollowups:[],
+        intakeDeliveryHeads:[],intakeDeliveryOperations:[],intakeResourcePublications:[],intakeBodyProjections:[],intakeFollowupStates:[],intakeFollowups:[],intakeHandledSources:[],intakeResourceCutovers:[],
         companionSourceManifests:[],companionGenerationRequests:[],companionGenerationOutbox:[],companionGenerationCheckpoints:[],
         companionAnswers:[],companionGenerationTasks:[],companionRevisions:[],companionGenerationCalls:[],companionOutputBlocks:[],
         dailyPlans:[],dailyPlanHistory:[],todayRest:[],companionDailySettings:[],companions:[],companionPaidSettingOperations:[],
@@ -169,6 +173,7 @@ export class AccountCoreExport {
       for await(const item of this.identities.exportInTransaction(client,who,{tasks:sections.companionGenerationTasks,revisions:sections.companionRevisions},signal))append(item.section,item.record);
       for await(const item of this.onboarding.exportInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.onboardingResponses.exportInTransaction(client,who,{drafts:sections.onboardingDrafts,submissions:sections.onboardingSafetySubmissions},signal))append(item.section,item.record);
+      for await(const item of this.intakeDelivery.exportInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of exportCostsInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of exportSecurityInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of exportVoiceUsageInTransaction(client,who,signal))append(item.section,item.record);
