@@ -74,3 +74,11 @@ test('details validation remains strict even when its effective value would be h
     }
   }
 });
+
+test('first-letter provider is separate, explicit and validated without activating other purposes',()=>{
+ assert.deepEqual(readConfig({PLATFORM_FIRST_LETTER_PROVIDER:'openai'}).modelRoutes,
+  {first_letter_generation:{provider:'openai'}});
+ assert.deepEqual(readConfig({OPENAI_FIRST_LETTER_MODEL:'fictional-letter',OPENAI_API_KEY:'fictional-key',PLATFORM_ALLOW_PROVIDER_CALLS:'1'}).modelRoutes,{});
+ for(const value of ['', ' ', 'fictional-provider\n','fictional-provider,other','x'.repeat(81)])
+  assert.throws(()=>readConfig({PLATFORM_FIRST_LETTER_PROVIDER:value}));
+});

@@ -52,8 +52,8 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
         const saved = snapshotBackgroundChat(input,context);
         if (saved.input.provider !== 'openai') throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','No verified structured output adapter is available for this provider.',503);
         requireProvider(env,saved.input.provider,'chat');
-        const configured = providerStatuses(env).find(provider => provider.id === 'openai')?.modelsByPurpose?.companion_generation;
-        if (!configured || configured.length !== 1) throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','Configure an explicit server companion generation model.',503);
+        const configured = providerStatuses(env).find(provider => provider.id === 'openai')?.modelsByPurpose?.[saved.context.background!.purpose];
+        if (!configured || configured.length !== 1) throw new ProviderError('PROVIDER_STRUCTURED_OUTPUT_UNAVAILABLE','Configure an explicit server model for this background purpose.',503);
         if (saved.input.model !== configured[0]) invalid('Background generation must use the configured server model.');
         return streamBackgroundChat(http,env,saved.input,saved.context);
       }

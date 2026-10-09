@@ -291,7 +291,7 @@ async function* openAIStep(http: HttpClient, env: NodeJS.ProcessEnv, input: Chat
         // Only a normal, fully read terminal stream can establish content failure.
         // Refusal, bad envelope, trailing events, transport interruption and
         // cancellation exit earlier without this server-owned evidence.
-        try { text = structuredResponse(text,format,backgroundCompletionEvidence && ctx.purpose === 'companion_generation'); }
+        try { text = structuredResponse(text,format,backgroundCompletionEvidence && (ctx.purpose === 'companion_generation' || ctx.purpose === 'first_letter_generation')); }
         catch (error) {
           if (error instanceof ProviderError && error.code === 'PROVIDER_STRUCTURED_VALIDATION_FAILED') structuredOutcome = 'invalid_format';
           throw error;
@@ -406,7 +406,7 @@ export function snapshotBackgroundChat(input: ChatInput, ctx: ChatContext): { in
   const limits = closed(background.limits,['maxOutputTokens']);
   if (request.mode !== 'chat' || typeof request.provider !== 'string' || typeof request.model !== 'string'
     || !request.model.trim() || request.model.trim() !== request.model || request.model.length > 150 || /[\x00-\x1f\x7f]/.test(request.model)
-    || background.purpose !== 'companion_generation' || typeof context.requestAdmission !== 'function' || typeof context.onModelCall !== 'function'
+    || !['companion_generation','first_letter_generation'].includes(background.purpose as string) || typeof context.requestAdmission !== 'function' || typeof context.onModelCall !== 'function'
     || context.signal !== undefined && !(context.signal instanceof AbortSignal)
     || !Number.isSafeInteger(limits.maxOutputTokens) || (limits.maxOutputTokens as number) < 1 || (limits.maxOutputTokens as number) > 1536
     || !Number.isSafeInteger(background.timeoutMs) || (background.timeoutMs as number) < 1 || (background.timeoutMs as number) > 15000) structuredInput();
@@ -425,7 +425,7 @@ export function snapshotBackgroundChat(input: ChatInput, ctx: ChatContext): { in
   const format = structuredFormat(background.responseFormat);
   return { input: Object.freeze({ provider: request.provider, model: request.model, mode: 'chat', messages: Object.freeze(savedMessages) }) as ChatInput,
     context: Object.freeze({ ...(context.signal === undefined ? {} : { signal: context.signal }), requestAdmission: context.requestAdmission,
-      onModelCall: context.onModelCall, background: Object.freeze({ purpose: 'companion_generation', responseFormat: format,
+      onModelCall: context.onModelCall, background: Object.freeze({ purpose: background.purpose, responseFormat: format,
         limits: Object.freeze({ maxOutputTokens: limits.maxOutputTokens }), timeoutMs: background.timeoutMs }) }) as ChatContext };
 }
 /** A backend generation is one real tools-disabled provider request, not a conversation or agent loop. */
