@@ -34,6 +34,15 @@ export class UploadRemovals {
   const event=this.crypto!.sealUtf8(canonical({recordDigest:hash(r),at}),{table:'platform_upload_removal_events',column:'ciphertext',rowId:r.lastEventId,ownerId:r.ownerId,revision:r.generation});
   await client.query('INSERT INTO platform_upload_removal_events(upload_id,user_id,id,generation,ciphertext,created_at) VALUES($1,$2,$3,$4,$5,$6)',[r.uploadId,r.ownerId,r.lastEventId,r.generation,event,at]);
  }
+ /** Only an authenticated, completed journal may lose its recovery coordinates.
+  * The caller holds the journal row lock; the FK cascades its private events.
+  * Live owners keep their receipts. No deletion identity is retained here. */
+ private async purgeDeletedOwnerReceipt(client:PoolClient,r:Record){
+  if(r.status!=='removed')return;
+  await client.query(`DELETE FROM platform_upload_removals r WHERE r.upload_id=$1 AND r.user_id=$2
+   AND r.generation=$3 AND r.status='removed'
+   AND NOT EXISTS(SELECT 1 FROM platform_users u WHERE u.id=r.user_id)`,[r.uploadId,r.ownerId,r.generation]);
+ }
  private public(r:Record){return parseUploadRemovalReceipt({ownerId:r.ownerId,name:r.name,uploadId:r.uploadId,operationId:r.operationId,status:r.status,requestedAt:r.requestedAt,removedAt:r.removedAt});}
  async get(value:FixedSessionContext,key:unknown,signal?:AbortSignal){const who=fixed(value),id=careerRecordId(key);return this.db.withBoundedTransaction(async client=>{await authorizeFixedSession(client,who,signal);const row=(await client.query('SELECT * FROM platform_upload_removals WHERE upload_id=$1 AND user_id=$2 FOR SHARE',[id,who.userId])).rows[0];if(!row)throw missing();const r=await this.decode(client,row);await authorizeFixedSession(client,who,signal);return this.public(r);});}
  async list(value:FixedSessionContext,input:unknown={},signal?:AbortSignal){
@@ -59,7 +68,7 @@ export class UploadRemovals {
  async cleanup(key:string,signal?:AbortSignal):Promise<void>{
   this.configured();careerRecordId(key);signal?.throwIfAborted();
   const claimed=await this.db.withBoundedTransaction(async client=>{
-   const row=(await client.query('SELECT * FROM platform_upload_removals WHERE upload_id=$1 FOR UPDATE',[key])).rows[0];if(!row)return null;const r=await this.decode(client,row);if(r.status==='removed'||r.scope!==this.storage.scope)return null;
+   const row=(await client.query('SELECT * FROM platform_upload_removals WHERE upload_id=$1 FOR UPDATE',[key])).rows[0];if(!row)return null;const r=await this.decode(client,row);if(r.status==='removed'){await this.purgeDeletedOwnerReceipt(client,r);return null;}if(r.scope!==this.storage.scope)return null;
    const clock=(await client.query("SELECT clock_timestamp() at,clock_timestamp()+interval '30 seconds' until")).rows[0];if(r.leaseUntil&&r.leaseUntil>clock.at.toISOString())return null;
    if(r.generation>=2147483647)throw unavailable();const claimed:Record={...r,generation:r.generation+1,lastEventId:randomUUID(),leaseToken:randomUUID(),leaseUntil:clock.until.toISOString()};await this.save(client,claimed,clock.at.toISOString());return claimed;
   });if(!claimed)return;
@@ -69,8 +78,21 @@ export class UploadRemovals {
   await this.db.withBoundedTransaction(async client=>{
    const row=(await client.query('SELECT * FROM platform_upload_removals WHERE upload_id=$1 FOR UPDATE',[key])).rows[0];if(!row)return;const r=await this.decode(client,row),at=(await client.query('SELECT clock_timestamp() at')).rows[0].at.toISOString();
    if(r.status!=='pending'||r.leaseToken!==claimed.leaseToken||r.generation!==claimed.generation||r.leaseUntil===null||r.leaseUntil<=at)return;if(r.generation>=2147483647)throw unavailable();
-   await this.save(client,{...r,status:'removed',removedAt:at,generation:r.generation+1,lastEventId:randomUUID(),leaseToken:null,leaseUntil:null},at);
+   const removed:Record={...r,status:'removed',removedAt:at,generation:r.generation+1,lastEventId:randomUUID(),leaseToken:null,leaseUntil:null};
+   await this.save(client,removed,at);await this.purgeDeletedOwnerReceipt(client,removed);
   });
  }
- async recover(signal?:AbortSignal){this.configured();const rows=(await this.db.query("SELECT upload_id FROM platform_upload_removals WHERE status='pending' AND (lease_until IS NULL OR lease_until<=clock_timestamp()) ORDER BY requested_at LIMIT 20")).rows;for(const row of rows){signal?.throwIfAborted();await this.cleanup(row.upload_id,signal);}}
+ async recover(signal?:AbortSignal){
+  this.configured();
+  // Separate bounded batches: pending records for an offline storage scope must
+  // not occupy every slot and indefinitely retain completed orphan receipts.
+  for(const status of ['removed','pending']){
+   signal?.throwIfAborted();
+   const rows=(await this.db.query(`SELECT r.upload_id FROM platform_upload_removals r WHERE r.status=$1
+    AND (($1='pending' AND (r.lease_until IS NULL OR r.lease_until<=clock_timestamp()))
+      OR ($1='removed' AND NOT EXISTS(SELECT 1 FROM platform_users u WHERE u.id=r.user_id)))
+    ORDER BY r.requested_at,r.upload_id LIMIT 20`,[status])).rows;
+   for(const row of rows){signal?.throwIfAborted();await this.cleanup(row.upload_id,signal);}
+  }
+ }
 }
