@@ -10,7 +10,7 @@ export async function readResumeReviews(client:BoundPlatformClient,after:string|
  for(let i=0;i<v.items.length;i++){if(!d[i]||!('value' in d[i]))return fail();const item=parseResumeReviewItem(d[i].value);if(item.ownerId!==client.account.accountId)return fail();items.push(item);}
  if(new Set(items.map(v=>v.id)).size!==items.length)return fail();const nextAfter=v.nextAfter===null?null:careerRecordId(v.nextAfter);if(nextAfter!==null&&(items.length!==50||items.at(-1)!.id!==nextAfter))return fail();return Object.freeze({items:Object.freeze(items),nextAfter});
 }
-export async function readResumeReview(client:BoundPlatformClient,id:string,signal?:AbortSignal){const result=await view(client,await client.request('/pending-items/'+careerRecordId(id),{signal}));if(result.item.id!==id)return fail();return result;}
+export async function readResumeReview(client:BoundPlatformClient,id:string,signal?:AbortSignal){const result=await view(client,await client.request('/pending-items/'+careerRecordId(id),{signal,cache:'no-store'}));if(result.item.id!==id)return fail();return result;}
 export interface PendingResumeIntent {readonly action:ResumeReviewAction;readonly itemId:string|null;readonly body:Readonly<ResumeReviewCommand>;readonly source?:'upload';}
 async function result(client:BoundPlatformClient,input:unknown,intent:PendingResumeIntent,observer=false){
  const v=careerRecordObject(input,['view','operation']),op=careerRecordObject(v.operation,['id','itemId','replayed'],observer?['action']:[]);
