@@ -7,6 +7,7 @@ import {createPrebirthFixture,withPrebirthLoopback,type PrebirthFixture} from '.
 import {readyBirth} from './fixtures/companion-birth.ts';
 import {FICTIONAL_LEGAL} from './fixtures/student-entry.ts';
 import {FirstLetterSources} from '../src/first-letter-sources.ts';
+import {runFirstLetterReviewCycle,type FirstLetterReviewStage} from '../src/first-letter-review.ts';
 import {composeFirstLetter,parseFirstLetterCandidate,snapshotFirstLetterSettings,reviewFirstLetterCandidate} from '../src/first-letter-composition.ts';
 import {CompanionWelcomeService} from '../src/companion-welcome.ts';
 import {CompanionBirthOriginStore} from '../src/companion-birth-origin-store.ts';
@@ -357,6 +358,103 @@ test('saved persona dimensions and actual O2 facts enter the shared whole-letter
   assert.equal(falseFact.outputCheck.status,'requires_review');
   assert(falseFact.outputCheck.rules.includes('unverified_user_fact'));
   assert.equal(calls.length,count);
+  assert.equal((await a.welcome.read(a.who) as any).step,'C7');
+ });
+});
+
+
+test('semantic review and one rewrite use actual background protocol, fixed sources, accounting and bounded phases',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await setup(birthRuntime,{...values,emotion_language:'zh'}),p=await a.sources.prepare(a.who,settings);
+  const body='我是'+p.signature.name+'，名字是你起的。我是 AI。只记你同意的；在「我 → 它记得的你」可查看、修改、删除。'+
+   '要发给别人的消息和材料，都先进待确认；表单里哪些项可以替你做，由你在对话里逐项确认；最终提交永远由你本人点。'+
+   '你填的专业是 DS / 统计，目前在投，还没面试。前辈帮你整理简历，投递官帮你整理投递，面试官陪你练面试。接下来一起看今天的三件事。';
+  const raw=JSON.stringify({body,factReferences:[{ref:'study',quote:'DS / 统计'},{ref:'search_stage',quote:'在投，还没面试'}]});
+  const keys=['identity','memory','external_actions','user_facts','experts','today','language_personality','prohibited_content'];
+  const assessment=(status:'supported'|'contradicted'|'uncertain'='supported')=>JSON.stringify({
+   checks:Object.fromEntries(keys.map(k=>[k,k==='user_facts'?status:'supported'])),
+   references:{study:status,search_stage:'supported'}
+  });
+  const route={provider:'openai',model:'fictional-letter'};
+  function fixture(outputs:string[],options:{refusal?:boolean;ledgerFailure?:boolean;signal?:AbortSignal;noAdmission?:boolean}={}){
+   const stages:FirstLetterReviewStage[]=[],requests:any[]=[],ledger:any[]=[];
+   const runtime=createProviderRuntime({
+    env:{PLATFORM_ALLOW_PROVIDER_CALLS:'1',OPENAI_API_KEY:'fictional-only',OPENAI_FIRST_LETTER_MODEL:route.model},
+    fetch:async(url,init)=>{
+     assert.equal(String(url),'https://api.openai.com/v1/responses');
+     const request=JSON.parse(String(init?.body));requests.push(request);
+     assert.equal(request.model,route.model);assert.equal(request.store,false);assert.deepEqual(request.tools,[]);
+     assert.equal(request.tool_choice,'none');assert.equal(request.max_output_tokens,1536);
+     const content=options.refusal?[{type:'refusal',refusal:'Fictional private refusal'}]:
+      [{type:'output_text',text:outputs[requests.length-1]??'Unexpected extra model call'}];
+     const response={type:'response.completed',response:{status:'completed',usage:{input_tokens:10,output_tokens:10},
+      output:[{type:'message',role:'assistant',status:'completed',content}]}};
+     return new Response('data: '+JSON.stringify(response)+'\n\ndata: [DONE]\n\n',
+      {status:200,headers:{'content-type':'text/event-stream'}});
+    }
+   });
+   return {stages,requests,ledger,execution:{runtime,route,signal:options.signal,hooks:(stage:FirstLetterReviewStage)=>{
+    stages.push(stage);
+    return {requestAdmission:options.noAdmission?undefined as any:async(launch:any,signal:any)=>launch(signal??new AbortController().signal),
+     onModelCall:async(event:any)=>{ledger.push({...event,stage});if(options.ledgerFailure&&event.type==='finished')throw new Error('PRIVATE LEDGER ERROR');}};
+   }}};
+  }
+  const success=fixture([assessment()]);
+  const result=await runFirstLetterReviewCycle(p,raw,success.execution);
+  assert.equal(result.kind,'reviewed_draft');assert.equal(result.rewrites,0);
+  if(result.kind==='reviewed_draft'){
+   assert.equal(result.assurance,'non_durable_model_judgment');assert.equal(result.preparationId,p.preparationId);
+   assert.equal(result.candidate.body,body);assert.equal(result.observations[0].callId,success.ledger[0].callId);
+   assert.equal(result.assessment.supported,true);assert(Object.isFrozen(result));
+  }
+  assert.deepEqual(success.stages,['review_original']);assert.equal(success.ledger.length,2);
+  assert.equal(success.requests[0].text.format.name,'career_first_letter_review');
+  const prompt=JSON.stringify(success.requests[0].input);
+  for(const secret of [p.ownerId,p.sourceId,p.companionId,p.conversationId,p.preparationId])assert(!prompt.includes(secret));
+
+  const retry=fixture([assessment('contradicted'),raw,assessment()]);
+  const repaired=await runFirstLetterReviewCycle(p,raw,retry.execution);
+  assert.equal(repaired.kind,'reviewed_draft');assert.equal(repaired.rewrites,1);
+  assert.deepEqual(retry.stages,['review_original','rewrite','review_rewrite']);
+  assert.equal(retry.requests.length,3);assert.equal(retry.ledger.length,6);
+  assert.deepEqual(retry.requests.map(r=>r.text.format.name),['career_first_letter_review','career_first_letter','career_first_letter_review']);
+  assert(retry.requests[1].input.some((m:any)=>m.role==='user'&&m.content.includes('semantic.user_facts')));
+  assert(retry.requests[1].input[0].content.includes('重写整封第一封信'));
+  assert(!retry.requests[1].input[0].content.includes(body));
+  assert(!retry.requests[0].input[0].content.includes(body));
+  assert(!Object.hasOwn(repaired,'approved'));assert(!Object.hasOwn(repaired,'delivered'));
+
+  const hard=fixture([raw,assessment()]);
+  const bad=JSON.stringify({body:body.replace('逐项确认','确认'),factReferences:JSON.parse(raw).factReferences});
+  const fixed=await runFirstLetterReviewCycle(p,bad,hard.execution);
+  assert.equal(fixed.kind,'reviewed_draft');assert.deepEqual(hard.stages,['rewrite','review_rewrite']);
+
+  const exhausted=fixture([assessment('uncertain'),raw,assessment('uncertain')]);
+  const failure=await runFirstLetterReviewCycle(p,raw,exhausted.execution);
+  assert.equal(failure.kind,'failed');assert.equal(failure.rewrites,1);assert.equal(exhausted.requests.length,3);
+  if(failure.kind==='failed')assert.equal(failure.fallback,'这条我没组织好，先不发了。换个说法再问我一次？');
+  const stillBad=fixture([bad]);
+  assert.equal((await runFirstLetterReviewCycle(p,bad,stillBad.execution)).kind,'failed');
+  assert.deepEqual(stillBad.stages,['rewrite']);
+  const invalidRewrite=fixture(['not valid JSON']);
+  const invalidResult=await runFirstLetterReviewCycle(p,bad,invalidRewrite.execution);
+  assert.equal(invalidResult.kind,'failed');assert.equal(invalidRewrite.requests.length,1);
+  if(invalidResult.kind==='failed')assert.deepEqual(invalidResult.rules,['draft.invalid_format']);
+  assert.equal(invalidRewrite.ledger[1].structuredOutcome,'invalid_format');
+
+  for(const [outputs,options] of [
+   [[assessment()],{refusal:true}],[[assessment()],{ledgerFailure:true}],
+   [['{"checks":{"identity":"supported"},"references":{}}'],{}],
+   [[assessment()],{signal:AbortSignal.abort(new Error('Fictional cancellation'))}],
+   [[assessment()],{noAdmission:true}]
+  ] as const){
+   const broken=fixture([...outputs],options);
+   await assert.rejects(runFirstLetterReviewCycle(p,raw,broken.execution));
+   assert(broken.requests.length<=1);assert(!broken.stages.includes('rewrite'));
+  }
+  const forged={runtime:{async *streamChat(){yield {type:'delta' as const,text:assessment()};}},
+   route,hooks:success.execution.hooks};
+  await assert.rejects(runFirstLetterReviewCycle(p,raw,forged));
   assert.equal((await a.welcome.read(a.who) as any).step,'C7');
  });
 });
