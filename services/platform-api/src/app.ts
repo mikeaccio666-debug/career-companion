@@ -715,6 +715,19 @@ export async function buildApp(options:AppOptions={}) {
         coordinates.revision, coordinates.passageId, signal) };
     });
   });
+  app.get(prefix + '/org-knowledge/methods/:sourceId/:revision/:passageId', secured('org-knowledge'), (request, reply) => {
+    return applicationRead(request, reply, async signal => {
+      let coordinates: { sourceId: string; revision: number; passageId: string };
+      try {
+        careerRecordObject(careerHttpQuery(request.query), []);
+        const v = careerRecordObject(careerHttpQuery(request.params), ['sourceId', 'revision', 'passageId']);
+        if (typeof v.revision !== 'string' || !/^[1-9][0-9]{0,9}$/.test(v.revision)) throw Error();
+        coordinates = parseOrgKnowledgeReference({ sourceId: v.sourceId, revision: Number(v.revision), passageId: v.passageId });
+        if (!Number.isSafeInteger(coordinates.revision) || coordinates.revision > 2147483647) throw Error();
+      } catch { throw new ApiError(400, 'ORG_CONTENT_INPUT_INVALID', '请使用支持的来源坐标。'); }
+      return { method: await orgKnowledge.readMethodDetails(fixedRequestSession(request,userId(request)), coordinates, signal) };
+    });
+  });
   app.get(prefix + '/career/mentor-services/:orgId', secure, (request, reply) => applicationRead(request, reply, async signal => {
     let orgId: string;
     try {

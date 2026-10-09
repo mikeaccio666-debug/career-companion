@@ -13,7 +13,7 @@ import { CareerStories } from '../src/career-stories.ts';
 import { parseStudentOrgKnowledgePassage } from '@companion/platform-contracts';
 import { parseOrgP0Asset, orgAssetLegacyBody } from '@companion/career-core';
 import { orgDigest } from '../src/org-knowledge-values.ts';
-import { readOrgSource, orgSourcePath, orgSourceReferenceFromPath, type OrgSourceClient } from '../../../apps/web/src/org-source-api.ts';
+import { readOrgSource, readOrgMethod, orgSourcePath, orgSourceReferenceFromPath, type OrgSourceClient } from '../../../apps/web/src/org-source-api.ts';
 import { OrgSourceController } from '../../../apps/web/src/org-source-controller.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -48,7 +48,7 @@ const q = (id = 'fictional.question') => ({ question_ref: id, type: 'sql', role_
   topics: ['aggregation'], prompt_en: 'Explain a fictional aggregate query.', prompt_zh: '解释一个虚构的聚合查询。',
   external_ref: null, rubric: null, key_points: ['Explain the grouping.'], follow_ups: ['How would null values change the result?'], time_budget_min: 15 });
 const rejected = (code: string) => (e: unknown) => !!e && typeof e === 'object' && (e as { code?: string }).code === code;
-async function setup(assetClass = 'question', audience = 'cohort') {
+async function setup(assetClass = 'question', audience = 'cohort', allowedUses = ['retrieve', 'model_context', 'display_full']) {
   const operator = await f.actor(true), editor = await f.actor(true), reviewer = await f.actor(true), owner = await f.actor(), org = randomUUID(), agreementRef = randomUUID();
   await f.db.query("INSERT INTO platform_orgs(id,slug,display_name) VALUES($1,$2,'Fictional licensed library')", [org, 'org_' + org.replaceAll('-', '')]);
   for (const [user, role] of [[operator.userId, 'ops'], [editor.userId, 'content_editor'], [editor.userId, 'mentor'], [reviewer.userId, 'content_reviewer'], [reviewer.userId, 'mentor']])
@@ -56,7 +56,7 @@ async function setup(assetClass = 'question', audience = 'cohort') {
   const key = agreementRef, bytes = Buffer.from('Fictional test agreement, not a production license.');
   await blobs.put(key, bytes);
   await f.db.query("INSERT INTO platform_uploads(id,user_id,filename,mime,byte_size,storage_key) VALUES($1,$2,'fictional.txt','text/plain',$3,$4)", [agreementRef, operator.userId, bytes.length, key]);
-  const licenseInput = { operationId: randomUUID(), assetClass, agreementRef, allowedUses: ['retrieve', 'model_context', 'display_full'], audience,
+  const licenseInput = { operationId: randomUUID(), assetClass, agreementRef, allowedUses, audience,
     validFrom: '2025-01-01T00:00:00.000Z', validUntil: end };
   const license = await service.registerLicense(operator, org, licenseInput);
   const entitlementInput = { operationId: randomUUID(), userId: owner.userId, expectedRevision: 0, audienceGrants: ['cohort'], expiresAt: end, revoke: false };
@@ -640,4 +640,53 @@ test('changing caller signal during a method read cannot commit an abandoned acc
   const read = await new CareerMethodReferences(f.db, isolated).open(s.owner, { organizationId: s.org, turnId: scope.turnId, speaker: 'guide', roleFamily: 'da' });
   await assert.rejects(read(scope, methodRef, methodRequest), (error: any) => error.name === 'AbortError');
   assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE user_id=$1', [s.owner.userId])).rows[0].n, 0);
+});
+
+test('student expands the exact method through actual password HTTP and the Web controller, with full-display authorization and access receipts', async () => {
+  const s = await setup('method_card'), p = await s.published([s.row(methodFixture(s, { superseded_by: 'fictional.story.v2' }))]), web = await sourceWebClient(s.owner);
+  const reference = { sourceId: p.source, revision: 2, passageId: '2:0' }, controller = new OrgSourceController(web.client, reference, () => {});
+  controller.start(); await sourceStateReady(controller); assert.equal(controller.snapshot().details.state, 'closed');
+  await controller.expandMethod(); const snapshot = controller.snapshot();
+  assert.equal(snapshot.details.state, 'ready');
+  const method = snapshot.details.method!;
+  assert.equal(method.older, true); assert.equal(method.assetRevision, 1); assert.equal(method.revision, 2);
+  assert.equal(method.content.steps.length, 2); assert.equal(method.content.appliesTo.role_families[0], 'da');
+  assert(method.content.counterexamples[0].includes('individual ownership'));
+  for (const forbidden of [s.editor.userId, s.reviewer.userId, s.license.licenseId, 'allowed_tools', 'bound_speakers', 'tokenHash']) assert(!JSON.stringify(method).includes(forbidden));
+  const response = await system.app.inject({ url: '/api/platform/org-knowledge/methods/' + p.source + '/2/2%3A0', headers: web.headers });
+  assert.equal(response.statusCode, 200); assert.match(String(response.headers['cache-control']), /no-store/);
+  const count = (await f.db.query("SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE source_id=$1 AND purpose='view_method_full' AND speaker='user'", [p.source])).rows[0].n;
+  assert(count >= 2);
+  await service.revokeLicense(s.operator, s.org, s.license.licenseId, { operationId: randomUUID(), expectedRevision: 1, reason: 'Fictional full method withdrawal' });
+  controller.closeMethod(); await controller.expandMethod();
+  assert.equal(controller.snapshot().state, 'denied'); assert.equal(controller.snapshot().passage, null); assert.equal(controller.snapshot().details.method, null);
+  controller.stop();
+});
+test('excerpt or model-context permission does not authorize full human display; denied users, malformed coordinates and other asset classes remain closed', async () => {
+  const s = await setup('method_card', 'cohort', ['retrieve', 'model_context', 'display_excerpt']), p = await s.published([s.row(methodFixture(s))]), web = await sourceWebClient(s.owner);
+  const reference = { sourceId: p.source, revision: 2, passageId: '2:0' }, controller = new OrgSourceController(web.client, reference, () => {});
+  controller.start(); await sourceStateReady(controller); assert.equal(controller.snapshot().state, 'ready');
+  await controller.expandMethod(); assert.equal(controller.snapshot().details.state, 'limited'); assert(controller.snapshot().passage);
+  assert.equal((await f.db.query("SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE source_id=$1 AND purpose='view_method_full'", [p.source])).rows[0].n, 0);
+  const foreign = await sourceWebClient(await f.actor());
+  await assert.rejects(readOrgMethod(foreign.client, reference), rejected('NOT_ENTITLED'));
+  const root = '/api/platform/org-knowledge/methods/' + p.source;
+  for (const suffix of ['/2/2%3A128', '/2/1%3A0', '/2/2%3A0?ownerId=' + s.owner.userId, '/2147483648/2147483648%3A0'])
+    assert.equal((await system.app.inject({ url: root + suffix, headers: web.headers })).statusCode, 400);
+  const noAccount = { ...web.headers }; delete (noAccount as any)[PLATFORM_ACCOUNT_HEADER];
+  assert.equal((await system.app.inject({ url: root + '/2/2%3A0', headers: noAccount })).statusCode, 409);
+  const question = await setup(), qp = await question.published();
+  await assert.rejects(service.readMethodDetails(question.owner, { sourceId: qp.source, revision: 2, passageId: '2:0' }), rejected('NOT_ENTITLED'));
+  controller.stop();
+});
+test('full method rejects stale, withdrawn, corrupt and cancelled reads without returning content or committing partial logs', async () => {
+  const s = await setup('method_card'), p = await s.published([s.row(methodFixture(s))]), reference = { sourceId: p.source, revision: 2, passageId: '2:0' };
+  await assert.rejects(service.readMethodDetails(s.owner, { ...reference, revision: 1, passageId: '1:0' }), rejected('STALE_REVISION'));
+  const abort = new AbortController(); abort.abort();
+  await assert.rejects(service.readMethodDetails(s.owner, reference, abort.signal));
+  await f.db.query("UPDATE platform_org_knowledge_passages SET content='Fictional corrupt later passage' WHERE source_id=$1 AND passage_index=1", [p.source]);
+  await assert.rejects(service.readMethodDetails(s.owner, reference), rejected('ORG_CONTENT_STORAGE_UNAVAILABLE'));
+  assert.equal((await f.db.query("SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE source_id=$1 AND purpose='view_method_full'", [p.source])).rows[0].n, 0);
+  await service.withdrawSource(s.operator, s.org, p.source, { operationId: randomUUID(), expectedRevision: 2, reason: 'Fictional method removed' });
+  await assert.rejects(service.readMethodDetails(s.owner, reference), rejected('STALE_REVISION'));
 });

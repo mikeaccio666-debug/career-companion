@@ -1,4 +1,4 @@
-import { careerRecordObject, parseOrgKnowledgeReference, parseStudentOrgKnowledgePassage,
+import { careerRecordObject, parseOrgKnowledgeReference, parseStudentOrgKnowledgePassage, parseStudentOrgMethod,
   type OrgKnowledgeReference } from '@companion/platform-contracts';
 export interface OrgSourceClient {
   readonly account: { readonly accountId: string };
@@ -27,4 +27,16 @@ export async function readOrgSource(client: OrgSourceClient, reference: OrgKnowl
   const v = careerRecordObject(raw, ['passage']), passage = parseStudentOrgKnowledgePassage(v.passage);
   if (!client.isCurrent() || passage.sourceId !== r.sourceId || passage.revision !== r.revision || passage.passageId !== r.passageId) return failed();
   return passage;
+}
+
+export async function readOrgMethod(client: OrgSourceClient, reference: OrgKnowledgeReference, signal?: AbortSignal) {
+  const r = parseOrgKnowledgeReference(reference);
+  if (!client.isCurrent()) return failed();
+  signal?.throwIfAborted();
+  const raw = await client.request('/org-knowledge/methods/' + r.sourceId + '/' + r.revision + '/' + encodeURIComponent(r.passageId),
+    { signal, cache: 'no-store' });
+  signal?.throwIfAborted();
+  const v = careerRecordObject(raw, ['method']), method = parseStudentOrgMethod(v.method);
+  if (!client.isCurrent() || method.sourceId !== r.sourceId || method.revision !== r.revision || method.passageId !== r.passageId) return failed();
+  return method;
 }

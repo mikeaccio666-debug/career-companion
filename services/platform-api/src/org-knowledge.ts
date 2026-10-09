@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { parseSkillMethodRefs } from './skill-method-references.ts';
 import type { PoolClient } from 'pg';
-import { careerRecordObject, orgKnowledgeBrand, careerRecordId, careerLibraryTime, STAFF_ROLES, type AgentSpeakerKey } from '@companion/platform-contracts';
-import { parseOrgP0Asset, careerSkill, ROLE_FAMILIES, orgChoice, orgArray, orgInteger, orgText, orgAssetBody, orgAssetLegacyBody, orgAssetSpeakers } from '@companion/career-core';
+import { careerRecordObject, parseOrgKnowledgeReference, parseStudentOrgMethod, type StudentOrgMethod, orgKnowledgeBrand, careerRecordId, careerLibraryTime, STAFF_ROLES, type AgentSpeakerKey } from '@companion/platform-contracts';
+import { parseOrgP0Asset, careerSkill, ROLE_FAMILIES, orgChoice, orgArray, orgInteger, orgText, orgAssetBody, orgMethodContent, orgAssetLegacyBody, orgAssetSpeakers } from '@companion/career-core';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
@@ -308,6 +308,49 @@ export class OrgKnowledge {
       await authorizeFixedSession(c, s, signal); return result;
     });
   }
+
+  /** Explicit student request for the method behind an existing citation. Full
+   * display permission is independent from model_context and excerpt permission. */
+  async readMethodDetails(session: FixedSessionContext, reference: unknown, signal?: AbortSignal): Promise<StudentOrgMethod> {
+    const s = fixed(session), ref = parseOrgKnowledgeReference(reference);
+    return this.db.withBoundedTransaction(async c => {
+      await this.store.authorizeSession(c, s, signal);
+      const coordinate = (await c.query('SELECT org_id FROM platform_org_knowledge_sources WHERE id=$1', [ref.sourceId])).rows[0];
+      if (!coordinate) throw new ApiError(404, 'NOT_FOUND', '来源不存在。');
+      await c.query('SELECT id FROM platform_orgs WHERE id=$1 FOR SHARE', [coordinate.org_id]);
+      const row = (await c.query('SELECT * FROM platform_org_knowledge_sources WHERE id=$1 FOR SHARE', [ref.sourceId])).rows[0];
+      if (!row) throw new ApiError(404, 'NOT_FOUND', '来源不存在。');
+      const state = await this.source(c, row), at = await this.at(c);
+      const license = await this.license(c, row.org_id, row.license_id, ['retrieve'], at);
+      await this.audience(c, s.userId, row.org_id, license, at);
+      if (!(license.allowedUses as string[]).includes('display_full')) throw new ApiError(403, 'METHOD_FULL_NOT_ALLOWED', '这份资料暂未授权展示完整方法。');
+      if (row.asset_class !== 'method_card' || license.assetClass !== 'method_card') throw orgDenied();
+      if (row.revision !== ref.revision || state.reviewStatus !== 'published' || state.validUntil <= at ||
+          state.reviewedAt === null || state.publishBatch === null) throw orgStale();
+      const asset = parseOrgP0Asset('method_card', row.structured);
+      if (!('method_id' in asset) || asset.effective_from > at) throw orgStale();
+      const actual = splitKnowledgePassages(row.id, row.revision, row.body);
+      const parts = (await c.query('SELECT passage_id,passage_index,content FROM platform_org_knowledge_passages WHERE source_id=$1 AND revision=$2 ORDER BY passage_index FOR SHARE', [row.id, row.revision])).rows;
+      if (!parts.some(part => part.passage_id === ref.passageId)) throw orgStale();
+      if (parts.length !== actual.length || parts.some((part, i) => part.passage_index !== i ||
+          part.passage_id !== actual[i].passageId || part.content !== actual[i].text)) throw orgUnavailable();
+      const method = parseStudentOrgMethod({ ...ref, title: row.title, updatedAt: state.updatedAt, scope: 'org', assetClass: 'method_card',
+        provenanceLabel: this.brand + '方法 · v' + asset.revision, provenance: 'untrusted_knowledge', deidentified: true,
+        older: asset.superseded_by !== null, brand: this.brand, assetRevision: asset.revision, content: orgMethodContent(asset) });
+      for (const part of parts) {
+        signal?.throwIfAborted();
+        await c.query("INSERT INTO platform_knowledge_access_log(id,user_id,source_id,revision,passage_id,asset_class,speaker,purpose,created_at,retention_until) VALUES($1,$2,$3,$4,$5,'method_card','user','view_method_full',$6,$6::timestamptz+interval '180 days')",
+          [randomUUID(), s.userId, row.id, row.revision, part.passage_id, at]);
+      }
+      const deliveryAt = await this.at(c);
+      if (state.validUntil <= deliveryAt) throw orgStale();
+      const currentLicense = await this.license(c, row.org_id, row.license_id, ['retrieve', 'display_full'], deliveryAt);
+      await this.audience(c, s.userId, row.org_id, currentLicense, deliveryAt);
+      await authorizeFixedSession(c, s, signal); signal?.throwIfAborted();
+      return method;
+    });
+  }
+
   /** Exact method versions for skill loading, never keyword search. Internal only:
    * caller supplies the authenticated turn binding and its frozen publication ceiling. */
   async readSkillMethodsInTransaction(c: PoolClient, session: FixedSessionContext, input: {
@@ -341,9 +384,7 @@ export class OrgKnowledge {
           asset.author_id === asset.reviewer_id || row.reviewer_id !== asset.reviewer_id) throw orgUnavailable();
       // Explicit old revisions remain readable after a newer method is published.
       // Revocation, expiry and withdrawal still win; no automatic version upgrade.
-      const data = { whenToUse: asset.when_to_use, appliesTo: asset.applies_to, prerequisites: asset.prerequisites,
-        evidenceNature: asset.evidence_nature, steps: asset.steps.map(step => ({ goal: step.goal, method: step.method, output: step.output })),
-        rubricRef: asset.rubric_ref, stopWhen: asset.stop_when, counterexamples: asset.counterexamples, escalateWhen: asset.escalate_when };
+      const data = orgMethodContent(asset);
       const fullText = JSON.stringify(data);
       if (Buffer.byteLength(fullText) > 65536) throw orgUnavailable();
       const summary = JSON.stringify({ ...data, steps: asset.steps.map(step => ({ goal: step.goal, output: step.output })), fullReferenceRequired: true });
