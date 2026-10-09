@@ -74,3 +74,8 @@ API、worker、迁移和只读运维入口共用这项启动检查。2026-10-09 
 ### HTTP 响应安全策略
 
 API 与同源网页现在共用启动时确定的 CSP、防嵌套、nosniff、Referrer-Policy 与浏览器能力策略；生产配置另发送 HSTS。私有文件保留原有更严格的沙箱。分离 API 时，提供 HTML 的平台进程需把 `PLATFORM_WEB_API_ORIGIN` 与构建的 `VITE_PLATFORM_API_ORIGIN` 对齐；独立网页主机需要自己的响应头配置。缓存外壳和实际云端 TLS 的验收范围见 [HTTP 安全策略](../../../docs/platform/http-security-policy.md)。
+
+
+### 备份与恢复
+
+上线前需同时保存数据库、匹配时间点的私有对象、历史解密密钥及发布配置，并在独立目标恢复验证。现有[隔离恢复演练](../../../docs/platform/backup-restore.md)可用虚构数据验证当前数据库和本地附件；没有开启托管备份、PITR 或 S3/R2 版本恢复，不能据此宣布灾备已就绪。
