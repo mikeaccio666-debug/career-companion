@@ -1,3 +1,4 @@
+import { parseCareerProgressSnapshot } from '@companion/platform-contracts';
 import { careerProgress } from '@companion/career-core';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
@@ -17,7 +18,7 @@ export class CareerProgressService {
             const applications = await this.applications.readProgressEvidenceInTransaction(client, context, signal);
             await authorizeFixedSession(client, context, signal);
             signal?.throwIfAborted();
-            return Object.freeze({ progress: careerProgress(context.userId, [...projects, ...applications]),
+            return parseCareerProgressSnapshot({ ownerId: context.userId, progress: careerProgress(context.userId, [...projects, ...applications]),
                 coverage: Object.freeze(['project', 'application'] as const) });
         });
     }

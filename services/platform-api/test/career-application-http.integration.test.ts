@@ -83,6 +83,7 @@ test('buildApp composes actual password-login-created application and JD into pr
 
 test('real password-authenticated progress route composes actual current applications and projects with explicit coverage', async () => {
     const a = await actor(), b = await actor(), { app } = await make(a), url = '/api/platform/career/progress';
+    const ownedProgress = await system.app.inject({ url, headers: a.headers }); assert.equal(ownedProgress.json().ownerId, a.id);
     const read = () => system.app.inject({ url, headers: a.headers });
     assert.equal((await read()).json().progress.provisionalCounts.application, 0);
     const staged = await system.app.inject({ method: 'POST', url: prefix + '/' + app.id + '/stage', headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 1, stage: 'applied' } });

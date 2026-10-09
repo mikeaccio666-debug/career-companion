@@ -336,3 +336,5 @@ export * from './mentor-ratings.ts';
 export * from './companion-paid-settings.ts';
 
 export * from './resume-diff.ts';
+
+export * from './career-progress.ts';
