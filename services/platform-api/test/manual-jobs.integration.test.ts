@@ -43,3 +43,38 @@ test('restoring a previously authentic removed snapshot cannot undo the immutabl
  const who=await f.actor(),first=await jobs.mutate(who,'create',null,command()),id=first.job!.id,row=(await f.db.query('SELECT * FROM platform_career_job_observations WHERE id=$1',[id])).rows[0];await jobs.mutate(who,'delete',id,{operationId:randomUUID(),expectedRevision:1});
  await f.db.query('INSERT INTO platform_career_job_observations(id,user_id,source,state,revision,last_operation_id,observed_at,checked_at,created_at,updated_at,record_ciphertext) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$7,$7,$9)',[row.id,row.user_id,row.source,row.state,row.revision,row.last_operation_id,row.observed_at,row.checked_at,row.record_ciphertext]);await assert.rejects(jobs.get(who,id),error(503));await assert.rejects(jobs.list(who),error(503));
 });
+
+test('read-only operation observation confirms saved and genuinely removed jobs without creating receipts',async()=>{
+ const who=await f.actor(),other=await f.actor(),body=command(),saved=await jobs.mutate(who,'create',null,body);
+ const before=(await f.db.query('SELECT * FROM platform_career_job_observation_operations WHERE user_id=$1',[who.userId])).rows;
+ const observed=await jobs.observe(who,body.operationId);assert.deepEqual(observed.job,saved.job);assert.equal(observed.operation.replayed,true);
+ assert.deepEqual((await f.db.query('SELECT * FROM platform_career_job_observation_operations WHERE user_id=$1',[who.userId])).rows,before);
+ await assert.rejects(jobs.observe(other,body.operationId),error(404));await assert.rejects(jobs.observe(who,randomUUID()),error(404));
+ await f.db.query('DELETE FROM platform_terms_consents WHERE user_id=$1',[who.userId]);assert.equal((await jobs.observe(who,body.operationId)).job!.id,saved.job!.id);
+ const deletion={operationId:randomUUID(),expectedRevision:1};await jobs.mutate(who,'delete',saved.job!.id,deletion);
+ assert.equal((await jobs.observe(who,body.operationId)).job,null);
+ const removed=await jobs.observe(who,deletion.operationId);assert.equal(removed.job,null);assert.equal(removed.operation.appliedRevision,2);
+ assert.equal((await f.db.query('SELECT * FROM platform_career_job_observation_operations WHERE user_id=$1',[who.userId])).rowCount,2);
+});
+test('observation rejects missing content without a deletion receipt and corrupted current content',async()=>{
+ const who=await f.actor(),body=command(),saved=await jobs.mutate(who,'create',null,body);
+ await f.db.query('UPDATE platform_career_job_observations SET record_ciphertext=$2 WHERE id=$1',[saved.job!.id,Buffer.alloc(40)]);
+ await assert.rejects(jobs.observe(who,body.operationId),error(503));
+ await f.db.query('DELETE FROM platform_career_job_observations WHERE id=$1',[saved.job!.id]);
+ await assert.rejects(jobs.observe(who,body.operationId),error(503));
+});
+test('observation reauthorizes after reading private content and does not return a late revoked result',async()=>{
+ const who=await f.actor(),body=command();await jobs.mutate(who,'create',null,body);
+ const original=f.db.withBoundedTransaction.bind(f.db);
+ f.db.withBoundedTransaction=async(run,options)=>original(async client=>{
+  const query=client.query.bind(client);let reset=false;
+  return run(new Proxy(client,{get(target,key){
+   if(key==='query')return async(...args:any[])=>{const result=await (query as any)(...args);
+    if(!reset&&typeof args[0]==='string'&&args[0].startsWith('SELECT * FROM platform_career_job_observations WHERE user_id=')){
+     reset=true;await query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[who.userId]);
+    }return result;};
+   const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+  }}));
+ },options);
+ try{await assert.rejects(jobs.observe(who,body.operationId),error(401));}finally{f.db.withBoundedTransaction=original;}
+});

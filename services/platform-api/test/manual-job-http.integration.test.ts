@@ -17,3 +17,18 @@ test('foreign, stale headers, CSRF and fabricated live/eligibility/source metada
  for(const patch of [{state:'observed_open'},{source:'greenhouse'},{sponsorship:'explicit_yes'},{eligible:true},{checkedAt:'2026-10-08T00:00:00.000Z'},{ownerId:b.id}])assert.equal((await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload:{...command(),...patch}})).statusCode,400);
  assert.equal((await system.app.inject({url:prefix+'?userId='+b.id,headers:a.headers})).statusCode,400);assert.equal((await system.app.inject({url:prefix})).statusCode,401);assert.equal((await system.app.inject({method:'PATCH',url:prefix+'/'+id,headers:a.headers,payload:command()})).statusCode,404);
 });
+
+test('actual authenticated GET reconciles the owner operation without resubmitting and rejects foreign or query authority',async()=>{
+ const a=await actor(),b=await actor(),payload=command();
+ const saved=await system.app.inject({method:'POST',url:prefix,headers:a.headers,payload});assert.equal(saved.statusCode,201);
+ const url=prefix+'/operations/'+payload.operationId;
+ const observed=await system.app.inject({url,headers:a.headers});assert.equal(observed.statusCode,200,observed.body);
+ assert.equal(observed.headers['cache-control'],'private, no-store');assert.deepEqual(observed.json().job,saved.json().job);assert.equal(observed.json().operation.replayed,true);
+ assert.equal((await system.app.inject({url,headers:b.headers})).statusCode,404);
+ assert.equal((await system.app.inject({url:url+'?userId='+b.id,headers:a.headers})).statusCode,400);
+ assert.equal((await system.app.inject({url})).statusCode,401);
+ assert.equal((await system.app.inject({url,headers:{...a.headers,[PLATFORM_ACCOUNT_HEADER]:b.id}})).statusCode,409);
+ assert.equal((await f.db.query('SELECT * FROM platform_career_job_observation_operations WHERE user_id=$1',[a.id])).rowCount,1);
+ const removed=await system.app.inject({method:'DELETE',url:prefix+'/'+saved.json().job.id,headers:a.headers,payload:{operationId:randomUUID(),expectedRevision:1}});assert.equal(removed.statusCode,200);
+ assert.equal((await system.app.inject({url,headers:a.headers})).json().job,null);assert.equal(calls,0);
+});

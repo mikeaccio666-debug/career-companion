@@ -95,6 +95,22 @@ export class ManualJobs {
   }
   await authorizeFixedSession(client,s,signal);
  }
+ /** Observe immutable own intent without retrying a mutation or granting consent. */
+ async observe(value:FixedSessionContext,key:unknown,signal?:AbortSignal){
+  const context=this.fixed(value);let operationId:string;try{operationId=careerRecordId(key);}catch{throw bad();}
+  return this.db.withBoundedTransaction(async client=>{
+   await this.authorize(client,context,signal);
+   const row=(await client.query('SELECT * FROM platform_career_job_observation_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,operationId])).rows[0];
+   if(!row)throw missing();
+   const original=await this.receipt(client,context,row),latest=await this.latest(client,context,original.observationId);
+   if(latest.appliedRevision<original.appliedRevision)throw unavailable();
+   const saved=await this.row(client,context,original.observationId);
+   const job=saved?await this.record(client,context,saved,latest):null;
+   if(!saved&&latest.action!=='delete')throw unavailable();
+   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
+   return Object.freeze({job,operation:Object.freeze({id:original.operationId,observationId:original.observationId,appliedRevision:original.appliedRevision,replayed:true})});
+  });
+ }
  async get(value:FixedSessionContext,key:unknown,signal?:AbortSignal){const context=this.fixed(value);return this.db.withBoundedTransaction(client=>this.readInTransaction(client,context,key,signal));}
  async list(value:FixedSessionContext,query:unknown={},signal?:AbortSignal){const context=this.fixed(value);let after:string|null;try{const q=careerRecordObject(query,[],['after']);after=Object.hasOwn(q,'after')?careerRecordId(q.after):null;}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);let cursor:any=null;if(after){cursor=await this.row(client,context,after);if(!cursor)throw missing();await this.record(client,context,cursor);}
