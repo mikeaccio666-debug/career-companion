@@ -1,3 +1,4 @@
+import type { CareerEvidence } from '@companion/career-core';
 import { accountExportRows } from './account-export-rows.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
@@ -121,18 +122,36 @@ export class CareerInterviews {
         return this.db.withBoundedTransaction(async (c) => { await this.authorize(c, s, signal); const row = await this.operation(c, s, id); if (!row)
             throw missing(); const r = this.receipt(s, row), interview = await this.result(c, s, r); await authorizeFixedSession(c, s, signal); return Object.freeze({ interview, operation: this.ack(r, true) }); });
     }
+    private async currentRecords(c:PoolClient,s:FixedSessionContext,signal?:AbortSignal):Promise<readonly Readonly<CareerInterview>[]> {
+      const rows=(await c.query('SELECT * FROM platform_career_interviews WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[s.userId])).rows;
+      if(rows.length>500)throw unavailable();
+      const proofs=(await c.query(`SELECT o.* FROM platform_career_interview_operations o JOIN
+        (SELECT interview_id,max(applied_revision) AS revision FROM platform_career_interview_operations WHERE user_id=$1 GROUP BY interview_id) latest
+        ON latest.interview_id=o.interview_id AND latest.revision=o.applied_revision WHERE o.user_id=$1 AND o.action<>'delete' ORDER BY o.interview_id LIMIT 501 FOR SHARE OF o`,[s.userId])).rows;
+      if(proofs.length!==rows.length)throw unavailable();
+      const latest=new Map<string,Receipt>();for(const row of proofs){signal?.throwIfAborted();const r=this.receipt(s,row);if(latest.has(r.interviewId))throw unavailable();latest.set(r.interviewId,r);}
+      const records:Readonly<CareerInterview>[]=[];
+      for(const row of rows){signal?.throwIfAborted();const proof=latest.get(row.id);if(!proof)throw unavailable();records.push(await this.record(c,s,row,proof));}
+      return Object.freeze(records);
+    }
+    /** Owner-only activity. A completed schedule is a self-report, not verified
+     * attendance, practice, skill improvement or an interview outcome. */
+    async readProgressEvidenceInTransaction(c:PoolClient,value:FixedSessionContext,signal?:AbortSignal):Promise<readonly Readonly<CareerEvidence>[]> {
+      const s=this.fixed(value);await this.authorize(c,s,signal);
+      const records=await this.currentRecords(c,s,signal);
+      const evidence=records.filter(v=>v.status==='done').map(v=>Object.freeze({
+        id:v.id,ownerId:s.userId,subjectId:v.id,kind:'interview' as const,state:'active' as const,
+        verification:'self_reported' as const,referenceId:'career-interview:'+v.id+':'+v.revision,occurredAt:v.updatedAt,
+      }));
+      await authorizeFixedSession(c,s,signal);signal?.throwIfAborted();return Object.freeze(evidence);
+    }
     /** Complete private schedule coordinates, verified against each immutable receipt.
      * Scheduled interviews are not practice sessions or evidence of completing preparation. */
     private async readDailySources(c:PoolClient,value:FixedSessionContext,signal?:AbortSignal) {
       const s=this.fixed(value);await this.authorize(c,s,signal);await this.storage.authorizeSession(c,s,signal);
-      const rows=(await c.query('SELECT * FROM platform_career_interviews WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[s.userId])).rows;
-      if(rows.length>500)throw unavailable();
-      const proofs=rows.length?(await c.query(`SELECT o.* FROM platform_career_interview_operations o JOIN
-        (SELECT interview_id,max(applied_revision) AS revision FROM platform_career_interview_operations WHERE user_id=$1 AND interview_id=ANY($2::uuid[]) GROUP BY interview_id) latest
-        ON latest.interview_id=o.interview_id AND latest.revision=o.applied_revision WHERE o.user_id=$1 FOR SHARE OF o`,[s.userId,rows.map(r=>r.id)])).rows:[];
-      const latest=new Map<string,Receipt>();for(const row of proofs){signal?.throwIfAborted();const r=this.receipt(s,row);if(latest.has(r.interviewId))throw unavailable();latest.set(r.interviewId,r);}
+      const records=await this.currentRecords(c,s,signal);
       const result=[], agenda=[];
-      for(const row of rows){signal?.throwIfAborted();const proof=latest.get(row.id);if(!proof)throw unavailable();const v=await this.record(c,s,row,proof);
+      for(const v of records){signal?.throwIfAborted();
         agenda.push(Object.freeze({id:v.id,ownerId:s.userId,title:v.application.title,employer:v.application.employer,status:v.status,startsAt:v.startsAt,timeZone:v.timeZone,durationMin:v.durationMin}));
         result.push(Object.freeze({id:v.id,ownerId:s.userId,revision:v.revision,lastOperationId:v.lastOperationId,status:v.status,roundType:v.roundType,startsAt:v.startsAt,timeZone:v.timeZone,durationMin:v.durationMin,application:Object.freeze({id:v.application.id,revision:v.application.revision,track:v.application.roleFamily}),source:v.source}));
       }

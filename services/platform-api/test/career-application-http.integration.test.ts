@@ -90,10 +90,21 @@ test('real password-authenticated progress route composes actual current applica
     assert.equal(staged.statusCode, 200, staged.body);
     const response = await read(); assert.equal(response.statusCode, 200, response.body);
     assert.equal(response.headers['cache-control'], 'private, no-store');
-    assert.deepEqual(response.json().coverage, ['project', 'application']);
+    assert.deepEqual(response.json().coverage, ['project', 'application', 'interview']);
     assert.equal(response.json().progress.provisionalCounts.application, 1);
     assert.equal(response.json().progress.counts.application, 0);
     assert(!response.body.includes('Fictional'));
+    const created=await system.app.inject({method:'POST',url:'/api/platform/career/interviews',headers:a.headers,payload:{
+      operationId:randomUUID(),expectedRevision:0,applicationId:app.id,applicationRevision:2,roundType:'sql',
+      startsAt:'2026-11-01T05:30:00.000Z',timeZone:'America/New_York',durationMin:45}});
+    assert.equal(created.statusCode,201,created.body);const interview=created.json().interview;
+    assert.equal((await read()).json().progress.provisionalCounts.interview,0);
+    const completed=await system.app.inject({method:'POST',url:'/api/platform/career/interviews/'+interview.id+'/status',headers:a.headers,
+      payload:{operationId:randomUUID(),expectedRevision:interview.revision,status:'done'}});
+    assert.equal(completed.statusCode,200,completed.body);
+    const withInterview=await read();assert.equal(withInterview.json().progress.provisionalCounts.interview,1);assert.equal(withInterview.json().progress.counts.interview,0);
+    assert.equal((await system.app.inject({url,headers:b.headers})).json().progress.provisionalCounts.interview,0);
+
     assert.equal((await system.app.inject({ url, headers: b.headers })).json().progress.provisionalCounts.application, 0);
     assert.equal((await system.app.inject({ url })).statusCode, 401);
     assert.equal((await system.app.inject({ url: url + '?ownerId=' + a.id, headers: b.headers })).statusCode, 400);

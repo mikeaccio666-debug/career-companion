@@ -157,7 +157,7 @@ export async function buildApp(options:AppOptions={}) {
   const careerApplications=new CareerApplications(db,config,bundle,manualJobs);
   const careerInterviews=new CareerInterviews(db,config,bundle,careerApplications);
   const careerStories=new CareerStories(db,config,bundle);
-  const careerProgressService=new CareerProgressService(db,careerStories,careerApplications);
+  const careerProgressService=new CareerProgressService(db,careerStories,careerApplications,careerInterviews);
   const storage=options.storage??createStorage(config);
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage),uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
