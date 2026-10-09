@@ -1,3 +1,8 @@
+import {renderSafetyResponse} from '@companion/career-core';
+import {parseNameSafetyPublicationCommand,type NameSafetyPublicationCommand} from '@companion/platform-contracts';
+import {publicSafetyResponseBody} from './safety-response-view.ts';
+import {readArchivedDeliveryAssets,readArchivedDeliveryActivation} from './safety-delivery-review.ts';
+import type {readNameOriginalCaptureInTransaction} from './companion-name-safety-responses.ts';
 import type { PoolClient } from 'pg';
 import type { NameSafetyResourceCommand } from '@companion/platform-contracts';
 import type { DataCrypto } from './data-crypto.ts';
@@ -51,6 +56,23 @@ export function bodyProjectionCapture(row:NameSafetyProjectionRow,body:unknown) 
   return {schemaVersion:1,id:row.id,userId:row.user_id,publicationId:row.publication_id,edition:row.edition,
     bodyDigest:row.body_digest,sessionHash:row.session_hash,issuedAt:row.issued_at.toISOString(),body};
 }
+export function decodeNameSafetyFollowup(crypto:DataCrypto,p:NameSafetyPublicationRow,r:NameSafetyFollowupRow) {
+    const raw=openDelivery(crypto,'platform_companion_name_safety_followups',r.operation_id,r.user_id,r.applied_revision,r.payload_ciphertext);
+    const data=deliveryRecord(raw,['schemaVersion',...operationKeys,'clarifiedAt','at','request','authority','previousDigest','journalDigest']);
+    const request=deliveryRecord(data.request,['operationId','publicationId','expectedPublicationRevision','action']),action=request.action as Record<string,unknown>;
+    const publicKind=r.kind==='present_body_evidence'?'present_body':r.kind;
+    const a=deliveryRecord(action,publicKind==='present_body'?['kind','bodyProjectionId']:publicKind==='need_support'?['kind']:
+      publicKind==='clarify_exaggeration'?['kind','presentationDigest','safe','exaggeration']:['kind','presentationDigest']);
+    if(request.operationId!==r.operation_id||request.publicationId!==p.id||request.expectedPublicationRevision!==r.expected_revision||a.kind!==publicKind
+      ||publicKind==='present_body'&&a.bodyProjectionId!==r.body_projection_id
+      ||'presentationDigest'in a&&a.presentationDigest!==r.presentation_digest
+      ||publicKind==='clarify_exaggeration'&&(a.safe!==true||a.exaggeration!==true))throw deliveryStorageUnavailable();
+    const authority=deliveryRecord(data.authority,['authVersion','legalVersion']);
+    if(r.handled?(typeof authority.authVersion!=='string'||typeof authority.legalVersion!=='string'):(authority.authVersion!==null||authority.legalVersion!==null))throw deliveryStorageUnavailable();
+    const capture=followupCapture(r,request,authority);
+    if(JSON.stringify(raw)!==JSON.stringify(capture)||r.journal_digest!==followupDigest(r,request,authority))throw deliveryStorageUnavailable();
+    return capture;
+}
 /** Validate only this publication, including its sealed head and EVERY original operation.
  * Rows are never re-counted into a new state after a suffix/projection disappears. */
 export async function readNameSafetyJournal(client:PoolClient,crypto:DataCrypto,p:NameSafetyPublicationRow,body:unknown) {
@@ -70,20 +92,7 @@ export async function readNameSafetyJournal(client:PoolClient,crypto:DataCrypto,
   for(let i=0;i<operations.length;i++){
     const r=operations[i];if(r.user_id!==p.user_id||r.submission_id!==p.submission_id||r.source_generation!==p.source_generation
       ||r.expected_revision!==i||r.applied_revision!==i+1||r.previous_digest!==digest||r.created_at<previousTime||r.created_at<p.published_at)throw deliveryStorageUnavailable();
-    const raw=openDelivery(crypto,'platform_companion_name_safety_followups',r.operation_id,r.user_id,r.applied_revision,r.payload_ciphertext);
-    const data=deliveryRecord(raw,['schemaVersion',...operationKeys,'clarifiedAt','at','request','authority','previousDigest','journalDigest']);
-    const request=deliveryRecord(data.request,['operationId','publicationId','expectedPublicationRevision','action']),action=request.action as Record<string,unknown>;
-    const publicKind=r.kind==='present_body_evidence'?'present_body':r.kind;
-    const a=deliveryRecord(action,publicKind==='present_body'?['kind','bodyProjectionId']:publicKind==='need_support'?['kind']:
-      publicKind==='clarify_exaggeration'?['kind','presentationDigest','safe','exaggeration']:['kind','presentationDigest']);
-    if(request.operationId!==r.operation_id||request.publicationId!==p.id||request.expectedPublicationRevision!==r.expected_revision||a.kind!==publicKind
-      ||publicKind==='present_body'&&a.bodyProjectionId!==r.body_projection_id
-      ||'presentationDigest'in a&&a.presentationDigest!==r.presentation_digest
-      ||publicKind==='clarify_exaggeration'&&(a.safe!==true||a.exaggeration!==true))throw deliveryStorageUnavailable();
-    const authority=deliveryRecord(data.authority,['authVersion','legalVersion']);
-    if(r.handled?(typeof authority.authVersion!=='string'||typeof authority.legalVersion!=='string'):(authority.authVersion!==null||authority.legalVersion!==null))throw deliveryStorageUnavailable();
-    const capture=followupCapture(r,request,authority);
-    if(JSON.stringify(raw)!==JSON.stringify(capture)||r.journal_digest!==followupDigest(r,request,authority))throw deliveryStorageUnavailable();
+    const capture=decodeNameSafetyFollowup(crypto,p,r);
     if(r.kind==='present_body_evidence'){
       if(r.created_at<p.retention_until||r.created_at>=p.evidence_retention_until)throw deliveryStorageUnavailable();
     }else if(!r.handled&&r.created_at>=p.retention_until)throw deliveryStorageUnavailable();
@@ -115,3 +124,42 @@ export async function writeNameSafetyState(client:PoolClient,crypto:DataCrypto,p
     WHERE publication_id=$1 AND revision=$6 RETURNING publication_id`,[p.id,row.revision,row.latest_operation_id,deliveryHash(row.journal_digest),cipher,row.revision-1]);
   if(found.rowCount!==1)throw deliveryStorageUnavailable();
 }
+
+export interface PublicationOperation {user_id:string;operation_id:string;submission_id:string;source_generation:number;publication_id:string;kind:'publish'|'recover';expected_edition:number;session_hash:string;payload_ciphertext:Buffer;created_at:Date;}
+
+type OriginalCapture=NonNullable<Awaited<ReturnType<typeof readNameOriginalCaptureInTransaction>>>;
+const publicationTable='platform_companion_name_safety_publications',requestTable='platform_companion_name_delivery_operations';
+export const publicationRequestCapture=(r:PublicationOperation,request:NameSafetyPublicationCommand)=>({schemaVersion:1,userId:r.user_id,operationId:r.operation_id,
+ submissionId:r.submission_id,sourceGeneration:r.source_generation,publicationId:r.publication_id,kind:r.kind,expectedEdition:r.expected_edition,
+ sessionHash:r.session_hash,at:r.created_at.toISOString(),request});
+export async function readNamePublicationCapture(client:PoolClient,crypto:DataCrypto,r:NameSafetyPublicationRow,original:OriginalCapture,lock=true) {
+
+    const t=original.target,source=t.source;
+    if(r.user_id!==source.user_id||r.submission_id!==source.id||r.response_id!==original.row.id||r.source_generation!==source.generation
+      ||r.detector_revision!==source.detector_revision||r.level!==t.decision.level||r.detector_mode!==t.decision.mode
+      ||r.logical_draft_id!==t.previewSource.sourceDraftId||r.prepared_at.toISOString()!==r.published_at.toISOString()
+      ||r.prepared_at<original.row.prepared_at!)throw deliveryStorageUnavailable();
+    const a=await readArchivedDeliveryAssets(client,crypto,r.asset_id,lock);
+    const activation=await readArchivedDeliveryActivation(client,crypto,a.id,r.activation_user_id,r.activation_operation_id,lock);
+    if(Date.parse(activation.at)>r.prepared_at.getTime())throw deliveryStorageUnavailable();
+    const locale=original.row.locale!;
+    const response=renderSafetyResponse({level:r.level,locale,templateFromBundle:a.bundle.locales[locale],contactsFromBundle:a.bundle.resources.contacts,
+      outsideUsTranslation:a.bundle.resources.outsideUs[locale],companionName:locale==='en'?'Your companion':'你的主理人',userName:'',askSafetyQuestion:r.level==='L2'});
+    const body=publicSafetyResponseBody(response),questionDigest=response.question===undefined?null:deliveryDigest(response.question);
+    const capture={schemaVersion:1,...publicationCoordinates(r),activation,locale,response};
+    const actual=openDelivery(crypto,publicationTable,r.id,r.user_id,1,r.payload_ciphertext);
+    const dates=await client.query(`SELECT $1::timestamptz<=clock_timestamp() AND $2::timestamptz=$1::timestamptz+($4::int*interval '1 day')
+      AND $3::timestamptz=$1::timestamptz+($5::int*interval '1 day') AS actual`,[r.prepared_at,r.retention_until,r.evidence_retention_until,a.bundle.retentionDays,a.review.evidenceRetentionDays]);
+    if(r.body_digest!==deliveryDigest(JSON.stringify(body))||r.question_digest!==questionDigest||JSON.stringify(actual)!==JSON.stringify(capture)||dates.rows[0].actual!==true)throw deliveryStorageUnavailable();
+    const request=(await client.query<PublicationOperation>(`SELECT * FROM platform_companion_name_delivery_operations WHERE user_id=$1 AND operation_id=$2${lock?' FOR SHARE':''}`,[r.user_id,r.publication_operation_id])).rows[0];
+    if(!request||request.publication_id!==r.id||request.submission_id!==r.submission_id||request.source_generation!==r.source_generation)throw deliveryStorageUnavailable();
+    decodeNamePublicationOperation(crypto,request);return {row:r,target:t,original,assets:a,activation,response,body,capture};
+  }
+export function decodeNamePublicationOperation(crypto:DataCrypto,row:PublicationOperation) {
+
+    const raw=openDelivery(crypto,requestTable,row.operation_id,row.user_id,1,row.payload_ciphertext);
+    const data=deliveryRecord(raw,['schemaVersion','userId','operationId','submissionId','sourceGeneration','publicationId','kind','expectedEdition','sessionHash','at','request']);
+    const request=parseNameSafetyPublicationCommand(data.request);
+    if(request.operationId!==row.operation_id||request.submissionId!==row.submission_id||request.expectedEdition!==row.expected_edition
+      ||JSON.stringify(raw)!==JSON.stringify(publicationRequestCapture(row,request)))throw deliveryStorageUnavailable();return request;
+  }

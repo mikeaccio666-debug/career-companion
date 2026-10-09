@@ -17,8 +17,8 @@ import { parseSafetyResponseBundle, type SafetyResponseBundle } from './safety-r
 import { publicSafetyResponseBody } from './safety-response-view.ts';
 import { acquireDeliveryReviewCoordinator, assertActiveDeliveryAssets, deliveryDigest, deliveryInteger, deliveryRecord,
   deliveryStorageUnavailable, deliveryUnavailable, deliveryUuid, openDelivery, parseSafetyDeliveryReview,
-  readArchivedDeliveryActivation, readArchivedDeliveryAssets, sealDelivery, type SafetyDeliveryReview } from './safety-delivery-review.ts';
-import { bodyProjectionCapture, followupCapture, followupDigest, followupStateCapture, publicationCoordinates, publicationGenesis,
+  sealDelivery, type SafetyDeliveryReview } from './safety-delivery-review.ts';
+import { publicationRequestCapture,readNamePublicationCapture,decodeNamePublicationOperation,type PublicationOperation,bodyProjectionCapture, followupCapture, followupDigest, followupStateCapture, publicationCoordinates, publicationGenesis,
   readNameSafetyJournal, resourceCanonicalInput, writeNameSafetyState, type NameSafetyFollowupRow, type NameSafetyProjectionRow,
   type NameSafetyPublicationRow, type NameSafetyStateRow } from './companion-name-safety-delivery-protocol.ts';
 
@@ -27,13 +27,9 @@ const conflict=()=>new ApiError(409,'SAFETY_DELIVERY_OPERATION_CONFLICT','Use a 
 const changed=()=>new ApiError(409,'SAFETY_DELIVERY_PUBLICATION_REVISION_CHANGED','Read the current resource state before continuing.');
 const expired=()=>new ApiError(409,'SAFETY_DELIVERY_RESPONSE_EXPIRED','A current reviewed resource edition is required.');
 interface HeadRow {submission_id:string;user_id:string;source_generation:number;detector_revision:number;level:'L1'|'L2';detector_mode:'full'|'keyword_only';revision:number;latest_publication_id:string|null;payload_ciphertext:Buffer;}
-interface PublicationOperation {user_id:string;operation_id:string;submission_id:string;source_generation:number;publication_id:string;kind:'publish'|'recover';expected_edition:number;session_hash:string;payload_ciphertext:Buffer;created_at:Date;}
 type OriginalCapture=NonNullable<Awaited<ReturnType<CompanionNameSafetyResponses['readCaptureInTransaction']>>>;
 const capturedHead=(r:HeadRow)=>({schemaVersion:1,submissionId:r.submission_id,userId:r.user_id,sourceGeneration:r.source_generation,
   detectorRevision:r.detector_revision,level:r.level,mode:r.detector_mode,revision:r.revision,latestPublicationId:r.latest_publication_id});
-const publicationRequestCapture=(r:PublicationOperation,request:NameSafetyPublicationCommand)=>({schemaVersion:1,userId:r.user_id,operationId:r.operation_id,
-  submissionId:r.submission_id,sourceGeneration:r.source_generation,publicationId:r.publication_id,kind:r.kind,expectedEdition:r.expected_edition,
-  sessionHash:r.session_hash,at:r.created_at.toISOString(),request});
 function parsed<T>(run:()=>T):T{try{return run();}catch{throw new ApiError(400,'INVALID_INPUT','Use a valid resource operation.');}}
 function idInput(value:unknown,key:'publicationId'|'submissionId'):string{return parsed(()=>deliveryUuid(deliveryRecord(value,[key])[key]));}
 
@@ -56,34 +52,9 @@ export class CompanionNameSafetyDelivery {
     return this.original.readCaptureInTransaction(client,submissionId,signal);
   }
   private async decodePublication(client:PoolClient,r:NameSafetyPublicationRow,original:OriginalCapture){
-    const t=original.target,source=t.source;
-    if(r.user_id!==source.user_id||r.submission_id!==source.id||r.response_id!==original.row.id||r.source_generation!==source.generation
-      ||r.detector_revision!==source.detector_revision||r.level!==t.decision.level||r.detector_mode!==t.decision.mode
-      ||r.logical_draft_id!==t.previewSource.sourceDraftId||r.prepared_at.toISOString()!==r.published_at.toISOString()
-      ||r.prepared_at<original.row.prepared_at!)throw deliveryStorageUnavailable();
-    const a=await readArchivedDeliveryAssets(client,this.storage.crypto!,r.asset_id);
-    const activation=await readArchivedDeliveryActivation(client,this.storage.crypto!,a.id,r.activation_user_id,r.activation_operation_id);
-    if(Date.parse(activation.at)>r.prepared_at.getTime())throw deliveryStorageUnavailable();
-    const locale=original.row.locale!;
-    const response=renderSafetyResponse({level:r.level,locale,templateFromBundle:a.bundle.locales[locale],contactsFromBundle:a.bundle.resources.contacts,
-      outsideUsTranslation:a.bundle.resources.outsideUs[locale],companionName:locale==='en'?'Your companion':'你的主理人',userName:'',askSafetyQuestion:r.level==='L2'});
-    const body=publicSafetyResponseBody(response),questionDigest=response.question===undefined?null:deliveryDigest(response.question);
-    const capture={schemaVersion:1,...publicationCoordinates(r),activation,locale,response};
-    const actual=openDelivery(this.storage.crypto!,publicationTable,r.id,r.user_id,1,r.payload_ciphertext);
-    const dates=await client.query(`SELECT $1::timestamptz<=clock_timestamp() AND $2::timestamptz=$1::timestamptz+($4::int*interval '1 day')
-      AND $3::timestamptz=$1::timestamptz+($5::int*interval '1 day') AS actual`,[r.prepared_at,r.retention_until,r.evidence_retention_until,a.bundle.retentionDays,a.review.evidenceRetentionDays]);
-    if(r.body_digest!==deliveryDigest(JSON.stringify(body))||r.question_digest!==questionDigest||JSON.stringify(actual)!==JSON.stringify(capture)||dates.rows[0].actual!==true)throw deliveryStorageUnavailable();
-    const request=(await client.query<PublicationOperation>('SELECT * FROM platform_companion_name_delivery_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[r.user_id,r.publication_operation_id])).rows[0];
-    if(!request||request.publication_id!==r.id||request.submission_id!==r.submission_id||request.source_generation!==r.source_generation)throw deliveryStorageUnavailable();
-    this.decodeRequest(request);return {row:r,target:t,original,assets:a,activation,response,body,capture};
+    return readNamePublicationCapture(client,this.storage.crypto!,r,original);
   }
-  private decodeRequest(row:PublicationOperation){
-    const raw=openDelivery(this.storage.crypto!,requestTable,row.operation_id,row.user_id,1,row.payload_ciphertext);
-    const data=deliveryRecord(raw,['schemaVersion','userId','operationId','submissionId','sourceGeneration','publicationId','kind','expectedEdition','sessionHash','at','request']);
-    const request=parseNameSafetyPublicationCommand(data.request);
-    if(request.operationId!==row.operation_id||request.submissionId!==row.submission_id||request.expectedEdition!==row.expected_edition
-      ||JSON.stringify(raw)!==JSON.stringify(publicationRequestCapture(row,request)))throw deliveryStorageUnavailable();return request;
-  }
+  private decodeRequest(row:PublicationOperation){return decodeNamePublicationOperation(this.storage.crypto!,row);}
   private async head(client:PoolClient,original:OriginalCapture){
     const target=original.target,r=(await client.query<HeadRow>('SELECT * FROM platform_companion_name_delivery_heads WHERE submission_id=$1 FOR UPDATE',[target.source.id])).rows[0];
     const anchor=(await client.query<{first_safety_publication_id:string|null}>('SELECT first_safety_publication_id FROM platform_companion_name_submissions WHERE id=$1 AND user_id=$2 FOR UPDATE',[target.source.id,target.source.user_id])).rows[0];

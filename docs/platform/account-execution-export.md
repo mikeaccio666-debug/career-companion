@@ -2,7 +2,7 @@
 
 对应产品 09 §11，内部账户捕获新增 workflowTemplates、workflowCheckpoints、workflowStepEvents、browserCheckpoints、browserActionEvents，覆盖五张已有表。它们是底座已保存的本人历史，不扩展通用工作台，不向学生开放浏览器页或工作流编辑器。
 
-普通 JSON 当前 121 张已投影、7 张明确排除、43 张待处理；带私有文件为 124 / 7 / 40。两者仍 complete=false。完整个人数据、归档 worker、公开下载、删除协调和其余 P0 仍需继续实现。
+普通 JSON 当前 129 张已投影、7 张明确排除、35 张待处理；带私有文件为 132 / 7 / 32。两者仍 complete=false。完整个人数据、归档 worker、公开下载、删除协调和其余 P0 仍需继续实现。
 
 ## 保留内容与边界
 
