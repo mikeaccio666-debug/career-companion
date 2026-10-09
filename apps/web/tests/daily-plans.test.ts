@@ -18,3 +18,18 @@ test('item commands use the item-specific PATCH route and cannot accept executab
 test('a confirmed rest interrupts a pending task response and refreshes hidden state without losing the uncertain operation',async()=>{
  let resolve!:(v:unknown)=>void,c:any,rest=false;const h=harness((_p,i)=>{if(i.method){c=JSON.parse(String(i.body));return new Promise(r=>resolve=r);}return{...initial,paused:rest};});await ready(h);h.controller.begin(intent);rest=true;h.controller.suspend();h.controller.resume();await until(()=>h.controller.snapshot().loaded);assert.equal(h.controller.snapshot().view?.paused,true);assert(h.controller.snapshot().pending);resolve(saved(c));await new Promise(r=>setTimeout(r,5));assert.equal(h.controller.snapshot().view?.plan,null);assert.equal(h.controller.snapshot().view?.paused,true);h.controller.stop();
 });
+
+test('page lifecycle hides tasks, keeps an unknown write and reads the new day without replaying it',async()=>{
+ const {bindPrivatePageLifecycle}=await import('../src/private-page-lifecycle.ts');
+ const events=new EventTarget(),page=Object.assign(new EventTarget(),{visibilityState:'visible'});let online=true,reads=0,writes=0,resolve!:(v:unknown)=>void,c:any,newDay=false;
+ const h=harness((_p,i)=>{if(i.method){writes++;c=JSON.parse(String(i.body));return new Promise(r=>resolve=r);}reads++;return newDay?{...initial,localDate:'2026-10-10'}:initial;});
+ const lifecycle=bindPrivatePageLifecycle(h.controller,events,page,()=>online);
+ await until(()=>h.controller.snapshot().loaded);h.controller.begin(intent);const pending=h.controller.snapshot().pending;assert(pending);
+ page.visibilityState='hidden';page.dispatchEvent(new Event('visibilitychange'));assert.equal(h.controller.snapshot().view,null);assert.equal(h.controller.snapshot().pending,pending);
+ newDay=true;lifecycle.refresh();events.dispatchEvent(new Event('online'));assert.equal(reads,1);
+ online=false;events.dispatchEvent(new Event('offline'));page.visibilityState='visible';page.dispatchEvent(new Event('visibilitychange'));assert.equal(reads,1);
+ online=true;events.dispatchEvent(new Event('online'));await until(()=>h.controller.snapshot().loaded);
+ assert.equal(h.controller.snapshot().view?.localDate,'2026-10-10');assert.equal(writes,1);assert.equal(h.controller.snapshot().pending,pending);
+ resolve(saved(c));await new Promise(r=>setTimeout(r,5));assert.equal(h.controller.snapshot().view?.localDate,'2026-10-10');assert.equal(h.controller.snapshot().pending,pending);
+ h.invalidate();page.visibilityState='hidden';page.dispatchEvent(new Event('visibilitychange'));page.visibilityState='visible';page.dispatchEvent(new Event('visibilitychange'));assert.equal(reads,2);assert.equal(h.controller.snapshot().view,null);lifecycle.dispose();
+});
