@@ -1,3 +1,4 @@
+import {decodeUploadWriteRecord,type UploadWriteRecord as WriteRecord} from './upload-journal-codec.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId, careerRecordObject } from '@companion/platform-contracts';
@@ -10,11 +11,6 @@ import { ApiError } from './errors.ts';
 const unavailable=()=>new ApiError(503,'UPLOAD_WRITE_UNAVAILABLE','文件保存状态暂时无法确认，请重新查看文件列表。');
 const canonical=(v:unknown)=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const digest=(v:unknown)=>createHash('sha256').update(canonical(v)).digest('hex');
-interface WriteRecord {
- schemaVersion:1;id:string;ownerId:string;storageKey:string;scope:string;writerToken:string;
- status:'writing'|'ready'|'cleanup';writerFinished:boolean;revision:number;lastEventId:string;
- publishUntil:string;leaseToken:string|null;leaseUntil:string|null;
-}
 export interface StagedUpload {readonly id:string;readonly name:string;readonly mime:string;readonly size:number;}
 type WriteAuthority=(client:PoolClient)=>Promise<void>;
 /** Persist before I/O; publish and retire the intent in one transaction. Unknown
@@ -34,17 +30,8 @@ export class UploadWrites {
  }
  private async read(c:PoolClient,id:string):Promise<WriteRecord|null>{
   const row=(await c.query('SELECT * FROM platform_upload_writes WHERE id=$1 FOR UPDATE',[id])).rows[0];if(!row)return null;
-  try{
-   const raw=this.crypto!.openUtf8(row.record_ciphertext,{table:'platform_upload_writes',column:'record_ciphertext',rowId:id,ownerId:row.user_id,revision:row.revision});
-   const r=careerRecordObject(JSON.parse(raw),['schemaVersion','id','ownerId','storageKey','scope','writerToken','status','writerFinished','revision','lastEventId','publishUntil','leaseToken','leaseUntil']) as unknown as WriteRecord;
-   if(canonical(r)!==raw||r.schemaVersion!==1||r.id!==id||r.ownerId!==row.user_id||r.status!==row.status||r.revision!==row.revision||r.lastEventId!==row.last_event_id
-    ||r.publishUntil!==row.publish_until.toISOString()||r.leaseUntil!==(row.lease_until?.toISOString()??null)||!Number.isSafeInteger(r.revision)||r.revision<1
-    ||!['writing','ready','cleanup'].includes(r.status)||typeof r.writerFinished!=='boolean'||r.status==='ready'&&!r.writerFinished
-    ||!/^blob_scope_[0-9a-f]{64}$/.test(r.scope)||(r.leaseToken===null)!==(r.leaseUntil===null))throw unavailable();
-   for(const v of [r.id,r.ownerId,r.storageKey,r.writerToken,r.lastEventId])careerRecordId(v);if(r.leaseToken!==null)careerRecordId(r.leaseToken);
-   const event=(await c.query('SELECT * FROM platform_upload_write_events WHERE write_id=$1 ORDER BY revision DESC LIMIT 1 FOR SHARE',[id])).rows[0];
-   if(!event||event.id!==r.lastEventId||event.revision!==r.revision||this.crypto!.openUtf8(event.ciphertext,{table:'platform_upload_write_events',column:'ciphertext',rowId:event.id,ownerId:r.ownerId,revision:r.revision})!==digest(r))throw unavailable();
-   return r;
+  try{const event=(await c.query('SELECT * FROM platform_upload_write_events WHERE write_id=$1 ORDER BY revision DESC LIMIT 1 FOR SHARE',[id])).rows[0];
+   return decodeUploadWriteRecord(this.crypto,row,event,id);
   }catch{throw unavailable();}
  }
  private next(r:WriteRecord,changes:Partial<WriteRecord>):WriteRecord{if(r.revision>=2147483647)throw unavailable();return {...r,...changes,revision:r.revision+1,lastEventId:randomUUID()};}

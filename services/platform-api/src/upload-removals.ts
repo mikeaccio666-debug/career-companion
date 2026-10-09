@@ -1,3 +1,4 @@
+import {decodeUploadRemovalRecord,type UploadRemovalRecord as Record} from './upload-journal-codec.ts';
 import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId,careerRecordObject,careerLibraryTime,parseUploadRemovalCommand,parseUploadRemovalReceipt,type UploadRemovalReceipt } from '@companion/platform-contracts';
@@ -11,7 +12,7 @@ const unavailable=()=>new ApiError(503,'UPLOAD_REMOVAL_UNAVAILABLE','文件清�
 const missing=()=>new ApiError(404,'NOT_FOUND','这份文件或清理记录不存在。');
 const canonical=(value:unknown)=>JSON.stringify(value,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 const hash=(value:unknown)=>createHash('sha256').update(canonical(value)).digest('hex');
-interface Record extends UploadRemovalReceipt {schemaVersion:1;ownerId:string;acceptedAuthVersion:string;scope:string;storageKey:string;generation:number;lastEventId:string;leaseToken:string|null;leaseUntil:string|null;}
+
 function fixed(value:FixedSessionContext){try{const v=careerRecordObject(value,['userId','tokenHash']);if(typeof v.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(v.tokenHash))throw Error();return {userId:careerRecordId(v.userId),tokenHash:v.tokenHash};}catch{throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');}}
 /** Durable file revocation and cleanup only. No model work, external-user
  * capability, fake completion, or replacement of saved text copies. */
@@ -19,14 +20,8 @@ export class UploadRemovals {
  constructor(private readonly db:Database,private readonly crypto:DataCrypto|undefined,private readonly storage:BlobStorage){}
  private configured(){if(!this.crypto||typeof this.storage.scope!=='string'||!/^blob_scope_[0-9a-f]{64}$/.test(this.storage.scope))throw unavailable();}
  private async decode(client:PoolClient,row:any):Promise<Record>{
-  this.configured();try{
-   const raw=this.crypto!.openUtf8(row.record_ciphertext,{table:'platform_upload_removals',column:'record_ciphertext',rowId:row.upload_id,ownerId:row.user_id,revision:row.generation});
-   const v=careerRecordObject(JSON.parse(raw),['schemaVersion','ownerId','name','uploadId','operationId','status','requestedAt','removedAt','acceptedAuthVersion','scope','storageKey','generation','lastEventId','leaseToken','leaseUntil']),receipt=parseUploadRemovalReceipt(Object.fromEntries(['ownerId','name','uploadId','operationId','status','requestedAt','removedAt'].map(k=>[k,v[k]])));
-   if(canonical(v)!==raw||v.schemaVersion!==1||v.ownerId!==row.user_id||receipt.uploadId!==row.upload_id||receipt.operationId!==row.operation_id||receipt.status!==row.status||v.generation!==row.generation||v.lastEventId!==row.last_event_id||receipt.requestedAt!==row.requested_at.toISOString()||receipt.removedAt!==(row.removed_at?.toISOString()??null)||v.leaseUntil!==(row.lease_until?.toISOString()??null)||typeof v.acceptedAuthVersion!=='string'||!/^(0|[1-9][0-9]*)$/.test(v.acceptedAuthVersion)||typeof v.scope!=='string'||!/^blob_scope_[0-9a-f]{64}$/.test(v.scope)||typeof v.storageKey!=='string'||!(/^[A-Za-z0-9_-]{1,240}$/).test(v.storageKey)||!Number.isSafeInteger(v.generation)||Number(v.generation)<1)throw unavailable();
-   careerRecordId(v.ownerId);careerRecordId(v.lastEventId);if(v.leaseToken!==null)careerRecordId(v.leaseToken);if(v.leaseUntil!==null)careerLibraryTime(v.leaseUntil);if((v.leaseToken===null)!==(v.leaseUntil===null)||v.status==='removed'&&v.leaseToken!==null)throw unavailable();
-   const event=(await client.query('SELECT * FROM platform_upload_removal_events WHERE upload_id=$1 ORDER BY generation DESC LIMIT 1 FOR SHARE',[row.upload_id])).rows[0];if(!event||event.user_id!==row.user_id||event.id!==v.lastEventId||event.generation!==v.generation)throw unavailable();
-   const text=this.crypto!.openUtf8(event.ciphertext,{table:'platform_upload_removal_events',column:'ciphertext',rowId:event.id,ownerId:row.user_id,revision:row.generation}),e=careerRecordObject(JSON.parse(text),['recordDigest','at']);if(canonical(e)!==text||e.recordDigest!==hash(v)||e.at!==event.created_at.toISOString())throw unavailable();
-   return v as unknown as Record;
+  this.configured();try{const event=(await client.query('SELECT * FROM platform_upload_removal_events WHERE upload_id=$1 ORDER BY generation DESC LIMIT 1 FOR SHARE',[row.upload_id])).rows[0];
+   return decodeUploadRemovalRecord(this.crypto,row,event);
   }catch{throw unavailable();}
  }
  private async save(client:PoolClient,r:Record,at:string){
