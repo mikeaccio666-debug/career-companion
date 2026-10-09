@@ -296,6 +296,23 @@ export async function saveCompanionSourcePrefixInTransaction(client: PoolClient,
     if (saved.rowCount!==1) throw intakeUnavailable();
   } catch { throw intakeUnavailable(); }
 }
+/** Decode the immutable saved manifest only. Archive callers must project out
+ * credentials; this does not reconstruct source rows or confer execution proof. */
+export function decodeCompanionSourcePrefix(crypto: OnboardingStorage['crypto'], row: Record<string, any>,
+  value: CompanionSourcePrefixBinding, valueDigest: string): Readonly<CompanionSourcePrefixManifest> {
+  try {
+    const binding=parseBinding(value),expectedDigest=digest(valueDigest);
+    if (!row||row.task_id!==binding.taskId||row.user_id!==binding.userId||row.id!==binding.taskId||row.companion_id!==binding.companionId||row.answers_id!==binding.answersId
+      ||row.source_draft_id!==binding.sourceDraftId||row.source_revision!==binding.sourceRevision||String(row.auth_version)!==binding.authVersion
+      ||row.questionnaire_revision!==1||row.rules_revision!==1||row.generator_version!==1||row.purpose!==binding.purpose
+      ||![1,2].includes(row.schema_version)||row.payload_digest!==expectedDigest) throw intakeUnavailable();
+    const text=crypto!.openUtf8(row.payload_ciphertext,aad(binding)), original=parseManifest(JSON.parse(text));
+    if (original.schemaVersion!==row.schema_version||sha(text)!==expectedDigest||JSON.stringify(original)!==text||original.capturedAt!==at(row.captured_at)
+      ||JSON.stringify(parseBinding(Object.fromEntries(bindingKeys.map(key=>[key,original[key]]))))!==JSON.stringify(binding)) throw intakeUnavailable();
+    return original;
+  } catch { throw intakeUnavailable(); }
+}
+
 /** No source recovery or manifest creation. Original ID completeness and every
  * original content/coordinate digest must still match the independent capture. */
 export function verifyCompanionSourcePrefixInTransaction(client: PoolClient, storage: OnboardingStorage,
@@ -319,13 +336,8 @@ export async function verifyCompanionSourcePrefixInTransaction(client: PoolClien
       JOIN platform_companion_generation_tasks t ON t.id=m.task_id AND t.user_id=m.user_id AND t.companion_id=m.companion_id
       WHERE m.task_id=$1 AND m.user_id=$2 AND t.source_receipt_version=m.schema_version AND m.schema_version IN(1,2) FOR UPDATE OF m`,[binding.taskId,binding.userId])).rows;
     const row=rows[0];
-    if (rows.length!==1||row.id!==binding.taskId||row.companion_id!==binding.companionId||row.answers_id!==binding.answersId
-      ||row.source_draft_id!==binding.sourceDraftId||row.source_revision!==binding.sourceRevision||String(row.auth_version)!==binding.authVersion
-      ||row.questionnaire_revision!==1||row.rules_revision!==1||row.generator_version!==1||row.purpose!==binding.purpose
-      ||![1,2].includes(row.schema_version)||row.payload_digest!==expectedDigest) throw intakeUnavailable();
-    const text=storage.crypto.openUtf8(row.payload_ciphertext,aad(binding)), original=parseManifest(JSON.parse(text));
-    if (original.schemaVersion!==row.schema_version||sha(text)!==expectedDigest||JSON.stringify(original)!==text||original.capturedAt!==at(row.captured_at)
-      ||JSON.stringify(parseBinding(Object.fromEntries(bindingKeys.map(key=>[key,original[key]]))))!==JSON.stringify(binding)) throw intakeUnavailable();
+    if(rows.length!==1)throw intakeUnavailable();
+    const original=decodeCompanionSourcePrefix(storage.crypto,row,binding,expectedDigest),text=JSON.stringify(original);
     const current=await manifestAt(client,storage,binding,original.capturedAt,original);
     if (JSON.stringify(current.manifest)!==text) throw intakeUnavailable();
     const proof={handledSubmissionIds:original.handledSubmissionIds,responseIds:Object.freeze(original.responses.map(row=>row.responseId as string)),

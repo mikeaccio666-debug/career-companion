@@ -1,3 +1,4 @@
+import {projectCompanionSourceManifest} from './account-companion-source-export.ts';
 import {createHash} from 'node:crypto';
 import {decodeCompanionRequest} from './companion-request-snapshot.ts';
 import type {PoolClient} from 'pg';
@@ -9,8 +10,8 @@ import {ApiError} from './errors.ts';
 
 export const COMPANION_GENERATION_EXPORT_TABLES=Object.freeze(['platform_companion_answers','platform_companion_generation_tasks',
  'platform_companion_revisions','platform_companion_generation_calls','platform_companion_output_blocks',
- 'platform_companion_generation_requests','platform_companion_generation_outbox','platform_companion_generation_checkpoints'] as const);
-export type CompanionGenerationExportSection='companionAnswers'|'companionGenerationTasks'|'companionRevisions'|'companionGenerationCalls'|'companionOutputBlocks'|'companionGenerationRequests'|'companionGenerationOutbox'|'companionGenerationCheckpoints';
+ 'platform_companion_generation_requests','platform_companion_generation_outbox','platform_companion_generation_checkpoints','platform_companion_source_prefixes'] as const);
+export type CompanionGenerationExportSection='companionAnswers'|'companionGenerationTasks'|'companionRevisions'|'companionGenerationCalls'|'companionOutputBlocks'|'companionGenerationRequests'|'companionGenerationOutbox'|'companionGenerationCheckpoints'|'companionSourceManifests';
 const unavailable=()=>new ApiError(503,'ACCOUNT_COMPANION_GENERATION_EXPORT_UNAVAILABLE','The saved companion generation records could not be confirmed.');
 type Row=Record<string,any>;
 const at=(v:Date|null)=>v===null?null:v.toISOString();
@@ -110,7 +111,7 @@ export class AccountCompanionGenerationExport {
     if(capture.id!==row.id||capture.userId!==who.userId||capture.sourceDraftId!==row.source_draft_id||capture.sourceRevision!==row.source_revision)throw unavailable();
     answers.set(row.id,capture);yield {section:'companionAnswers',record:{...capture,createdAt:at(row.created_at)}};
    }
-   const tasks=new Map<string,{row:Row;style:ReturnType<typeof style>}>();
+   const tasks=new Map<string,{row:Row;style:ReturnType<typeof style>;seed:Row}>();
    for await(const row of rows(client,who.userId,'platform_companion_generation_tasks',signal)){
     const saved=this.open(row,'platform_companion_generation_tasks','seed_ciphertext',row.id,who.userId,row.source_revision);
     const seed=object(saved,['schemaVersion','taskId','userId','companionId','answersId','sourceDraftId','sourceRevision','authVersion','questionnaireRevision',
@@ -125,13 +126,23 @@ export class AccountCompanionGenerationExport {
     if(row.source_receipt_version!==null&&(![1,2].includes(row.source_receipt_version)||seed.sourceReceiptVersion!==row.source_receipt_version
      ||typeof seed.sourceReceiptDigest!=='string'||!/^[0-9a-f]{64}$/.test(seed.sourceReceiptDigest)))throw unavailable();
     const snapshot=style(seed);text(seed.provider);text(seed.model);natural(row.generation);
-    tasks.set(row.id,{row,style:snapshot});
+    tasks.set(row.id,{row,style:snapshot,seed});
     yield {section:'companionGenerationTasks',record:{id:row.id,ownerId:who.userId,companionId:row.companion_id,answersId:row.answers_id,
      sourceDraftId:row.source_draft_id,sourceRevision:row.source_revision,questionnaireRevision:row.questionnaire_revision,rulesRevision:row.rules_revision,
      generatorVersion:row.generator_version,purpose:row.purpose,status:row.status,generation:row.generation,quirkDraw:row.quirk_draw,
      sourceReceiptVersion:row.source_receipt_version,createdAt:at(row.created_at),finishedAt:at(row.finished_at),leaseUntil:at(row.lease_until),
      errorCode:row.error_code,prepared:{provider:seed.provider,model:seed.model,...snapshot}}};
    }
+   const manifestTasks=new Set<string>();
+   for await(const row of rows(client,who.userId,'platform_companion_source_prefixes',signal)){
+    const task=tasks.get(row.task_id);
+    if(!task||manifestTasks.has(row.task_id)||task.row.source_receipt_version!==row.schema_version)throw unavailable();
+    const answer=answers.get(task.row.answers_id);
+    if(!answer)throw unavailable();
+    const manifest=projectCompanionSourceManifest(this.config.dataCrypto,row,task.row,task.seed,answer);
+    manifestTasks.add(row.task_id);yield {section:'companionSourceManifests',record:manifest};
+   }
+   for(const [taskId,task] of tasks)if(task.row.source_receipt_version!==null&&!manifestTasks.has(taskId))throw unavailable();
    const requests=new Map<string,Row>();
    for await(const row of rows(client,who.userId,'platform_companion_generation_requests',signal)){
     const snapshot=decodeCompanionRequest(row as Parameters<typeof decodeCompanionRequest>[0],this.config.dataCrypto),task=tasks.get(row.task_id);
