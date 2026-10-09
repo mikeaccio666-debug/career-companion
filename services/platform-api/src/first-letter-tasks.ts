@@ -55,9 +55,12 @@ export function readFirstLetterTaskSnapshot(row:FirstLetterTaskRow,crypto:Platfo
   return result;
  }catch{throw unavailable();}
 }
-function match(task:FirstLetterTaskSnapshot,source:FirstLetterSourceSnapshot,prepared:FirstLetterPreparation){
+function matchIdentity(task:FirstLetterTaskSnapshot,source:FirstLetterSourceSnapshot){
  if(task.ownerId!==source.ownerId||task.companionId!==source.companionId||task.conversationId!==source.conversationId
   ||task.welcomeId!==source.trigger.welcomeId||task.birthReceiptId!==source.trigger.birthReceiptId)throw unavailable();
+}
+function match(task:FirstLetterTaskSnapshot,source:FirstLetterSourceSnapshot,prepared:FirstLetterPreparation){
+ matchIdentity(task,source);
  if(task.sourceId!==source.sourceId||task.preparationId!==prepared.preparationId||task.policyRevision!==prepared.policyRevision)throw changed();
 }
 /** A durable preparation identity, not a running job. All inputs are internal:
@@ -96,6 +99,48 @@ export class FirstLetterTasks{
    return this.complete(c,s,source,prepared,row,signal);
   });
  }
+
+ /** Explicitly refresh an unstarted preparation using current server sources.
+  * The caller supplies only the task and the preparation it observed, never
+  * replacement facts. Once an execution stage or cost intent exists, its
+  * immutable preparation remains bound to that history. */
+ async refresh(value:FixedSessionContext,selection:unknown,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
+  const s=fixed(value),savedSettings=snapshotFirstLetterSettings(settings);
+  let taskId:string,expectedPreparationId:string;
+  try{
+   const r=careerRecordObject(selection,['taskId','expectedPreparationId']);
+   taskId=careerRecordId(r.taskId);expectedPreparationId=coordinate(r.expectedPreparationId,'first_letter_preparation_');
+  }catch{throw new ApiError(400,'FIRST_LETTER_TASK_INPUT_INVALID','Use the saved task and observed preparation.');}
+  return this.db.withBoundedTransaction(async c=>{
+   const source=await this.sources.readInTransaction(c,s,signal),prepared=composeFirstLetter(source,savedSettings);
+   const rows=(await c.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND id=$2 FOR UPDATE',[s.userId,taskId])).rows;
+   if(!rows.length)throw new ApiError(404,'NOT_FOUND','The first-letter task was not found.');
+   if(rows.length!==1)throw unavailable();
+   const row=rows[0],task=readFirstLetterTaskSnapshot(row,this.crypto,s.userId);
+   matchIdentity(task,source);
+   // An already matching task is a read-only replay even if generation has
+   // started since the successful refresh. Never rewrite or clear its history.
+   if(task.sourceId===source.sourceId&&task.preparationId===prepared.preparationId&&task.policyRevision===prepared.policyRevision)
+    return this.complete(c,s,source,prepared,row,signal);
+   if(task.preparationId!==expectedPreparationId)throw changed();
+   const used=await c.query(`SELECT
+    EXISTS(SELECT 1 FROM platform_first_letter_stages WHERE task_id=$1)
+    OR EXISTS(SELECT 1 FROM platform_cost_reservations WHERE source_kind='job' AND source_id=$1)
+    OR EXISTS(SELECT 1 FROM platform_cost_ledger WHERE source_kind='job' AND source_id=$1) AS used`,[taskId]);
+   if(used.rows[0]?.used!==false)throw new ApiError(409,'FIRST_LETTER_TASK_ALREADY_STARTED',
+    'Recover the existing execution before changing its preparation.');
+   const next:FirstLetterTaskSnapshot={...task,sourceId:source.sourceId,preparationId:prepared.preparationId,
+    policyRevision:prepared.policyRevision,settings:savedSettings};
+   const cipher=this.crypto!.sealUtf8(JSON.stringify(next),binding(s.userId,taskId));
+   signal?.throwIfAborted();
+   const updated=(await c.query<FirstLetterTaskRow>(`UPDATE platform_first_letter_tasks SET source_id=$3,preparation_id=$4,
+    preparation_ciphertext=$5 WHERE id=$1 AND user_id=$2 AND preparation_id=$6 RETURNING *`,
+    [taskId,s.userId,next.sourceId,next.preparationId,cipher,expectedPreparationId])).rows;
+   if(updated.length!==1)throw changed();
+   return this.complete(c,s,source,prepared,updated[0],signal);
+  });
+ }
+
  async read(value:FixedSessionContext,selection:unknown,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
   const s=fixed(value),savedSettings=snapshotFirstLetterSettings(settings);
   let taskId:string;try{taskId=careerRecordId(careerRecordObject(selection,['taskId']).taskId);}

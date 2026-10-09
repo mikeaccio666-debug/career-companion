@@ -545,3 +545,54 @@ test('SIGKILL in review preserves the original and never resets review or rewrit
   });
  });
 });
+
+test('a preparation cannot refresh during a real model call or after its paid output; matching reads remain harmless',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await prepared(birthRuntime),next={...settings,localDate:'2026-10-10'};
+  const pickRefresh={taskId:pick(a).taskId,expectedPreparationId:a.saved.task.preparationId};
+  let entered!:()=>void,release!:()=>void;
+  const atFetch=new Promise<void>(resolve=>entered=resolve),gate=new Promise<void>(resolve=>release=resolve);
+  const p=provider({hook:async()=>{entered();await gate;}}),g=service(a,p.runtime),running=g.generate(a.who,pick(a),settings);
+  try{
+   await Promise.race([atFetch,running.then(()=>{throw Error('Completed before observed dispatch.');})]);
+   await assert.rejects(a.tasks.refresh(a.who,pickRefresh,next),{code:'FIRST_LETTER_TASK_ALREADY_STARTED'});
+  }finally{release();}
+  const saved=await running;assert.equal(saved.status,'draft_saved');assert.equal(p.calls,1);
+  await assert.rejects(a.tasks.refresh(a.who,pickRefresh,next),{code:'FIRST_LETTER_TASK_ALREADY_STARTED'});
+  assert.deepEqual(await a.tasks.refresh(a.who,pickRefresh,settings),a.saved);
+  assert.deepEqual(await g.read(a.who,pick(a),settings),saved);assert.equal(p.calls,1);
+  // Simulated damaged retention in the disposable schema: an authentic charge
+  // still prevents refresh even if someone has removed its execution row.
+  await f.db.query('DELETE FROM platform_first_letter_stages WHERE task_id=$1',[pick(a).taskId]);
+  await assert.rejects(a.tasks.refresh(a.who,pickRefresh,next),{code:'FIRST_LETTER_TASK_ALREADY_STARTED'});
+  assert.deepEqual(await a.tasks.read(a.who,pick(a),settings),a.saved);
+ });
+});
+test('even a no-call budget-failed stage keeps its preparation; existing same-input recovery remains usable',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await prepared(birthRuntime),p=provider(),g=service(a,p.runtime);
+  await f.db.query('UPDATE platform_cost_user_policy SET hard_micros=1 WHERE user_id=$1',[a.who.userId]);
+  await assert.rejects(g.generate(a.who,pick(a),settings));assert.equal(p.calls,0);
+  const before=await row(a);assert.equal(before.status,'failed');assert.equal(before.call_id,null);
+  await assert.rejects(a.tasks.refresh(a.who,{taskId:pick(a).taskId,expectedPreparationId:a.saved.task.preparationId},
+   {...settings,localDate:'2026-10-10'}),{code:'FIRST_LETTER_TASK_ALREADY_STARTED'});
+  assert.deepEqual(await row(a),before);
+  await f.db.query('UPDATE platform_cost_user_policy SET hard_micros=100000000 WHERE user_id=$1',[a.who.userId]);
+  assert.equal((await g.generate(a.who,pick(a),settings)).status,'draft_saved');assert.equal(p.calls,1);
+ });
+});
+
+test('an explicitly refreshed task generates from its new preparation, while old settings cannot send a request',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await prepared(birthRuntime),next={...settings,rosterRevision:2,localDate:'2026-10-10'};
+  const refreshed=await a.tasks.refresh(a.who,{taskId:pick(a).taskId,expectedPreparationId:a.saved.task.preparationId},next);
+  const p=provider(),runtime:PlatformProviderRuntime={...p.runtime,streamChat:(input,context)=>{
+   assert.deepEqual(input.messages,refreshed.preparation.messages);return p.runtime.streamChat(input,context);
+  }},g=service(a,runtime);
+  await assert.rejects(g.generate(a.who,pick(a),settings),{code:'FIRST_LETTER_TASK_PREPARATION_CHANGED'});
+  assert.equal(p.calls,0);
+  const generated=await g.generate(a.who,pick(a),next);
+  assert.equal(generated.status,'draft_saved');assert.equal(generated.preparationId,refreshed.task.preparationId);
+  assert.equal(p.calls,1);assert.deepEqual(await g.generate(a.who,pick(a),next),generated);assert.equal(p.calls,1);
+ });
+});

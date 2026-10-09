@@ -24,6 +24,8 @@ readReview 只重建结果或返回需要的阶段。recoverReview 只协调已�
 
 ## 尚未接通
 
-当前只支持真实 direct_letter 的既有来源。准备配置过期后的显式刷新、无人值守 worker、post 唯一发布、C7 完成与 UI 尚未接通。模型质量评测和 PR3 顺序门槛仍保留。没有新增 HTTP 入口或学生可见的“已完成”状态。
+当前只支持真实 direct_letter 的既有来源。已有执行记录的准备配置过期恢复、无人值守 worker、post 唯一发布、C7 完成与 UI 尚未接通。模型质量评测和 PR3 顺序门槛仍保留。没有新增 HTTP 入口或学生可见的“已完成”状态。
 
 [验证记录](first-letter-durable-review-verification.md)；新增[真实进程退出与恢复验证](first-letter-process-recovery-verification.md)。本轮没有外部付费调用、主库迁移、部署、预览重启或发信。
+
+尚未执行的准备现可通过 [FirstLetterTasks.refresh](first-letter-task-preparation.md) 显式更新，保留原任务身份；已有执行或费用记录不会被刷新。
