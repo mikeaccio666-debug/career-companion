@@ -25,6 +25,7 @@
     "account:coverage": "tsx src/account-data-coverage-main.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.132.1",
     "@aws-sdk/client-s3": "^3.922.0",
     "@companion/ai-core": "workspace:*",
     "@companion/career-core": "workspace:*",

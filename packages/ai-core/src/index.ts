@@ -109,3 +109,5 @@ export function createProviderRuntime(options:RuntimeOptions={}):PlatformProvide
 }
 
 export { ProviderAdapter, runAgentLoop } from './agent-loop.ts';
+
+export { chatInstructions } from './chat-instructions.ts';

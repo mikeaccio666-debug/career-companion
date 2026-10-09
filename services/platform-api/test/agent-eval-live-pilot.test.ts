@@ -104,7 +104,7 @@ test('invalid switches, absent private key, expired tariff and unsafe output roo
   const link=join(f.root,'link');await symlink(f.root,link);await assert.rejects(runLiveLunaPilot({...f,env:{...f.env,CAREER_EVAL_RESULTS_DIR:link}},dependencies),{code:'EVAL_JOURNAL_UNAVAILABLE'});
   assert.equal(constructed,0);
   const env=new Proxy({}, {get(){throw new Error('Must not inspect credentials for invalid arguments');}});
-  for(const args of [[],['--live','anthropic-haiku','--run-id','test'],['--live','openai-luna','--run-id','../secret'],['--live','openai-luna','--run-id','ok','--model','gpt-6-astra']])
+  for(const args of [[],['--live','anthropic-opus','--run-id','test'],['--live','openai-luna','--run-id','../secret'],['--live','openai-luna','--run-id','ok','--model','gpt-6-astra']])
    assert.deepEqual(await evalLiveCommand(args,env),{exitCode:2,result:{status:'rejected',code:'EVAL_LIVE_ARGUMENTS_INVALID'}});
  }finally{await chmod(f.root,0o700);await f.close();}
 });
