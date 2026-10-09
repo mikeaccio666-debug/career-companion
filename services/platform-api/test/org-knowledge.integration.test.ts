@@ -1,3 +1,5 @@
+import { CareerMethodReferences } from '../src/career-method-references.ts';
+import { CapabilityRegistry, type CapabilityScope } from '../src/capabilities.ts';
 import type {PoolClient} from 'pg';
 import type {Database} from '../src/database.ts';
 import {AccountCoreExport} from '../src/account-core-export.ts';
@@ -496,4 +498,146 @@ test('account archive applies 04 exclusions to real entitlements and access logs
   // The catalog inspection uses names, not row contents. There must be no
   // domain reads, decryption, retrieval or quota/access-log side effects here.
   assert(!queries.some(sql=>/\b(?:FROM|JOIN|UPDATE|INTO)\s+platform_(?:user_entitlements|knowledge_access_log|org_knowledge_sources|org_knowledge_passages|content_licenses|org_content_state_proofs)\b/i.test(sql)));
+});
+
+function methodFixture(s: Awaited<ReturnType<typeof setup>>, overrides: Record<string, unknown> = {}) {
+  return { method_id: 'fictional.story', revision: 1, author_id: s.editor.userId, reviewer_id: s.reviewer.userId,
+    applies_to: { role_families: ['da'], stages: ['preparation'], situations: ['course_project'] }, prerequisites: ['project-facts'],
+    steps: [{ goal: 'Find one real decision.', method: 'Read the fictional course notes. '.repeat(100), allowed_tools: ['read_evidence'], output: 'An evidence-backed decision.' }, { goal: 'Check the boundary.', method: 'Compare the fictional source notes. '.repeat(100), allowed_tools: [], output: 'One verified contribution.' }],
+    rubric_ref: null, stop_when: ['The claim has a source.'], counterexamples: ['A group result is not proof of individual ownership.'],
+    escalate_when: ['Ask a human if the source remains ambiguous.'], evidence_nature: '经验建议',
+    bound_skills: ['evidence-story'], when_to_use: 'Before rewriting a fictional course-project story.', bound_speakers: ['guide'],
+    effective_from: '2025-01-01T00:00:00.000Z', superseded_by: null, ...overrides };
+}
+function methodScope(s: Awaited<ReturnType<typeof setup>>, turnId = randomUUID()): CapabilityScope {
+  return { ownerId: s.owner.userId, turnId, profile: { speaker: 'guide' }, room: { kind: 'expert_room', expert: 'guide' },
+    phase: { enabledFeatures: ['P0'], enabledSpeakers: ['guide'], reviewedSkills: ['evidence-story'] } };
+}
+const methodRef = [{ methodId: 'fictional.story', revision: 1 }] as const;
+const methodRequest = { skillId: 'evidence-story', detail: 'excerpt' } as const;
+async function methodPort(s: Awaited<ReturnType<typeof setup>>, scope: CapabilityScope, roleFamily = 'da') {
+  return new CareerMethodReferences(f.db, service).open(s.owner, {
+    organizationId: s.org, turnId: scope.turnId, speaker: scope.profile.speaker, roleFamily,
+  });
+}
+
+test('real published method loads through a skill, with bounded excerpt, full text, citations and no staff identities', async () => {
+  const s = await setup('method_card'), p = await s.published([s.row(methodFixture(s))]), scope = methodScope(s);
+  const readMethodReferences = await methodPort(s, scope);
+  const bindings = { 'evidence-story': [{ methodId: 'fictional.story', revision: 1 }] };
+  const registry = new CapabilityRegistry({ methodReferences: bindings, readMethodReferences,
+    careerPorts: {
+      readProfile: async () => ({ ownerId: s.owner.userId, id: randomUUID(), revision: 1, state: 'current', normalSummary: 'Fictional DA course project.', confirmed: { degree: true, graduation: true, roleFamily: true } }),
+      listEvidence: async () => [{ ownerId: s.owner.userId, id: randomUUID(), revision: 1, state: 'current', kind: 'project', normalSummary: 'Fictional course notes.' }],
+    },
+    registrations: ['read_profile', 'read_evidence', 'save_story_draft'].map(id => ({ id, reviewed: true, execute: async () => ({}) })),
+  });
+  bindings['evidence-story'][0].revision = 99;
+  const session = registry.session(() => scope), input = { provider: 'ollama', mode: 'companion', messages: [] } as const;
+  const exec = (callId: string) => ({ turnId: scope.turnId, callId, idempotencyKey: scope.turnId + ':' + callId, effect: 'read' as const });
+  await session.beforeStep({ ...input, messages: [] }); session.resolveTools();
+  assert(!session.resolveTools().some(tool => tool.name === 'read_skill_reference'));
+  const result: any = await session.executeTool('use_skill', { id: 'evidence-story' }, exec('load'));
+  assert.equal(result.state, 'ready_for_draft'); assert.equal(result.methodExcerpts[0].revision, 1);
+  assert(result.methodExcerpts[0].text.length <= 4000); assert(result.methodExcerpts[0].text.includes('counterexamples'));
+  assert(result.methodExcerpts[0].text.includes('fullReferenceRequired'));
+  for (const privateId of [s.editor.userId, s.reviewer.userId, s.license.licenseId]) assert(!JSON.stringify(result).includes(privateId));
+  assert(!JSON.stringify(result).includes('allowed_tools'));
+  const next = await session.beforeStep({ ...input, messages: [] }); session.resolveTools();
+  assert(session.resolveTools().some(tool => tool.name === 'read_skill_reference'));
+  assert(next.messages.some(message => message.role === 'user' && message.content.includes('untrusted_knowledge')));
+  assert(!next.messages.some(message => message.role === 'system' && message.content.includes('A group result')));
+  const full: any = await session.executeTool('read_skill_reference', { id: 'evidence-story', ref: 'fictional.story' }, exec('full'));
+  assert(full.references[0].text.length > 4000);
+  assert(full.references[0].text.includes('A group result is not proof'));
+  assert.equal(full.references[0].citations[0].sourceId, p.source);
+  assert.equal(full.references[0].citations[0].revision, 2); // Source publication revision differs from method revision.
+  assert.equal(full.references[0].revision, 1);
+  const logs = (await f.db.query('SELECT purpose FROM platform_knowledge_access_log WHERE source_id=$1', [p.source])).rows;
+  assert(logs.some(log => log.purpose === 'skill_method_excerpt'));
+  assert(logs.some(log => log.purpose === 'skill_method_full'));
+  await service.revokeLicense(s.operator, s.org, s.license.licenseId, { operationId: randomUUID(), expectedRevision: 1, reason: 'Fictional withdrawal' });
+  await assert.rejects(session.beforeStep(next), rejected('NOT_ENTITLED'));
+  await assert.rejects(session.executeTool('read_skill_reference', { id: 'evidence-story', ref: 'fictional.story' }, exec('revoked')));
+});
+
+test('method port freezes publication ceiling and never upgrades an exact old revision', async () => {
+  const s = await setup('method_card'), first = await s.published([s.row(methodFixture(s, { superseded_by: 'fictional.story.v2' }))]);
+  const scope = methodScope(s), read = await methodPort(s, scope);
+  await s.published([s.row(methodFixture(s, { revision: 2, when_to_use: 'A fictional updated method.' }))]);
+  assert.equal((await read(scope, methodRef, methodRequest))[0].revision, 1);
+  const oldCitation = await service.readPassage(s.owner, first.source, 2, '2:0');
+  assert.equal(oldCitation.older, true);
+  assert.equal(parseStudentOrgKnowledgePassage(oldCitation).assetRevision, 1);
+  await assert.rejects(read(scope, [{ methodId: 'fictional.story', revision: 2 }], methodRequest), rejected('STALE_REVISION'));
+  const next = await methodPort(s, scope);
+  assert.equal((await next(scope, [{ methodId: 'fictional.story', revision: 2 }], methodRequest))[0].revision, 2);
+  await service.withdrawSource(s.operator, s.org, first.source, { operationId: randomUUID(), expectedRevision: 2, reason: 'Fictional invalidated old method' });
+  await assert.rejects(next(scope, methodRef, methodRequest), rejected('STALE_REVISION'));
+});
+
+test('method reader enforces owner, turn, speaker, skill, role family and authenticated entitlement revision', async () => {
+  const s = await setup('method_card'); await s.published([s.row(methodFixture(s))]);
+  const scope = methodScope(s), read = await methodPort(s, scope);
+  for (const change of [{ ownerId: randomUUID() }, { turnId: randomUUID() }, { profile: { speaker: 'interviewer' as const } }])
+    await assert.rejects(read({ ...scope, ...change }, methodRef, methodRequest), rejected('TOOL_NOT_ALLOWED'));
+  await assert.rejects(read(scope, methodRef, { skillId: 'resume-revision', detail: 'excerpt' }), rejected('NOT_ENTITLED'));
+  const wrongRole = await methodPort(s, scope, 'swe');
+  await assert.rejects(wrongRole(scope, methodRef, methodRequest), rejected('NOT_ENTITLED'));
+  const stranger = await f.actor();
+  await assert.rejects(new CareerMethodReferences(f.db, service).open(stranger, { organizationId: s.org, turnId: scope.turnId, speaker: 'guide', roleFamily: 'da' }), rejected('NOT_ENTITLED'));
+  await service.setEntitlement(s.operator, s.org, { ...s.entitlementInput, operationId: randomUUID(), expectedRevision: 1, revoke: true });
+  await assert.rejects(read(scope, methodRef, methodRequest), rejected('NOT_ENTITLED'));
+  await service.setEntitlement(s.operator, s.org, { ...s.entitlementInput, operationId: randomUUID(), expectedRevision: 2 });
+  await assert.rejects(read(scope, methodRef, methodRequest), rejected('NOT_ENTITLED'));
+  const fresh = await methodPort(s, scope); assert.equal((await fresh(scope, methodRef, methodRequest)).length, 1);
+});
+
+test('unpublished, duplicate and future-effective method versions fail without partial access receipts', async () => {
+  const s = await setup('method_card'), method = methodFixture(s);
+  await service.importBundle(s.operator, s.org, s.bundle([s.row(method)]));
+  const scope = methodScope(s), draftReader = await methodPort(s, scope);
+  await assert.rejects(draftReader(scope, methodRef, methodRequest), rejected('STALE_REVISION'));
+  await s.published([s.row(method)]);
+  await s.published([s.row({ ...method, when_to_use: 'A second conflicting fictional copy.' })]);
+  const ambiguous = await methodPort(s, scope);
+  await assert.rejects(ambiguous(scope, methodRef, methodRequest), rejected('STALE_REVISION'));
+  const t = await setup('method_card'); await t.published([t.row(methodFixture(t, { effective_from: '2027-01-01T00:00:00.000Z' }))]);
+  const otherScope = methodScope(t), future = await methodPort(t, otherScope);
+  await assert.rejects(future(otherScope, methodRef, methodRequest), rejected('STALE_REVISION'));
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE user_id=ANY($1::uuid[])', [[s.owner.userId, t.owner.userId]])).rows[0].n, 0);
+});
+
+test('method proof and passage corruption cannot reach a skill; failed multi-reference reads roll back all logs', async () => {
+  const s = await setup('method_card'), p = await s.published([s.row(methodFixture(s))]), scope = methodScope(s), read = await methodPort(s, scope);
+  await assert.rejects(read(scope, [...methodRef, { methodId: 'fictional.missing', revision: 1 }], methodRequest), rejected('STALE_REVISION'));
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE source_id=$1', [p.source])).rows[0].n, 0);
+  await f.db.query("UPDATE platform_org_knowledge_passages SET content='Fictional corruption' WHERE source_id=$1", [p.source]);
+  await assert.rejects(read(scope, methodRef, methodRequest), rejected('ORG_CONTENT_STORAGE_UNAVAILABLE'));
+  const t = await setup('method_card'), tp = await t.published([t.row(methodFixture(t))]), ts = methodScope(t), tr = await methodPort(t, ts);
+  await f.db.query("UPDATE platform_org_knowledge_sources SET structured=jsonb_set(structured,'{counterexamples}','[\"Fictional tampered example.\"]'::jsonb) WHERE id=$1", [tp.source]);
+  await assert.rejects(tr(ts, methodRef, methodRequest), rejected('ORG_CONTENT_STORAGE_UNAVAILABLE'));
+});
+
+test('method reader rechecks fixed session and cancellation before any content leaves the transaction', async () => {
+  const s = await setup('method_card'); await s.published([s.row(methodFixture(s))]);
+  const scope = methodScope(s), read = await methodPort(s, scope), controller = new AbortController();
+  controller.abort();
+  await assert.rejects(read({ ...scope, signal: controller.signal }, methodRef, methodRequest));
+  await f.db.query('DELETE FROM platform_sessions WHERE token_hash=$1', [s.owner.tokenHash]);
+  await assert.rejects(read(scope, methodRef, methodRequest), rejected('AUTH_REQUIRED'));
+});
+
+test('changing caller signal during a method read cannot commit an abandoned access receipt', async () => {
+  const s = await setup('method_card'); await s.published([s.row(methodFixture(s))]);
+  const abort = new AbortController(), scope = { ...methodScope(s), signal: abort.signal };
+  const isolated = new OrgKnowledge(f.db, f.config, FICTIONAL_LEGAL, blobs), original = isolated.readSkillMethodsInTransaction.bind(isolated);
+  isolated.readSkillMethodsInTransaction = async (...args) => {
+    const result = await original(...args);
+    abort.abort(); scope.signal = new AbortController().signal;
+    return result;
+  };
+  const read = await new CareerMethodReferences(f.db, isolated).open(s.owner, { organizationId: s.org, turnId: scope.turnId, speaker: 'guide', roleFamily: 'da' });
+  await assert.rejects(read(scope, methodRef, methodRequest), (error: any) => error.name === 'AbortError');
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE user_id=$1', [s.owner.userId])).rows[0].n, 0);
 });

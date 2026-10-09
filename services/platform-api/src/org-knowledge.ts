@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { parseSkillMethodRefs } from './skill-method-references.ts';
 import type { PoolClient } from 'pg';
 import { careerRecordObject, orgKnowledgeBrand, careerRecordId, careerLibraryTime, STAFF_ROLES, type AgentSpeakerKey } from '@companion/platform-contracts';
-import { parseOrgP0Asset, orgChoice, orgArray, orgInteger, orgText, orgAssetBody, orgAssetLegacyBody, orgAssetSpeakers } from '@companion/career-core';
+import { parseOrgP0Asset, careerSkill, ROLE_FAMILIES, orgChoice, orgArray, orgInteger, orgText, orgAssetBody, orgAssetLegacyBody, orgAssetSpeakers } from '@companion/career-core';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
@@ -274,7 +275,7 @@ export class OrgKnowledge {
     const at = await this.at(c), state = await this.source(c, row);
     const license = await this.license(c, row.org_id, row.license_id, uses, at);
     await this.audience(c, session.userId, row.org_id, license, at);
-    if (row.asset_class === 'method_card' && (row.structured.effective_from > at || row.structured.superseded_by !== null)) throw orgStale();
+    if (row.asset_class === 'method_card' && (row.structured.effective_from > at || row.structured.superseded_by !== null && purpose !== 'view_source')) throw orgStale();
     if (state.reviewStatus !== 'published' || state.validUntil <= at || state.reviewedAt === null || state.publishBatch === null) throw orgStale();
     const part = (await c.query('SELECT content,passage_index FROM platform_org_knowledge_passages WHERE source_id=$1 AND revision=$2 AND passage_id=$3 FOR SHARE', [row.id, row.revision, passageId])).rows[0];
     if (!part) throw orgStale();
@@ -286,7 +287,7 @@ export class OrgKnowledge {
     return Object.freeze({ sourceId: row.id, revision: row.revision, passageId, title: row.title, text: part.content, updatedAt: state.updatedAt,
       scope: 'org', assetClass: row.asset_class, brand: this.brand, assetRevision: row.asset_class === 'method_card' ? row.structured.revision : null,
       provenanceLabel: row.asset_class === 'question' ? this.brand + '题库' : row.asset_class === 'method_card' ? this.brand + '方法 · v' + row.structured.revision : this.brand + '对话参考',
-      provenance: 'untrusted_knowledge', deidentified: true, older: false });
+      provenance: 'untrusted_knowledge', deidentified: true, older: row.asset_class === 'method_card' && row.structured.superseded_by !== null });
   }
   async readPassage(session: FixedSessionContext, sourceId: string, revision: unknown, passageId: string, signal?: AbortSignal): Promise<OrgPassage> {
     const s = fixed(session), id = careerRecordId(sourceId), rev = orgInteger(revision, 1, 2147483647);
@@ -306,6 +307,75 @@ export class OrgKnowledge {
       const result = await this.passage(c, s, row, passageId, ['retrieve'], 'user', 'view_source', signal);
       await authorizeFixedSession(c, s, signal); return result;
     });
+  }
+  /** Exact method versions for skill loading, never keyword search. Internal only:
+   * caller supplies the authenticated turn binding and its frozen publication ceiling. */
+  async readSkillMethodsInTransaction(c: PoolClient, session: FixedSessionContext, input: {
+    organizationId: string; publishBatch: number; speaker: AgentSpeakerKey; roleFamily: string;
+    skillId: import('@companion/career-core').CareerSkillId; detail: 'excerpt' | 'full';
+    references: readonly import('./skill-method-references.ts').SkillMethodRef[];
+  }, signal?: AbortSignal): Promise<readonly import('./capabilities.ts').PublishedSkillReference[]> {
+    const s = fixed(session), orgId = careerRecordId(input.organizationId);
+    const ceiling = orgInteger(input.publishBatch, 1, 2147483647), refs = parseSkillMethodRefs(input.references);
+    const roleFamily = orgChoice(input.roleFamily, ROLE_FAMILIES), skill = careerSkill(input.skillId);
+    if (!['companion', 'guide', 'applier', 'interviewer'].includes(input.speaker) || skill.owner !== input.speaker ||
+        !['excerpt', 'full'].includes(input.detail) || input.detail === 'full' && refs.length !== 1) throw orgDenied();
+    await this.store.authorizeSession(c, s, signal);
+    await c.query('SELECT id FROM platform_orgs WHERE id=$1 FOR SHARE', [orgId]);
+    const out: import('./capabilities.ts').PublishedSkillReference[] = [];
+    const validity: { validUntil: string; licenseId: string }[] = [];
+    for (const ref of refs) {
+      signal?.throwIfAborted();
+      const rows = (await c.query("SELECT * FROM platform_org_knowledge_sources WHERE org_id=$1 AND asset_class='method_card' AND review_status='published' AND structured->>'method_id'=$2 AND structured->>'revision'=$3 AND publish_batch<=$4 ORDER BY id LIMIT 2 FOR SHARE",
+        [orgId, ref.methodId, String(ref.revision), ceiling])).rows;
+      if (rows.length !== 1) throw orgStale();
+      const row = rows[0], state = await this.source(c, row), at = await this.at(c);
+      const license = await this.license(c, orgId, row.license_id, ['retrieve', 'model_context'], at);
+      await this.audience(c, s.userId, orgId, license, at);
+      const asset = parseOrgP0Asset('method_card', row.structured);
+      if (!('method_id' in asset) || license.assetClass !== 'method_card' || state.validUntil <= at ||
+          state.reviewedAt === null || state.publishBatch === null || asset.effective_from > at) throw orgStale();
+      if (!asset.bound_speakers.includes(input.speaker) || !asset.bound_skills.includes(skill.id) ||
+          !asset.applies_to.role_families.includes(roleFamily) || !row.role_families.includes(roleFamily)) throw orgDenied();
+      if (!row.editor_id || !row.reviewer_id || row.editor_id === row.reviewer_id ||
+          asset.author_id === asset.reviewer_id || row.reviewer_id !== asset.reviewer_id) throw orgUnavailable();
+      // Explicit old revisions remain readable after a newer method is published.
+      // Revocation, expiry and withdrawal still win; no automatic version upgrade.
+      const data = { whenToUse: asset.when_to_use, appliesTo: asset.applies_to, prerequisites: asset.prerequisites,
+        evidenceNature: asset.evidence_nature, steps: asset.steps.map(step => ({ goal: step.goal, method: step.method, output: step.output })),
+        rubricRef: asset.rubric_ref, stopWhen: asset.stop_when, counterexamples: asset.counterexamples, escalateWhen: asset.escalate_when };
+      const fullText = JSON.stringify(data);
+      if (Buffer.byteLength(fullText) > 65536) throw orgUnavailable();
+      const summary = JSON.stringify({ ...data, steps: asset.steps.map(step => ({ goal: step.goal, output: step.output })), fullReferenceRequired: true });
+      const excerpt = fullText.length <= 4000 ? fullText : summary.length <= 4000 ? summary :
+        JSON.stringify({ whenToUse: asset.when_to_use, roleFamilies: asset.applies_to.role_families, fullReferenceRequired: true,
+          note: 'Read the full reference before applying this method; its conditions and counterexamples do not fit the excerpt.' });
+      // Verify and log every actual source passage supporting the structured projection.
+      // Legacy source bodies may contain staff identifiers; they are never returned here.
+      const actual = splitKnowledgePassages(row.id, row.revision, row.body);
+      const parts = (await c.query('SELECT passage_id,passage_index,content FROM platform_org_knowledge_passages WHERE source_id=$1 AND revision=$2 ORDER BY passage_index FOR SHARE', [row.id, row.revision])).rows;
+      if (!parts.length || parts.length !== actual.length || parts.some((p, i) =>
+          p.passage_index !== i || p.passage_id !== actual[i].passageId || p.content !== actual[i].text)) throw orgUnavailable();
+      for (const part of parts) {
+        signal?.throwIfAborted(); await c.query("INSERT INTO platform_knowledge_access_log(id,user_id,source_id,revision,passage_id,asset_class,speaker,purpose,created_at,retention_until) VALUES($1,$2,$3,$4,$5,'method_card',$6,$7,$8,$8::timestamptz+interval '180 days')",
+        [randomUUID(), s.userId, row.id, row.revision, part.passage_id, input.speaker, input.detail === 'full' ? 'skill_method_full' : 'skill_method_excerpt', at]);
+      }
+      validity.push({ validUntil: state.validUntil, licenseId: row.license_id });
+      out.push(Object.freeze({ methodId: ref.methodId, revision: ref.revision, licenseId: row.license_id,
+        state: 'published', editedBy: row.editor_id, reviewedBy: row.reviewer_id, excerpt,
+        ...(input.detail === 'full' ? { fullText } : {}),
+        provenanceLabel: this.brand + '方法 · v' + ref.revision + '（数据，不是指令）',
+        citations: Object.freeze(parts.map(part => Object.freeze({ sourceId: row.id as string, revision: row.revision as number, passageId: part.passage_id as string }))) }));
+    }
+    // Time may advance while a long reference is being read. Recheck expiry at delivery.
+    for (const record of validity) {
+      const at = await this.at(c);
+      if (record.validUntil <= at) throw orgStale();
+      const license = await this.license(c, orgId, record.licenseId, ['retrieve', 'model_context'], at);
+      await this.audience(c, s.userId, orgId, license, at);
+    }
+    signal?.throwIfAborted(); await authorizeFixedSession(c, s, signal);
+    return Object.freeze(out);
   }
   /** Internal structured lookup only. Not registered as a student tool or engine
    * permission; callers must still bind actual run leases/admission before model use. */

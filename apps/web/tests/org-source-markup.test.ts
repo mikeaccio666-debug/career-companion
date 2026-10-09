@@ -38,3 +38,10 @@ test('mounted page has visible AI identity and malformed-route recovery without 
   const html = renderToStaticMarkup(createElement(views.OrgSourcePage, { reference: null, onLogout() {} }));
   assert.match(html, /career-surface/); assert.match(html, /AI 主理人和队伍/); assert.match(html, /出处地址不完整/); assert.match(html, /回到对话/); assert(!html.includes('蔓藤题库'));
 });
+
+test('historical method version keeps the exact citation and explains that existing plans do not upgrade', () => {
+  const html = renderToStaticMarkup(createElement(views.OrgSourceScene, { snapshot: { state: 'ready', passage: { ...passage, older: true } }, onRetry() {} }));
+  assert.match(html, /蔓藤方法 · v7/); assert.match(html, /历史方法版本/); assert.match(html, /不会自动更新已有计划/);
+  const current = renderToStaticMarkup(createElement(views.OrgSourceScene, { snapshot: { state: 'ready', passage }, onRetry() {} }));
+  assert(!current.includes('历史方法版本'));
+});
