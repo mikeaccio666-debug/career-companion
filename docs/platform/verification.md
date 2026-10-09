@@ -1093,3 +1093,16 @@ API 类型检查与 git diff --check 通过。没有 schema 变更、主库/主�
 - 当前 JSON 覆盖 106 表、剩余 58；带文件覆盖 109、剩余 55；另有 7 个既有豁免。总清单仍为 171 表，`complete=false` 保持。完整自助下载、其他资料投影、删除协调与主对话评测仍不在本轮完成范围内。
 
 私人运行证据保留在远端忽略目录 `.local/verification/ci-regression-20261008/`：`companion-identity-export-integration`、`companion-identity-export-regression`、`companion-identity-final`、`companion-identity-final-types`。
+
+## 入门安全提示与用户处理历史导出：2026-10-09
+
+新增三类原始私有记录，详见 [范围与来源验证](account-onboarding-response-export.md)。账户捕获复用同事务已验证的入门草稿/文本/分类来源，逐项核对原响应、准备事件、已持久化提示卡及展示—确认—明确继续的真实关系。纯解密函数由原业务流程和导出共同使用；不启动恢复、准备、发布或处理。无迁移与 UI 改动。
+
+- 账户导出、覆盖清单、导师履约、组织知识以及原入门安全提示/后续处理流程组合回归 **348/348** 通过，零失败、零跳过。
+- 新模块 10 个真实数据库案例覆盖 pending/ready/publication 区分、实际展示/确认/澄清/继续、请求支持、过期资源保留、撤回同意与邮箱验证、当前政策变动、105 条真实分类及提示卡和 105 条真实操作分页。
+- 损坏或跨用户密文、缺失响应/事件/提示卡/展示、来源代次错误、重新加密的不一致内容与跨会话拼接均拒绝整个捕获；晚到会话失效、取消和容量超限不释放半份归档，密码再验证凭据可重试。
+- 审查时移除关系校验缓存里不再需要的响应与提示卡密文，最终专项 **10/10** 和 API TypeScript 检查通过。该专项包含在 348 个案例中，复验不重复计数。
+- 使用虚构资料、隔离 PostgreSQL schema 和注入分类器；没有付费模型调用、真实资料、生产迁移、合并或部署。
+- JSON 当前覆盖 109 表、剩余 55；带文件覆盖 112、剩余 52；另有 7 项既有豁免，总清单 171 表。`complete=false` 保持；混合来源安全事件表、V2 交付记录及其他剩余资料仍未算作已覆盖，完整自助下载和删除协调继续开发。
+
+私人运行日志保留在远端忽略目录 `.local/verification/ci-regression-20261008/`：`onboarding-response-integration`、`onboarding-response-regression`、`onboarding-response-final`、`onboarding-response-final-types`。

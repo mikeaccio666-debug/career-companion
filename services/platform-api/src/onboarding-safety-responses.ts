@@ -23,7 +23,7 @@ function capture(row: SafetyResponseRow, response: SafetyResponseRenderResult) {
   return { schemaVersion: 1, ...Object.fromEntries(coordinates.map(key => [key, row[key]])),
     preparedAt: row.prepared_at!.toISOString(), retentionUntil: row.retention_until!.toISOString(), response };
 }
-function decode(storage: OnboardingStorage, row: SafetyResponseRow): SafetyResponseRenderResult {
+export function decodeSafetyResponse(storage: OnboardingStorage, row: SafetyResponseRow): SafetyResponseRenderResult {
   try {
     const value: unknown = JSON.parse(storage.crypto!.openUtf8(row.payload_ciphertext!, {
       table:'platform_onboarding_safety_responses',column:'payload_ciphertext',rowId:row.id,ownerId:row.user_id,revision:1,
@@ -84,7 +84,7 @@ async function authenticateResponseRows(client: PoolClient, storage: OnboardingS
       || event.source_kind!=='onboarding' || event.event_kind!=='response_prepared' || event.level!==row.level
       || event.detector_revision!==row.detector_revision || event.detector_mode!==row.detector_mode
       || event.created_at.toISOString()!==row.prepared_at!.toISOString() || event.retention_until.toISOString()!==row.retention_until!.toISOString()) throw responseStorageUnavailable();
-    captures.push({row,response:decode(storage,row)});
+    captures.push({row,response:decodeSafetyResponse(storage,row)});
   }
   return captures;
 }
@@ -177,7 +177,7 @@ export class OnboardingSafetyResponses {
       const at=(await client.query<{ at:Date }>('SELECT clock_timestamp() AS at')).rows[0].at;
       const result=rows.map(row=>Object.freeze({responseId:row.id,submissionId:row.submission_id,level:row.level,
         status:row.status==='ready' && row.retention_until!<=at?'expired' as const:row.status,
-        ...(row.status==='ready'&&row.retention_until!>at?{response:publicSafetyResponse(decode(this.storage,row))}:{})}));
+        ...(row.status==='ready'&&row.retention_until!>at?{response:publicSafetyResponse(decodeSafetyResponse(this.storage,row))}:{})}));
       await authorizeFixedSession(client,fixed,signal); return Object.freeze(result);
     });
   }

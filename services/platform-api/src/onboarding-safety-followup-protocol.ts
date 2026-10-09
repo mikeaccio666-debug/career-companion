@@ -84,6 +84,21 @@ export function captureFollowup(storage:OnboardingStorage,row:SafetyFollowupRow)
     return data as unknown as SafetyFollowupCapture;
   }catch{throw followupUnavailable();}
 }
+/** Decode an original publication without issuing a new publication or transport receipt.
+ * Caller authenticates the source response and its owner/version before use. */
+export function captureSafetyPublication(storage:OnboardingStorage,row:SafetyPublicationRow,
+  source:{row:Pick<import('./onboarding-safety-response-outbox.ts').SafetyResponseRow,'prepared_at'>;response:Parameters<typeof publicSafetyResponse>[0]}) {
+    try {
+      const data=exactRecord(open(storage,'platform_onboarding_safety_publications','payload_ciphertext',row.id,row.user_id,1,row.payload_ciphertext),
+        ['schemaVersion','id','userId','draftId','responseId','submissionId','sourceGeneration','preparedAt','publishedAt','retentionUntil','projectionDigest','response']);
+      const response=publicSafetyResponse(source.response), json=JSON.stringify(response);
+      if(data.schemaVersion!==1||data.id!==row.id||data.userId!==row.user_id||data.draftId!==row.draft_id||data.responseId!==row.response_id
+        ||data.submissionId!==row.submission_id||data.sourceGeneration!==row.source_generation||data.preparedAt!==source.row.prepared_at!.toISOString()
+        ||data.publishedAt!==row.published_at.toISOString()||data.retentionUntil!==row.retention_until.toISOString()
+        ||data.projectionDigest!==row.projection_digest||row.projection_digest!==followupDigest(json)||JSON.stringify(data.response)!==json) throw followupUnavailable();
+      return data as unknown as SafetyPublicationCapture;
+    }catch{throw followupUnavailable();}
+}
 /** Authenticate the complete history, including rows unrelated to the latest response.
  * A handled source remains L1/L2; it is never eligibility for facts, personality or context.
  */
@@ -97,16 +112,7 @@ export async function readSafetyFollowupHistory(client:PoolClient,storage:Onboar
     if(!source||!source.response||source.row.status!=='ready'||row.user_id!==draft.userId||row.draft_id!==draft.id
       ||row.submission_id!==source.row.submission_id||row.source_generation!==source.row.source_generation
       ||row.retention_until.toISOString()!==source.row.retention_until!.toISOString()||row.published_at<source.row.prepared_at!) throw followupUnavailable();
-    try {
-      const data=exactRecord(open(storage,'platform_onboarding_safety_publications','payload_ciphertext',row.id,row.user_id,1,row.payload_ciphertext),
-        ['schemaVersion','id','userId','draftId','responseId','submissionId','sourceGeneration','preparedAt','publishedAt','retentionUntil','projectionDigest','response']);
-      const response=publicSafetyResponse(source.response), json=JSON.stringify(response);
-      if(data.schemaVersion!==1||data.id!==row.id||data.userId!==row.user_id||data.draftId!==row.draft_id||data.responseId!==row.response_id
-        ||data.submissionId!==row.submission_id||data.sourceGeneration!==row.source_generation||data.preparedAt!==source.row.prepared_at!.toISOString()
-        ||data.publishedAt!==row.published_at.toISOString()||data.retentionUntil!==row.retention_until.toISOString()
-        ||data.projectionDigest!==row.projection_digest||row.projection_digest!==followupDigest(json)||JSON.stringify(data.response)!==json) throw followupUnavailable();
-      decoded.set(row.id,data as unknown as SafetyPublicationCapture);
-    }catch{throw followupUnavailable();}
+    decoded.set(row.id,captureSafetyPublication(storage,row,{row:source.row,response:source.response}));
   }
   const operations=(await client.query<SafetyFollowupRow>('SELECT * FROM platform_onboarding_safety_followups WHERE user_id=$1 ORDER BY created_at,operation_id FOR UPDATE',[draft.userId])).rows;
   const opCaptures=new Map<string,SafetyFollowupCapture>();

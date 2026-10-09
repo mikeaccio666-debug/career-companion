@@ -1,6 +1,6 @@
 # 文件写入与删除日志的账户归档
 
-依据产品 09 §11，账户 JSON 新增 `uploadWrites`、`uploadWriteEvents`、`uploadRemovals`、`uploadRemovalEvents`，覆盖现有四张写入与删除日志表。普通 JSON 当前为 106 张已投影、7 张明确排除、58 张待处理；带私有文件模式为 109 / 7 / 55。当前计数包括后续加入的[任务历史](account-task-export.md)及[执行历史](account-execution-export.md)。两者仍 `complete=false`；文件字节仅由 AccountFileArchive 捕获，这四类日志本身不会读取或恢复文件。
+依据产品 09 §11，账户 JSON 新增 `uploadWrites`、`uploadWriteEvents`、`uploadRemovals`、`uploadRemovalEvents`，覆盖现有四张写入与删除日志表。普通 JSON 当前为 109 张已投影、7 张明确排除、55 张待处理；带私有文件模式为 112 / 7 / 52。当前计数包括后续加入的[任务历史](account-task-export.md)及[执行历史](account-execution-export.md)。两者仍 `complete=false`；文件字节仅由 AccountFileArchive 捕获，这四类日志本身不会读取或恢复文件。
 
 ## 保存哪些内容
 
