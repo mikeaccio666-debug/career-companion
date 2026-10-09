@@ -1,0 +1,41 @@
+.student-shell{min-height:100dvh;background:var(--paper);color:var(--ink);font-size:15px;line-height:24px;}
+.student-shell *{box-sizing:border-box;}
+.student-shell-header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;min-height:56px;padding:8px 24px;background:var(--sheet);border-bottom:1px solid var(--rule);}
+.student-shell-heading{min-width:0;display:flex;align-items:center;gap:20px;}
+.student-shell-brand{font-size:15px;font-weight:700;white-space:nowrap;}
+.student-shell-heading strong{display:block;font-size:15px;line-height:22px;overflow-wrap:anywhere;}
+.student-shell-heading small{display:block;font-size:12px;line-height:18px;color:var(--ink-3);}
+.student-shell-navigation{display:flex;align-items:center;justify-content:center;gap:4px;margin:auto;}
+.student-shell-nav-item{display:flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:8px 12px;border-radius:999px;text-decoration:none;color:var(--ink-3);font-size:13px;font-weight:500;line-height:20px;white-space:nowrap;}
+.student-shell-nav-item svg{width:20px;height:20px;stroke-width:1.5;}
+.student-shell-nav-item[aria-current="page"]{color:var(--ink);background:var(--tint);font-weight:700;}
+.student-shell-nav-item[aria-disabled="true"]{cursor:default;}
+.student-shell-account{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0;}
+.student-shell-avatar{display:flex;align-items:center;justify-content:center;width:44px;min-height:44px;text-decoration:none;color:var(--ink-2);}
+.student-shell-avatar span{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:var(--tint);font-weight:700;}
+.student-shell-account button{font:inherit;font-size:13px;min-height:44px;padding:8px 12px;border:1px solid var(--rule);border-radius:999px;color:var(--ink);background:var(--sheet);cursor:pointer;}
+.student-shell :is(.student-shell-nav-item,.student-shell-avatar,.student-shell-account button,.student-shell-skip):focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
+.student-shell-content{min-width:0;scroll-margin-top:104px;}
+.student-shell-content[hidden]{display:none;}
+.student-shell-content>:is(main,.mentor-page){min-height:calc(100dvh - 72px);width:100%;margin:0 auto;}
+.student-shell-content>.student-route-missing>header{display:none;}
+.student-shell-content>.mentor-page>.mentor-sidebar{display:none;}
+.student-shell-content>.mentor-page{grid-template-columns:minmax(0,1fr);}
+.student-shell-unavailable{max-width:760px;margin:32px auto;padding:0 24px;color:var(--ink-2);}
+.student-shell-skip{position:fixed;top:8px;left:16px;z-index:30;padding:8px 12px;background:var(--sheet);color:var(--air);border:1px solid var(--rule);transform:translateY(-200%);}
+.student-shell-skip:focus{transform:none;}
+.student-shell-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0;}
+@media(max-width:1023px){
+ .student-shell{padding-bottom:calc(72px + env(safe-area-inset-bottom));}
+ .student-shell-header{justify-content:space-between;}
+ .student-shell-brand{display:none;}
+ .student-shell-navigation{position:fixed;bottom:0;left:0;right:0;z-index:20;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;min-height:56px;padding:0 max(8px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(8px,env(safe-area-inset-left));background:var(--sheet);border-top:1px solid var(--rule);}
+ .student-shell-nav-item{flex-direction:column;gap:0;border-radius:0;padding:4px 0;min-height:56px;font-size:12px;line-height:18px;}
+ .student-shell-nav-item svg{width:24px;height:24px;}
+ .student-shell-nav-item[aria-current="page"]{background:transparent;}
+ .student-shell[data-editing="true"] .student-shell-navigation{display:none;}
+ .student-shell-content>:is(main,.mentor-page){min-height:calc(100dvh - 144px);}
+}
+@media(max-width:639px){.student-shell-header{padding:8px 16px;gap:8px;}.student-shell-account{gap:4px;}.student-shell-account button{padding:8px;}.student-shell-unavailable{padding:0 16px;}}
+@media(prefers-reduced-motion:reduce){.student-shell *{scroll-behavior:auto;}}
+@media(forced-colors:active){.student-shell-nav-item[aria-current="page"]{outline:1px solid CanvasText;outline-offset:-4px;}.student-shell-nav-item[aria-disabled="true"]{color:GrayText;}}

@@ -1,3 +1,4 @@
+import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { MentorHumanEntry } from './mentor-human-entry';
 import {useEffect,useMemo,useState} from 'react';
 import {CAREER_IDENTITY_FIELDS,type CareerIdentityField,type CareerIdentityRecord} from '@companion/platform-contracts';
@@ -56,4 +57,4 @@ export function CareerIdentityScene({state,editor,setEditor,deleting,setDeleting
   <footer className="identity-footer">{IDENTITY_FOOTER}</footer>
  </section>;
 }
-export function CareerIdentityPage({onLogout}:{onLogout:()=>void}){return <main className="identity-page"><nav><a href="/">回到对话</a><a href="/me/memory">它记得的你</a><button type="button" onClick={onLogout}>退出登录</button></nav><p className="identity-ai">AI 主理人和队伍 · 个人资料</p><section className="mentor-human-group career-surface" aria-label="真人与社区"><h2>真人与社区</h2><MentorHumanEntry/></section><CareerIdentityPanel/></main>;}
+export function CareerIdentityPage({onLogout}:{onLogout:()=>void}){return <main className="identity-page"><StudentPageNavigation><a href="/">回到对话</a><a href="/me/memory">它记得的你</a><button type="button" onClick={onLogout}>退出登录</button></StudentPageNavigation><p className="identity-ai">AI 主理人和队伍 · 个人资料</p><section className="mentor-human-group career-surface" aria-label="真人与社区"><h2>真人与社区</h2><MentorHumanEntry/></section><CareerIdentityPanel/></main>;}

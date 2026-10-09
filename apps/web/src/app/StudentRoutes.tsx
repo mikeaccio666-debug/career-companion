@@ -1,3 +1,4 @@
+import { StudentShell } from './StudentShell';
 import { lazyFeature } from '../LazyFeature';
 import { useRequiredPlatformAccountClient } from '../account-client';
 import { orgSourceReferenceFromPath } from '../org-source-api';
@@ -36,6 +37,9 @@ export function StudentRoutes({ route, user, onLogout }: {
 }) {
   const client = useRequiredPlatformAccountClient();
   if (!client.isCurrent() || client.account.accountId !== user.id) return null;
+  return <StudentShell route={route} user={user} onLogout={onLogout}><StudentPage route={route} user={user} onLogout={onLogout}/></StudentShell>;
+}
+function StudentPage({route,user,onLogout}:{route:StudentRoute;user:User;onLogout:()=>void}){
   if (route.kind === 'missing') return <MissingStudentRecord route={route} />;
   if (route.kind === 'source') return <OrgSourcePage reference={orgSourceReferenceFromPath(route.pathname)} onLogout={onLogout} />;
   switch (route.page) {

@@ -1,3 +1,4 @@
+import {StandaloneStudentHeader} from './app/StudentPageNavigation';
 import { useSyncExternalStore } from 'react';
 import { ArrowLeft, ArrowUpRight, ChevronRight } from 'lucide-react';
 import { useRequiredPlatformAccountClient } from './account-client';
@@ -39,7 +40,7 @@ export function StudentMePage({ user, onLogout }: { user: User; onLogout: () => 
   const online = useSyncExternalStore(subscribeAvailability, available, () => false);
   const current = client.isCurrent() && client.account.accountId === user.id;
   return <main className="career-surface student-me-page" aria-labelledby="student-me-title">
-    <header className="student-me-top"><a href="/"><ArrowLeft size={18} aria-hidden="true" />回到首页</a><span>{BRAND.name}</span></header>
+    <StandaloneStudentHeader className="student-me-top"><a href="/"><ArrowLeft size={18} aria-hidden="true" />回到首页</a><span>{BRAND.name}</span></StandaloneStudentHeader>
     <div className="student-me-content">
       <header className="student-me-heading"><h1 id="student-me-title">我</h1><p>你的资料与偏好，由你决定。</p><small>主理人与队员都是 AI</small></header>
       {current && <AppearanceSettings/>}

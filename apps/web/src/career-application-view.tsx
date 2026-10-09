@@ -1,3 +1,4 @@
+import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { CareerProgressPanel } from './career-progress-view';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { APPLICATION_STAGES, APPLICATION_STAGE_LABELS, APPLICATION_CLOSE_REASONS, APPLICATION_CLOSE_REASON_LABELS, APPLICATION_OFFER_STATES, APPLICATION_OFFER_STATE_LABELS, careerApplicationSummary, parseCareerApplicationCommand, type CareerApplication, type CareerApplicationSummary, type CareerApplicationEvent, type ManualJobSummary, type ApplicationStage, type ApplicationCloseReason, type ApplicationOfferState } from '@companion/platform-contracts';
@@ -178,7 +179,7 @@ export function CareerApplicationPage({ onLogout, initialApplicationId, invalidL
         return; setEvents(old => after ? [...old, ...page.events.filter(e => !old.some(p => p.id === e.id))] : page.events); setEventNext(page.nextAfter); }; }); }
     if (!client.isCurrent() || observedClient !== client) return null;
     const disabled = busy || uncertain;
-    return <main className="career-surface career-target-page application-page"><nav aria-label="旅程导航"><a href="/">回到对话</a><a href="/journey/applications">投递看板</a><a href="/journey/interviews">面试安排</a><a href="/journey/jobs">收藏的岗位</a><a href="/journey/targets">目标方向</a><span>Career Companion · AI</span><button type="button" onClick={onLogout}>退出登录</button></nav>
+    return <main className="career-surface career-target-page application-page"><StudentPageNavigation aria-label="旅程导航"><a href="/">回到对话</a><a href="/journey/applications">投递看板</a><a href="/journey/interviews">面试安排</a><a href="/journey/jobs">收藏的岗位</a><a href="/journey/targets">目标方向</a><span>Career Companion · AI</span><button type="button" onClick={onLogout}>退出登录</button></StudentPageNavigation>
   <section className="career-target-panel"><header><h1>{initialApplicationId || invalidLink ? '这份投递记录' : '你的投递旅程'}</h1><p>从收藏的岗位开始，按你的实际进展更新。</p></header>
    <div className="career-target-actions">{!initialApplicationId && !invalidLink && <button type="button" disabled={disabled} onClick={() => loadJobs()}>从收藏建立记录</button>}{!invalidLink && <button type="button" disabled={disabled} onClick={() => void load()}>{initialApplicationId ? "重新读取这份记录" : "重新读取看板"}</button>}</div>
    {busy && <p role="status">正在读取或保存…</p>}{notice && <p role="status">{notice}</p>}{error && <p role="alert" className="career-target-notice">{error}</p>}

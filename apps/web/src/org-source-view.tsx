@@ -1,3 +1,4 @@
+import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { useEffect, useMemo, useState } from 'react';
 import { parseStudentOrgKnowledgePassage, type OrgKnowledgeReference, type StudentOrgKnowledgePassage } from '@companion/platform-contracts';
 import { useRequiredPlatformAccountClient } from './account-client';
@@ -57,7 +58,7 @@ export function OrgSourcePanel({ reference }: { reference: OrgKnowledgeReference
   return <OrgSourceScene snapshot={state} onRetry={() => void controller.refresh()} />;
 }
 export function OrgSourcePage({ reference, onLogout }: { reference: OrgKnowledgeReference | null; onLogout: () => void }) {
-  return <main className="career-source-page career-surface"><nav aria-label="出处导航"><a href="/">回到对话</a><button type="button" onClick={onLogout}>退出登录</button></nav>
+  return <main className="career-source-page career-surface"><StudentPageNavigation aria-label="出处导航"><a href="/">回到对话</a><button type="button" onClick={onLogout}>退出登录</button></StudentPageNavigation>
     <p className="career-source-ai">AI 主理人和队伍 · 看依据</p>
     {reference ? <OrgSourcePanel reference={reference} /> : <section className="career-source-panel"><h1>查看出处</h1><p>这个出处地址不完整。请回到对话，重新打开依据。</p></section>}
   </main>;
