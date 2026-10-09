@@ -1,5 +1,6 @@
 import { DailyPlans } from './daily-plans.ts';
 import { parseDailyPlanCommand } from '@companion/platform-contracts';
+import { CompanionPlanningSources } from './companion-planning-source.ts';
 import { TodaySources } from './today-sources.ts';
 import { TodayRestService } from './today-rest.ts';
 import { CompanionDailySettingsService } from './companion-daily-settings.ts';
@@ -142,7 +143,7 @@ export async function buildApp(options:AppOptions={}) {
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage),uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
   const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview,careerApplications);
-  const todaySources=new TodaySources(db,{plans:dailyPlans,rest:todayRest,settings:companionDailySettings,targets:careerTargets,library:careerStories,resumes:resumeReview,jobs:manualJobs,applications:careerApplications,interviews:careerInterviews});
+  const todaySources=new TodaySources(db,{behavior:new CompanionPlanningSources(db,config,bundle,companion.generation),plans:dailyPlans,rest:todayRest,settings:companionDailySettings,targets:careerTargets,library:careerStories,resumes:resumeReview,jobs:manualJobs,applications:careerApplications,interviews:careerInterviews});
   const memorySafety=new SharedMemorySafety(db,config,bundle,sharedMemories,runtime,await readSafetyDetectorProfile(config.safetyDetectorProfilePath).catch(()=>null));
   const contextSources=new CompanionContextSources(db,new CompanionBirthOriginStore(config.dataCrypto),companion.generation,studentOnboarding.prebirth);
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
