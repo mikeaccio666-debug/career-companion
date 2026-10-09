@@ -4,8 +4,8 @@ import type { OwnedCareerResume } from './career-run-context.ts';
 import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { workflowHash } from '@companion/ai-core';
-import { ownerResumeActionAllowed,validateOwnerResumePayload } from '@companion/career-core';
-import { careerRecordObject,careerRecordId,parseResumeReviewCommand,parseResumeReviewItem,parseResumeUploadCommand,resumeReviewInteger,type ResumeReviewItem,type ResumeReviewPayload,type ResumeReviewAction,type ResumeUploadSnapshot,type ResumeReviewCommand,type ResumeReviewView } from '@companion/platform-contracts';
+import { compareOwnerResumeText,ownerResumeActionAllowed,validateOwnerResumePayload } from '@companion/career-core';
+import { parseResumeReviewDiff,careerRecordObject,careerRecordId,parseResumeReviewCommand,parseResumeReviewItem,parseResumeUploadCommand,resumeReviewInteger,type ResumeReviewItem,type ResumeReviewPayload,type ResumeReviewAction,type ResumeUploadSnapshot,type ResumeReviewCommand,type ResumeReviewView } from '@companion/platform-contracts';
 import { authorizeFixedSession,type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
@@ -121,6 +121,21 @@ export class ResumeOriginalReview {
  }
  async revision(value:FixedSessionContext,key:unknown,revision:unknown,signal?:AbortSignal){const context=this.fixed(value);let id:string,r:number;try{id=careerRecordId(key);r=resumeReviewInteger(revision);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{const auth=await this.authorize(client,context,signal),row=await this.row(client,context,id);if(!row)throw missing();const view=await this.current(client,context,row,auth,signal);if(r>view.item.revision)throw missing();const payload=await this.payload(client,context,id,r);await authorizeFixedSession(client,context,signal);return Object.freeze({itemId:id,ownerId:context.userId,revision:r,payload,payloadDigest:workflowHash(payload)});});
+ }
+ /** Private history comparison in one transaction. A diff never confirms a
+  * version, classifies facts or grants access to another saved object. */
+ async diff(value:FixedSessionContext,key:unknown,input:unknown,signal?:AbortSignal){
+  const context=this.fixed(value);let id:string,from:number,to:number;
+  try{const q=careerRecordObject(input,['from','to']);id=careerRecordId(key);from=resumeReviewInteger(q.from);to=resumeReviewInteger(q.to);if(from>=to)throw bad();}catch{throw bad();}
+  return this.db.withBoundedTransaction(async client=>{
+   const auth=await this.authorize(client,context,signal),row=await this.row(client,context,id);if(!row)throw missing();
+   const current=await this.current(client,context,row,auth,signal);if(to>current.item.revision)throw missing();
+   const before=await this.payload(client,context,id,from),after=to===current.item.revision?current.payload:await this.payload(client,context,id,to);
+   if(canonical(before.source_refs)!==canonical(current.payload.source_refs))throw unavailable();
+   let result:ReturnType<typeof parseResumeReviewDiff>;
+   try{result=parseResumeReviewDiff({itemId:id,ownerId:context.userId,currentRevision:current.item.revision,from:{revision:from,payloadDigest:workflowHash(before)},to:{revision:to,payloadDigest:workflowHash(after)},sourceRefs:before.source_refs,text:compareOwnerResumeText(before,after),unresolvedClaims:[]});}catch{throw unavailable();}
+   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return result;
+  });
  }
  async operation(value:FixedSessionContext,key:unknown,signal?:AbortSignal){
   const context=this.fixed(value);let id:string;try{id=careerRecordId(key);}catch{throw bad();}

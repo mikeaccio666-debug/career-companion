@@ -29,3 +29,5 @@ export * from './team/members.ts';
 export * from './team/name-call.ts';
 export * from './team/personas.ts';
 export * from './paid-suggestion-policy.ts';
+
+export * from './pending/resume-diff.ts';

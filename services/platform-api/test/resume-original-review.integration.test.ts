@@ -99,3 +99,31 @@ test('approval rechecks the real clock after source loading so an original that 
  try{await assert.rejects(review.mutate(who,'approve',a.item.id,command(a),'web'),error(409));}finally{f.db.withBoundedTransaction=original;}
  assert.equal((await review.get(who,a.item.id)).item.status,'pending');assert.equal((await f.db.query('SELECT * FROM platform_pending_item_decisions WHERE user_id=$1',[who.userId])).rowCount,0);
 });
+
+test('same-object history diff reconstructs authentic original and current text, preserves confirmation binding and records no new decision',async()=>{
+ const who=await f.actor(),a=(await review.mutate(who,'create',null,create({text:'虚构课程：比较 IBM 资料。😀'}),'web')).view!;
+ const b=(await review.mutate(who,'edit',a.item.id,command(a,{label:'Fictional revised label',text:'虚构课程：比较 IBM 公开资料，并核对口径。😄'}),'web')).view!;
+ const d=await review.diff(who,a.item.id,{from:1,to:2});assert.equal(d.text.prefix+d.text.removed+d.text.suffix,a.payload.text);assert.equal(d.text.prefix+d.text.added+d.text.suffix,b.payload.text);assert.equal(d.from.payloadDigest,a.item.payloadDigest);assert.equal(d.to.payloadDigest,b.item.payloadDigest);assert.deepEqual(d.unresolvedClaims,[]);
+ assert.equal((await review.get(who,a.item.id)).item.status,'pending');assert.equal((await f.db.query('SELECT count(*)::int n FROM platform_pending_item_decisions WHERE user_id=$1',[who.userId])).rows[0].n,0);
+ await assert.rejects(review.mutate(who,'approve',a.item.id,command(a),'web'),error(409));
+ const approved=(await review.mutate(who,'approve',a.item.id,command(b),'web')).view!;assert.equal((await review.diff(who,a.item.id,{from:1,to:2})).to.payloadDigest,approved.item.approvedDigest);
+ const fresh=(await review.mutate(who,'create',null,create({derivedFromId:approved.item.resumeVersionId}),'web')).view!;await assert.rejects(review.diff(who,fresh.item.id,{from:1,to:2}),error(404));assert.equal((await review.get(who,a.item.id)).item.status,'approved');
+});
+test('diff observes source privacy, admission withdrawal, actual removal and ordered bounded revisions',async()=>{
+ const who=await f.actor(),other=await f.actor(),staff=await f.actor(true),a=(await review.mutate(who,'create',null,create(),'web')).view!;
+ const b=(await review.mutate(who,'edit',a.item.id,command(a,{label:'Fictional relabel only',text:a.payload.text}),'web')).view!;
+ const d=await review.diff(who,a.item.id,{from:1,to:2});assert.equal(d.text.removed,'');assert.equal(d.text.added,'');assert.equal(d.from.payloadDigest,d.to.payloadDigest);
+ await assert.rejects(review.diff(other,a.item.id,{from:1,to:2}),error(404));await assert.rejects(review.diff(staff,a.item.id,{from:1,to:2}),error(403));
+ for(const input of [{from:2,to:1},{from:0,to:2},{from:1,to:1},{from:1,to:2,ownerId:who.userId}])await assert.rejects(review.diff(who,a.item.id,input),error(400));
+ await assert.rejects(review.diff(who,a.item.id,{from:1,to:3}),error(404));
+ await f.db.query('DELETE FROM platform_terms_consents WHERE user_id=$1',[who.userId]);assert.equal((await review.diff(who,a.item.id,{from:1,to:2})).itemId,a.item.id);
+ await review.mutate(who,'delete',a.item.id,command(b),'web');await assert.rejects(review.diff(who,a.item.id,{from:1,to:2}),error(404));
+});
+test('diff rejects authentic metadata rollback and a real session reset while reading history',async()=>{
+ const who=await f.actor(),a=(await review.mutate(who,'create',null,create(),'web')).view!,old=(await f.db.query('SELECT * FROM platform_pending_items WHERE id=$1',[a.item.id])).rows[0];
+ await review.mutate(who,'edit',a.item.id,command(a,{label:'Fictional edit',text:'Fictional edit'}),'web');
+ await f.db.query('UPDATE platform_pending_items SET current_revision=$2,generation=$3,last_operation_id=$4,record_ciphertext=$5,updated_at=$6 WHERE id=$1',[old.id,old.current_revision,old.generation,old.last_operation_id,old.record_ciphertext,old.updated_at]);await assert.rejects(review.diff(who,a.item.id,{from:1,to:2}),error(503));
+ const owner=await f.actor(),first=(await review.mutate(owner,'create',null,create(),'web')).view!;await review.mutate(owner,'edit',first.item.id,command(first,{label:'Fictional revision',text:'Fictional changed body'}),'web');
+ const original=f.db.withBoundedTransaction.bind(f.db);f.db.withBoundedTransaction=async(run,options)=>original(async c=>{const query=c.query.bind(c);let count=0;return run(new Proxy(c,{get(target,key){if(key==='query')return async(...args:any[])=>{const result=await (query as any)(...args);if(typeof args[0]==='string'&&args[0].startsWith('SELECT * FROM platform_pending_item_revisions')&&++count===3)await query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[owner.userId]);return result;};return Reflect.get(target,key);}}));},options);
+ try{await assert.rejects(review.diff(owner,first.item.id,{from:1,to:2}),error(401));}finally{f.db.withBoundedTransaction=original;}
+});
