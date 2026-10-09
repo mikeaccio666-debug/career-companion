@@ -47,12 +47,13 @@ export class CompanionBirthAnswerSources {
     // completed generation; merely decrypting a mutable answer row is not proof.
     const proof = await this.generations.readSavedCompletedForViewerInTransaction(c, s, { taskId: task.id }, signal);
     if (!proof) throw unavailable();
-    const source = proof.envelope.source;
+    const {source, preview} = proof.envelope;
     if (snapshot.ownerId !== s.userId || capture.ownerId !== s.userId
       || receipt.identity.companionId !== task.companionId || source.companionId !== task.companionId
       || source.taskId !== task.id || source.generation !== task.generation || source.answersId !== task.answersId
       || source.sourceDraftId !== task.sourceDraftId || source.sourceRevision !== task.sourceRevision
       || source.previewRevision !== 1 || source.questionnaireRevision !== 1 || source.rulesRevision !== 1
+      || preview.companionId !== task.companionId || preview.revision !== 1 || preview.inkToken !== capture.identity.inkToken
       || (task.sourceReceiptVersion !== null && proof.kind !== 'historical_completed_preview')) throw unavailable();
     const rows = (await c.query(`SELECT a.*,t.source_receipt_version FROM platform_companion_answers a
       JOIN platform_companion_generation_tasks t ON t.answers_id=a.id AND t.user_id=a.user_id
@@ -73,6 +74,9 @@ export class CompanionBirthAnswerSources {
     return Object.freeze({
       ownerId:s.userId, companionId:task.companionId, conversationId:receipt.main.id,
       birthReceiptId:receipt.id, bornAt:receipt.bornAt, answers,
+      companion:Object.freeze({name:capture.identity.name,nameOrigin:capture.identity.nameOrigin,
+        sealChar:capture.identity.sealChar,inkToken:capture.identity.inkToken,personaRevision:preview.revision,
+        styleCard:preview.styleCard,samples:Object.freeze([...preview.samples])}),
       provenance:Object.freeze({taskId:task.id,generation:task.generation,answersId:answers.id,
         sourceDraftId:answers.sourceDraftId,sourceRevision:answers.sourceRevision,
         sourceReceiptVersion:task.sourceReceiptVersion,proofKind:proof.kind}),
