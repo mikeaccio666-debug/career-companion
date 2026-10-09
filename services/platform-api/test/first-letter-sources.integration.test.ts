@@ -7,7 +7,7 @@ import {createPrebirthFixture,withPrebirthLoopback,type PrebirthFixture} from '.
 import {readyBirth} from './fixtures/companion-birth.ts';
 import {FICTIONAL_LEGAL} from './fixtures/student-entry.ts';
 import {FirstLetterSources} from '../src/first-letter-sources.ts';
-import {composeFirstLetter,parseFirstLetterCandidate,snapshotFirstLetterSettings} from '../src/first-letter-composition.ts';
+import {composeFirstLetter,parseFirstLetterCandidate,snapshotFirstLetterSettings,reviewFirstLetterCandidate} from '../src/first-letter-composition.ts';
 import {CompanionWelcomeService} from '../src/companion-welcome.ts';
 import {CompanionBirthOriginStore} from '../src/companion-birth-origin-store.ts';
 import {ApiError} from '../src/errors.ts';
@@ -319,5 +319,44 @@ test('real preparation format is accepted by the background runtime using only a
   assert.equal(ledger[1].status,'complete');
   const result=events.find(e=>e.type==='delta');assert(result?.type==='delta');
   assert.equal(parseFirstLetterCandidate(p,result.text).status,'requires_full_output_check');
+ });
+});
+
+
+test('saved persona dimensions and actual O2 facts enter the shared whole-letter checker before any publication',async()=>{
+ await withPrebirthLoopback(async(runtime,calls)=>{
+  const a=await setup(runtime,{...values,emotion_language:'zh'}),p=await a.sources.prepare(a.who,settings),count=calls.length;
+  const source=await a.sources.read(a.who);
+  const proof=await f.db.withBoundedTransaction(c=>a.b.ready.background.readSavedCompletedForViewerInTransaction(c,a.who,
+   {taskId:source.provenance.taskId}));
+  assert(proof);assert.deepEqual(p.dimensions,proof.envelope.dimensions);assert(Object.isFrozen(p.dimensions));
+  const intro='我是'+p.signature.name+'，名字是你起的。我是 AI。';
+  const memory='只记你同意的；在「我 → 它记得的你」可查看、修改、删除。';
+  const external='要发给别人的消息和材料，都先进待确认；表单里哪些项可以替你做，由你在对话里逐项确认；最终提交永远由你本人点。';
+  const facts='你填的专业是 DS / 统计，目前在投，还没面试。';
+  const team='前辈帮你整理简历，投递官帮你整理投递，面试官陪你练面试。';
+  const today='接下来一起看今天的三件事。';
+  const refs=[{ref:'study',quote:'DS / 统计'},{ref:'search_stage',quote:'在投，还没面试'}];
+  const inspect=(body:string)=>reviewFirstLetterCandidate(p,JSON.stringify({body,factReferences:refs}));
+  const body=intro+memory+external+facts+team+today,r=inspect(body);
+  assert.equal(r.outputCheck.status,'requires_review');assert(r.outputCheck.rules.includes('semantic_review_required'));
+  assert(!r.outputCheck.rules.includes('unverified_execution'));
+  assert.deepEqual(r.candidate.references[0].sourceRef,p.facts.find(f=>f.field==='study')!.sourceRef);
+  for(const [text,rule] of [
+   [body+'保证你拿到offer。','outcome_promise'],
+   [body+'我已经发送邮件。','unverified_execution'],
+   [body+'规划师也在。','first_letter_team_mismatch'],
+   [body.replace('逐项确认','确认'),'first_letter_external_rule_missing'],
+   [body.replace(memory,''),'first_letter_memory_missing']
+  ]){
+   const checked=inspect(text);assert.equal(checked.outputCheck.status,'blocked');assert(checked.outputCheck.rules.includes(rule as any));
+   assert.equal(checked.candidate.status,'requires_full_output_check');
+   assert(!Object.hasOwn(checked,'approved'));assert(!JSON.stringify(checked.outputCheck).includes(text));
+  }
+  const falseFact=inspect(body+'你拥有博士学位。');
+  assert.equal(falseFact.outputCheck.status,'requires_review');
+  assert(falseFact.outputCheck.rules.includes('unverified_user_fact'));
+  assert.equal(calls.length,count);
+  assert.equal((await a.welcome.read(a.who) as any).step,'C7');
  });
 });

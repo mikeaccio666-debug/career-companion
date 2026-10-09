@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {enabledExpertRoster} from '@companion/career-core';
+import {enabledExpertRoster,checkCompanionOutput} from '@companion/career-core';
 import {careerRecordObject,type ExpertKey,type ProviderChatMessage} from '@companion/platform-contracts';
 import type {FirstLetterSourceSnapshot} from './first-letter-sources.ts';
 import {ApiError} from './errors.ts';
@@ -75,6 +75,7 @@ export function composeFirstLetter(source:FirstLetterSourceSnapshot,value:FirstL
    limits:{maxOutputTokens:1536},timeoutMs:15000},
   signature:{name:source.companion.name,sealChar:source.companion.sealChar,inkToken:source.companion.inkToken,date:settings.localDate},
   // Retained only server-side. Never spread the preparation into model input.
+  dimensions:source.companion.dimensions,emotionLanguage:source.emotionLanguage,
   facts:source.facts,requiredFactReferences:source.requiredFactReferences,needsMoreFacts:source.needsMoreFacts,
  };
  return freeze({...draft,preparationId:'first_letter_preparation_'+hash(draft)});
@@ -111,4 +112,48 @@ export function parseFirstLetterCandidate(prepared:FirstLetterPreparation,raw:st
    body,signature:prepared.signature,displayedText,references,needsMoreFacts:prepared.needsMoreFacts,
    assurance:'structure_and_reference_membership_only' as const});
  }catch{throw new ApiError(422,'FIRST_LETTER_DRAFT_INVALID','The first-letter draft did not match its prepared sources.');}
+}
+
+
+// Code-owned descriptions retain the original structured distinctions. These
+// aid exact-span review; they do not turn a paraphrase into verified truth.
+function firstLetterFactDescription(f:FirstLetterPreparation['facts'][number]):string{
+ switch(f.field){
+  case 'study':{
+   const fields={cs:'CS / computer science',ds_statistics:'DS / 统计 / data science / statistics',
+    ece_ee:'ECE / EE / electrical and computer engineering',other_stem:'其他 STEM / other STEM'};
+   const programs={'12_month':'12 个月 / 12 months','16_month':'16 个月 / 16 months',
+    '24_month':'24 个月 / 24 months',other:'其他学制 / other program length'};
+   return '专业方向 / field: '+fields[f.value.degreeField]+'; 学制 / program length: '+
+    (f.value.programChoice===null?'未填写 / not provided':programs[f.value.programChoice]);
+  }
+  case 'graduation':return '毕业月份 / graduation month: '+f.value.month+'; '+
+   (f.value.graduated?'已毕业 / graduated':'尚未毕业 / not yet graduated');
+  case 'roles':return f.value.kind==='undecided'?'目标方向尚未确定 / target roles undecided':
+   '目标岗位 / target roles: '+f.value.roles.map(x=>x==='other'?'其他 / other':x.toUpperCase()).join(', ');
+  case 'search_stage':return ({
+   not_started:'还没开始 / not started',applying:'在投，还没面试 / applying, no interview yet',
+   interviewing:'有面试在进行 / interviewing',offer:'已经有 offer / has an offer',
+   graduated_looking:'已毕业，在找工作 / graduated, looking for work'
+  })[f.value];
+ }
+}
+/** Every first-letter candidate now enters the same common output checker.
+ * Results are private review evidence, never a publication or model permit.
+ * The common first-letter surface requires semantic review even if its
+ * deterministic checks find no violation. Do not convert that into success. */
+export function reviewFirstLetterCandidate(prepared:FirstLetterPreparation,raw:string){
+ const candidate=parseFirstLetterCandidate(prepared,raw);
+ const sources=prepared.facts.map(f=>({ref:f.field,kind:'profile' as const,
+  revision:f.sourceRef.appliedRevision,text:firstLetterFactDescription(f)}));
+ const claims=candidate.references.map(r=>{
+  const start=candidate.body.indexOf(r.quote);
+  return {start,end:start+r.quote.length,kind:'user_fact' as const,sourceRefs:[r.field]};
+ });
+ const outputCheck=checkCompanionOutput({surface:'first_letter',channel:'web',companionId:prepared.companionId,
+  text:candidate.body,dimensions:prepared.dimensions,sources,claims,letter:{
+   name:prepared.signature.name,sealChar:prepared.signature.sealChar,date:prepared.signature.date,
+   emotionLanguage:prepared.emotionLanguage,enabledExperts:prepared.settings.enabledExperts
+  }});
+ return freeze({candidate,outputCheck});
 }

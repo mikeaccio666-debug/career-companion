@@ -76,7 +76,7 @@ export class CompanionBirthAnswerSources {
       birthReceiptId:receipt.id, bornAt:receipt.bornAt, answers,
       companion:Object.freeze({name:capture.identity.name,nameOrigin:capture.identity.nameOrigin,
         sealChar:capture.identity.sealChar,inkToken:capture.identity.inkToken,personaRevision:preview.revision,
-        styleCard:preview.styleCard,samples:Object.freeze([...preview.samples])}),
+        styleCard:preview.styleCard,samples:Object.freeze([...preview.samples]),dimensions:Object.freeze({...proof.envelope.dimensions})}),
       provenance:Object.freeze({taskId:task.id,generation:task.generation,answersId:answers.id,
         sourceDraftId:answers.sourceDraftId,sourceRevision:answers.sourceRevision,
         sourceReceiptVersion:task.sourceReceiptVersion,proofKind:proof.kind}),
