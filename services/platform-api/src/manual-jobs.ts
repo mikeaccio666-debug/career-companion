@@ -62,21 +62,24 @@ export class ManualJobs {
             receipts.set(r.observationId, r);
         }
         const metadata: Readonly<OwnedCareerSavedJob>[] = [];
-        const daily = [];
+        const daily = [], agenda = [];
         for (const row of rows) {
             signal?.throwIfAborted();
             const proof = receipts.get(row.id);
             if (!proof)
                 throw unavailable();
             const job = await this.record(client, context, row, proof);
+            agenda.push(Object.freeze({id:job.id,ownerId:context.userId,title:job.title,employer:job.employer,deadlineAt:job.deadlineAt,deadlineTimeZone:job.deadlineTimeZone}));
             daily.push(Object.freeze({id:job.id,ownerId:context.userId,revision:job.revision,track:job.roleFamily,observedAt:job.observedAt,deadlineAt:job.deadlineAt,deadlineTimeZone:job.deadlineTimeZone,source:job.source}));
             metadata.push(Object.freeze({ ownerId: context.userId, id: job.id, revision: job.revision, state: 'current', source: 'manual', track: job.roleFamily, observedAt: job.observedAt,
                 normalSummary: '本人粘贴的岗位 · ' + job.roleFamily + ' · 未核实是否仍开放。' }));
         }
         await authorizeFixedSession(client, context, signal);
-        return Object.freeze({preparation:Object.freeze(metadata),daily:Object.freeze(daily)});
+        return Object.freeze({preparation:Object.freeze(metadata),daily:Object.freeze(daily),agenda:Object.freeze(agenda)});
     }
     async readForPreparationInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal) { return (await this.readPreparationAndDailySources(client,value,signal)).preparation; }
+    /** Private owner display only; never included in planning/model metadata. */
+    async readForTodayViewInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal) { return (await this.readPreparationAndDailySources(client,value,signal)).agenda; }
     /** Verified coordinates/deadlines only. Never promises the job is open. */
     async readForDailyPlanningInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal) { return (await this.readPreparationAndDailySources(client,value,signal)).daily; }
 

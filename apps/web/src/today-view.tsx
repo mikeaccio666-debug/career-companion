@@ -2,6 +2,8 @@ import {useEffect,useMemo,useState,useCallback} from 'react';
 import type {DailyPlanView} from '@companion/platform-contracts';
 import {useRequiredPlatformAccountClient} from './account-client';
 import {DailyPlanController,emptyDailyPlan,type DailyPlanIntent} from './daily-plans-controller';
+import {BRAND} from './brand';
+import {TodayAgendaPanel} from './today-agenda-view';
 import {TodayRestPanel} from './today-rest-view';
 import './career-design-tokens.css';import './companion-paid-settings-view.css';import './today-view.css';
 const labels={proposed:'待你接受',accepted:'今天做',done:'本人标记完成',moved:'挪到明天了',dropped:'不做了'};
@@ -19,12 +21,13 @@ export function DailyPlanContent({view,disabled,onChoose}:{view:Readonly<DailyPl
 export function TodayPage({onLogout}:{onLogout:()=>void}){
  const client=useRequiredPlatformAccountClient(),[observed,setObserved]=useState(()=>({client,state:emptyDailyPlan()}));
  const controller=useMemo(()=>new DailyPlanController(client,state=>setObserved({client,state})),[client]);const state=observed.client===client&&client.isCurrent()?observed.state:emptyDailyPlan();
- const restSaved=useCallback(()=>{controller.suspend();if(navigator.onLine)controller.resume();},[controller]);
+ const [agendaRevision,setAgendaRevision]=useState(0);
+ const restSaved=useCallback(()=>{setAgendaRevision(n=>n+1);controller.suspend();if(navigator.onLine)controller.resume();},[controller]);
  useEffect(()=>{controller.start(!navigator.onLine);const off=()=>controller.suspend(),on=()=>controller.resume();window.addEventListener('offline',off);window.addEventListener('online',on);return()=>{window.removeEventListener('offline',off);window.removeEventListener('online',on);controller.stop();};},[controller]);
  useEffect(()=>{if(!state.pending||!client.isCurrent())return;const guard=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard);},[state.pending,client]);
- return <main className="companion-settings-page career-surface today-page"><nav aria-label="求职导航"><a href="/today" aria-current="page">今天</a><a href="/">对话</a><a href="/pending">待确认</a><a href="/journey">旅程</a><a href="/me">我</a><button type="button" onClick={onLogout}>退出登录</button></nav><section aria-labelledby="today-heading"><h1 id="today-heading">今天</h1>{state.view&&!state.view.paused&&<p>晨报和自动三件事尚未开放。先把你想做的事放在这里。</p>}
+ return <main className="companion-settings-page career-surface today-page"><nav aria-label="求职导航"><a href="/today" aria-current="page">今天</a><a href="/">对话</a><a href="/pending">待确认</a><a href="/journey">旅程</a><a href="/me">我</a><span>{BRAND.name} · AI</span><button type="button" onClick={onLogout}>退出登录</button></nav><section aria-labelledby="today-heading"><h1 id="today-heading">今天</h1>{state.view&&!state.view.paused&&<p>晨报和自动三件事尚未开放。先把你想做的事放在这里。</p>}
  {state.error&&<p role="alert">{state.error}</p>}{state.notice&&<p role="status">{state.notice}</p>}{state.busy&&<p role="status">正在确认今天的安排…</p>}{state.suspended&&<p role="status">当前离线，恢复连接后重新读取。</p>}
  {state.loaded&&state.view&&<DailyPlanContent key={state.view.localDate+':'+(state.view.plan?.revision??0)} view={state.view} disabled={state.busy||state.suspended||!!state.pending} onChoose={intent=>controller.begin(intent)}/>}
  <div className="companion-settings-actions"><button type="button" disabled={state.busy||state.suspended} onClick={()=>void controller.refresh()}>重新读取安排</button>{state.pending&&<><button type="button" disabled={state.busy||state.suspended} onClick={()=>void controller.observe()}>核对这次操作</button><button type="button" disabled={state.busy||state.suspended} onClick={()=>void controller.retry()}>用原操作重试</button></>}<a href="/me/companion">时区与每日预算</a></div>
- </section><TodayRestPanel onSaved={restSaved}/></main>;
+ </section><TodayAgendaPanel key={agendaRevision} suspended={state.suspended} hidePending={state.view?.paused??false}/><TodayRestPanel onSaved={restSaved}/></main>;
 }
