@@ -24,7 +24,7 @@ function receipt(value:unknown):Row|null{
  const artifactIds=r.artifactIds.map(id);if(new Set(artifactIds).size!==artifactIds.length)throw unavailable();
  return {kind:'task',jobId:id(r.jobId),generation:integer(r.generation,2147483647,1),artifactIds,completedAt:time(r.completedAt)};
 }
-function source(value:unknown,stepIndex:number):Row{
+export function accountPlanSource(value:unknown,stepIndex:number):Row{
  const kind=(value as Row)?.source,base=['source','fromStep','sha256','byteSize'];
  const fields=kind==='analysis_text'?['mode','messageId']:kind==='artifact_text'?['mode','artifactIndex','jobId','generation','artifactId','mime']:
   kind==='reference_image'?['imageIndex','jobId','generation','artifactId','attachmentId','mime']:kind==='artifact_file'?['artifactIndex','jobId','generation','artifactId','attachmentId','name','mime']:null;
@@ -90,7 +90,7 @@ export async function* exportPlansInTransaction(client:PoolClient,value:FixedSes
        let resolvedTask=null,inputSources:Row[]|null=null;
        if(s.resolved_task!==null){
         resolvedTask=parseJob(s.resolved_task);if(goalPlanHash(resolvedTask)!==goalPlanHash(s.resolved_task)||resolvedTask.kind!==s.input.task.kind||!Array.isArray(s.input_sources)||s.input_sources.length>9||!boundAt)throw unavailable();
-        inputSources=s.input_sources.map((v:unknown)=>source(v,index));
+        inputSources=s.input_sources.map((v:unknown)=>accountPlanSource(v,index));
         for(const item of inputSources){
          const prior=steps[item.fromStep],priorReceipt=receipt(prior.receipt);if(!priorReceipt)throw unavailable();
          if(item.source==='analysis_text'){

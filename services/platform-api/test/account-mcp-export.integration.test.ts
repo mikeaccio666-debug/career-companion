@@ -48,9 +48,10 @@ test('actual discovered connection metadata excludes service configuration, sche
  assert.equal(result.sections.mcpConnections.length,1);assert.equal(result.sections.mcpReceipts.length,1);const row=result.sections.mcpConnections[0] as any,call=result.sections.mcpReceipts[0] as any;
  assert.equal(row.id,connection.connectionId);assert.equal(row.storedStatus,'connected');assert.equal(row.grantVersion,1);assert.deepEqual(row.tools,[{name:'fictional_search',description:'Fictional untrusted tool description',authorization:'reviewed_read_only',provenance:'untrusted_mcp_definition'}]);
  assert.equal(call.storedStatus,'completed');assert.equal(call.resultIncluded,false);assert.equal(typeof call.artifactId,'string');
- for(const secret of [who.tokenHash,password,encoded,other.userId,foreign.connectionId!,otherCall.job,'fictional-schema-default-private','fictional-service-key','fictional-mcp.example.invalid','fictional-result-not-loaded','Fictional task body not projected here','a'.repeat(64),'b'.repeat(64),'c'.repeat(64),'d'.repeat(64)])assert(!JSON.stringify(result).includes(secret));
+ assert.equal((result.sections.jobs[0] as any).definition.prompt,'Fictional task body not projected here');assert(!JSON.stringify([row,call]).includes('Fictional task body not projected here'));
+ for(const secret of [who.tokenHash,password,encoded,other.userId,foreign.connectionId!,otherCall.job,'fictional-schema-default-private','fictional-service-key','fictional-mcp.example.invalid','fictional-result-not-loaded','a'.repeat(64),'b'.repeat(64),'c'.repeat(64),'d'.repeat(64)])assert(!JSON.stringify(result).includes(secret));
  assert(!queries.filter(sql=>connectionRead(sql)||receiptRead(sql)).some(sql=>/policy_hash|definition_hash|arguments_hash|response_hash|execution_policy/.test(sql)));assert.deepEqual(m.counts(),counts);assert.deepEqual(await snapshot(who),before);
- assert(Object.isFrozen(row.tools[0]));assert.equal(result.includedTables.length,82);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(result.remainingTables.includes('platform_artifacts'));
+ assert(Object.isFrozen(row.tools[0]));assert.equal(result.includedTables.length,88);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(result.remainingTables.includes('platform_artifacts'));
 });
 
 test('revocation and removed live catalog do not rewrite historical grants or trigger discovery',async()=>{
