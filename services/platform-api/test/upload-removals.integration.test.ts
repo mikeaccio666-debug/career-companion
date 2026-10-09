@@ -53,7 +53,7 @@ test('actual latest immutable event rejects projection forgery and valid earlier
 });
 test('a changed actual storage scope never deletes another backend, while committed cleanup survives a real account deletion',async()=>{
  const who=await f.actor(),u=await file(who);await removals.request(who,u.id,u.command);const another=new LocalBlobStorage(path.join(directory,'another-backend')),wrong=new UploadRemovals(f.db,f.crypto,another);await wrong.cleanup(u.id);await storage.stat(u.key);assert.equal((await removals.get(who,u.id)).status,'pending');
- await f.db.query('DELETE FROM platform_users WHERE id=$1',[who.userId]);await assert.rejects(removals.get(who,u.id),denied(401));await removals.cleanup(u.id);await assert.rejects(storage.stat(u.key),denied(404));assert.equal((await f.db.query('SELECT status FROM platform_upload_removals WHERE upload_id=$1',[u.id])).rows[0].status,'removed');
+ await f.db.query('DELETE FROM platform_users WHERE id=$1',[who.userId]);await assert.rejects(removals.get(who,u.id),denied(401));await removals.cleanup(u.id);await assert.rejects(storage.stat(u.key),denied(404));assert.equal((await f.db.query('SELECT 1 FROM platform_upload_removals WHERE upload_id=$1',[u.id])).rowCount,0);assert.equal((await f.db.query('SELECT 1 FROM platform_upload_removal_events WHERE upload_id=$1',[u.id])).rowCount,0);
 });
 
 test('receipt history is owner-scoped and survives refresh with exact database cursor precision',async()=>{
