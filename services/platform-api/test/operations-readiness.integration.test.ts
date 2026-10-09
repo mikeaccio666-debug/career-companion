@@ -9,7 +9,7 @@ import { Database } from '../src/database.ts';
 import { readConfig } from '../src/config.ts';
 import { buildApp } from '../src/app.ts';
 import type { TaskQueue } from '../src/jobs.ts';
-import { OperationsReadiness, probeRedisReadOnly } from '../src/operations-readiness.ts';
+import { OperationsReadiness, probeRedisReadOnly, requiredOperationsSchema } from '../src/operations-readiness.ts';
 import { connectionFromUrl } from '../src/queue-connection.ts';
 
 const config = readConfig({...process.env,PLATFORM_REQUIRE_INVITE:'1'}), schema = `ops_ready_${randomUUID().replaceAll('-', '')}`, admin = new Database(config.databaseUrl);
@@ -74,6 +74,34 @@ test('public process liveness survives empty or migration-incomplete data; probe
   try { assert.equal((await badSchema.readiness()).ok, false); assert.equal((await badSchema.diagnostics()).dataReason, 'schema_missing'); }
   finally { await badSchema.close(); await db.query('ALTER TABLE platform_goal_plan_steps RENAME COLUMN fictional_missing_column TO input_sources'); }
 });
+
+test('readiness inventories every actual migrated table, including names containing numeric version suffixes', async () => {
+  const expected = await requiredOperationsSchema();
+  const actual = (await db.query("SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r','p')")).rows.map(row => row.relname).sort();
+  assert.deepEqual([...expected.relations].sort(), actual);
+});
+test('a missing native V2 safety table fails real HTTP readiness even when its migration ledger is intact', async () => {
+  const ledger = (await db.query('SELECT name FROM platform_migrations ORDER BY name')).rows;
+  const table = 'platform_onboarding_safety_v2_handled';
+  await db.query('ALTER TABLE '+table+' RENAME TO fictional_missing_v2_handled');
+  let system: Awaited<ReturnType<typeof buildApp>> | undefined;
+  try {
+    system = await fixtureApp();
+    const live = await system.app.inject('/api/platform/live'); assert.equal(live.statusCode, 200);
+    const ready = await system.app.inject('/api/platform/ready'); assert.equal(ready.statusCode, 503, ready.body);
+    assert.equal(ready.json().database, 'unavailable'); assert.equal(ready.headers['cache-control'], 'no-store');
+    assert(!ready.body.includes(table)); assert(!ready.body.includes(schema));
+    assert.equal((await system.app.inject('/api/platform/health')).statusCode, 503);
+    assert.deepEqual((await db.query('SELECT name FROM platform_migrations ORDER BY name')).rows, ledger);
+  } finally {
+    await system?.app.close();
+    await db.query('ALTER TABLE fictional_missing_v2_handled RENAME TO '+table);
+  }
+  const recovered = new OperationsReadiness(db, probeConfig, false);
+  try { assert.equal((await recovered.readiness()).ok, true); }
+  finally { await recovered.close(); }
+});
+
 test('fresh worker reports require exact queue/build, valid DB-clock age, Redis, running and unpaused state', async () => {
   for (const patch of [{queue: 'other-fictional-queue'}, {code: 'other-build'}, {age: '-31 seconds'}, {age: '5 seconds'}, {state: 'starting'}, {state: 'stopping'}, {redis: false}, {running: false}, {paused: true}]) {
     await heartbeat(patch); const readiness = new OperationsReadiness(db, probeConfig, true);

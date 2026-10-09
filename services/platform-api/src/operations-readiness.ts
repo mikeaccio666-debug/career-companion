@@ -28,7 +28,7 @@ export async function requiredOperationsSchema() {
   const relations = new Set(['platform_migrations']);
   for (const name of names) {
     const sql = await fs.readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8');
-    for (const match of sql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)\s*\(/g)) relations.add(match[1]);
+    for (const match of sql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z_0-9]*)\s*\(/g)) relations.add(match[1]);
   }
   return {migrations: names, relations: [...relations], columns: requiredColumns};
 }
