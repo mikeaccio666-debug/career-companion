@@ -353,3 +353,5 @@ export * from './daily-plans.ts';
 export * from './today-agenda.ts';
 
 export * from './today-weekly.ts';
+
+export * from './first-letter-progress.ts';

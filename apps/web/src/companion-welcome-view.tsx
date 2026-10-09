@@ -1,3 +1,4 @@
+import {FirstLetterProgressPanel} from './first-letter-progress-view';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BoundPlatformClient } from './api';
 import { CompanionWelcomeController, emptyWelcome } from './companion-welcome-controller';
@@ -27,7 +28,7 @@ export default function CompanionWelcomeView({ client, companionId, paused = fal
     {welcome.step === 'C1' && <div className="companion-welcome-choices"><button type="button" disabled={paused || busy || state.uncertain} onClick={() => controller.choose('begin')}>好</button>
       <button type="button" disabled={paused || busy || state.uncertain} onClick={() => controller.choose('direct_letter')}>直接写信吧</button></div>}
     {welcome.step === 'C2' && <p className="companion-welcome-progress" role="status">已记下：先聊聊你的处境。下一段对话正在接入。</p>}
-    {welcome.step === 'C7' && <p className="companion-welcome-progress" role="status">已记下：用已有信息写第一封信。信件生成正在接入，第一封信还没有生成。</p>}
+    {welcome.step === 'C7' && <FirstLetterProgressPanel client={client} companionId={companionId} welcomeId={welcome.id} paused={paused}/>}
   </>}
   {!welcome && !state.error && <p className="companion-welcome-progress" role="status">{paused ? '初见暂时暂停，处理完上方事项后继续。' : '正在读取初见进度…'}</p>}
   {state.error && <p className="onboarding-notice" role="alert">{state.error}</p>}
