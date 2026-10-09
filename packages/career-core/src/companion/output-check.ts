@@ -1,10 +1,15 @@
 import type { CompanionDimensions } from './mapping.ts';
+import { EXPERT_KEYS, type ExpertKey } from '@companion/platform-contracts';
+import { enabledExpertRoster } from '../team/members.ts';
 
-export type CompanionOutputSurface = 'companion_preview' | 'conversation' | 'outbound' | 'proactive' | 'paid_suggestion' | 'mode_card' | 'ui';
+export type CompanionOutputSurface = 'companion_preview' | 'first_letter' | 'conversation' | 'outbound' | 'proactive' | 'paid_suggestion' | 'mode_card' | 'ui';
 export type CompanionOutputRule = 'invalid_input' | 'unsupported_context' | 'forbidden_expression' | 'outcome_promise'
   | 'identity_claim' | 'provider_disclosure' | 'paid_without_authorization' | 'unverified_numeric'
   | 'unverified_entity' | 'unverified_user_fact' | 'unverified_execution' | 'immigration_fact'
-  | 'channel_limit' | 'personality_conflict' | 'semantic_review_required';
+  | 'channel_limit' | 'personality_conflict' | 'semantic_review_required'
+  | 'first_letter_identity_missing' | 'first_letter_memory_missing' | 'first_letter_external_rule_missing'
+  | 'first_letter_facts_missing' | 'first_letter_followup_missing' | 'first_letter_team_mismatch'
+  | 'first_letter_today_missing' | 'first_letter_language_mismatch';
 export interface CompanionOutputCheckResult {
   readonly status: 'passed_rules' | 'blocked' | 'requires_review';
   readonly rules: readonly CompanionOutputRule[];
@@ -21,12 +26,19 @@ export interface CompanionPreviewOutputCheckInput {
   readonly sources: readonly GroundedOutputSource[];
   readonly claims: readonly GroundedOutputClaim[];
 }
+export interface FirstLetterOutputCheckInput {
+  readonly surface: 'first_letter'; readonly channel: 'web' | 'discord';
+  readonly companionId: string; readonly dimensions: CompanionDimensions; readonly text: string;
+  readonly sources: readonly GroundedOutputSource[]; readonly claims: readonly GroundedOutputClaim[];
+  readonly letter: Readonly<{ name: string; sealChar: string; date: string;
+    emotionLanguage: 'zh' | 'en' | 'either' | null; enabledExperts: readonly ExpertKey[] }>;
+}
 interface ForbiddenDefinition {
   readonly id: string; readonly category: 'expression' | 'sales' | 'ui';
   readonly pattern: string; readonly surfaces: readonly CompanionOutputSurface[];
 }
-const allSurfaces = Object.freeze(['companion_preview', 'conversation', 'outbound', 'proactive', 'paid_suggestion', 'mode_card', 'ui'] as const);
-const salesSurfaces = Object.freeze(['proactive', 'paid_suggestion', 'mode_card', 'ui'] as const);
+const allSurfaces = Object.freeze(['companion_preview', 'first_letter', 'conversation', 'outbound', 'proactive', 'paid_suggestion', 'mode_card', 'ui'] as const);
+const salesSurfaces = Object.freeze(['first_letter', 'proactive', 'paid_suggestion', 'mode_card', 'ui'] as const);
 const uiSurfaces = Object.freeze(['ui'] as const);
 /** One configuration, with the applicability boundaries from 02 §3.3, 06 §9 and 08 §9.3. */
 export const COMPANION_OUTPUT_FORBIDDEN_CONFIG: readonly ForbiddenDefinition[] = Object.freeze([
@@ -106,7 +118,7 @@ export type OutputSourceKind = 'user_message' | 'profile' | 'confirmed_memory' |
 export interface GroundedOutputSource { readonly ref: string; readonly kind: OutputSourceKind; readonly revision: number; readonly text: string; }
 export type OutputClaimKind = 'user_fact' | 'number' | 'date' | 'organization' | 'role' | 'immigration_fact' | 'sponsorship_quote' | 'execution_fact';
 export interface GroundedOutputClaim { readonly start: number; readonly end: number; readonly kind: OutputClaimKind; readonly sourceRefs: readonly string[]; }
-export interface OutputGroundingInput { readonly text: string; readonly surface: 'conversation' | 'outbound' | 'companion_preview'; readonly sources: readonly GroundedOutputSource[]; readonly claims: readonly GroundedOutputClaim[]; }
+export interface OutputGroundingInput { readonly text: string; readonly surface: 'conversation' | 'outbound' | 'companion_preview' | 'first_letter'; readonly sources: readonly GroundedOutputSource[]; readonly claims: readonly GroundedOutputClaim[]; }
 export interface OutputGroundingResult {
   readonly status: 'matched_spans' | 'unmatched_spans';
   readonly failures: readonly Readonly<{ claimIndex: number; rule: 'invalid_input' | 'source_missing' | 'source_kind' | 'source_text_mismatch' }>[];
@@ -161,7 +173,7 @@ export function checkGroundedOutputClaims(value: OutputGroundingInput): OutputGr
   });
   try {
     const data = record(value, ['text', 'surface', 'sources', 'claims']), raw = text(data.text, true);
-    if (!['conversation', 'outbound', 'companion_preview'].includes(data.surface as string)) invalid();
+    if (!['conversation', 'outbound', 'companion_preview', 'first_letter'].includes(data.surface as string)) invalid();
     const sources = sourcesSnapshot(data.sources), claims = claimsSnapshot(data.claims, raw), failures: OutputGroundingResult['failures'][number][] = [];
     for (const [claimIndex, claim] of claims.entries()) {
       const span = raw.slice(claim.start, claim.end);
@@ -171,7 +183,7 @@ export function checkGroundedOutputClaims(value: OutputGroundingInput): OutputGr
         if (claim.kind === 'immigration_fact' && !['immigration_fact', 'user_message'].includes(source.kind)
           || claim.kind === 'sponsorship_quote' && source.kind !== 'tool_result'
           || claim.kind === 'execution_fact' && source.kind !== 'tool_result'
-          || data.surface === 'outbound' && !ownedFactSources.has(source.kind)) {
+          || (data.surface === 'outbound' || data.surface === 'first_letter') && !ownedFactSources.has(source.kind)) {
           failures.push({ claimIndex, rule: 'source_kind' }); continue;
         }
         if (!matchingExactSpan(source.text, span, claim.kind === 'number' || claim.kind === 'date')) failures.push({ claimIndex, rule: 'source_text_mismatch' });
@@ -226,15 +238,17 @@ function recognizedNonfactualClause(clause: string, slot: CompanionPreviewOutput
 }
 
 /**
- * 02 §§3.3–3.4: preview-only rule checking, with no user facts or paid permission.
+ * 02 §§3.3–3.4: shared preview/first-letter rule entry. Preview has no user
+ * facts or paid permission; first letters require independent semantic review.
  * A passed_rules result is NOT a proof that arbitrary natural language contains no
  * facts. Detectors and clause classification are heuristic; unmatched statements
  * require review. Provider completion, owned source eligibility, safety state,
  * semantic quality, authorization and persistence remain server responsibilities.
  */
-export function checkCompanionOutput(value: CompanionPreviewOutputCheckInput | unknown): CompanionOutputCheckResult {
+export function checkCompanionOutput(value: CompanionPreviewOutputCheckInput | FirstLetterOutputCheckInput | unknown): CompanionOutputCheckResult {
   try {
-    const data = record(value, ['surface', 'text'], ['slot', 'channel', 'companionId', 'dimensions', 'sources', 'claims']);
+    const data = record(value, ['surface', 'text'], ['slot', 'channel', 'companionId', 'dimensions', 'sources', 'claims', 'letter']);
+    if (data.surface === 'first_letter') return checkFirstLetterOutput(value);
     if (data.surface !== 'companion_preview') return result('blocked', ['unsupported_context']);
     record(value, ['surface', 'text', 'slot', 'channel', 'companionId', 'dimensions', 'sources', 'claims']);
     if (!['summary', 'sample_1', 'sample_2', 'sample_3'].includes(data.slot as string)
@@ -263,4 +277,94 @@ export function checkCompanionOutput(value: CompanionPreviewOutputCheckInput | u
     }
     return result('passed_rules', []);
   } catch { return result('blocked', ['invalid_input']); }
+}
+
+
+// First-letter clauses are checked as a whole before publication. These are
+// coverage detectors, not a static letter template or semantic equivalence proof.
+const letterCoverage = Object.freeze({
+ identity: [/(?:我是|我是一名|我作为)[^。！？\n]{0,12}(?:AI|人工智能)|\bI(?: am|'m) (?:an? )?AI\b/iu,
+  /(?:这?个?名字|我的名字|这个称呼)[^。！？\n]{0,12}(?:你起|你取|你选)|你(?:给我|为我)(?:起|取)(?:了|的)?(?:这个)?名字|\byou (?:chose|picked|gave me) (?:my |this |the )?name\b/iu],
+ memory: [/(?:只|只有)[^。！？\n]{0,20}(?:你(?:同意|点头|允许)|征得你同意)[^。！？\n]{0,20}(?:记|保存)|(?:只记|只会记)[^。！？\n]{0,20}你(?:同意|允许)|\b(?:remember|save|store)\b[^.!?\n]{0,40}\bonly\b[^.!?\n]{0,25}\b(?:consent|agree|approve|permission)\b/iu,
+  /它记得的你|what (?:I|it) remember(?:s)? about you/iu,
+  /查看|看见|看到|\b(?:view|see|review)\b/iu,/修改|更改|编辑|\b(?:edit|change|update)\b/iu,
+  /删除|删掉|可删|可以删|能删|\b(?:delete|remove)\b/iu],
+ external: [/(?:消息|邮件)[^。！？\n]{0,15}材料[^。！？\n]{0,25}待确认|(?:messages|emails)[^.!?\n]{0,15}materials[^.!?\n]{0,45}(?:pending (?:your )?(?:review|confirmation)|await (?:your )?(?:review|confirmation))/iu,
+  /(?:表单|字段)[^。！？\n]{0,50}(?:对话|聊天)[^。！？\n]{0,20}(?:逐项|每一项)[^。！？\n]{0,12}(?:确认|授权)|form[^.!?\n]{0,45}(?:each|per.field|field.by.field)[^.!?\n]{0,30}(?:chat|conversation)/iu,
+  /最终提交[^。！？\n]{0,20}你本人|(?:final submission|final submit)[^.!?\n]{0,25}(?:you|yourself)|you[^.!?\n]{0,20}(?:final submission|final submit)/iu],
+ today: [/今天[^。！？\n]{0,15}(?:三件事|三件小事)|today[^.!?\n]{0,15}(?:three|3) (?:things|tasks)/iu],
+ followup: [/(?:接下来|下一步|之后|随后)[^。！？\n]{0,45}(?:了解|问问|聊聊|告诉我)|\bnext\b[^.!?\n]{0,70}\b(?:learn|ask|tell|understand|discuss)\b/iu]
+});
+const letterExpertPatterns: Readonly<Record<ExpertKey,RegExp>> = Object.freeze({
+ guide:/前辈|(?:^|[，,、；;：:\s])前(?=帮|来|负责|陪)|\b(?:career guide|senior peer)\b/iu,
+ applier:/投递官|(?:^|[，,、；;：:\s])投(?=帮|来|负责|陪)|\b(?:application specialist|application agent)\b/iu,
+ interviewer:/面试官|(?:^|[，,、；;：:\s])面(?=帮|来|负责|陪)|\binterviewer\b/iu,
+ planner:/规划师|\bcareer planner\b/iu,
+ coach:/技能教练|\bskills? coach\b/iu,
+ networker:/人脉官|\bnetworking (?:specialist|agent)\b/iu
+});
+function checkFirstLetterOutput(value: unknown): CompanionOutputCheckResult {
+ try {
+  const r=record(value,['surface','channel','companionId','dimensions','text','sources','claims','letter']);
+  if(!['web','discord'].includes(r.channel as string)||typeof r.companionId!=='string'
+   ||/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(r.companionId)?.[0]!==r.companionId)invalid();
+  const d=dimensionSnapshot(r.dimensions),raw=text(r.text,true),normalized=raw.normalize('NFKC');
+  const sources=sourcesSnapshot(r.sources),claims=claimsSnapshot(r.claims,raw);
+  const letter=record(r.letter,['name','sealChar','date','emotionLanguage','enabledExperts']);
+  const name=text(letter.name),seal=text(letter.sealChar),date=text(letter.date);
+  if([...name].length>40||!/^\p{Script=Han}$/u.test(seal)
+   ||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date+'T00:00:00Z'))
+   ||new Date(date+'T00:00:00Z').toISOString().slice(0,10)!==date
+   ||![null,'zh','en','either'].includes(letter.emotionLanguage as never))invalid();
+  const keys=array(letter.enabledExperts,6);
+  if(keys.some(k=>!EXPERT_KEYS.includes(k as ExpertKey))||new Set(keys).size!==keys.length)invalid();
+  enabledExpertRoster(keys as ExpertKey[]);
+  if(sources.some(s=>!['profile','confirmed_memory'].includes(s.kind))
+   ||claims.some(c=>c.kind!=='user_fact'||c.sourceRefs.length!==1))invalid();
+  const hard:CompanionOutputRule[]=[],review:CompanionOutputRule[]=[];
+  const cited=new Set(claims.flatMap(c=>c.sourceRefs));
+  if([...cited].some(ref=>!sources.some(s=>s.ref===ref))
+   ||cited.size<Math.min(2,sources.length))hard.push('first_letter_facts_missing');
+  if([...raw+'\n'+name+'\n'+date].length>350||r.channel==='discord'&&raw.length>2000
+   ||/[!！]{2,}|[~～]|[<>]|https?:\/\/|\p{Extended_Pictographic}/u.test(raw))hard.push('channel_limit');
+  if(forbidden(normalized,'first_letter').length)hard.push('forbidden_expression');
+  if(outcomePromise.test(normalized))hard.push('outcome_promise');
+  if(humanIdentity.test(normalized)||dependency.test(normalized)||roleImpersonation.test(normalized))hard.push('identity_claim');
+  if(providers.test(normalized))hard.push('provider_disclosure');
+  if(paid.test(normalized))hard.push('paid_without_authorization');
+  if(immigration.test(normalized))hard.push('immigration_fact');
+  // Preview forbids even unverified help/execution phrases; letters must be
+  // able to introduce an expert's future help. Only completed-action claims
+  // use this detector; the full promise/permission meaning remains in review.
+  if(/(?:已经|刚刚|已)[^。！？;；\n]{0,20}(?:发送|发出|提交|申请|投递|付款|注册|登录|记住|保存|签名|签好|写好|改好|安排好|预订)|我(?:给你|替你|帮你)?(?:写了|改了|提交了|发送了|核对过|投递过|保存过|记住了)|\b(?:I|we)\s+(?:(?:have|already|just)\s+)*(?:sent|submitted|applied|paid|registered|logged\s+in|saved|remembered|signed)\b/iu.test(normalized))hard.push('unverified_execution');
+  if(personalityConflict(normalized,d))hard.push('personality_conflict');
+  for(const [key,rule] of [
+   ['identity','first_letter_identity_missing'],['memory','first_letter_memory_missing'],
+   ['external','first_letter_external_rule_missing'],['today','first_letter_today_missing']
+  ] as const)if(!letterCoverage[key].every(pattern=>pattern.test(normalized)))hard.push(rule);
+  if(sources.length<2&&!letterCoverage.followup.every(pattern=>pattern.test(normalized)))hard.push('first_letter_followup_missing');
+  for(const key of EXPERT_KEYS){
+   if(letterExpertPatterns[key].test(normalized)!==keys.includes(key))hard.push('first_letter_team_mismatch');
+  }
+  // Script coverage catches an entirely wrong language, not bilingual quality.
+  // Chinese UI labels and the saved name must not reject an otherwise English letter.
+  const languageText=normalized.replaceAll(name.normalize('NFKC'),'').replaceAll('它记得的你','');
+  if((letter.emotionLanguage==='zh'||letter.emotionLanguage===null)&&!/[\p{Script=Han}]/u.test(languageText)
+   ||letter.emotionLanguage==='en'&&!/\b[A-Za-z]{3,}\b/u.test(languageText))hard.push('first_letter_language_mismatch');
+  const grounding=checkGroundedOutputClaims({text:raw,surface:'first_letter',sources,claims});
+  if(grounding.status!=='matched_spans')review.push('unverified_user_fact');
+  let remainder=raw;
+  if(grounding.status==='matched_spans')for(const claim of [...claims].sort((a,b)=>b.start-a.start))
+    remainder=remainder.slice(0,claim.start)+' '.repeat(claim.end-claim.start)+remainder.slice(claim.end);
+  remainder=remainder.normalize('NFKC');
+  if(userFact.test(remainder))review.push('unverified_user_fact');
+  if(/(?:你|您|\byou(?:r)?\b)[^。！？.!?;；\n]{0,70}\p{N}/iu.test(remainder))review.push('unverified_numeric');
+  if(unknownEntity(remainder))review.push('unverified_entity');
+  // Exact spans cannot certify the surrounding proposition, omitted claims,
+  // paraphrases, negation, expert availability or tone. No semantic permit is
+  // accepted from the model/caller. A real independent review stage is still
+  // needed; this surface intentionally never returns passed_rules by regex alone.
+  review.push('semantic_review_required');
+  return hard.length?result('blocked',[...hard,...review]):result('requires_review',review);
+ }catch{return result('blocked',['invalid_input']);}
 }
