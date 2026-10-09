@@ -23,7 +23,8 @@
     "mentor-payment": "tsx src/mentor-payment-main.ts",
     "mentor-scheduling": "tsx src/mentor-scheduling-main.ts",
     "account:coverage": "tsx src/account-data-coverage-main.ts",
-    "recovery:drill": "tsx --test --test-concurrency=1 test/recovery/backup-restore.drill.ts"
+    "recovery:drill": "tsx --test --test-concurrency=1 test/recovery/backup-restore.drill.ts",
+    "recovery:drill:s3": "tsx --test --test-concurrency=1 test/recovery/s3-restore.drill.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.132.1",
