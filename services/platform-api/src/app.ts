@@ -1,3 +1,4 @@
+import { AccountReauthentication } from './account-reauthentication.ts';
 import { CareerProgressService } from './career-progress.ts';
 import { CompanionPaidSettingsService } from './companion-paid-settings.ts';
 import { MentorRatings } from './mentor-ratings.ts';
@@ -137,6 +138,7 @@ export async function buildApp(options:AppOptions={}) {
   const jobs=new JobService(db,config,runtime,storage,undefined,options.mcp,bundle);
   const requestLimits=new RequestLimits(db,options.requestLimits);
   const accountActions=new AccountActions(db,config.accountEmail);
+  const accountReauthentication=new AccountReauthentication(db);
   const staff=new StaffAccess(db);
   const knowledge=new KnowledgeSources(db);
   const orgKnowledge=new OrgKnowledge(db,config,bundle,storage,staff);
@@ -480,6 +482,13 @@ export async function buildApp(options:AppOptions={}) {
     const valid=await checkPassword(password,row?.password_hash??'scrypt:00000000000000000000000000000000:'+Buffer.alloc(64).toString('hex'));
     if(!row||!valid)throw new ApiError(401,'INVALID_CREDENTIALS','Email or password is incorrect.');
     await setSession(db,config,reply,row.id,row.auth_version);return {user:{id:row.id,email:row.email,name:row.name,emailVerified:row.email_verified_at!==null}};
+  });
+  app.post(`${prefix}/account/reauthenticate`,{preHandler:[authenticated,accountContext(),authenticatedLimit('account-reauth')]},async(request,reply)=>{
+    reply.header('Cache-Control','private, no-store');
+    if(Object.keys(object(request.query)).length)throw invalid('Privacy verification does not accept query parameters.');
+    const cancellation=requestSignal(request,reply);
+    try{return {proof:await accountReauthentication.verify(fixedRequestSession(request,userId(request)),request.body,cancellation.signal)};}
+    finally{cancellation.dispose();}
   });
   app.post(`${prefix}/auth/logout`,limitedAccount,async(request,reply)=>{await logout(db,request,reply);return {ok:true};});
   app.get(`${prefix}/auth/me`,{preHandler:[authenticated,authenticatedLimit('api')]},async request=>({user:(request as AuthRequest).platformUser}));

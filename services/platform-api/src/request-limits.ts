@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import type { Database } from './database.ts';
 import { ApiError } from './errors.ts';
 
-export type UserRequestLimitScope = 'api' | 'chat' | 'speech' | 'transcription' | 'realtime' | 'control' | 'org-knowledge';
+export type UserRequestLimitScope = 'api' | 'chat' | 'speech' | 'transcription' | 'realtime' | 'control' | 'org-knowledge' | 'account-reauth';
 export type AnonymousRequestLimitScope = 'auth-login' | 'auth-register' | 'auth-email-request' | 'auth-email-consume' | 'public';
 export type RequestLimitScope = UserRequestLimitScope | AnonymousRequestLimitScope;
 export interface RequestLimitPolicy { max: number; windowSeconds: number; }
@@ -24,6 +24,7 @@ export const DEFAULT_REQUEST_LIMIT_POLICIES: Readonly<Record<RequestLimitScope, 
   transcription: Object.freeze({ max: 20, windowSeconds: 60 }),
   realtime: Object.freeze({ max: 4, windowSeconds: 3600 }),
   control: Object.freeze({ max: 120, windowSeconds: 60 }),
+  'account-reauth': Object.freeze({ max: 5, windowSeconds: 900 }),
   'org-knowledge': Object.freeze({ max: 60, windowSeconds: 60 }),
   'auth-login': Object.freeze({ max: 20, windowSeconds: 60 }),
   'auth-register': Object.freeze({ max: 10, windowSeconds: 60 }),
@@ -32,7 +33,7 @@ export const DEFAULT_REQUEST_LIMIT_POLICIES: Readonly<Record<RequestLimitScope, 
   public: Object.freeze({ max: 120, windowSeconds: 60 }),
 });
 
-const userScopes = new Set<UserRequestLimitScope>(['api', 'chat', 'speech', 'transcription', 'realtime', 'control', 'org-knowledge']);
+const userScopes = new Set<UserRequestLimitScope>(['api', 'chat', 'speech', 'transcription', 'realtime', 'control', 'org-knowledge', 'account-reauth']);
 const anonymousScopes = new Set<AnonymousRequestLimitScope>(['auth-login', 'auth-register', 'auth-email-request', 'auth-email-consume', 'public']);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function unavailable() { return new ApiError(503, 'REQUEST_LIMIT_UNAVAILABLE', 'Request availability could not be confirmed. Please try again.'); }
