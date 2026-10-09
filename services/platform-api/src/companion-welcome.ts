@@ -95,6 +95,13 @@ export class CompanionWelcomeService {
         });
     }
     async choose(context: FixedSessionContext, body: unknown, signal?: AbortSignal): Promise<CompanionWelcomeChoiceResult> {
+        const s=fixed(context);
+        let command:Readonly<CompanionWelcomeChoice>;
+        try{command=parseCompanionWelcomeChoice(body);}catch{throw new ApiError(400,'INVALID_INPUT','Choose a documented next path.');}
+        return this.db.withBoundedTransaction(client=>this.chooseInTransaction(client,s,command,signal));
+    }
+    /** Caller keeps the same transaction for dependent first-letter intent. */
+    async chooseInTransaction(client:PoolClient,context:FixedSessionContext,body:unknown,signal?:AbortSignal):Promise<CompanionWelcomeChoiceResult>{
         let command: Readonly<CompanionWelcomeChoice>;
         try {
             command = parseCompanionWelcomeChoice(body);
@@ -103,7 +110,6 @@ export class CompanionWelcomeService {
             throw new ApiError(400, 'INVALID_INPUT', 'Choose a documented next path.');
         }
         const s = fixed(context);
-        return this.db.withBoundedTransaction(async (client) => {
             const c = await this.current(client, s, signal);
             if (!c)
                 throw new ApiError(409, 'COMPANION_BIRTH_REQUIRED', 'Complete companion birth first.');
@@ -139,6 +145,6 @@ export class CompanionWelcomeService {
             await authorizeFixedSession(client, s, signal);
             signal?.throwIfAborted();
             return { state, operation: { id: command.operationId, appliedRevision: 2, replayed: false } };
-        });
     }
+
 }

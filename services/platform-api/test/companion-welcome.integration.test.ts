@@ -1,3 +1,4 @@
+import {CompanionDailySettingsService} from '../src/companion-daily-settings.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -19,7 +20,7 @@ type Actor = {
 before(async () => {
     fixture = await createPrebirthFixture();
     system = await buildApp({ db: fixture.db, legalBundle: FICTIONAL_LEGAL,
-        config: { ...readConfig(), dataCrypto: fixture.crypto, requireVerifiedEmail: true, allowedOrigins: new Set([origin]) }, enableQueue: false,
+        config: { ...readConfig(), expertRoster:{schemaVersion:1,revision:1,enabledExperts:[]}, dataCrypto: fixture.crypto, requireVerifiedEmail: true, allowedOrigins: new Set([origin]) }, enableQueue: false,
         runtime: createProviderRuntime({ env: { PLATFORM_ALLOW_PROVIDER_CALLS: '1', OPENAI_API_KEY: 'fictional-blocked' }, fetch: async () => { providerCalls++; throw Error('External providers are forbidden'); } }) });
 });
 after(async () => { try {
@@ -191,7 +192,10 @@ test('first-letter progress HTTP is a private read of actual preparation and nev
  let result=await system.app.inject({url,headers:headers(a)});assert.equal(result.statusCode,200,result.body);
  assert.equal(result.json().state,'not_started');assert.equal(result.headers['cache-control'],'private, no-store');
  const before=await count(a);
- await system.firstLetterTasks.prepare(a.who,{rosterRevision:1,enabledExperts:[],localDate:'2026-10-09'});
+ const daily=new CompanionDailySettingsService(fixture.db,fixture.config,FICTIONAL_LEGAL);
+ await daily.change(a.who,{operationId:randomUUID(),expectedRevision:0,companionId:(await read(a)).json().companionId,
+  preferences:{timeZone:'America/New_York',morningTime:'09:00',quietStart:'22:30',quietEnd:'08:30',dailyMinutes:90,webAlert:'none'}});
+ await system.firstLetterTasks.prepare(a.who,await system.firstLetterSettings.read(a.who));
  result=await system.app.inject({url,headers:headers(a)});assert.equal(result.statusCode,200,result.body);
  assert.equal(result.json().state,'prepared');assert.equal(result.json().delivered,false);assert.equal(result.json().ownerId,a.who.userId);
  assert.equal((await system.app.inject({url})).statusCode,401);

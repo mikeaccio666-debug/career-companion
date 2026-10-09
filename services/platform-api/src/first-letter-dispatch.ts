@@ -1,3 +1,5 @@
+import type {FirstLetterSettings} from './first-letter-settings.ts';
+import type {PoolClient} from 'pg';
 import {careerRecordId,careerRecordObject,type PlatformProviderRuntime} from '@companion/platform-contracts';
 import {DatabaseOperationTimeout,type Database} from './database.ts';
 import {DatabaseError} from 'pg';
@@ -14,8 +16,12 @@ const changed=()=>new ApiError(409,'FIRST_LETTER_ACCEPTED_SOURCE_CHANGED','The a
 export class FirstLetterNotificationReadUnavailable extends Error{}
 export class FirstLetterDispatch{
  constructor(readonly db:Database,readonly config:PlatformConfig,private readonly runtime:PlatformProviderRuntime,
-  private readonly tasks:Pick<FirstLetterTasks,'readInTransaction'>,private readonly generation:FirstLetterGeneration){}
+  private readonly tasks:Pick<FirstLetterTasks,'readInTransaction'>,private readonly generation:FirstLetterGeneration,
+  private readonly serverSettings?:Pick<FirstLetterSettings,'readInTransaction'>){}
  async accept(who:FixedSessionContext,input:unknown,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
+  return this.db.withBoundedTransaction(c=>this.acceptInTransaction(c,who,input,settings,signal));
+ }
+ async acceptInTransaction(c:PoolClient,who:FixedSessionContext,input:unknown,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
   let requestId:string,taskId:string,expectedPreparationId:string;
   try{
    const v=careerRecordObject(input,['operationId','taskId','expectedPreparationId']);
@@ -24,7 +30,6 @@ export class FirstLetterDispatch{
    expectedPreparationId=v.expectedPreparationId;
   }catch{throw new ApiError(400,'FIRST_LETTER_REQUEST_INPUT_INVALID','Use the saved task and observed preparation.');}
   const current=snapshotFirstLetterSettings(settings);
-  return this.db.withBoundedTransaction(async c=>{
    const {task}=await this.tasks.readInTransaction(c,who,{taskId},current,signal);
    if(task.preparationId!==expectedPreparationId)throw changed();
    const prior=(await c.query<FirstLetterRequestRow>('SELECT * FROM platform_first_letter_requests WHERE id=$1 OR (user_id=$2 AND task_id=$3) FOR UPDATE',[requestId,who.userId,taskId])).rows;
@@ -57,15 +62,17 @@ export class FirstLetterDispatch{
    const result=decodeFirstLetterRequest(row,this.config.dataCrypto);
    await authorizeFixedSession(c,who,signal);signal?.throwIfAborted();
    return Object.freeze({request:projectFirstLetterRequest(result),replayed:false});
-  });
  }
- async executeNotification(input:unknown,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
-  const notification=firstLetterNotification(input),current=snapshotFirstLetterSettings(settings);
+
+ async executeNotification(input:unknown,settings?:FirstLetterCompositionSettings,signal?:AbortSignal){
+  const notification=firstLetterNotification(input),explicit=settings===undefined?undefined:snapshotFirstLetterSettings(settings);
   const accepted=await this.db.withBoundedTransaction(async c=>{
    const found=(await c.query<FirstLetterRequestRow>('SELECT * FROM platform_first_letter_requests WHERE id=$1 AND task_id=$2',
     [notification.requestId,notification.taskId])).rows[0];
    if(!found)throw firstLetterRequestUnavailable();
    const initial=decodeFirstLetterRequest(found,this.config.dataCrypto),who={userId:initial.ownerId,tokenHash:initial.tokenHash};
+   const current=explicit??await this.serverSettings?.readInTransaction(c,who,signal);
+   if(!current)throw new ApiError(503,'FIRST_LETTER_SETTINGS_UNAVAILABLE','The current server letter settings are unavailable.');
    const {task}=await this.tasks.readInTransaction(c,who,{taskId:initial.taskId},current,signal);
    const row=(await c.query<FirstLetterRequestRow>(`SELECT r.* FROM platform_first_letter_requests r JOIN platform_first_letter_outbox o
     ON o.request_id=r.id AND o.user_id=r.user_id AND o.task_id=r.task_id
@@ -77,13 +84,13 @@ export class FirstLetterDispatch{
     ||saved.companionId!==task.companionId||saved.welcomeId!==task.welcomeId||JSON.stringify(saved.settings)!==JSON.stringify(current))throw changed();
    const route=resolveModelRoute(this.config,this.runtime,'first_letter_generation');
    if(route.provider!==saved.provider||route.model!==saved.model)throw changed();
-   await authorizeFixedSession(c,who,signal);signal?.throwIfAborted();return {who,taskId:task.taskId};
+   await authorizeFixedSession(c,who,signal);signal?.throwIfAborted();return {who,taskId:task.taskId,settings:current};
   }).catch(error=>{
    if(error instanceof DatabaseOperationTimeout||error instanceof DatabaseError&&error.code==='57014')
     throw new FirstLetterNotificationReadUnavailable('Initial letter request verification needs another delivery.');
    throw error;
   });
-  const pick={taskId:accepted.taskId};
+  const pick={taskId:accepted.taskId},current=accepted.settings;
   let original=await this.generation.recover(accepted.who,pick,current,signal);
   if(original?.status==='running')return {kind:'waiting' as const};
   if(original?.status==='uncertain'||original?.status==='failed'&&original.call)return {kind:'held' as const,reason:'terminal' as const};

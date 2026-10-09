@@ -1,3 +1,4 @@
+import type {FirstLetterSettings} from './first-letter-settings.ts';
 import {randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
 import {careerRecordId,careerRecordObject} from '@companion/platform-contracts';
@@ -69,7 +70,11 @@ function match(task:FirstLetterTaskSnapshot,source:FirstLetterSourceSnapshot,pre
 export class FirstLetterTasks{
  private readonly crypto:PlatformConfig['dataCrypto'];
  constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'>,
-  private readonly sources:Pick<FirstLetterSources,'readInTransaction'>){this.crypto=config.dataCrypto;}
+  private readonly sources:Pick<FirstLetterSources,'readInTransaction'>,
+  private readonly serverSettings?:Pick<FirstLetterSettings,'readInTransaction'>){this.crypto=config.dataCrypto;}
+ async assertCurrentSettingsInTransaction(c:PoolClient,s:FixedSessionContext,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
+  if(this.serverSettings&&JSON.stringify(await this.serverSettings.readInTransaction(c,s,signal))!==JSON.stringify(settings))throw changed();
+ }
  private async complete(c:PoolClient,s:FixedSessionContext,source:FirstLetterSourceSnapshot,prepared:FirstLetterPreparation,
   row:FirstLetterTaskRow,signal?:AbortSignal){
   const task=readFirstLetterTaskSnapshot(row,this.crypto,s.userId);match(task,source,prepared);
@@ -78,8 +83,13 @@ export class FirstLetterTasks{
  }
  async prepare(value:FixedSessionContext,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
   const s=fixed(value),savedSettings=snapshotFirstLetterSettings(settings);
-  return this.db.withBoundedTransaction(async c=>{
-   const source=await this.sources.readInTransaction(c,s,signal),prepared=composeFirstLetter(source,savedSettings);
+  return this.db.withBoundedTransaction(c=>this.prepareInTransaction(c,s,savedSettings,signal));
+ }
+ async prepareInTransaction(c:PoolClient,value:FixedSessionContext,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
+  const s=fixed(value),savedSettings=snapshotFirstLetterSettings(settings);
+   const source=await this.sources.readInTransaction(c,s,signal);
+   await this.assertCurrentSettingsInTransaction(c,s,savedSettings,signal);
+   const prepared=composeFirstLetter(source,savedSettings);
    if(!this.crypto)throw unavailable();
    // Source reader already holds the same owner lock as welcome/source writers.
    const existing=(await c.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND welcome_id=$2 FOR UPDATE',
@@ -97,7 +107,6 @@ export class FirstLetterTasks{
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,'prepared',$9,$10) RETURNING *`,[taskId,s.userId,source.companionId,source.conversationId,
     source.trigger.welcomeId,source.trigger.birthReceiptId,source.sourceId,prepared.preparationId,cipher,createdAt])).rows[0];
    return this.complete(c,s,source,prepared,row,signal);
-  });
  }
 
  /** Explicitly refresh an unstarted preparation using current server sources.
@@ -112,7 +121,9 @@ export class FirstLetterTasks{
    taskId=careerRecordId(r.taskId);expectedPreparationId=coordinate(r.expectedPreparationId,'first_letter_preparation_');
   }catch{throw new ApiError(400,'FIRST_LETTER_TASK_INPUT_INVALID','Use the saved task and observed preparation.');}
   return this.db.withBoundedTransaction(async c=>{
-   const source=await this.sources.readInTransaction(c,s,signal),prepared=composeFirstLetter(source,savedSettings);
+   const source=await this.sources.readInTransaction(c,s,signal);
+   await this.assertCurrentSettingsInTransaction(c,s,savedSettings,signal);
+   const prepared=composeFirstLetter(source,savedSettings);
    const rows=(await c.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND id=$2 FOR UPDATE',[s.userId,taskId])).rows;
    if(!rows.length)throw new ApiError(404,'NOT_FOUND','The first-letter task was not found.');
    if(rows.length!==1)throw unavailable();
@@ -153,7 +164,8 @@ export class FirstLetterTasks{
   const s=fixed(value),savedSettings=snapshotFirstLetterSettings(settings);
   let taskId:string;try{taskId=careerRecordId(careerRecordObject(selection,['taskId']).taskId);}
   catch{throw new ApiError(400,'FIRST_LETTER_TASK_INPUT_INVALID','Use the saved task identifier.');}
-  const source=await this.sources.readInTransaction(c,s,signal),prepared=composeFirstLetter(source,savedSettings);
+  const source=await this.sources.readInTransaction(c,s,signal);
+   const prepared=composeFirstLetter(source,savedSettings);
   const rows=(await c.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND id=$2 FOR SHARE',[s.userId,taskId])).rows;
   if(!rows.length)throw new ApiError(404,'NOT_FOUND','The first-letter task was not found.');
   if(rows.length!==1)throw unavailable();

@@ -1,3 +1,10 @@
+import {FirstLetterSettings} from './first-letter-settings.ts';
+import {FirstLetterSources} from './first-letter-sources.ts';
+import {FirstLetterTasks} from './first-letter-tasks.ts';
+import {FirstLetterGeneration} from './first-letter-generation.ts';
+import {FirstLetterDispatch} from './first-letter-dispatch.ts';
+import {FirstLetterQueue,createFirstLetterWorker} from './first-letter-queue.ts';
+import {CompanionDailySettingsService} from './companion-daily-settings.ts';
 import { UploadWrites } from './upload-writes.ts';
 import { MentorFinancialLedger } from './mentor-financial-ledger.ts';
 import { UploadRemovals } from './upload-removals.ts';
@@ -33,6 +40,13 @@ if(config.dataCrypto){await uploadRemovals.recover();await uploadWrites.recover(
 const worker=createWorker(jobs);
 const companionWorker=createCompanionGenerationWorker(companion),companionQueue=new CompanionGenerationQueue(companion);
 const companionNameWorker=createCompanionNameWorker(naming),companionNameQueue=new CompanionNameQueue(naming);
+const letterSettings=new FirstLetterSettings(db,new CompanionDailySettingsService(db,config,legal),config);
+const letterTasks=new FirstLetterTasks(db,config,new FirstLetterSources(db,config,legal,companion.generation,studentOnboarding.prebirth),letterSettings);
+const letterGeneration=new FirstLetterGeneration(db,config,runtime,letterTasks);
+const letterDispatch=new FirstLetterDispatch(db,config,runtime,letterTasks,letterGeneration,letterSettings);
+const letterQueue=config.expertRoster?new FirstLetterQueue(letterDispatch):undefined;
+const letterWorker=config.expertRoster?createFirstLetterWorker(letterDispatch):undefined;
+letterQueue?.start();
 companionQueue.start();
 companionNameQueue.start();
 const accountEmailWorker=startAccountEmailWorker(db,config.accountEmail);
@@ -53,7 +67,7 @@ for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{
     await recovering;
     // BullMQ close waits for processors and has no built-in deadline. A stopping report is not proof of shutdown.
     const results=await Promise.allSettled([worker.close(),accountEmailWorker.close(),companionWorker.close(),companionQueue.close(),
-      companionNameWorker.close(),companionNameQueue.close()]);
+      companionNameWorker.close(),companionNameQueue.close(),letterQueue?.close(),letterWorker?.close()]);
     await db.close();
     if(results.some(result=>result.status==='rejected'))throw new Error('Worker shutdown could not be confirmed.');
   })();

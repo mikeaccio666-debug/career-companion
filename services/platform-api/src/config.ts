@@ -1,3 +1,4 @@
+import {readExpertRelease,type ExpertRelease} from './expert-release.ts';
 import path from 'node:path';
 import { orgKnowledgeBrand } from '@companion/platform-contracts';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,7 @@ export interface PlatformConfig {
   requireInvite: boolean; legalBundlePath?: string; safetyDetectorProfilePath?: string; safetyResponseBundlePath?: string; safetyDeliveryReviewPath?: string; companionIdentityBundlePath?: string; companionIdentityReviewPath?: string; safetyDailyModelCallLimit: number;
   dataCrypto?: DataCrypto;
   orgContentBrand?: string;
+  expertRoster?: Readonly<ExpertRelease>;
   mentorOrganizationId?: string;
   mentorRetentionDays?: number; mentorRetentionEvidenceRef?: string;
   companionSealGlyphs?: Readonly<CompanionSealGlyphConfiguration>;
@@ -176,6 +178,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
     mentorOrganizationId: env.PLATFORM_MENTOR_ORG_ID === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_ORG_ID),
     mentorRetentionDays: env.PLATFORM_MENTOR_RETENTION_DAYS === undefined ? undefined : mentorRetentionDays(env.PLATFORM_MENTOR_RETENTION_DAYS),
     mentorRetentionEvidenceRef: env.PLATFORM_MENTOR_RETENTION_EVIDENCE_REF === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_RETENTION_EVIDENCE_REF),
+    expertRoster: readExpertRelease(env.PLATFORM_EXPERT_ROSTER_JSON),
     orgContentBrand: orgKnowledgeBrand(env.PLATFORM_ORG_CONTENT_BRAND ?? '蔓藤'),
     storageDir: path.resolve(workspaceRoot,env.PLATFORM_STORAGE_DIR ?? '.local/platform/blobs'),
     host: host as PlatformConfig['host'], port: hostedPort ?? platformPort ?? 4320,
