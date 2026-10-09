@@ -47,7 +47,7 @@ test('export includes owned legacy content, excluded messages, raw statuses, aud
  assert.equal((s.audioTranscriptions[0] as any).text,'Fictional 原始转录 🚀');assert.equal((s.chatCalls[0] as any).cachedInputTokens,20);
  assert.equal((s.messages as any[]).find(x=>x.id===running).status,'streaming');
  for(const table of CONVERSATION_EXPORT_TABLES){assert(result.includedTables.includes(table));assert(!result.remainingTables.includes(table));}
- assert.equal(result.includedTables.length,31);assert(result.remainingTables.includes('platform_companion_welcome'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+ assert.equal(result.includedTables.length,33);assert(result.includedTables.includes('platform_companion_welcome'));assert(result.remainingTables.includes('platform_companion_birth_receipts'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
  const text=JSON.stringify(result);for(const secret of [a.tokenHash,encoded,password,b.userId,foreignRoom,foreignMessage,'Fictional foreign secret',source.storageKey,'lease_until'])assert(!text.includes(secret));
  assert(Object.isFrozen(exported.audioTranscripts));
 });
@@ -106,13 +106,13 @@ test('message-size limit and cancellation during a page return no partial export
  assert.equal((await new AccountCoreExport(f.db,f.config).capture(a,token)).sections.messages.length,1);
 });
 
-test('actual companion birth and welcome messages preserve typed sources without pretending the encrypted introduction is already exported',async()=>{
+test('actual companion birth and welcome messages preserve typed sources and the separately decoded introduction',async()=>{
  const a=await actor();await withPrebirthLoopback(async(runtime,calls)=>{
   const ready=await readyBirth(f,runtime,{who:a});await ready.service.birth(a,ready.body,ready.key);
   const welcome=await new CompanionWelcomeService(f.db,f.config,FICTIONAL_LEGAL,new CompanionBirthOriginStore(f.crypto),ready.prebirth).open(a,{expectedCompanionId:ready.ready.prepared.companionId});
   const result=await capture(a),messages=result.sections.messages as any[];assert.equal(messages.length,2);assert.equal((result.sections.conversations[0] as any).kind,'main');
   assert(messages.some(m=>m.payload.event==='companion_born'));const intro=messages.find(m=>m.payload.type==='companion_intro');
-  assert.equal(intro.id,welcome.intro.id);assert.equal(intro.content,'');assert.equal(intro.payload.welcomeId,welcome.id);assert.equal(intro.speakerSnapshot.displayName,welcome.intro.speaker.name);
-  assert(result.remainingTables.includes('platform_companion_welcome'));assert(!JSON.stringify(result).includes('intro_ciphertext'));assert.equal(calls.length,2);
+  assert.equal(intro.id,welcome.intro.id);assert.equal(intro.content,'');assert.equal(intro.payload.welcomeId,welcome.id);assert.equal(intro.speakerSnapshot.displayName,welcome.intro.speaker.name);assert.deepEqual((result.sections.companionWelcomes[0] as any).intro,welcome.intro);
+  assert(result.includedTables.includes('platform_companion_welcome'));assert(result.remainingTables.includes('platform_companion_birth_receipts'));assert(!JSON.stringify(result).includes('intro_ciphertext'));assert.equal(calls.length,2);
  });
 });
