@@ -33,3 +33,33 @@ test('page lifecycle hides tasks, keeps an unknown write and reads the new day w
  resolve(saved(c));await new Promise(r=>setTimeout(r,5));assert.equal(h.controller.snapshot().view?.localDate,'2026-10-10');assert.equal(h.controller.snapshot().pending,pending);
  h.invalidate();page.visibilityState='hidden';page.dispatchEvent(new Event('visibilitychange'));page.visibilityState='visible';page.dispatchEvent(new Event('visibilitychange'));assert.equal(reads,2);assert.equal(h.controller.snapshot().view,null);lifecycle.dispose();
 });
+
+test('editing binds the draft to its observed revision and sends only domain fields; stale edits require a new review',async()=>{
+ const {dailyEditBasis}=await import('../src/daily-plan-editor.ts');const v=saved(cmd()).view,item=v.plan.items[0],basis=dailyEditBasis(v as any,item.id)!;let writes:any[]=[];
+ const h=harness((_p,i)=>{if(!i.method)return v;const body=JSON.parse(String(i.body));writes.push(body);throw new ApiError('Conflict',409,'DAILY_PLAN_CHANGED');});
+ await ready(h);h.controller.begin({action:'edit',itemId:item.id,title:'Fictional revision',minutes:10,basis:{...basis,revision:0}});
+ assert.equal(writes.length,0);assert.match(h.controller.snapshot().error,/变化/);
+ h.controller.begin({action:'edit',itemId:item.id,title:'Fictional revision',minutes:10,basis});await until(()=>!h.controller.snapshot().busy);
+ assert.equal(writes.length,1);assert.equal(writes[0].expectedRevision,1);assert.equal('basis' in writes[0],false);assert.equal(h.controller.snapshot().view,null);h.controller.stop();
+});
+test('unknown edit keeps original text, minutes and revision across recovery; observation never sends another PATCH',async()=>{
+ const {dailyEditBasis}=await import('../src/daily-plan-editor.ts');const v=saved(cmd()).view,item=v.plan.items[0];let body:any,writes=0;
+ const h=harness((p,i)=>{
+  if(p.includes('/operations/'))return{view:{...v,plan:{...v.plan,revision:2,lastOperationId:body.operationId,items:[{...item,title:body.title,minutes:body.minutes}]}},operation:{id:body.operationId,action:'edit',localDate:date,planId:v.plan.id,appliedRevision:2,replayed:true}};
+  if(!i.method)return v;writes++;body=JSON.parse(String(i.body));throw Error('Lost response');
+ });await ready(h);h.controller.begin({action:'edit',itemId:item.id,title:'A smaller fictional step',minutes:5,basis:dailyEditBasis(v as any,item.id)!});await until(()=>h.controller.snapshot().uncertain);
+ const pending=h.controller.snapshot().pending;h.controller.suspend();h.controller.resume();await until(()=>h.controller.snapshot().loaded);assert.equal(h.controller.snapshot().pending,pending);assert.equal(writes,1);
+ await h.controller.observe();assert.equal(h.controller.snapshot().pending,null);assert.equal(h.controller.snapshot().view?.plan?.items[0].minutes,5);assert.equal(writes,1);h.controller.stop();
+});
+test('edit transport refuses a matching operation envelope that returns wrong saved text or an already accepted task',async()=>{
+ const v=saved(cmd()).view,item=v.plan.items[0],body={operationId:randomUUID(),companionId,localDate:date,planId:v.plan.id,expectedRevision:1,action:'edit',itemId:item.id,title:'Exact revised fictional task',minutes:12};
+ const receipt={view:{...v,plan:{...v.plan,revision:2,lastOperationId:body.operationId,items:[{...item,title:body.title,minutes:body.minutes}]}},operation:{id:body.operationId,action:'edit',localDate:date,planId:v.plan.id,appliedRevision:2,replayed:false}};
+ assert.equal((await changeDailyPlan(harness((path,init)=>{assert.equal(path,'/today/plan/items/'+item.id);assert.equal(init.method,'PATCH');return receipt;}).client,body)).view.plan?.items[0].title,body.title);
+ for(const patch of [{title:'Wrong text'},{minutes:90},{state:'accepted'}])await assert.rejects(changeDailyPlan(harness(()=>({...receipt,view:{...receipt.view,plan:{...receipt.view.plan,acceptedAt:at,items:[{...receipt.view.plan.items[0],...patch}]}}})).client,body));
+});
+test('edit basis cannot cross midnight, a plan replacement, or a completed/moved/dropped task',async()=>{
+ const {dailyEditBasis,dailyEditMatches}=await import('../src/daily-plan-editor.ts');const v=saved(cmd()).view,item=v.plan.items[0],basis=dailyEditBasis(v as any,item.id)!;
+ assert(dailyEditMatches(v as any,item.id,basis));
+ for(const changed of [{...v,localDate:'2026-10-10'},{...v,paused:true},{...v,plan:{...v.plan,revision:2}},{...v,plan:{...v.plan,id:randomUUID()}}])assert.equal(dailyEditMatches(changed as any,item.id,basis),false);
+ for(const state of ['done','moved','dropped'])assert.equal(dailyEditBasis({...v,plan:{...v.plan,items:[{...item,state}]}} as any,item.id),null);
+});

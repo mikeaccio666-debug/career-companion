@@ -65,3 +65,47 @@ test('failure during the second half of a move rolls back both days, and malform
  try{await assert.rejects(service.mutate(who,move),error(503));}finally{f.db.withBoundedTransaction=original;}assert.deepEqual(await service.read(who),v);assert.equal((await f.db.query('SELECT * FROM platform_daily_plans WHERE user_id=$1',[who.userId])).rowCount,1);assert.equal((await f.db.query('SELECT * FROM platform_daily_plan_items WHERE user_id=$1',[who.userId])).rowCount,1);await assert.rejects(service.observe(who,move.operationId),error(404));
  for(const mode of ['ciphertext','owner','items']){f.db.withBoundedTransaction=async(fn,options)=>original(c=>fn(new Proxy(c,{get(target,key){if(key==='query')return async(sql:any,...args:any[])=>{const result=await(target.query as any)(sql,...args);if(typeof sql==='string'&&sql.startsWith('SELECT * FROM platform_daily_plan_operations'))for(const row of result.rows){if(mode==='ciphertext'){row.record_ciphertext=Buffer.from(row.record_ciphertext);row.record_ciphertext[12]^=1;}if(mode==='owner')row.user_id=randomUUID();}if(mode==='items'&&typeof sql==='string'&&sql.startsWith('SELECT id,candidate_id FROM platform_daily_plan_items'))return{...result,rows:[]};return result;};const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;}})),options);try{await assert.rejects(service.read(who),error(503));}finally{f.db.withBoundedTransaction=original;}}
 });
+
+test('editing a proposed or accepted owner task keeps identity, requires renewed acceptance and preserves old revisions',async()=>{
+ const who=await born();let v=(await service.mutate(who,add(await service.read(who),20))).view;
+ const original=v.plan!.items[0],edit=command(v,{action:'edit',itemId:original.id,title:'PRIVATE_FICTIONAL_EDITED_TASK',minutes:10});
+ const both=await Promise.all([service.mutate(who,edit),service.mutate(who,edit)]);assert.equal(both.filter(r=>r.operation.replayed).length,1);v=both[0].view;
+ assert.equal(v.plan!.items[0].id,original.id);assert.equal(v.plan!.items[0].candidateId,original.candidateId);assert.equal(v.plan!.items[0].state,'proposed');assert.equal(v.plan!.items[0].minutes,10);
+ v=(await service.mutate(who,command(v,{action:'accept'}))).view;
+ v=(await service.mutate(who,command(v,{action:'edit',itemId:original.id,title:'PRIVATE_FICTIONAL_SECOND_EDIT',minutes:25}))).view;
+ assert.equal(v.plan!.items[0].state,'proposed');assert.equal(v.plan!.items[0].completionSource,null);
+ await assert.rejects(service.mutate(who,command(v,{action:'done',itemId:original.id})),error(409));
+ const exported=await f.db.withBoundedTransaction(async c=>{const rows=[];for await(const row of service.exportInTransaction(c,who))rows.push(row);return rows;});
+ const history=exported.filter(r=>r.section==='dailyPlanHistory').map(r=>(r.record as any).plan);
+ assert.equal(history[0].items[0].title,original.title);assert.equal(history[1].items[0].title,'PRIVATE_FICTIONAL_EDITED_TASK');assert.equal(history[3].items[0].title,'PRIVATE_FICTIONAL_SECOND_EDIT');
+ assert.equal((await f.db.query('SELECT id FROM platform_daily_plan_items WHERE user_id=$1',[who.userId])).rowCount,1);
+ assert.equal((await service.observe(who,edit.operationId)).operation.appliedRevision,2);
+ await assert.rejects(service.mutate(who,{...edit,minutes:30}),error(409));
+ v=(await service.mutate(who,command(v,{action:'accept'}))).view;v=(await service.mutate(who,command(v,{action:'done',itemId:original.id}))).view;
+ await assert.rejects(service.mutate(who,command(v,{action:'edit',itemId:original.id,title:'Do not rewrite completed work',minutes:5})),error(409));
+});
+test('edits enforce total budget, current revision, item ownership and terminal state without partial persistence',async()=>{
+ const who=await born(),other=await born();let v=(await service.mutate(who,add(await service.read(who),50))).view;v=(await service.mutate(who,add(v,30))).view;
+ const itemId=v.plan!.items[0].id,edit=command(v,{action:'edit',itemId,title:'Fictional shortened task',minutes:61});
+ await assert.rejects(service.mutate(who,edit),{code:'DAILY_PLAN_BUDGET'});assert.deepEqual(await service.read(who),v);await assert.rejects(service.observe(who,edit.operationId),error(404));
+ await assert.rejects(service.mutate(who,{...edit,itemId:randomUUID(),minutes:10}),error(404));
+ await assert.rejects(service.mutate(other,{...edit,minutes:10}),error(409));
+ const results=await Promise.allSettled([service.mutate(who,{...edit,minutes:40}),service.mutate(who,{...edit,operationId:randomUUID(),minutes:20})]);assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+ v=await service.read(who);v=(await service.mutate(who,command(v,{action:'accept'}))).view;
+ v=(await service.mutate(who,command(v,{action:'drop',itemId}))).view;
+ await assert.rejects(service.mutate(who,command(v,{action:'edit',itemId,title:'No reopening dropped item',minutes:5})),error(409));
+ const movedId=v.plan!.items[1].id;v=(await service.mutate(who,command(v,{action:'move',itemId:movedId}))).view;
+ await assert.rejects(service.mutate(who,command(v,{action:'edit',itemId:movedId,title:'No rewriting yesterday',minutes:5})),error(409));
+});
+test('an edit crossing local midnight can be observed and replayed but a fresh stale edit cannot change either day',async()=>{
+ const who=await born();let edit:any,stale:any;
+ await clock('2026-11-01T04:59:59.000Z',async()=>{
+  let v=(await service.mutate(who,add(await service.read(who),15))).view;
+  edit=command(v,{action:'edit',itemId:v.plan!.items[0].id,title:'Fictional midnight draft',minutes:10});
+  v=(await service.mutate(who,edit)).view;stale=command(v,{action:'edit',itemId:v.plan!.items[0].id,title:'Fictional stale draft',minutes:5});
+ });
+ await clock('2026-11-02T05:00:00.000Z',async()=>{
+  const observed=await service.observe(who,edit.operationId);assert.equal(observed.operation.localDate,'2026-11-01');assert.equal(observed.view.localDate,'2026-11-02');assert.equal(observed.view.plan,null);
+  assert.equal((await service.mutate(who,edit)).operation.replayed,true);await assert.rejects(service.mutate(who,stale),error(409));assert.equal((await service.read(who)).plan,null);
+ });
+});
