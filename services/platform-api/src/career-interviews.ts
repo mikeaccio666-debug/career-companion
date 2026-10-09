@@ -123,7 +123,7 @@ export class CareerInterviews {
     }
     /** Complete private schedule coordinates, verified against each immutable receipt.
      * Scheduled interviews are not practice sessions or evidence of completing preparation. */
-    async readForDailyPlanningInTransaction(c:PoolClient,value:FixedSessionContext,signal?:AbortSignal) {
+    private async readDailySources(c:PoolClient,value:FixedSessionContext,signal?:AbortSignal) {
       const s=this.fixed(value);await this.authorize(c,s,signal);await this.storage.authorizeSession(c,s,signal);
       const rows=(await c.query('SELECT * FROM platform_career_interviews WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[s.userId])).rows;
       if(rows.length>500)throw unavailable();
@@ -131,12 +131,16 @@ export class CareerInterviews {
         (SELECT interview_id,max(applied_revision) AS revision FROM platform_career_interview_operations WHERE user_id=$1 AND interview_id=ANY($2::uuid[]) GROUP BY interview_id) latest
         ON latest.interview_id=o.interview_id AND latest.revision=o.applied_revision WHERE o.user_id=$1 FOR SHARE OF o`,[s.userId,rows.map(r=>r.id)])).rows:[];
       const latest=new Map<string,Receipt>();for(const row of proofs){signal?.throwIfAborted();const r=this.receipt(s,row);if(latest.has(r.interviewId))throw unavailable();latest.set(r.interviewId,r);}
-      const result=[];
+      const result=[], agenda=[];
       for(const row of rows){signal?.throwIfAborted();const proof=latest.get(row.id);if(!proof)throw unavailable();const v=await this.record(c,s,row,proof);
+        agenda.push(Object.freeze({id:v.id,ownerId:s.userId,title:v.application.title,employer:v.application.employer,status:v.status,startsAt:v.startsAt,timeZone:v.timeZone,durationMin:v.durationMin}));
         result.push(Object.freeze({id:v.id,ownerId:s.userId,revision:v.revision,lastOperationId:v.lastOperationId,status:v.status,roundType:v.roundType,startsAt:v.startsAt,timeZone:v.timeZone,durationMin:v.durationMin,application:Object.freeze({id:v.application.id,revision:v.application.revision,track:v.application.roleFamily}),source:v.source}));
       }
-      await authorizeFixedSession(c,s,signal);signal?.throwIfAborted();return Object.freeze(result);
+      await authorizeFixedSession(c,s,signal);signal?.throwIfAborted();return Object.freeze({daily:Object.freeze(result),agenda:Object.freeze(agenda)});
     }
+    async readForDailyPlanningInTransaction(c:PoolClient,value:FixedSessionContext,signal?:AbortSignal) { return (await this.readDailySources(c,value,signal)).daily; }
+    /** Private owner display; distinct from the text-free planning projection. */
+    async readForTodayViewInTransaction(c:PoolClient,value:FixedSessionContext,signal?:AbortSignal) { return (await this.readDailySources(c,value,signal)).agenda; }
     async list(value: FixedSessionContext, query: unknown = {}, signal?: AbortSignal) {
         const s = this.fixed(value);
         let after: string | null, status: string | null;
