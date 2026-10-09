@@ -20,12 +20,12 @@ function normalizedEmail(value: string): string {
   return value.toLowerCase();
 }
 function targetHash(email: string) { return createHash('sha256').update('career-companion:account-email-target:v1\0').update(email).digest('hex'); }
-async function targetAllowed(client: PoolClient, email: string, purpose: AccountActionPurpose): Promise<boolean> {
-  const result = await client.query(`INSERT INTO platform_account_action_limits AS current(target_hash,purpose,request_count,expires_at)
-    VALUES($1,$2,1,clock_timestamp()+interval '1 hour') ON CONFLICT(target_hash,purpose) DO UPDATE SET
+async function targetAllowed(client: PoolClient, user: {id:string;email:string}, purpose: AccountActionPurpose): Promise<boolean> {
+  const result = await client.query(`INSERT INTO platform_account_action_limits AS current(target_hash,purpose,request_count,expires_at,user_id)
+    VALUES($1,$2,1,clock_timestamp()+interval '1 hour',$3) ON CONFLICT(target_hash,purpose) DO UPDATE SET
       request_count=CASE WHEN current.expires_at <= clock_timestamp() THEN 1 ELSE current.request_count+1 END,
       expires_at=CASE WHEN current.expires_at <= clock_timestamp() THEN clock_timestamp()+interval '1 hour' ELSE current.expires_at END
-    WHERE current.expires_at <= clock_timestamp() OR current.request_count < 3 RETURNING request_count`, [targetHash(email),purpose]);
+    WHERE current.user_id=EXCLUDED.user_id AND (current.expires_at <= clock_timestamp() OR current.request_count < 3) RETURNING request_count`, [targetHash(user.email),purpose,user.id]);
   return result.rowCount === 1;
 }
 async function revoke(client: PoolClient, userId: string, purpose?: AccountActionPurpose) {
@@ -44,8 +44,11 @@ export class AccountActions {
     await confirmed(()=>this.db.transaction(async client => {
       await client.query("SELECT set_config('statement_timeout','2000',true)");
       const result = await client.query('SELECT id,email,auth_version FROM platform_users WHERE email=$1 FOR UPDATE',[address]);
-      const allowed = await targetAllowed(client,address,'password-reset');
-      if (allowed && result.rows[0]) await this.enqueue(client,result.rows[0],'password-reset');
+      // Unknown/deleted accounts get the same accepted response but no email
+      // digest counter. Socket-IP admission still protects the public route.
+      const row=result.rows[0];if(!row)return;
+      const allowed = await targetAllowed(client,row,'password-reset');
+      if (allowed) await this.enqueue(client,row,'password-reset');
     }));
   }
 
@@ -56,7 +59,7 @@ export class AccountActions {
       await client.query("SELECT set_config('statement_timeout','2000',true)");
       const result = await client.query('SELECT id,email,auth_version,email_verified_at FROM platform_users WHERE id=$1 FOR UPDATE',[id]);
       const row = result.rows[0]; if (!row) return;
-      const allowed = await targetAllowed(client,row.email,'verify-email');
+      const allowed = await targetAllowed(client,row,'verify-email');
       if (allowed && !row.email_verified_at) await this.enqueue(client,row,'verify-email');
     }));
   }
