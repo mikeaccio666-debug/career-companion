@@ -1,16 +1,9 @@
-import { CompanionPaidSettingsPage } from './companion-paid-settings-view';
+import { lazyFeature } from './LazyFeature';
+
 import { applicationRoute } from './career-application-route';
-import { MentorIntentPage } from './mentor-intent-view';
-import { OrgSourcePage } from './org-source-view';
+
 import { orgSourceReferenceFromPath } from './org-source-api';
-import { CareerInterviewPage } from './career-interview-view';
-import { CareerIdentityPage } from './career-identity-view';
-import { CareerApplicationPage } from './career-application-view';
-import { ResumeReviewPage } from './resume-review-view';
-import { CareerStoryPage } from './career-story-view';
-import { ManualJobPage } from './manual-job-view';
-import { CareerTargetPage } from './career-target-view';
-import { SharedMemoryPage } from './shared-memory-view';
+
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import ChatMarkdown from './ChatMarkdown';
 import { BRAND } from './brand';
@@ -25,33 +18,25 @@ import AuthView from './AuthView';
 import AccountActionView, { AccountGate, EmailVerificationControls } from './AccountActionView';
 import { AccountActionInbox, parseAuthOptions, studentAccountEntryStep, takeAccountActionLink, type AccountActionLink, type AuthOptions } from './account-actions';
 import AccountConsentView from './AccountConsentView';
-import StudentOnboarding from './StudentOnboarding';
+
 import StudentSafetyResources from './StudentSafetyResources';
 import LegalDocumentPage from './LegalDocumentPage';
 import { readStudentConsent } from './legal-api';
 import { readResourceSession } from './resource-session-api';
 import { isCurrentStudentConsent, publicLegalPage } from './student-entry-state';
-import SettingsPanel from './SettingsPanel';
-import KnowledgePanel from './KnowledgePanel';
-import TaskPanel from './TaskPanel';
-import McpToolPanel from './McpToolPanel';
-import ConversationTasksPanel from './ConversationTasksPanel';
-import ConversationGoalPlansPanel from './ConversationGoalPlansPanel';
+
 import { shouldRefreshGoalPlanProposals } from './conversation-goal-plan-labels';
 import { GoalPlanWorkspaceStore } from './goal-plan-workspace';
-import GoalPlansPanel from './GoalPlansPanel';
+
 import { streamGoalPlanAnalysis } from './goal-plan-analysis';
 import { applyConversationTaskDraft, type ConversationTaskReference } from './conversation-task-draft';
 import { mcpResultAgentDraft, ownedMcpResultJob } from './mcp-editor';
-import CreativePanel from './CreativePanel';
-import WorkflowPanel from './WorkflowPanel';
-import BrowserPanel from './BrowserPanel';
+
 import ApprovalDetails from './ApprovalDetails';
-import VoicePanel from './VoicePanel';
-import VoiceRecords from './VoiceRecords';
+
 import PrivateFileLink from './PrivateFileLink';
 import ChatAttachmentsPanel from './ChatAttachmentsPanel';
-import AudioTranscriptHistory from './AudioTranscriptHistory';
+
 import { createAudioTranscriptionClient } from './audio-transcriptions-api';
 import { AudioTranscriptionController, type AudioReviewSnapshot } from './audio-transcriptions-controller';
 import { parsePlatformFeatures, parsePublicCapabilities, studentChatRequest } from './student-requests';
@@ -67,6 +52,32 @@ import { agentToolStatusText, appendAgentApprovalStatus, finishAgentToolStatuses
 import type { ConversationTask, GoalPlanContinuation, GoalPlanProposalSummary, StudentConsentStatus, VoiceRecord, VoiceRecordInput } from '@companion/platform-contracts';
 import { Badge, Brand, isJobActive, isProviderReady, jobLabel, providerModels, ProviderSelect, statusLabel } from './ui';
 import type { Approval, Artifact, ChatMode, Conversation, Job, JobKind, Memory, Message, PlatformState, Upload, User, View } from './types';
+const CompanionPaidSettingsPage = lazyFeature(async () => ({ default: (await import('./companion-paid-settings-view')).CompanionPaidSettingsPage }), '主理人设置');
+const MentorIntentPage = lazyFeature(async () => ({ default: (await import('./mentor-intent-view')).MentorIntentPage }), '蔓藤导师');
+const OrgSourcePage = lazyFeature(async () => ({ default: (await import('./org-source-view')).OrgSourcePage }), '资料来源');
+const CareerInterviewPage = lazyFeature(async () => ({ default: (await import('./career-interview-view')).CareerInterviewPage }), '面试安排');
+const CareerIdentityPage = lazyFeature(async () => ({ default: (await import('./career-identity-view')).CareerIdentityPage }), '身份资料');
+const CareerApplicationPage = lazyFeature(async () => ({ default: (await import('./career-application-view')).CareerApplicationPage }), '投递看板');
+const ResumeReviewPage = lazyFeature(async () => ({ default: (await import('./resume-review-view')).ResumeReviewPage }), '简历确认');
+const CareerStoryPage = lazyFeature(async () => ({ default: (await import('./career-story-view')).CareerStoryPage }), '项目与故事');
+const ManualJobPage = lazyFeature(async () => ({ default: (await import('./manual-job-view')).ManualJobPage }), '收藏岗位');
+const CareerTargetPage = lazyFeature(async () => ({ default: (await import('./career-target-view')).CareerTargetPage }), '目标方向');
+const SharedMemoryPage = lazyFeature(async () => ({ default: (await import('./shared-memory-view')).SharedMemoryPage }), '共享记忆');
+const StudentOnboarding = lazyFeature(() => import('./StudentOnboarding'), '初见');
+const SettingsPanel = lazyFeature(() => import('./SettingsPanel'), '设置');
+const KnowledgePanel = lazyFeature(() => import('./KnowledgePanel'), '我的资料库');
+const TaskPanel = lazyFeature(() => import('./TaskPanel'), '内部任务');
+const McpToolPanel = lazyFeature(() => import('./McpToolPanel'), '外部工具');
+const ConversationTasksPanel = lazyFeature(() => import('./ConversationTasksPanel'), '任务记录');
+const ConversationGoalPlansPanel = lazyFeature(() => import('./ConversationGoalPlansPanel'), '计划提议');
+const GoalPlansPanel = lazyFeature(() => import('./GoalPlansPanel'), '目标与计划');
+const CreativePanel = lazyFeature(() => import('./CreativePanel'), '创作工作室');
+const WorkflowPanel = lazyFeature(() => import('./WorkflowPanel'), '工作流');
+const BrowserPanel = lazyFeature(() => import('./BrowserPanel'), '浏览器工作台');
+const VoicePanel = lazyFeature(() => import('./VoicePanel'), '语音交流');
+const VoiceRecords = lazyFeature(() => import('./VoiceRecords'), '语音记录');
+const AudioTranscriptHistory = lazyFeature(() => import('./AudioTranscriptHistory'), '转写记录');
+
 const navigation = [
   { id: 'chat', label: '一起思考', icon: MessageCircle },
   { id: 'companion', label: '陪伴与练习', icon: MessageCircle },
