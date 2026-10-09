@@ -1,3 +1,4 @@
+import { CareerProgressPanel } from './career-progress-view';
 import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { applicationHref } from './career-application-route';
 import { useEffect, useMemo, useState } from 'react';
@@ -28,9 +29,10 @@ export function CareerInterviewPanel({ initialInterviewId }: { initialInterviewI
   const state = observed?.client === client && observed.controller === controller ? observed.state : null;
   useEffect(() => { if (state?.lastResult) { setEditor(null); setDecision(null); setInputError(''); } }, [state?.lastResult]);
   if (!client.isCurrent()) return null;
-  return <CareerInterviewScene state={state} initialInterviewId={initialInterviewId} editor={editor} setEditor={setEditor}
+  return <><CareerInterviewScene state={state} initialInterviewId={initialInterviewId} editor={editor} setEditor={setEditor}
     decision={decision} setDecision={setDecision} inputError={inputError} setInputError={setInputError}
-    viewerZone={viewerZone} setViewerZone={setViewerZone} controller={controller} />;
+    viewerZone={viewerZone} setViewerZone={setViewerZone} controller={controller} />
+    {!initialInterviewId && <CareerProgressPanel suspended={!state?.loaded || !!state.busy || !!state.pending || !!state.needsRefresh} />}</>;
 }
 interface SceneProps {
   state: InterviewSnapshot | null; initialInterviewId?: string;

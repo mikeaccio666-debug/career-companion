@@ -4,12 +4,12 @@ import { readCareerProgress, type CareerProgressClient } from '../src/career-pro
 import { CareerProgressController } from '../src/career-progress-controller.ts';
 const owner='11111111-1111-4111-8111-111111111111';
 const counts=()=>({project:0,resume_review:0,practice_review:0,outreach:0,application:0,interview:0});
-const data=(applications=53)=>({ownerId:owner,coverage:['project','application'],progress:{policyRevision:1,counts:{...counts(),project:1},provisionalCounts:{...counts(),application:applications},milestones:['first_project_evidence']}});
+const data=(applications=53)=>({ownerId:owner,coverage:['project','application','interview'],progress:{policyRevision:1,counts:{...counts(),project:1},provisionalCounts:{...counts(),application:applications,interview:23},milestones:['first_project_evidence']}});
 function deferred<T>(){let resolve!:(v:T)=>void;const promise=new Promise<T>(r=>{resolve=r;});return{resolve,promise};}
 const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
 function fixture(){let active=true,run:()=>Promise<unknown>=async()=>data();const listeners=new Set<()=>void>(),calls:{path:string;init:RequestInit}[]=[];const client:CareerProgressClient={account:{accountId:owner,generation:1},isCurrent:()=>active,subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);},async request(path,init={}){calls.push({path,init});return await run() as any;}};return{client,calls,set(fn:()=>Promise<unknown>){run=fn;},expire(){active=false;for(const f of [...listeners])f();},listeners};}
 test('owned progress is one GET, complete counts are not limited to the visible list page, foreign and aborted responses fail',async()=>{
- const f=fixture();assert.equal((await readCareerProgress(f.client)).progress.provisionalCounts.application,53);assert.equal(f.calls[0].path,'/career/progress');assert.equal(f.calls[0].init.method,undefined);assert.equal(f.calls[0].init.body,undefined);
+ const f=fixture();assert.equal((await readCareerProgress(f.client)).progress.provisionalCounts.application,53);assert.equal((await readCareerProgress(f.client)).progress.provisionalCounts.interview,23);assert.equal(f.calls[0].path,'/career/progress');assert.equal(f.calls[0].init.method,undefined);assert.equal(f.calls[0].init.body,undefined);
  f.set(async()=>({...data(),ownerId:'22222222-2222-4222-8222-222222222222'}));await assert.rejects(readCareerProgress(f.client));
  const c=new AbortController();f.set(async()=>{c.abort();return data();});await assert.rejects(readCareerProgress(f.client,c.signal));
  const before=f.calls.length;await assert.rejects(readCareerProgress(f.client,AbortSignal.abort()));assert.equal(f.calls.length,before);

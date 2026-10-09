@@ -1,3 +1,4 @@
+import type { CareerInterviews } from './career-interviews.ts';
 import { parseCareerProgressSnapshot } from '@companion/platform-contracts';
 import { careerProgress } from '@companion/career-core';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
@@ -11,15 +12,18 @@ import type { CareerApplications } from './career-applications.ts';
 export class CareerProgressService {
     constructor(private readonly db: Database,
         private readonly stories: Pick<CareerStories, 'readProgressEvidenceInTransaction'>,
-        private readonly applications: Pick<CareerApplications, 'readProgressEvidenceInTransaction'>) {}
-    async read(context: FixedSessionContext, signal?: AbortSignal) {
+        private readonly applications: Pick<CareerApplications, 'readProgressEvidenceInTransaction'>,
+        private readonly interviews: Pick<CareerInterviews, 'readProgressEvidenceInTransaction'>) {}
+    async read(value: FixedSessionContext, signal?: AbortSignal) {
+        const context=Object.freeze({userId:value.userId,tokenHash:value.tokenHash});
         return this.db.withBoundedTransaction(async client => {
             const projects = await this.stories.readProgressEvidenceInTransaction(client, context, signal);
             const applications = await this.applications.readProgressEvidenceInTransaction(client, context, signal);
+            const interviews = await this.interviews.readProgressEvidenceInTransaction(client, context, signal);
             await authorizeFixedSession(client, context, signal);
             signal?.throwIfAborted();
-            return parseCareerProgressSnapshot({ ownerId: context.userId, progress: careerProgress(context.userId, [...projects, ...applications]),
-                coverage: Object.freeze(['project', 'application'] as const) });
+            return parseCareerProgressSnapshot({ ownerId: context.userId, progress: careerProgress(context.userId, [...projects, ...applications, ...interviews]),
+                coverage: Object.freeze(['project', 'application', 'interview'] as const) });
         });
     }
 }
