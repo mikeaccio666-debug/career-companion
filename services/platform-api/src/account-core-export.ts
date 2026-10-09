@@ -150,7 +150,7 @@ export class AccountCoreExport {
         companionAnswers:[],companionGenerationTasks:[],companionRevisions:[],companionGenerationCalls:[],companionOutputBlocks:[],
         dailyPlans:[],dailyPlanHistory:[],todayRest:[],companionDailySettings:[],companions:[],companionPaidSettingOperations:[],
         companionBirthReceipts:[],companionBirthAssetMetadata:[],
-        conversations:[],messages:[],chatCalls:[],audioTranscriptions:[],companionWelcomes:[],companionWelcomeOperations:[],firstLetterTasks:[],
+        conversations:[],messages:[],chatCalls:[],audioTranscriptions:[],companionWelcomes:[],companionWelcomeOperations:[],firstLetterTasks:[],firstLetterStages:[],
         termsConsents:[],sessions:[],memories:[],memoryOperations:[],memoryEvents:[],memoryUses:[],
         careerTargets:[],careerTargetOperations:[],careerProjects:[],careerStories:[],careerLibraryOperations:[],
         savedJobs:[],savedJobOperations:[],careerApplications:[],careerApplicationOperations:[],careerApplicationEvents:[],

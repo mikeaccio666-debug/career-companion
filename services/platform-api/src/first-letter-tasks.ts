@@ -100,12 +100,17 @@ export class FirstLetterTasks{
   const s=fixed(value),savedSettings=snapshotFirstLetterSettings(settings);
   let taskId:string;try{taskId=careerRecordId(careerRecordObject(selection,['taskId']).taskId);}
   catch{throw new ApiError(400,'FIRST_LETTER_TASK_INPUT_INVALID','Use the saved task identifier.');}
-  return this.db.withBoundedTransaction(async c=>{
-   const source=await this.sources.readInTransaction(c,s,signal),prepared=composeFirstLetter(source,savedSettings);
-   const rows=(await c.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND id=$2 FOR SHARE',[s.userId,taskId])).rows;
-   if(!rows.length)throw new ApiError(404,'NOT_FOUND','The first-letter task was not found.');
-   if(rows.length!==1)throw unavailable();
-   return this.complete(c,s,source,prepared,rows[0],signal);
-  });
+  return this.db.withBoundedTransaction(c=>this.readInTransaction(c,s,{taskId},savedSettings,signal));
+ }
+ /** Caller retains the owner/source locks through its execution transition. */
+ async readInTransaction(c:PoolClient,value:FixedSessionContext,selection:unknown,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
+  const s=fixed(value),savedSettings=snapshotFirstLetterSettings(settings);
+  let taskId:string;try{taskId=careerRecordId(careerRecordObject(selection,['taskId']).taskId);}
+  catch{throw new ApiError(400,'FIRST_LETTER_TASK_INPUT_INVALID','Use the saved task identifier.');}
+  const source=await this.sources.readInTransaction(c,s,signal),prepared=composeFirstLetter(source,savedSettings);
+  const rows=(await c.query<FirstLetterTaskRow>('SELECT * FROM platform_first_letter_tasks WHERE user_id=$1 AND id=$2 FOR SHARE',[s.userId,taskId])).rows;
+  if(!rows.length)throw new ApiError(404,'NOT_FOUND','The first-letter task was not found.');
+  if(rows.length!==1)throw unavailable();
+  return this.complete(c,s,source,prepared,rows[0],signal);
  }
 }

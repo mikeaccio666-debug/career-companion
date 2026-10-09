@@ -1,3 +1,4 @@
+import {readFirstLetterStageRecord,type FirstLetterStageRow} from './first-letter-stage-record.ts';
 import {readFirstLetterTaskSnapshot,type FirstLetterTaskRow} from './first-letter-tasks.ts';
 import type {PoolClient} from 'pg';
 import {careerRecordId,careerRecordObject} from '@companion/platform-contracts';
@@ -6,8 +7,8 @@ import type {PlatformConfig} from './config.ts';
 import {readWelcomeSnapshot,type WelcomeRow} from './companion-welcome-snapshot.ts';
 import {ApiError} from './errors.ts';
 
-export const WELCOME_EXPORT_TABLES=Object.freeze(['platform_companion_welcome','platform_companion_welcome_operations','platform_first_letter_tasks'] as const);
-export type WelcomeExportSection='companionWelcomes'|'companionWelcomeOperations'|'firstLetterTasks';
+export const WELCOME_EXPORT_TABLES=Object.freeze(['platform_companion_welcome','platform_companion_welcome_operations','platform_first_letter_tasks','platform_first_letter_stages'] as const);
+export type WelcomeExportSection='companionWelcomes'|'companionWelcomeOperations'|'firstLetterTasks'|'firstLetterStages';
 /** Owner export reads retained snapshots, including non-current companions.
  * It does not reopen C1, advance onboarding or require active model consent. */
 export class AccountWelcomeExport {
@@ -41,6 +42,14 @@ export class AccountWelcomeExport {
     yield {section:'firstLetterTasks',record:task};
    }
    if(tasks.length<100)break;after=tasks.at(-1)!.id;
+  }
+  after=null;
+  for(;;){
+   signal?.throwIfAborted();
+   const stages:FirstLetterStageRow[]=(await client.query<FirstLetterStageRow>(
+    'SELECT * FROM platform_first_letter_stages WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100',[who.userId,after])).rows;
+   for(const row of stages){signal?.throwIfAborted();yield {section:'firstLetterStages',record:await readFirstLetterStageRecord(client,this.crypto,who.userId,row)};}
+   if(stages.length<100)break;after=stages.at(-1)!.id;
   }
   await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
  }
