@@ -1,3 +1,4 @@
+import {ProductEvents} from './product-events.ts';
 import { accountExportRows } from './account-export-rows.ts';
 import type { OwnedCareerApplication, OwnedCareerSavedJob } from './career-run-context.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -39,7 +40,8 @@ interface PreparationProofs {
  * trusted click, overlay-clearing, notification or execution port. */
 export class CareerApplications {
     private readonly storage: OnboardingStorage;
-    constructor(private readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail'>, legal: LegalBundle | null, private readonly jobs: Pick<ManualJobs, 'readInTransaction' | 'readForPreparationInTransaction'>) { this.storage = new OnboardingStorage(config, legal); }
+    private readonly productEvents:ProductEvents;
+    constructor(private readonly db: Database, config: Pick<PlatformConfig, 'dataCrypto' | 'requireVerifiedEmail' | 'productEventsEnabled'>, legal: LegalBundle | null, private readonly jobs: Pick<ManualJobs, 'readInTransaction' | 'readForPreparationInTransaction'>) { this.storage = new OnboardingStorage(config, legal); this.productEvents=new ProductEvents(config); }
     private fixed(value: FixedSessionContext) {
         try {
             const v = careerRecordObject(value, ['userId', 'tokenHash']);
@@ -462,6 +464,8 @@ export class CareerApplications {
             }
             else
                 await c.query('DELETE FROM platform_career_applications WHERE id=$1 AND user_id=$2', [id, context.userId]);
+            if(action==='stage'&&application&&base&&(base.stage!==application.stage||base.closedReason!==application.closedReason))
+                await this.productEvents.record(c,context.userId,command.operationId,{event:'application_stage_changed',props:{from_stage:base.stage,to_stage:application.stage,closed_reason:application.closedReason??'none'}});
             await authorizeFixedSession(c, context, signal);
             signal?.throwIfAborted();
             return Object.freeze({ application, operation: this.ack(receipt, false) });

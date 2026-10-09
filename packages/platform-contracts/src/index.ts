@@ -357,3 +357,5 @@ export * from './today-weekly.ts';
 export * from './first-letter-progress.ts';
 
 export * from './career-profile.ts';
+
+export * from './product-events.ts';
