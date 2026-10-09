@@ -1106,3 +1106,17 @@ API 类型检查与 git diff --check 通过。没有 schema 变更、主库/主�
 - JSON 当前覆盖 109 表、剩余 55；带文件覆盖 112、剩余 52；另有 7 项既有豁免，总清单 171 表。`complete=false` 保持；混合来源安全事件表、V2 交付记录及其他剩余资料仍未算作已覆盖，完整自助下载和删除协调继续开发。
 
 私人运行日志保留在远端忽略目录 `.local/verification/ci-regression-20261008/`：`onboarding-response-integration`、`onboarding-response-regression`、`onboarding-response-final`、`onboarding-response-final-types`。
+
+## 新版入门交付历史私有导出：2026-10-09
+
+新增八个本人区段，详见 [新版入门交付导出](account-intake-delivery-export.md)。复用原分类来源、固定响应、资源资产/激活及发布验证；原执行读函数默认锁不变，归档只在 REPEATABLE READ 内关闭它们的行锁。操作纯解密与摘要验证由交付和导出共用，无迁移与网页改动。
+
+- 账户导出、覆盖清单、导师履约、组织知识、入门安全提示/后续处理、原生 V2 资源和命名交付组合回归 **399/399** 通过，零失败、零跳过。
+- 其中包含本模块 10 个数据库案例：旧版切换、真实正文投影/展示/确认/澄清/继续、空账户与未展示状态、撤回同意与邮箱验证、移除当前资源政策、105 个实际发布重试/正文投影/支持操作，以及 105 个独立原来源与发布版本跨页、跨八份来源缓存。
+- 七类密文表逐一损坏或串户、八类表逐一缺失、原始封存旧状态回滚、截断操作后缀、首份发布锚点变动、历史资产/激活缺失与处理记录元数据错误均拒绝整份导出。取消、晚到会话失效和容量超限不返回半份归档，并回滚密码再验证凭据消费。
+- 补充 L1 无问题模板和真实 recover 重用既有版本的断言后，该单项复验通过；属于上述同一案例的扩展，不重复计数。API 最终 TypeScript 检查通过。
+- 本人导出保留原提示和动作，但不包含会话/展示/执行凭据、员工审核身份、共享资产全文或原密文。读历史不产生新提示、处理回执、问题提问时间或执行权限。
+- 全部虚构资料、隔离 PostgreSQL schema、受控 loopback 或关键词分类，schema 清理确认；没有付费调用、真实申请、生产迁移、合并或部署。
+- JSON 当前覆盖 117 表、剩余 47；带文件覆盖 120、剩余 44；另有 7 项既有豁免，总清单仍 171。共享安全提问、命名流程及其他剩余资料、自助下载和完整删除协调仍未全部完成，`complete=false` 与整体 P0 goal 保持。
+
+私人日志位于远端忽略目录 `.local/verification/ci-regression-20261008/`：`intake-delivery-integration-fixed`、`intake-delivery-regression`、`intake-delivery-l1-recover`、`intake-delivery-final-types`。

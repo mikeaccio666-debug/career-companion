@@ -28,17 +28,18 @@ export async function observeIntakeSourcesInTransaction(client:PoolClient,storag
 }
 
 /** The actual classified target only. No later intake, original live session,
- * provider, lease, quota, preview or045 manifest can confer or deny this proof. */
-export async function readIntakeResourceSourceInTransaction(client:PoolClient,crypto:DataCrypto|undefined,id:string,signal?:AbortSignal){
+ * provider, lease, quota, preview or045 manifest can confer or deny this proof.
+ * lock=false is for a bounded REPEATABLE READ archive; execution keeps the default locks. */
+export async function readIntakeResourceSourceInTransaction(client:PoolClient,crypto:DataCrypto|undefined,id:string,signal?:AbortSignal,lock=true){
   id=deliveryUuid(id);if(!crypto)throw deliveryStorageUnavailable();signal?.throwIfAborted();
   const ref=(await client.query<{user_id:string}>('SELECT user_id FROM platform_onboarding_safety_submissions WHERE id=$1',[id])).rows[0];
   if(!ref)throw deliveryStorageUnavailable();
-  const owner=(await client.query<{account_kind:string}>('SELECT account_kind FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[ref.user_id])).rows[0];
+  const owner=(await client.query<{account_kind:string}>(`SELECT account_kind FROM platform_users WHERE id=$1${lock?' FOR NO KEY UPDATE':''}`,[ref.user_id])).rows[0];
   if(!owner||owner.account_kind!=='student')throw deliveryStorageUnavailable();
-  const source=(await client.query<SafetySubmissionRow>('SELECT * FROM platform_onboarding_safety_submissions WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,ref.user_id])).rows[0];
+  const source=(await client.query<SafetySubmissionRow>(`SELECT * FROM platform_onboarding_safety_submissions WHERE id=$1 AND user_id=$2${lock?' FOR UPDATE':''}`,[id,ref.user_id])).rows[0];
   if(!source||source.status!=='detected'||!source.result_ciphertext||!source.execution_token)throw deliveryStorageUnavailable();
   const storage=new OnboardingStorage({dataCrypto:crypto,requireVerifiedEmail:false},null);
-  const op=(await client.query<IntakeOperationRow&{user_id:string}>('SELECT * FROM platform_onboarding_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[source.user_id,source.operation_id])).rows[0];
+  const op=(await client.query<IntakeOperationRow&{user_id:string}>(`SELECT * FROM platform_onboarding_operations WHERE user_id=$1 AND operation_id=$2${lock?' FOR SHARE':''}`,[source.user_id,source.operation_id])).rows[0];
   if(!op||op.draft_id!==source.draft_id||op.applied_revision!==source.submitted_revision)throw deliveryStorageUnavailable();
   const command=storage.decodeOperation(op,source.user_id),decision=storage.decodeResult(source);
   if(command.action.kind!=='text'||command.action.questionId!==source.question_id)throw deliveryStorageUnavailable();
@@ -50,16 +51,16 @@ export async function readIntakeResourceSourceInTransaction(client:PoolClient,cr
       AND operation_id=$3 AND draft_id=$4 AND question_id=$5 AND submitted_revision=$6 AND generation=$7 AND auth_version=$8 AND detector_revision=$9
       AND entry_id IS NULL AND task_id IS NULL AND companion_id IS NULL AND preview_revision IS NULL AND expected_identity_revision IS NULL AND name_execution_token IS NULL
       AND purpose='safety_classify' AND call_index=1 AND status='complete' AND usage_status IN('reported','missing','invalid')
-      AND admitted_at IS NOT NULL AND finished_at IS NOT NULL AND admitted_at<=finished_at AND finished_at<=clock_timestamp() FOR SHARE`,
+      AND admitted_at IS NOT NULL AND finished_at IS NOT NULL AND admitted_at<=finished_at AND finished_at<=clock_timestamp()${lock?' FOR SHARE':''}`,
       [source.id,source.user_id,source.operation_id,source.draft_id,source.question_id,source.submitted_revision,source.generation,source.auth_version,source.detector_revision]);
     if(usage.rows.length!==1)throw deliveryStorageUnavailable();
   }
   signal?.throwIfAborted();return {source,decision,storage};
 }
-export async function readIntakeResourceCaptureInTransaction(client:PoolClient,crypto:DataCrypto|undefined,id:string,signal?:AbortSignal){
-  const target=await readIntakeResourceSourceInTransaction(client,crypto,id,signal);
+export async function readIntakeResourceCaptureInTransaction(client:PoolClient,crypto:DataCrypto|undefined,id:string,signal?:AbortSignal,lock=true){
+  const target=await readIntakeResourceSourceInTransaction(client,crypto,id,signal,lock);
   if(target.decision.level==='L0')return null;
-  const original=await readAuthenticatedSafetyResponseForSource(client,target.storage,target.source);
+  const original=await readAuthenticatedSafetyResponseForSource(client,target.storage,target.source,lock);
   return {...original,target};
 }
 /** Existing genuine039 target handling can be shown as an archived fact. No

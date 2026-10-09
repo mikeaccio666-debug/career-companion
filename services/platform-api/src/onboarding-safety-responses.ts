@@ -61,20 +61,20 @@ export async function readAuthenticatedSafetyResponsesForSources(client: PoolCli
 }
 /** Target-only archived resource proof, not an intake prefix or write admission.
  * Caller proves the actual original raw operation and target classified source. */
-export async function readAuthenticatedSafetyResponseForSource(client:PoolClient,storage:OnboardingStorage,source:SafetySubmissionRow){
-  const rows=(await client.query<SafetyResponseRow>('SELECT * FROM platform_onboarding_safety_responses WHERE user_id=$1 AND submission_id=$2 FOR UPDATE',[source.user_id,source.id])).rows;
-  const captures=await authenticateResponseRows(client,storage,[source],rows);
+export async function readAuthenticatedSafetyResponseForSource(client:PoolClient,storage:OnboardingStorage,source:SafetySubmissionRow,lock=true){
+  const rows=(await client.query<SafetyResponseRow>(`SELECT * FROM platform_onboarding_safety_responses WHERE user_id=$1 AND submission_id=$2${lock?' FOR UPDATE':''}`,[source.user_id,source.id])).rows;
+  const captures=await authenticateResponseRows(client,storage,[source],rows,lock);
   if(captures.length!==1||!captures[0].response||captures[0].row.status!=='ready')throw responseStorageUnavailable();return captures[0];
 }
 async function authenticateResponseRows(client: PoolClient, storage: OnboardingStorage,
-  sources: SafetySubmissionRow[], rows: SafetyResponseRow[]) {
+  sources: SafetySubmissionRow[], rows: SafetyResponseRow[],lock=true) {
   if (rows.length!==sources.filter(source=>source.status==='detected'&&source.level!=='L0').length) throw responseStorageUnavailable();
   const captures: {row: SafetyResponseRow;response: SafetyResponseRenderResult|null}[]=[];
   for (const row of rows) {
     const source=sources.find(source=>source.id===row.submission_id);
     if (!source) throw responseStorageUnavailable();
     assertSafetyResponseSource(row,source,storage.decodeResult(source));
-    const events=(await client.query(`SELECT * FROM platform_safety_events WHERE response_id=$1 FOR UPDATE`,[row.id])).rows;
+    const events=(await client.query(`SELECT * FROM platform_safety_events WHERE response_id=$1${lock?' FOR UPDATE':''}`,[row.id])).rows;
     if (row.status==='pending') {
       if (events.length) throw responseStorageUnavailable();
       captures.push({row,response:null}); continue;
