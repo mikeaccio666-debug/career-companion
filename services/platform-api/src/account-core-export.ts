@@ -1,3 +1,4 @@
+import type {AccountFileCapture,AccountFileSection,ArchiveFile} from './account-file-capture.ts';
 import {AccountMentorExport,MENTOR_EXPORT_TABLES,type MentorExportSection} from './account-mentor-export.ts';
 import {exportPlansInTransaction,PLAN_EXPORT_TABLES,type PlanExportSection} from './account-plan-export.ts';
 import {exportMcpInTransaction,MCP_EXPORT_TABLES,type McpExportSection} from './account-mcp-export.ts';
@@ -29,7 +30,7 @@ import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
 const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES,...COMPANION_EXPORT_TABLES,...COMPANION_GENERATION_EXPORT_TABLES,...ONBOARDING_EXPORT_TABLES,...COST_EXPORT_TABLES,...SECURITY_EXPORT_TABLES,...VOICE_USAGE_EXPORT_TABLES,...PRIVATE_KNOWLEDGE_EXPORT_TABLES,...MCP_EXPORT_TABLES,...PLAN_EXPORT_TABLES,...MENTOR_EXPORT_TABLES]);
-type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection|CompanionGenerationExportSection|OnboardingExportSection|CostExportSection|SecurityExportSection|VoiceUsageExportSection|PrivateKnowledgeExportSection|McpExportSection|PlanExportSection|MentorExportSection;
+type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection|CompanionGenerationExportSection|OnboardingExportSection|CostExportSection|SecurityExportSection|VoiceUsageExportSection|PrivateKnowledgeExportSection|McpExportSection|PlanExportSection|MentorExportSection|AccountFileSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
 const tooLarge=()=>new ApiError(503,'ACCOUNT_EXPORT_TOO_LARGE','This export requires the archive worker. No partial export was returned.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
@@ -44,6 +45,7 @@ function freeze<T>(value:T):T{
 /** Partial internal archive input, not a complete export or a download endpoint.
  * No consumer sees the returned private sections before COMMIT succeeds. */
 export class AccountCoreExport {
+  private readonly fileCapture:AccountFileCapture|undefined;
   private readonly mentors:AccountMentorExport;
   private readonly memories:SharedMemories;
   private readonly welcomes:AccountWelcomeExport;
@@ -53,7 +55,8 @@ export class AccountCoreExport {
   private readonly births:CompanionBirthOriginStore;
   private readonly maxBytes:number;
   private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords|ResumeOriginalReview)[];
-  constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number}={}){
+  constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number;fileCapture?:AccountFileCapture}={}){
+    this.fileCapture=limits.fileCapture;
     this.mentors=new AccountMentorExport(config);
     this.memories=new SharedMemories(db,config,null);
     this.welcomes=new AccountWelcomeExport(config);
@@ -80,6 +83,7 @@ export class AccountCoreExport {
       const capturedAt=(await client.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
       const sections:{account:Record<string,unknown>}&Record<ArraySection,unknown[]>={
         account:{...account,createdAt:account.createdAt.toISOString(),emailVerifiedAt:account.emailVerifiedAt?.toISOString()??null},
+        uploads:[],artifacts:[],privateFiles:[],
         mentorSessions:[],mentorIntentOperations:[],mentorRatings:[],
         mentorOrders:[],mentorOrderOperations:[],mentorSlotReservations:[],mentorReservationOperations:[],mentorFinancialRecords:[],mentorFinancialOperations:[],
         goalPlans:[],goalPlanRevisions:[],goalPlanSteps:[],goalPlanProposals:[],
@@ -137,14 +141,28 @@ export class AccountCoreExport {
       for await(const item of exportMcpInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of exportPlansInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.mentors.exportInTransaction(client,who,signal))append(item.section,item.record);
+      if(this.fileCapture){
+        for(const item of await this.fileCapture.captureInTransaction(client,who,signal))append(item.section,item.record);
+        const files=sections.privateFiles as ArchiveFile[];
+        sections.companionBirthAssetMetadata=sections.companionBirthAssetMetadata.map(value=>{
+          const record=value as {id:string;svgDigest:string;pngDigest:string;svgSizeBytes:number;pngSizeBytes:number};
+          for(const format of ['svg','png'] as const){const file=files.find(f=>f.source==='companion_birth_'+format&&f.sourceId===record.id);
+            if(!file||file.sha256!==record[format==='svg'?'svgDigest':'pngDigest']||file.size!==record[format==='svg'?'svgSizeBytes':'pngSizeBytes'])throw unavailable();}
+          return {...record,bytesIncluded:true};
+        });
+        if(files.filter(f=>f.source!=='upload').length!==sections.companionBirthAssetMetadata.length*2)throw unavailable();
+      }
       await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
-      return freeze({schemaVersion:1 as const,scope:'account_core_export_sections' as const,complete:false as const,
+      const includedTables=this.fileCapture?Object.freeze([...projectedTables,...this.fileCapture.tables]):projectedTables;
+      const result=freeze({schemaVersion:1 as const,scope:'account_core_export_sections' as const,complete:false as const,
         ownerId:who.userId,capturedAt,sections,
-        includedTables:projectedTables,
+        includedTables,
         exclusions:coverage.tables.filter(table=>table.exportStatus==='excluded_nonpersonal'||table.exportStatus==='excluded_product_policy')
           .map(table=>({table:table.table,status:table.exportStatus,reason:table.reason,policyReference:table.policyReference})),
-        remainingTables:coverage.tables.filter(table=>table.exportStatus==='blocked_projection_required'&&!projectedTables.includes(table.table)).map(table=>table.table),
-        filesIncluded:false as const});
+        remainingTables:coverage.tables.filter(table=>table.exportStatus==='blocked_projection_required'&&!includedTables.includes(table.table)).map(table=>table.table),
+        filesIncluded:Boolean(this.fileCapture)});
+      if(this.fileCapture)await this.fileCapture.finish(result,signal);
+      await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();return result;
     },{timeoutMs:5000});}catch(error){
       if(signal?.aborted)throw new ApiError(499,'ACCOUNT_EXPORT_CANCELLED','The private export was cancelled.');
       if(error instanceof ApiError)throw error;throw unavailable();
