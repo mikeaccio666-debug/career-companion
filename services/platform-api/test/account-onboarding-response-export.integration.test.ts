@@ -73,8 +73,8 @@ test('actual presentation, acknowledgment and explicit continuation/clarificatio
   const archive=await new AccountCoreExport(instrument(sql=>{queries.push(sql);}),config).capture(p.who,token),records=archive.sections.onboardingSafetyFollowups as any[];
   assert.equal(records.length,3);const last=records.find(x=>x.operationId===p.finish.operationId);assert.equal(last.kind,clarify?'clarify_exaggeration':'continue_intake');assert.equal(last.handled,true);assert.equal(last.resumeStatus,p.result.resumeStatus);
   assert.equal(last.presentationOperationId,p.show.operationId);assert.equal(last.acknowledgmentOperationId,p.ack.operationId);assert.equal(last.safe,clarify?true:undefined);
-  assert.equal((archive.sections.onboardingSafetySubmissions[0] as any).level,'L2');assert.equal(archive.sections.memories.length,0);assert.equal(archive.complete,false);assert.equal(archive.includedTables.length,129);
-  assert(archive.remainingTables.includes('platform_safety_events'));assert(archive.includedTables.includes('platform_onboarding_safety_v2_publications'));
+  assert.equal((archive.sections.onboardingSafetySubmissions[0] as any).level,'L2');assert.equal(archive.sections.memories.length,0);assert.equal(archive.complete,false);assert.equal(archive.includedTables.length,134);
+  assert(archive.includedTables.includes('platform_safety_events'));assert(!archive.remainingTables.includes('platform_safety_events'));assert(archive.includedTables.includes('platform_onboarding_safety_v2_publications'));
   const serialized=JSON.stringify(archive);for(const secret of [p.who.tokenHash,foreign.who.userId,foreign.publicationId,p.shown.presentationReceipt!,p.claim.leaseToken,token,password,encoded,'sessionHash','presentationDigest','payload_ciphertext','reviewRef','fictional-contact-integrity-reference'])assert(!serialized.includes(secret),secret);
   assert(Object.isFrozen(last));assert(Object.isFrozen((archive.sections.onboardingSafetyResponses[0] as any).response));assert.deepEqual(await snapshot(p.who),before);
   assert(!queries.some(sql=>/FROM platform_onboarding_safety_(responses|publications|followups)/.test(sql)&&/FOR (UPDATE|SHARE)/.test(sql)));

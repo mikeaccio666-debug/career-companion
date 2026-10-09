@@ -52,7 +52,8 @@ test('fresh owner proof returns decoded current/retained memory and metadata wit
   assert(result.includedTables.includes('platform_conversations'));assert(!result.remainingTables.includes('platform_conversations'));
   for(const table of ['platform_memory_safety_sources','platform_memory_safety_blocks']){assert(result.includedTables.includes(table));assert(!result.remainingTables.includes(table));}
   assert(result.includedTables.includes('platform_safety_model_usage'));assert(result.includedTables.includes('platform_model_relay_requests'));
-  assert(result.remainingTables.includes('platform_safety_events'));
+  assert(result.includedTables.includes('platform_safety_events'));assert(!result.remainingTables.includes('platform_safety_events'));
+  assert.deepEqual(result.sections.safetyResponseEvents,[]);
   assert.deepEqual(result.sections.memorySafetySources,[]);assert.deepEqual(result.sections.memorySafetyBlocks,[]);
   await assert.rejects(capture(a,token),code('ACCOUNT_REAUTH_REQUIRED'));
   assert.equal((await memories.list(a)).memories.length,1,'Export must not restore the deleted memory.');

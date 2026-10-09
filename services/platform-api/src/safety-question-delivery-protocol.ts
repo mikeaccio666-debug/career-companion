@@ -36,23 +36,30 @@ export function questionOperationCapture(row:QuestionOperationRow,request:unknow
 }
 export function questionScopeCapture(row:QuestionScopeRow,legacyDigest:string){return {schemaVersion:1,userId:row.user_id,draftId:row.draft_id,revision:row.revision,
   latestOperationId:row.latest_operation_id,journalDigest:row.journal_digest,legacyDigest};}
+/** Archive-only paging; callers supply reviewed table/key constants. */
+async function archiveRows<T>(client:PoolClient,table:string,key:string,userId:string,draftId:string,signal?:AbortSignal):Promise<T[]>{
+  const rows:T[]=[];let after:string|number|null=null;const kind=key==='applied_revision'?'int':'uuid';
+  for(;;){signal?.throwIfAborted();const page:Record<string,any>[]=(await client.query(`SELECT * FROM ${table} WHERE user_id=$1 AND draft_id=$2 AND ($3::${kind} IS NULL OR ${key}>$3) ORDER BY ${key} LIMIT 100`,[userId,draftId,after])).rows;
+    rows.push(...page as T[]);if(page.length<100)return rows;after=page.at(-1)![key];}
+}
 /** Authenticate every actual old transported capsule without current intake,
  * terms, identity, prefix045 or whole later execution history. Never infer
  * absence from mutable response.level. Old body copy itself may contain a
  * question: until the public cutover is reviewed, every old capsule is a
  * possible exposure, not an asserted asked occurrence. */
-export async function readLegacyQuestionPublications(client:PoolClient,crypto:DataCrypto,userId:string,draftId:string){
+export async function readLegacyQuestionPublications(client:PoolClient,crypto:DataCrypto,userId:string,draftId:string,lock=true,signal?:AbortSignal){
   const storage=new OnboardingStorage({dataCrypto:crypto,requireVerifiedEmail:false},null);
-  const rows=(await client.query<SafetyPublicationRow>('SELECT * FROM platform_onboarding_safety_publications WHERE user_id=$1 AND draft_id=$2 ORDER BY id FOR SHARE',[userId,draftId])).rows;
+  const rows=lock?(await client.query<SafetyPublicationRow>('SELECT * FROM platform_onboarding_safety_publications WHERE user_id=$1 AND draft_id=$2 ORDER BY id FOR SHARE',[userId,draftId])).rows
+    :await archiveRows<SafetyPublicationRow>(client,'platform_onboarding_safety_publications','id',userId,draftId,signal);
   const proofs:{id:string;proofDigest:string}[]=[];
   for(const row of rows){
-    const source=(await client.query<SafetySubmissionRow>('SELECT * FROM platform_onboarding_safety_submissions WHERE id=$1 AND user_id=$2 FOR SHARE',[row.submission_id,userId])).rows[0];
+    signal?.throwIfAborted();const source=(await client.query<SafetySubmissionRow>(`SELECT * FROM platform_onboarding_safety_submissions WHERE id=$1 AND user_id=$2${lock?' FOR SHARE':''}`,[row.submission_id,userId])).rows[0];
     if(!source||source.status!=='detected'||source.draft_id!==draftId||source.generation!==row.source_generation)throw deliveryStorageUnavailable();
-    const op=(await client.query<IntakeOperationRow&{user_id:string}>('SELECT * FROM platform_onboarding_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[userId,source.operation_id])).rows[0];
+    const op=(await client.query<IntakeOperationRow&{user_id:string}>(`SELECT * FROM platform_onboarding_operations WHERE user_id=$1 AND operation_id=$2${lock?' FOR SHARE':''}`,[userId,source.operation_id])).rows[0];
     if(!op||op.user_id!==userId||op.draft_id!==draftId||op.applied_revision!==source.submitted_revision)throw deliveryStorageUnavailable();
     const command=storage.decodeOperation(op,userId),result=storage.decodeResult(source);
     if(command.action.kind!=='text'||command.action.questionId!==source.question_id)throw deliveryStorageUnavailable();
-    const original=await readAuthenticatedSafetyResponseForSource(client,storage,source),response=publicSafetyResponse(original.response!);
+    const original=await readAuthenticatedSafetyResponseForSource(client,storage,source,lock),response=publicSafetyResponse(original.response!);
     if(original.row.id!==row.response_id||row.published_at<original.row.prepared_at!||row.retention_until.toISOString()!==original.row.retention_until!.toISOString())throw deliveryStorageUnavailable();
     const expected={schemaVersion:1,id:row.id,userId,draftId,responseId:row.response_id,submissionId:row.submission_id,sourceGeneration:row.source_generation,
       preparedAt:original.row.prepared_at!.toISOString(),publishedAt:row.published_at.toISOString(),retentionUntil:row.retention_until.toISOString(),projectionDigest:row.projection_digest,response};
@@ -63,9 +70,11 @@ export async function readLegacyQuestionPublications(client:PoolClient,crypto:Da
   }
   return proofs;
 }
-export async function readQuestionLegacy(client:PoolClient,crypto:DataCrypto,userId:string,draftId:string){
-  const actual=await readLegacyQuestionPublications(client,crypto,userId,draftId);
-  const rows=(await client.query<{user_id:string;draft_id:string;publication_id:string;recorded_at:Date;payload_ciphertext:Buffer}>('SELECT * FROM platform_safety_legacy_exposures WHERE user_id=$1 AND draft_id=$2 ORDER BY publication_id FOR SHARE',[userId,draftId])).rows;
+export async function readQuestionLegacy(client:PoolClient,crypto:DataCrypto,userId:string,draftId:string,lock=true,signal?:AbortSignal){
+  const actual=await readLegacyQuestionPublications(client,crypto,userId,draftId,lock,signal);
+  type LegacyRow={user_id:string;draft_id:string;publication_id:string;recorded_at:Date;payload_ciphertext:Buffer};
+  const rows=lock?(await client.query<LegacyRow>('SELECT * FROM platform_safety_legacy_exposures WHERE user_id=$1 AND draft_id=$2 ORDER BY publication_id FOR SHARE',[userId,draftId])).rows
+    :await archiveRows<LegacyRow>(client,'platform_safety_legacy_exposures','publication_id',userId,draftId,signal);
   if(actual.length!==rows.length||actual.some((r,i)=>r.id!==rows[i].publication_id))throw deliveryStorageUnavailable();
   const values=rows.map((row,i)=>{const expected={schemaVersion:1,userId:row.user_id,draftId:row.draft_id,publicationId:row.publication_id,recordedAt:row.recorded_at.toISOString(),kind:'legacy_possible_exposure',proofDigest:actual[i].proofDigest};
     if(JSON.stringify(openDelivery(crypto,'platform_safety_legacy_exposures',row.publication_id,row.user_id,1,row.payload_ciphertext))!==JSON.stringify(expected))throw deliveryStorageUnavailable();return expected;});
@@ -74,15 +83,17 @@ export async function readQuestionLegacy(client:PoolClient,crypto:DataCrypto,use
   // not an assumed never-asked source or a silently rewritten genesis.
   return {rows,digest:deliveryDigest(JSON.stringify(values))};
 }
-export async function readQuestionJournal(client:PoolClient,crypto:DataCrypto,scope:QuestionScopeRow){
-  const legacy=await readQuestionLegacy(client,crypto,scope.user_id,scope.draft_id),genesis=deliveryDigest(JSON.stringify({userId:scope.user_id,draftId:scope.draft_id,legacyDigest:legacy.digest}));
+export async function readQuestionJournal(client:PoolClient,crypto:DataCrypto,scope:QuestionScopeRow,lock=true,signal?:AbortSignal){
+  const legacy=await readQuestionLegacy(client,crypto,scope.user_id,scope.draft_id,lock,signal),genesis=deliveryDigest(JSON.stringify({userId:scope.user_id,draftId:scope.draft_id,legacyDigest:legacy.digest}));
   if(JSON.stringify(openDelivery(crypto,'platform_safety_question_scopes',scope.draft_id,scope.user_id,scope.revision,scope.payload_ciphertext))!==JSON.stringify(questionScopeCapture(scope,legacy.digest)))throw deliveryStorageUnavailable();
-  const rows=(await client.query<QuestionOperationRow>('SELECT * FROM platform_safety_question_operations WHERE user_id=$1 AND draft_id=$2 ORDER BY applied_revision FOR UPDATE',[scope.user_id,scope.draft_id])).rows;
+  const rows=lock?(await client.query<QuestionOperationRow>('SELECT * FROM platform_safety_question_operations WHERE user_id=$1 AND draft_id=$2 ORDER BY applied_revision FOR UPDATE',[scope.user_id,scope.draft_id])).rows
+    :await archiveRows<QuestionOperationRow>(client,'platform_safety_question_operations','applied_revision',scope.user_id,scope.draft_id,signal);
   if(rows.length!==scope.revision||scope.latest_operation_id!==(rows.at(-1)?.operation_id??null))throw deliveryStorageUnavailable();
-  const actual=(await client.query<QuestionOccurrenceRow>('SELECT * FROM platform_safety_question_occurrences WHERE user_id=$1 AND draft_id=$2 ORDER BY id FOR UPDATE',[scope.user_id,scope.draft_id])).rows;
+  const actual=lock?(await client.query<QuestionOccurrenceRow>('SELECT * FROM platform_safety_question_occurrences WHERE user_id=$1 AND draft_id=$2 ORDER BY id FOR UPDATE',[scope.user_id,scope.draft_id])).rows
+    :await archiveRows<QuestionOccurrenceRow>(client,'platform_safety_question_occurrences','id',scope.user_id,scope.draft_id,signal);
   const latest=new Map<string,QuestionOccurrenceRow>(),captures=new Map<string,ReturnType<typeof questionOperationCapture>>();let digest=genesis,priorTime:Date|null=null;
   for(let i=0;i<rows.length;i++){
-    const op=rows[i];if(op.expected_revision!==i||op.applied_revision!==i+1||op.previous_digest!==digest||priorTime&&op.created_at<priorTime)throw deliveryStorageUnavailable();
+    signal?.throwIfAborted();const op=rows[i];if(op.expected_revision!==i||op.applied_revision!==i+1||op.previous_digest!==digest||priorTime&&op.created_at<priorTime)throw deliveryStorageUnavailable();
     const raw=openDelivery(crypto,'platform_safety_question_operations',op.operation_id,op.user_id,op.applied_revision,op.payload_ciphertext);
     const d=deliveryRecord(raw,['schemaVersion',...operationKeys,'at','request','after','secret','question','previousDigest','journalDigest']);
     const after=occurrenceFromCapture(d.after),before=latest.get(op.occurrence_id),request=d.request as Record<string,unknown>;
