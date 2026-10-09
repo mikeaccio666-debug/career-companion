@@ -1,3 +1,4 @@
+import { readWebApiOrigin } from './security-headers.ts';
 import {readExpertRelease,type ExpertRelease} from './expert-release.ts';
 import path from 'node:path';
 import { orgKnowledgeBrand } from '@companion/platform-contracts';
@@ -13,7 +14,7 @@ export const workspaceRoot=path.resolve(path.dirname(fileURLToPath(import.meta.u
 export interface PlatformConfig {
   databaseUrl: string; redisUrl: string; storageDir: string; port: number;
   databasePoolMax: number; databaseConnectTimeoutMs: number; codeVersion: string;
-  host: '127.0.0.1' | 'localhost' | '::1' | '0.0.0.0'; webStaticDir?: string;
+  host: '127.0.0.1' | 'localhost' | '::1' | '0.0.0.0'; webStaticDir?: string; webApiOrigin?: string;
   allowedOrigins: Set<string>; sessionDays: number; maxActiveJobs: number;
   secureCookies: boolean; queueName: string; s3?: { endpoint?: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string };
   accountEmail?: AccountEmailConfig; requireVerifiedEmail: boolean;
@@ -100,6 +101,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   }
   if (env.PLATFORM_REQUIRE_INVITE !== undefined && !['0','1'].includes(env.PLATFORM_REQUIRE_INVITE)) throw new Error('PLATFORM_REQUIRE_INVITE must be 0 or 1');
   if (production && env.PLATFORM_REQUIRE_INVITE === '0') throw new Error('Production requires invitations');
+  const webApiOrigin = readWebApiOrigin(env.PLATFORM_WEB_API_ORIGIN, production);
   const requireInvite = production || env.PLATFORM_REQUIRE_INVITE !== '0';
   const dataCrypto = readDataCrypto(env);
   const companionSealGlyphs = readCompanionSealGlyphConfiguration(env, workspaceRoot);
@@ -184,7 +186,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): PlatformConfig
   if (!Number.isSafeInteger(maxActiveJobs) || maxActiveJobs < 1) throw new Error('PLATFORM_MAX_ACTIVE_JOBS must be a positive integer');
   if (env.PLATFORM_WEB_STATIC_DIR !== undefined && !env.PLATFORM_WEB_STATIC_DIR.trim()) throw new Error('PLATFORM_WEB_STATIC_DIR must name the built web directory');
   return {
-    databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
+    webApiOrigin, databaseUrl, redisUrl, databasePoolMax, databaseConnectTimeoutMs, codeVersion,
     mentorOrganizationId: env.PLATFORM_MENTOR_ORG_ID === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_ORG_ID),
     mentorRetentionDays: env.PLATFORM_MENTOR_RETENTION_DAYS === undefined ? undefined : mentorRetentionDays(env.PLATFORM_MENTOR_RETENTION_DAYS),
     mentorRetentionEvidenceRef: env.PLATFORM_MENTOR_RETENTION_EVIDENCE_REF === undefined ? undefined : mentorOrganizationId(env.PLATFORM_MENTOR_RETENTION_EVIDENCE_REF),

@@ -28,8 +28,12 @@ test('PWA worker and HTML revalidate while manifest, PNG and fingerprinted asset
       const result = await app.inject({ url, headers: { accept: 'text/html' } });
       assert.equal(result.statusCode, 200, result.body); assert.equal(result.headers['cache-control'], 'no-cache');
       assert.equal(result.headers['x-content-type-options'], 'nosniff'); assert.ok(result.headers.etag);
+      assert.equal(result.headers['x-frame-options'], 'DENY');
+      assert.equal(result.headers['referrer-policy'], 'no-referrer');
+      assert.match(String(result.headers['content-security-policy']), /frame-ancestors 'none'/);
       const conditional = await app.inject({ url, headers: { accept: 'text/html', 'if-none-match': String(result.headers.etag) } });
       assert.equal(conditional.statusCode, 304); assert.equal(conditional.body, ''); assert.equal(conditional.headers['cache-control'], 'no-cache');
+      assert.equal(conditional.headers['content-security-policy'], result.headers['content-security-policy']);
     }
     assert.match(String((await app.inject({ url: '/sw.js' })).headers['content-type']), /javascript/);
     for (const [url, mime] of [['/manifest.webmanifest', /application\/manifest\+json/], ['/icon-192.png', /image\/png/]] as const) {

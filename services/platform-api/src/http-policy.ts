@@ -1,3 +1,4 @@
+import { platformSecurityHeaders } from './security-headers.ts';
 import cors from '@fastify/cors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PlatformConfig } from './config.ts';
@@ -17,7 +18,9 @@ function platformRequest(request: FastifyRequest): boolean {
 
 // This is a browser transport policy, not authentication or permission to execute a task.
 export async function configurePlatformHttp(app: FastifyInstance, config: PlatformConfig): Promise<void> {
+  const securityHeaders = platformSecurityHeaders(config);
   app.addHook('onRequest', async (request, reply) => {
+    for (const [name, value] of Object.entries(securityHeaders)) reply.header(name, value);
     if (!platformRequest(request)) return;
     reply.header('Cache-Control', 'private, no-store').header('Vary', 'Origin');
     if (request.method !== 'OPTIONS' || !request.headers.origin || !config.allowedOrigins.has(request.headers.origin)) return;
