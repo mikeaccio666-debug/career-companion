@@ -42,7 +42,7 @@ test('pending and completed actual removals retain names, dates and complete eve
  const records=data.sections.uploadRemovals as any[],a=records.find(r=>r.uploadId===pending.file.id),b=records.find(r=>r.uploadId===complete.file.id);
  assert.equal(a.name,input.filename);assert.equal(a.operationId,pending.command.operationId);assert.equal(a.status,'pending');assert.equal(a.removedAt,null);assert.equal(a.generation,1);assert.equal(b.status,'removed');assert(b.removedAt);assert.equal(b.generation,3);
  assert.equal(data.sections.uploadRemovalEvents.length,4);assert.equal((data.sections.uploadRemovalEvents as any[]).find(e=>e.uploadId===pending.file.id).createdAt,a.requestedAt);
- assert.equal(data.includedTables.length,139);assert.equal(data.remainingTables.length,25);assert.equal(data.complete,false);assert.equal(data.filesIncluded,false);
+ assert.equal(data.includedTables.length,141);assert.equal(data.remainingTables.length,23);assert.equal(data.complete,false);assert.equal(data.filesIncluded,false);
  for(const secret of [sealed.storageKey,sealed.scope,who.tokenHash,other.userId,'acceptedAuthVersion','recordDigest','leaseToken','record_ciphertext',password,encoded])assert(!JSON.stringify(data).includes(secret));
  assert.deepEqual(await rowsSnapshot(who),before);assert(!queries.some(sql=>/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+platform_upload_/i.test(sql)));assert(Object.isFrozen(a));
 });

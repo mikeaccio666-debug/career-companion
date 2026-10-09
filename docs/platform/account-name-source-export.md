@@ -23,7 +23,7 @@ identityArchiveValidator 复用原身份校验，资源缓存仍限 8 份。分�
 
 ## 范围
 
-没有数据库迁移或网页改动。JSON 当前覆盖 139 表、剩余 25；带私有文件覆盖 142、剩余 22；既有豁免 7 项，总清单 171。命名流程的原始提示、发布、展示与处理记录由[命名交付导出](account-name-delivery-export.md)补齐；共享提问由[共享安全历史导出](account-shared-safety-export.md)覆盖；其他剩余表仍待实现。两种模式保持 complete=false；完整自助下载、删除协调与 P0 继续开发。
+没有数据库迁移或网页改动。JSON 当前覆盖 141 表、剩余 23；带私有文件覆盖 144、剩余 20；既有豁免 7 项，总清单 171。命名流程的原始提示、发布、展示与处理记录由[命名交付导出](account-name-delivery-export.md)补齐；共享提问由[共享安全历史导出](account-shared-safety-export.md)覆盖；其他剩余表仍待实现。两种模式保持 complete=false；完整自助下载、删除协调与 P0 继续开发。
 
 ## 验证口径
 
