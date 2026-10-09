@@ -1,6 +1,6 @@
 # PR3 前模型评测准备
 
-依据 [09 实施路线](../product/09-implementation-roadmap.md) 第 1 步和 [15 Agent 引擎](../product/15-companion-agent-engine.md) §1.2。本阶段只准备评测，不改变产品决定，也不调用商业模型。
+依据 [09 实施路线](../product/09-implementation-roadmap.md) 第 1 步和 [15 Agent 引擎](../product/15-companion-agent-engine.md) §1.2。准备阶段未调用商业模型。2026-10-08 用户随后授权隔离低价模型评测，接入状态见文末；不改变产品质量门槛。
 
 ## 样本与比较
 
@@ -14,11 +14,11 @@
 
 `pnpm --filter @companion/platform-api eval:plan`（或加 `--dry-run`）只打印样本 id、分布、候选价格、摘要哈希和未测指标；不读密钥、不创建 runtime、不访问数据库或网络。任何其他参数，包括 `--live`，都返回 `EVAL_DRY_RUN_ONLY`。
 
-独立 probe 可由测试注入 `streamModelStep` runtime，经真实 `ProviderAdapter` 和共享循环运行；没有对学生 HTTP 开放。请求只使用预算内部冻结的绑定，另传的绑定必须逐项一致，输入必须与同一 study plan 一致；不一致时在预留或调用 runtime 之前拒绝。它只有协议与循环基线：首次原始 delta、总耗时、调用用量与预算账本。`baselineFirstDeltaMs`、`baselineCompletedMs` 包含循环与账本写入时间，不能称为供应商自身延迟。输入的 `toolCondition` 只是提示词资料，结果明确记录 `prompt_only` 和 `toolExecution = not_exercised`。提示词是标注过的测试草案，输出只保留长度与摘要，质量分数为 `null`；不是主理人的正式人格、真实身份授权、转发卡或逐句校验流程。当前 CLI 不调用这个 probe。
+独立 probe 可由测试注入 `streamModelStep` runtime，经真实 `ProviderAdapter` 和共享循环运行；没有对学生 HTTP 开放。请求只使用预算内部冻结的绑定，另传的绑定必须逐项一致，输入必须与同一 study plan 一致；不一致时在预留或调用 runtime 之前拒绝。它只有协议与循环基线：首次原始 delta、总耗时、调用用量与预算账本。`baselineFirstDeltaMs`、`baselineCompletedMs` 包含循环与账本写入时间，不能称为供应商自身延迟。输入的 `toolCondition` 只是提示词资料，结果明确记录 `prompt_only` 和 `toolExecution = not_exercised`。提示词是标注过的测试草案，输出只保留长度与摘要，质量分数为 `null`；不是主理人的正式人格、真实身份授权、转发卡或逐句校验流程。原有 eval:plan CLI 不调用这个 probe；独立的 eval:pilot 入口见下文。
 
-`runProviderPilot` 把同一计划的 12 段开发预试串行接到 probe：开始前检查全部 12 段预算绑定和全新预算，逐段等待无正文的结果摘要持久化后才开始下一段；失败、取消、未知用量或摘要保存失败立即停止，不自动预测放行、扩大到 120 段或调用正式档。一个预算实例只能启动一次，拒绝并发或重复运行。结果摘要被冻结，保存回调不能改写成功状态。`persistedCases` 是确认保存的尝试数，`completedCases` 是其中成功数；费用账本已完成但摘要保存失败时，报告仍保留已花费用，不能按未保存的摘要数退款。结果保存与费用账本目前由调用者注入，尚无真实落盘适配或 live CLI，也不支持跨进程恢复。
+`runProviderPilot` 把同一计划的 12 段开发预试串行接到 probe：开始前检查全部 12 段预算绑定和全新预算，逐段等待无正文的结果摘要持久化后才开始下一段；失败、取消、未知用量或摘要保存失败立即停止，不自动预测放行、扩大到 120 段或调用正式档。一个预算实例只能启动一次，拒绝并发或重复运行。结果摘要被冻结，保存回调不能改写成功状态。`persistedCases` 是确认保存的尝试数，`completedCases` 是其中成功数；费用账本已完成但摘要保存失败时，报告仍保留已花费用，不能按未保存的摘要数退款。结果保存与费用账本由调用者注入；独立 live CLI 与私有落盘见下文，不支持跨进程恢复。
 
-用户已限定真实调用只能使用 Luna；具体服务商、完整模型 ID 与本次费用上限仍待确认。候选价格和旧规格的正式档比较均不构成其他模型的调用授权。预试报告始终标明 `productGate = not_evaluated`、`qualityStatus = not_scored`，通过协议测试不等于产品质量通过。
+用户随后确认服务商为 OpenAI，允许使用最便宜的 Luna，并将预算控制交给代理；又补充允许 Claude Haiku 5.5。当前授权型号为 `gpt-6-luna` 与 `claude-haiku-5-5`；不包括 Sol、Sonnet 或 Opus。候选价格和旧规格的正式档比较均不构成其他模型的调用授权。预试报告始终标明 `productGate = not_evaluated`、`qualityStatus = not_scored`，通过协议测试不等于产品质量通过。
 
 
 不能报告已校验的主理人／卡片首句、姓名路由准确率、转发卡逐字、校验误杀、缓存命中，以及持久化插话、停止、续传、后台进度。当前缺少对应 runner、校验器和事件表；用量接口也没有 cached token 分项。规划输出一律用 `null + blocked`，不填 0 或模拟通过。
@@ -43,3 +43,21 @@
 
 
 2026-10-08 补齐预试批次控制后，6 个评测测试文件 58/58 通过、无跳过，API 类型检查通过。其中新增 7 项覆盖固定 12 段顺序、末段绑定缺失时零调用、已结算失败请求停止、未知费用保留预留、摘要保存失败仍计费、取消以及并发／重复启动拒绝。全部使用虚构模型和内存保存回调；真实模型调用仍为 0。
+
+
+## 已授权的 Luna 隔离试跑入口（2026-10-08）
+
+产品负责人确认使用 OpenAI，允许 Luna，并把预算控制交给代理；随后补充允许 Claude Haiku 5.5。因此不再等待服务商或预算金额确认。Luna 入口固定 `gpt-6-luna`、全球 Standard、low reasoning、每段最多 2048 输出 token 和一次模型调用；首轮程序上限 $1，只运行固定的 12 段开发试跑。失败不切模型，不自动扩大到 120 段或旧规格的正式档。Haiku 5.5 的型号 `claude-haiku-5-5` 已从官方文档核对，但本次尚未实现其原生适配器，命令不会假装可用。
+
+新命令 `pnpm --filter @companion/platform-api eval:pilot --live openai-luna --run-id <唯一运行名>` 需要独立的 `CAREER_EVAL_ALLOW_PAID_CALLS=1`、`CAREER_EVAL_OPENAI_API_KEY` 和绝对路径 `CAREER_EVAL_RESULTS_DIR`。缺配置时不会发请求。原有 `eval:plan` 仍不加载密钥或发请求，`--live` 仍被它拒绝；规划结果仅声明另有试跑命令。不得复用主应用的商业开关；试跑创建的 runtime 只获得这一把 key 和这一型号，最终传输仅接受官方 Responses 地址，显式 `service_tier=default`，不读取其他供应商配置或自定义 API 地址。
+
+价格核对于 2026-10-09 04:26:02 UTC，依据 [Luna 模型页](https://developers.openai.com/api/docs/models/gpt-6-luna) 与 [官方价格](https://developers.openai.com/api/docs/pricing)。固定价格在 7 天后失效，需重新核对才可运行。每次按模型最大输入 922,000 token、2048 输出，以及 Standard 长上下文输入／缓存写入最大单价 $0.25/M、输出 $0.75/M 预留，上限预留 $0.232036；成功收到用量并持久化后，才释放确认未用的额度。它是保守计价，不是供应商发票；审阅来源明确记为 `agent_with_user_authorization`，不冒充人工逐项审价。
+
+私有结果目录须由当前 Linux 用户拥有、权限 0700、无符号链接；每个 run id 只允许新建一次。manifest、每条预算事件、每段摘要和最终报告分文件保存，权限 0600；写入后同步文件及目录，再允许后续操作。写盘失败立即停止。已有目录（包括中途失败或崩溃留下的）不能被自动覆盖或续跑；新运行必须使用新名字，且先核对旧记录及供应商费用，不能把没写下成功结果当作没有花钱。摘要不保存正文、密钥、请求参数或任意异常内容。
+
+这仍是 prompt-only 协议和费用基线，结果保持 `productGate=not_evaluated` 与 `qualityStatus=not_scored`。真正的身份、来源、逐句校验、转发卡、插话和恢复测试仍需引擎集成；真实输出质量也尚未评分，不能凭此通过 PR3 完整门槛。主网页调用开关、服务和数据库均不受此命令启用影响。
+
+
+在远端私有 env 文件填写专用 key 后，可通过 `./scripts/project.sh --filter @companion/platform-api exec node --env-file=/absolute/private/credentials.env --import tsx evals/live-main.ts --live openai-luna --run-id luna-pilot-001` 加载。私有文件的调用开关默认仍为 0；只在获授权的这次试跑进程设为 1，不改主服务环境。文件不要放进仓库，也不要把 key 当作 CLI 参数或聊天消息。run id 不含私人信息。
+
+验证：7 个评测测试文件 66/66 项通过、无跳过，API 类型检查通过。新增 8 项经过实际 OpenAI runtime 与模拟 SSE 传输，验证先写预留后发请求、每段结果先落盘、精确型号和 Standard 请求配置、未知用量／HTTP 错误停止、同名并发拒绝、写盘失败保留预留、取消中断、缺密钥和过期价格零传输、拒绝不安全输出目录及误入正文。首轮类型检查暴露边界 narrowing 和可选 runtime 方法问题，已收紧后复验。测试没有访问模型服务；真实模型调用仍为 0。

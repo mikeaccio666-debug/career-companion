@@ -65,7 +65,7 @@ test('actual CLI entry prints planning JSON even with provider flags set, withou
   });
   const plan = JSON.parse(text);
   assert.equal(plan.providerCalls, 0);
-  assert.equal(plan.liveCommandAvailable, false);
+  assert.equal(plan.liveCommandAvailable, true);
   assert(!text.includes('fictional-eval-secret-never-use'));
   assert(!text.includes('OPENAI_API_KEY'));
   assert(!text.includes('PLATFORM_ALLOW_PROVIDER_CALLS'));

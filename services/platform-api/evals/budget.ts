@@ -4,7 +4,7 @@ import { assertEvalStudyPlan, studyEntry, type EvalStudyPlan } from './study-pla
 export type EvalPriceTier = 'development' | 'formal';
 export type EvalStage = 'pilot' | 'full' | 'formal_pilot' | 'formal';
 export type EvalModelPurpose = 'companion_reply' | 'expert_consult' | 'room_turn';
-/** A human-reviewed upper tariff for this exact configured route, not an invoice guarantee. */
+/** A reviewed upper tariff under explicit user authorization for this exact configured route, not an invoice guarantee. */
 export interface EvalPriceSnapshot {
   id: string;
   provider: string;
@@ -13,7 +13,7 @@ export interface EvalPriceSnapshot {
   sourceUrl: string;
   checkedAt: string;
   expiresAt: string;
-  reviewedBy: 'human';
+  reviewedBy: 'human' | 'agent_with_user_authorization';
   approvedConfigId: string;
   tariffProfileId: string;
   maxContextInputTokens: number;
@@ -121,7 +121,7 @@ export function estimateMicroUsd(price: Pick<EvalPriceSnapshot, 'inputMicroUsdPe
 function validatePrice(price: EvalPriceSnapshot, now: number) {
   let url: URL; try { url = new URL(price.sourceUrl); } catch { throw new EvalBudgetError('EVAL_PRICE_UNCONFIRMED', 'price_unconfirmed'); }
   if (!integer(now) || ![price.id, price.provider, price.model, price.approvedConfigId, price.tariffProfileId].every(id) ||
-      !['development', 'formal'].includes(price.tier) || price.reviewedBy !== 'human' || url!.protocol !== 'https:' || url!.username || url!.password || url!.search || url!.hash ||
+      !['development', 'formal'].includes(price.tier) || !['human','agent_with_user_authorization'].includes(price.reviewedBy) || url!.protocol !== 'https:' || url!.username || url!.password || url!.search || url!.hash ||
       !Number.isFinite(Date.parse(price.checkedAt)) || !Number.isFinite(Date.parse(price.expiresAt)) || Date.parse(price.checkedAt) > now || Date.parse(price.expiresAt) <= now || Date.parse(price.expiresAt) <= Date.parse(price.checkedAt) ||
       !tokens(price.maxContextInputTokens, 1) || !tokens(price.maxOutputTokens, 1) || !integer(price.inputMicroUsdPerMillion, 1) || !integer(price.outputMicroUsdPerMillion, 1)) {
     throw new EvalBudgetError('EVAL_PRICE_UNCONFIRMED', 'price_unconfirmed');
