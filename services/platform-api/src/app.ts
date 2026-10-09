@@ -1,3 +1,6 @@
+import {FirstLetterSettings} from './first-letter-settings.ts';
+import {FirstLetterStart} from './first-letter-start.ts';
+import {FirstLetterQueue} from './first-letter-queue.ts';
 import {FirstLetterDispatch} from './first-letter-dispatch.ts';
 import {FirstLetterProgressService} from './first-letter-progress.ts';
 import { TodayWeeklyService } from './today-weekly.ts';
@@ -134,15 +137,17 @@ export async function buildApp(options:AppOptions={}) {
   const birth=new CompanionBirthService(db,config,bundle,studentOnboarding.prebirth,studentOnboarding.names,
     companion.generation,studentOnboarding.identities,new CompanionBirthOriginStore(config.dataCrypto),birthGlyphs);
   const firstLetterSources=new FirstLetterSources(db,config,bundle,companion.generation,studentOnboarding.prebirth);
-  const firstLetterTasks=new FirstLetterTasks(db,config,firstLetterSources);
+  const companionDailySettings=new CompanionDailySettingsService(db,config,bundle);
+  const firstLetterSettings=new FirstLetterSettings(db,companionDailySettings,config);
+  const firstLetterTasks=new FirstLetterTasks(db,config,firstLetterSources,firstLetterSettings);
   const firstLetterGeneration=new FirstLetterGeneration(db,config,runtime,firstLetterTasks);
   const firstLetterProgress=new FirstLetterProgressService(db,config,firstLetterSources,firstLetterGeneration);
-  const firstLetterDispatch=new FirstLetterDispatch(db,config,runtime,firstLetterTasks,firstLetterGeneration);
+  const firstLetterDispatch=new FirstLetterDispatch(db,config,runtime,firstLetterTasks,firstLetterGeneration,firstLetterSettings);
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
+  const firstLetterStart=new FirstLetterStart(db,config,welcome,firstLetterSettings,firstLetterTasks,firstLetterDispatch);
   const sharedMemories=new SharedMemories(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
   const companionPaidSettings=new CompanionPaidSettingsService(db,config,bundle);
-  const companionDailySettings=new CompanionDailySettingsService(db,config,bundle);
   const todayRest=new TodayRestService(db,config,bundle);
   const dailyPlans=new DailyPlans(db,config,bundle);
   const careerIdentity=new CareerIdentityRecords(db,config,bundle);
@@ -180,6 +185,7 @@ export async function buildApp(options:AppOptions={}) {
   const queue=options.queue??(options.enableQueue===false?undefined:new TaskQueue(jobs));
   const companionQueue=options.enableQueue===false?undefined:new CompanionGenerationQueue(companion);
   const companionNameQueue=options.enableQueue===false?undefined:new CompanionNameQueue(naming);
+  const firstLetterQueue=options.enableQueue===false||!config.expertRoster?undefined:new FirstLetterQueue(firstLetterDispatch);
   const readiness=new OperationsReadiness(db,config,Boolean(queue));
   const app=Fastify({logger:false,bodyLimit:256*1024,requestTimeout:120_000});
   await configurePlatformHttp(app,config);
@@ -1009,7 +1015,7 @@ export async function buildApp(options:AppOptions={}) {
   const streamRecovery=setInterval(()=>void recoverStaleStreams(db).catch(()=>{}),30_000);streamRecovery.unref();
   app.addHook('onClose',async()=>{
     clearInterval(streamRecovery);
-    const results=await Promise.allSettled([readiness.close(),queue?.close(),companionQueue?.close(),companionNameQueue?.close()]);
+    const results=await Promise.allSettled([readiness.close(),queue?.close(),companionQueue?.close(),companionNameQueue?.close(),firstLetterQueue?.close()]);
     if(!options.db)await db.close();
     if(results.some(result=>result.status==='rejected'))throw new Error('Platform shutdown could not be confirmed.');
   });
@@ -1019,6 +1025,7 @@ export async function buildApp(options:AppOptions={}) {
     if(queue)queue.start();
     if(companionQueue)companionQueue.start();
     if(companionNameQueue)companionNameQueue.start();
+    if(firstLetterQueue)firstLetterQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,firstLetterSources,firstLetterTasks,firstLetterGeneration,firstLetterDispatch,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,firstLetterSources,firstLetterTasks,firstLetterGeneration,firstLetterDispatch,firstLetterStart,firstLetterSettings,firstLetterQueue,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

@@ -31,7 +31,7 @@ function selection(value:unknown){try{return {taskId:careerRecordId(careerRecord
 export class FirstLetterGeneration{
  private readonly costs:CostGuard;
  constructor(private readonly db:Database,private readonly config:Config,private readonly runtime:PlatformProviderRuntime,
-  private readonly tasks:Pick<FirstLetterTasks,'readInTransaction'>){this.costs=new CostGuard(db);}
+  private readonly tasks:Pick<FirstLetterTasks,'readInTransaction'|'assertCurrentSettingsInTransaction'>){this.costs=new CostGuard(db);}
  private row(c:PoolClient,taskId:string,ownerId:string,stage:FirstLetterStageName='write_original'){
   return c.query<FirstLetterStageRow>("SELECT * FROM platform_first_letter_stages WHERE task_id=$1 AND user_id=$2 AND stage=$3 FOR UPDATE",[taskId,ownerId,stage]);
  }
@@ -156,6 +156,7 @@ export class FirstLetterGeneration{
  }
  private async current(c:PoolClient,who:FixedSessionContext,claim:Claim,signal?:AbortSignal){
   const {task}=await this.tasks.readInTransaction(c,who,{taskId:claim.row.task_id},claim.settings,signal);
+  await this.tasks.assertCurrentSettingsInTransaction(c,who,claim.settings,signal);
   if(task.preparationId!==claim.prepared.preparationId)throw lost();
   if(claim.row.stage!=='write_original'){
    const state=await this.continuation(c,who,claim.prepared,claim.row.task_id);

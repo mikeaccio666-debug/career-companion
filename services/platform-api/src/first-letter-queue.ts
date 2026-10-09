@@ -65,17 +65,17 @@ function reason(error:unknown){
  if(!(error instanceof ApiError))return 'storage';
  if(['AUTH_REQUIRED','STUDENT_ACCOUNT_REQUIRED','EMAIL_VERIFICATION_REQUIRED','TERMS_CONFIRMATION_REQUIRED','LEGAL_DOCUMENTS_UNAVAILABLE'].includes(error.code))return 'authorization';
  if(['FIRST_LETTER_ACCEPTED_SOURCE_CHANGED','FIRST_LETTER_TASK_PREPARATION_CHANGED','FIRST_LETTER_TRIGGER_REQUIRED'].includes(error.code))return 'source_changed';
- if(['MODEL_ROUTE_UNAVAILABLE','FIRST_LETTER_BUDGET_UNAVAILABLE'].includes(error.code))return 'configuration';
+ if(['MODEL_ROUTE_UNAVAILABLE','FIRST_LETTER_BUDGET_UNAVAILABLE','FIRST_LETTER_RELEASE_UNAVAILABLE','FIRST_LETTER_SETTINGS_UNAVAILABLE'].includes(error.code))return 'configuration';
  return 'storage';
 }
 /** The settings callback is trusted server configuration, never Redis data. */
-export function createFirstLetterWorker(entry:FirstLetterDispatch,settings:()=>FirstLetterCompositionSettings){
+export function createFirstLetterWorker(entry:FirstLetterDispatch,settings?:()=>FirstLetterCompositionSettings){
  const worker=new Worker(firstLetterQueueName(entry.config.queueName),async job=>{
   let notification;try{notification=firstLetterNotification(job.data);}catch{throw Error('Letter notification could not be verified.');}
   if(job.id!==notification.requestId||job.name!=='first-letter')throw Error('Letter notification could not be verified.');
   let held:string|null=null;
   try{
-   const outcome=await entry.executeNotification(notification,settings());
+   const outcome=await entry.executeNotification(notification,settings?.());
    if(outcome.kind!=='waiting')held='terminal';
   }catch(error){
    if(error instanceof FirstLetterNotificationReadUnavailable||error instanceof DatabaseError&&['55P03','40001','40P01'].includes(error.code??''))
