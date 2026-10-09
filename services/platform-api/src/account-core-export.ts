@@ -132,7 +132,9 @@ export class AccountCoreExport {
       return freeze({schemaVersion:1 as const,scope:'account_core_export_sections' as const,complete:false as const,
         ownerId:who.userId,capturedAt,sections,
         includedTables:projectedTables,
-        remainingTables:coverage.tables.filter(table=>table.exportStatus!=='excluded_nonpersonal'&&!projectedTables.includes(table.table)).map(table=>table.table),
+        exclusions:coverage.tables.filter(table=>table.exportStatus==='excluded_nonpersonal'||table.exportStatus==='excluded_product_policy')
+          .map(table=>({table:table.table,status:table.exportStatus,reason:table.reason,policyReference:table.policyReference})),
+        remainingTables:coverage.tables.filter(table=>table.exportStatus==='blocked_projection_required'&&!projectedTables.includes(table.table)).map(table=>table.table),
         filesIncluded:false as const});
     },{timeoutMs:5000});}catch(error){
       if(signal?.aborted)throw new ApiError(499,'ACCOUNT_EXPORT_CANCELLED','The private export was cancelled.');

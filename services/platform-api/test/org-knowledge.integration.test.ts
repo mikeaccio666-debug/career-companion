@@ -1,3 +1,7 @@
+import type {PoolClient} from 'pg';
+import type {Database} from '../src/database.ts';
+import {AccountCoreExport} from '../src/account-core-export.ts';
+import {AccountReauthentication} from '../src/account-reauthentication.ts';
 import { careerSkill, prepareCareerRun } from '@companion/career-core';
 import { CareerKnowledge } from '../src/career-knowledge.ts';
 import { KnowledgeSources } from '../src/knowledge-sources.ts';
@@ -453,4 +457,41 @@ test('caller scope mutation cannot swap the abort signal during actual SQL retri
   const before=(await f.db.query('SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE user_id=$1',[s.owner.userId])).rows[0].n;
   await assert.rejects(bound.search(scope,'cancellation'),(e:any)=>e.name==='AbortError');
   assert.equal((await f.db.query('SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE user_id=$1',[s.owner.userId])).rows[0].n,before);
+});
+
+test('account archive applies 04 exclusions to real entitlements and access logs without reading or changing them',async()=>{
+  const s=await setup(),p=await s.published(),password='Fictional-org-archive-password';
+  await service.readPassage(s.owner,p.source,2,'2:0');
+  await service.search(s.owner,{assetClass:'question'},'interviewer');
+  await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[s.owner.userId,await hashPassword(password)]);
+  const snapshot=async()=>({
+    entitlements:(await f.db.query('SELECT row_to_json(e)::text AS value FROM platform_user_entitlements e WHERE user_id=$1 ORDER BY id',[s.owner.userId])).rows,
+    logs:(await f.db.query('SELECT row_to_json(l)::text AS value FROM platform_knowledge_access_log l WHERE user_id=$1 ORDER BY id',[s.owner.userId])).rows,
+  });
+  const queries:string[]=[];
+  const db={withBoundedTransaction:<T>(run:(client:PoolClient)=>Promise<T>,options?:{readOnly?:boolean;timeoutMs?:number})=>f.db.withBoundedTransaction(client=>run(new Proxy(client,{get(target,key){
+    if(key==='query')return async(sql:string,values:unknown[])=>{queries.push(sql);return target.query(sql,values);};
+    const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+  }})),options)} as Database;
+  for(const revoked of [false,true]){
+    if(revoked){
+      await service.setEntitlement(s.operator,s.org,{...s.entitlementInput,operationId:randomUUID(),expectedRevision:1,revoke:true});
+      await service.withdrawSource(s.operator,s.org,p.source,{operationId:randomUUID(),expectedRevision:2,reason:'Fictional archive withdrawal'});
+    }
+    const before=await snapshot();assert.equal(before.entitlements.length,1);assert.equal(before.logs.length,2);
+    const token=(await new AccountReauthentication(f.db).verify(s.owner,{purpose:'account_export',password})).token;
+    const archive=await new AccountCoreExport(db,f.config).capture(s.owner,token);
+    assert.deepEqual(await snapshot(),before);
+    assert.deepEqual(archive.exclusions.filter(row=>row.status==='excluded_product_policy').map(row=>row.table),['platform_knowledge_access_log','platform_user_entitlements']);
+    assert(archive.exclusions.filter(row=>row.status==='excluded_product_policy').every(row=>row.policyReference&&row.reason.includes('4.11')));
+    const partition=[...archive.includedTables,...archive.remainingTables,...archive.exclusions.map(row=>row.table)];
+    assert.equal(partition.length,166);assert.equal(new Set(partition).size,166);assert.equal(archive.includedTables.length,65);
+    assert.equal(archive.remainingTables.length,94);assert.equal(archive.complete,false);assert.equal(archive.filesIncluded,false);
+    assert(archive.remainingTables.includes('platform_org_content_state_proofs'));assert(Object.isFrozen(archive.exclusions[0]));
+    const serialized=JSON.stringify(archive);
+    for(const secret of [s.entitlement.entitlementId,s.org,p.source,s.operator.userId,s.editor.userId,s.reviewer.userId,s.agreementRef,q().prompt_en])assert(!serialized.includes(secret));
+  }
+  // The catalog inspection uses names, not row contents. There must be no
+  // domain reads, decryption, retrieval or quota/access-log side effects here.
+  assert(!queries.some(sql=>/\b(?:FROM|JOIN|UPDATE|INTO)\s+platform_(?:user_entitlements|knowledge_access_log|org_knowledge_sources|org_knowledge_passages|content_licenses|org_content_state_proofs)\b/i.test(sql)));
 });
