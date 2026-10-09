@@ -1,3 +1,4 @@
+import { CompanionPaidSettingsService } from './companion-paid-settings.ts';
 import { MentorRatings } from './mentor-ratings.ts';
 import { MentorCapacity } from './mentor-capacity.ts';
 import { MentorIntents } from './mentor-intents.ts';
@@ -119,6 +120,7 @@ export async function buildApp(options:AppOptions={}) {
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
   const sharedMemories=new SharedMemories(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
+  const companionPaidSettings=new CompanionPaidSettingsService(db,config,bundle);
   const careerIdentity=new CareerIdentityRecords(db,config,bundle);
   const manualJobs=new ManualJobs(db,config,bundle);
   const careerApplications=new CareerApplications(db,config,bundle,manualJobs);
@@ -795,6 +797,9 @@ export async function buildApp(options:AppOptions={}) {
   app.post(`${prefix}/career/identity`,limitedAccount,(request,reply)=>identityMutation(request,reply,'create'));
   app.patch(`${prefix}/career/identity/:id`,limitedAccount,(request,reply)=>identityMutation(request,reply,'edit'));
   app.delete(`${prefix}/career/identity/:id`,limitedAccount,(request,reply)=>identityMutation(request,reply,'delete'));
+  app.get(`${prefix}/companion/settings`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/companion/settings/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.operation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
+  app.patch(`${prefix}/companion/settings`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionPaidSettings.change(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets`,limitedAccount,async(request,reply)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerTargets.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {target:await careerTargets.get(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}finally{cancellation.dispose();}});
   async function targetMutation(request:FastifyRequest,reply:FastifyReply,kind:'create'|'edit'|'status'|'delete'){
