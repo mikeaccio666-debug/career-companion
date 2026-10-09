@@ -52,6 +52,7 @@ import { agentToolStatusText, appendAgentApprovalStatus, finishAgentToolStatuses
 import type { ConversationTask, GoalPlanContinuation, GoalPlanProposalSummary, StudentConsentStatus, VoiceRecord, VoiceRecordInput } from '@companion/platform-contracts';
 import { Badge, Brand, isJobActive, isProviderReady, jobLabel, providerModels, ProviderSelect, statusLabel } from './ui';
 import type { Approval, Artifact, ChatMode, Conversation, Job, JobKind, Memory, Message, PlatformState, Upload, User, View } from './types';
+const JourneyPage = lazyFeature(async () => ({ default: (await import('./journey-view')).JourneyPage }), '旅程');
 const StudentMePage = lazyFeature(async () => ({ default: (await import('./student-me-view')).StudentMePage }), '我');
 const CompanionPaidSettingsPage = lazyFeature(async () => ({ default: (await import('./companion-paid-settings-view')).CompanionPaidSettingsPage }), '主理人设置');
 const MentorIntentPage = lazyFeature(async () => ({ default: (await import('./mentor-intent-view')).MentorIntentPage }), '蔓藤导师');
@@ -780,6 +781,7 @@ function AccountEntryApp() {
   if (!accountReady) return <AccountGate key={accountScope.current.revision} user={user} options={authOptions} onVerified={verifiedAccount} onLogout={() => void logout()} serverError={error}  />;
   if (!consentCurrent) return <AccountConsentView key={`consent-${accountScope.current.revision}`} user={user} options={authOptions} consent={consent} checking={checkingConsent} serverError={error} onRetry={() => void connectWorkspace(true)} onConsented={(status) => { if (accountClient?.isCurrent() && accountScope.current.isCurrent(renderSession) && isCurrentStudentConsent(authOptions, user.id, status)) setConsent(status); }} onLogout={() => void logout()} />;
   if (!privateAllowed) return <StudentOnboarding user={user} onLogout={() => void logout()} refreshVersion={supportVersion} supportBlocked={supportBlocked} onSourcesChanged={supportChanged} />;
+  if (window.location.pathname === '/journey' && accountClient?.isCurrent() && accountClient.account.accountId === user.id) return <JourneyPage key={`${user.id}:${accountClient.account.generation}`} onLogout={() => void logout()} />;
   const pendingResumePath=window.location.pathname.match(/^\/pending\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/);
   if ((window.location.pathname==='/pending'||pendingResumePath)&&accountClient?.isCurrent()&&accountClient.account.accountId===user.id) return <ResumeReviewPage key={accountClient.account.accountId+":"+accountClient.account.generation} onLogout={()=>void logout()} initialItemId={pendingResumePath?.[1]}/>;
   const storyPath=window.location.pathname.match(/^\/journey\/stories\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/);

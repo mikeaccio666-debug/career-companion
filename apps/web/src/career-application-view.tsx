@@ -5,7 +5,7 @@ import { ApiError } from './api';
 import { useRequiredPlatformAccountClient } from './account-client';
 import { readManualJobs } from './manual-job-api';
 import { readCareerApplications, readCareerApplication, readCareerApplicationEvents, changeCareerApplication, observeCareerApplication, type ApplicationIntent, type ApplicationResult } from './career-application-api';
-import { applicationHref } from './career-application-route';
+import { ApplicationBoard } from './application-board';
 import './career-target-view.css';
 import './career-application-view.css';
 const time = (at: string) => new Date(at).toLocaleString();
@@ -16,7 +16,6 @@ export function CareerApplicationPage({ onLogout, initialApplicationId, invalidL
     const [observedClient, setObservedClient] = useState(client);
     const [rows, setRows] = useState<readonly Readonly<CareerApplicationSummary>[]>([]), [next, setNext] = useState<string | null>(null);
     const [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false), [uncertain, setUncertain] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
-    const [closedOpen, setClosedOpen] = useState(false), [mobileStage, setMobileStage] = useState<ApplicationStage>('saved');
     const [detail, setDetail] = useState<Readonly<CareerApplication> | null>(null), [events, setEvents] = useState<readonly Readonly<CareerApplicationEvent>[]>([]), [eventNext, setEventNext] = useState<string | null>(null);
     const [stage, setStage] = useState<ApplicationStage>('saved'), [reason, setReason] = useState<ApplicationCloseReason | ''>(''), [offer, setOffer] = useState<ApplicationOfferState | ''>(''), [note, setNote] = useState(''), [remove, setRemove] = useState(false);
     const [jobs, setJobs] = useState<readonly Readonly<ManualJobSummary>[]>([]), [jobNext, setJobNext] = useState<string | null>(null), [creating, setCreating] = useState(false), [jobId, setJobId] = useState(''), [createNote, setCreateNote] = useState('');
@@ -179,14 +178,6 @@ export function CareerApplicationPage({ onLogout, initialApplicationId, invalidL
         return; setEvents(old => after ? [...old, ...page.events.filter(e => !old.some(p => p.id === e.id))] : page.events); setEventNext(page.nextAfter); }; }); }
     if (!client.isCurrent() || observedClient !== client) return null;
     const disabled = busy || uncertain;
-    const card = (a: Readonly<CareerApplicationSummary>) => <article key={a.id} className="application-card">
-  <strong>{a.job.employer}</strong><p>{a.job.title}</p><p>{a.job.location}</p>
-  <span className={"application-chip " + (a.stage === 'offer' ? 'done' : ['oa', 'interview'].includes(a.stage) ? 'active' : 'neutral')}>{APPLICATION_STAGE_LABELS[a.stage]}{a.closedReason ? ' · ' + APPLICATION_CLOSE_REASON_LABELS[a.closedReason] : a.offerState ? ' · ' + APPLICATION_OFFER_STATE_LABELS[a.offerState] : ''}</span>
-  {a.job.deadlineAt && <p>截止：{time(a.job.deadlineAt)} · {a.job.deadlineTimeZone}（你填写的时间）</p>}
-  <small>尚未关联材料包</small><small>你贴的 JD · 没核实是否还开放</small>
-  {a.submittedVia === 'user_sends' && <small>由你记录已投</small>}
-  <a href={applicationHref(a.id)}>查看与改阶段</a>
- </article>;
     return <main className="career-surface career-target-page application-page"><nav aria-label="旅程导航"><a href="/">回到对话</a><a href="/journey/applications">投递看板</a><a href="/journey/interviews">面试安排</a><a href="/journey/jobs">收藏的岗位</a><a href="/journey/targets">目标方向</a><span>Career Companion · AI</span><button type="button" onClick={onLogout}>退出登录</button></nav>
   <section className="career-target-panel"><header><h1>{initialApplicationId || invalidLink ? '这份投递记录' : '你的投递旅程'}</h1><p>从收藏的岗位开始，按你的实际进展更新。</p></header>
    <div className="career-target-actions">{!initialApplicationId && !invalidLink && <button type="button" disabled={disabled} onClick={() => loadJobs()}>从收藏建立记录</button>}{!invalidLink && <button type="button" disabled={disabled} onClick={() => void load()}>{initialApplicationId ? "重新读取这份记录" : "重新读取看板"}</button>}</div>
@@ -217,13 +208,7 @@ export function CareerApplicationPage({ onLogout, initialApplicationId, invalidL
    {!initialApplicationId && !invalidLink && <>
    {loaded && rows.length === 0 && <p className="career-target-empty">还没有申请记录。先选一个你收藏的岗位。</p>}
    <p className="application-read-caption">看板显示已读取的记录{next ? '，还有记录可以继续读取。' : '。'}</p>
-   <div className="application-mobile-stages" role="group" aria-label="选择投递阶段">{APPLICATION_STAGES.map(s => <button type="button" key={s} aria-pressed={mobileStage === s} onClick={() => setMobileStage(s)}>{APPLICATION_STAGE_LABELS[s]}</button>)}</div>
-   <div className={'application-board ' + (closedOpen ? 'closed-expanded' : 'closed-folded')}>
-    {APPLICATION_STAGES.map(s => <section key={s} className={'application-column ' + (mobileStage === s ? 'mobile-selected' : '') + (s === 'closed' ? ' application-closed' : '')} aria-label={APPLICATION_STAGE_LABELS[s]}>
-     <h2>{s === 'closed' ? <><button type="button" aria-expanded={closedOpen} onClick={() => setClosedOpen(!closedOpen)}>已结束 {closedOpen ? '收起' : '展开'}</button><span className="application-mobile-closed-title">已结束</span></> : <>{APPLICATION_STAGE_LABELS[s]} <span>{rows.filter(a => a.stage === s).length}</span></>}</h2>
-     <div className="application-column-cards">{rows.filter(a => a.stage === s).map(card)}</div>
-    </section>)}
-   </div>{next && <button type="button" disabled={disabled} onClick={() => void load(next)}>继续读取申请记录</button>}
+   <ApplicationBoard rows={rows}/>{next && <button type="button" disabled={disabled} onClick={() => void load(next)}>继续读取申请记录</button>}
    </>}
   {!initialApplicationId && !invalidLink && <CareerProgressPanel suspended={busy||uncertain}/>}</section></main>;
 }
