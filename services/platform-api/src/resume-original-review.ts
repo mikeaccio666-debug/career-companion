@@ -5,7 +5,7 @@ import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { workflowHash } from '@companion/ai-core';
 import { compareOwnerResumeText,ownerResumeActionAllowed,validateOwnerResumePayload } from '@companion/career-core';
-import { parseResumeReviewDiff,careerRecordObject,careerRecordId,parseResumeReviewCommand,parseResumeReviewItem,parseResumeUploadCommand,resumeReviewInteger,type ResumeReviewItem,type ResumeReviewPayload,type ResumeReviewAction,type ResumeUploadSnapshot,type ResumeReviewCommand,type ResumeReviewView } from '@companion/platform-contracts';
+import { CAREER_ROLE_FAMILIES,parseResumeReviewDiff,careerRecordObject,careerRecordId,parseResumeReviewCommand,parseResumeReviewItem,parseResumeUploadCommand,resumeReviewInteger,type ResumeReviewItem,type ResumeReviewPayload,type ResumeReviewAction,type ResumeUploadSnapshot,type ResumeReviewCommand,type ResumeReviewView } from '@companion/platform-contracts';
 import { authorizeFixedSession,type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
@@ -17,6 +17,12 @@ const unavailable=()=>new ApiError(503,'RESUME_REVIEW_UNAVAILABLE','The saved re
 const missing=()=>new ApiError(404,'NOT_FOUND','The resume review was not found.');
 const changed=()=>new ApiError(409,'PENDING_ITEM_CHANGED','The content changed. Read the current version before deciding.');
 const canonical=(value:unknown)=>JSON.stringify(value,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
+export const RESUME_EXPORT_TABLES=Object.freeze({
+ platform_pending_items:'pendingItems',platform_pending_item_revisions:'pendingItemRevisions',
+ platform_pending_item_decisions:'pendingItemDecisions',platform_pending_item_operations:'pendingItemOperations',
+ platform_career_resume_versions:'careerResumes',platform_career_resume_counters:'careerResumeCounters',
+} as const);
+export type ResumeExportSection=typeof RESUME_EXPORT_TABLES[keyof typeof RESUME_EXPORT_TABLES];
 type Action=ResumeReviewAction|'expire'|'supersede';
 interface Receipt {schemaVersion:1;ownerId:string;operationId:string;itemId:string;action:Action;generation:number;requestDigest:string;recordDigest:string|null;acceptedAuthVersion:string;createdAt:string;}
 interface PreparationProofs {latest:Map<string,any>;resumes:Map<string,any>;payloads:Map<string,any>;decisions:Map<string,any>;approvals:Map<string,any>;}
@@ -35,11 +41,97 @@ export class ResumeOriginalReview {
  }
  private async latest(client:PoolClient,context:FixedSessionContext,id:string){const row=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND item_id=$2 ORDER BY generation DESC LIMIT 1 FOR SHARE',[context.userId,id])).rows[0];if(!row)throw unavailable();return this.receipt(client,context,row);}
  private async row(client:PoolClient,context:FixedSessionContext,id:string,byResume=false){return (await client.query(byResume?'SELECT p.* FROM platform_pending_items p JOIN platform_career_resume_versions r ON r.pending_item_id=p.id AND r.user_id=p.user_id WHERE p.user_id=$1 AND r.id=$2 FOR UPDATE OF p':'SELECT * FROM platform_pending_items WHERE user_id=$1 AND id=$2 FOR UPDATE',[context.userId,id])).rows[0];}
- private async payload(client:PoolClient,context:FixedSessionContext,id:string,revision:number,proofs?:PreparationProofs):Promise<Readonly<ResumeReviewPayload>>{
-  try{const row=proofs?proofs.payloads.get(id+':'+revision):(await client.query('SELECT * FROM platform_pending_item_revisions WHERE user_id=$1 AND item_id=$2 AND revision=$3 FOR SHARE',[context.userId,id,revision])).rows[0];if(!row)throw unavailable();
+ private decodePayload(context:FixedSessionContext,id:string,revision:number,row:any):Readonly<ResumeReviewPayload>{
+  try{
+   if(!row||row.user_id!==context.userId||row.item_id!==id||row.revision!==revision)throw unavailable();
    const raw=this.storage.crypto!.openUtf8(row.ciphertext,{table:'platform_pending_item_revisions',column:'ciphertext',rowId:id,ownerId:context.userId,revision}),payload=validateOwnerResumePayload(JSON.parse(raw));
    if(canonical(payload)!==raw||payload.source_refs[0].id!==id||row.author!=='user'||row.payload_digest!==workflowHash(payload)||row.base_revision!==(revision===1?null:revision-1))throw unavailable();return payload;
   }catch{throw unavailable();}
+ }
+ private async payload(client:PoolClient,context:FixedSessionContext,id:string,revision:number,proofs?:PreparationProofs):Promise<Readonly<ResumeReviewPayload>>{
+  const row=proofs?proofs.payloads.get(id+':'+revision):(await client.query('SELECT * FROM platform_pending_item_revisions WHERE user_id=$1 AND item_id=$2 AND revision=$3 FOR SHARE',[context.userId,id,revision])).rows[0];
+  return this.decodePayload(context,id,revision,row);
+ }
+ /** Archive input in the caller's authenticated snapshot. Never calls current(),
+  * which can expire drafts. Originals retain their sensitivity and file bindings;
+  * this projection does not read blob bytes or confer execution permission. */
+ async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal):AsyncGenerator<{section:ResumeExportSection;record:unknown}>{
+  const context=this.fixed(value);await this.authorize(client,context,signal);
+  const sequences=new Map<string,number>();let after:string|null=null;
+  for(;;){
+   signal?.throwIfAborted();
+   const rows:Record<string,any>[]=(await client.query('SELECT * FROM platform_pending_items WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100',[context.userId,after])).rows;
+   for(const row of rows){
+    signal?.throwIfAborted();const {item,payload}=await this.decode(client,context,row);
+    sequences.set(item.track,Math.max(sequences.get(item.track)??0,item.sequence));
+    yield {section:'pendingItems',record:item};
+    // decode validated this exact unique pending-item/resume row pair.
+    yield {section:'careerResumes',record:{id:item.resumeVersionId,pendingItemId:item.id,track:item.track,status:item.resumeStatus,
+     source:item.source,uploadId:item.uploadId,revision:item.revision,contentDigest:item.payloadDigest,createdAt:item.createdAt,updatedAt:item.updatedAt}};
+    let revision=0;
+    for(;;){
+     signal?.throwIfAborted();
+     const history=(await client.query('SELECT * FROM platform_pending_item_revisions WHERE user_id=$1 AND item_id=$2 AND revision>$3 ORDER BY revision LIMIT 100',[context.userId,item.id,revision])).rows;
+     for(const saved of history){
+      signal?.throwIfAborted();
+      if(saved.revision!==revision+1||saved.revision>item.revision)throw unavailable();
+      const body=this.decodePayload(context,item.id,saved.revision,saved),createdAt=saved.created_at.toISOString();
+      if(canonical(body.source_refs)!==canonical(payload.source_refs)||createdAt<item.createdAt||createdAt>item.updatedAt)throw unavailable();
+      yield {section:'pendingItemRevisions',record:{itemId:item.id,revision:saved.revision,payload:body,payloadDigest:saved.payload_digest,
+       author:'user',baseRevision:saved.base_revision,createdAt}};
+      revision=saved.revision;
+     }
+     if(history.length<100)break;
+    }
+    if(revision!==item.revision)throw unavailable();
+    let generation=0;
+    for(;;){
+     signal?.throwIfAborted();
+     const decisions=(await client.query(`SELECT d.*,o.receipt_ciphertext,o.action,o.created_at AS operation_created_at
+      FROM platform_pending_item_decisions d JOIN platform_pending_item_operations o
+      ON o.user_id=d.user_id AND o.operation_id=d.operation_id AND o.item_id=d.item_id AND o.generation=d.generation
+      WHERE d.user_id=$1 AND d.item_id=$2 AND d.generation>$3 ORDER BY d.generation LIMIT 100`,[context.userId,item.id,generation])).rows;
+     for(const decision of decisions){
+      signal?.throwIfAborted();
+      const receipt=await this.receipt(client,context,{...decision,created_at:decision.operation_created_at});
+      const action=decision.decision==='approved'?'approve':decision.decision==='declined'?'decline':null;
+      const expectedDigest=workflowHash({action,itemId:item.id,command:{operationId:decision.operation_id,expectedRevision:decision.revision,payloadDigest:decision.payload_digest}});
+      if(!action||receipt.action!==action||receipt.requestDigest!==expectedDigest||receipt.recordDigest===null||decision.channel!=='web'||
+       decision.generation<=generation||decision.generation>item.generation||decision.revision>item.revision||
+       decision.created_at.toISOString()!==receipt.createdAt)throw unavailable();
+      const body=await this.payload(client,context,item.id,decision.revision);
+      if(workflowHash(body)!==decision.payload_digest)throw unavailable();
+      yield {section:'pendingItemDecisions',record:{itemId:item.id,operationId:decision.operation_id,generation:decision.generation,
+       revision:decision.revision,payloadDigest:decision.payload_digest,decision:decision.decision,channel:'web',createdAt:receipt.createdAt}};
+      generation=decision.generation;
+     }
+     if(decisions.length<100)break;
+    }
+   }
+   if(rows.length<100)break;after=rows.at(-1)!.id;
+  }
+  // Includes delete receipts whose bodies and decisions have been forgotten.
+  after=null;
+  for(;;){
+   signal?.throwIfAborted();
+   const rows:Record<string,any>[]=(await client.query('SELECT * FROM platform_pending_item_operations WHERE user_id=$1 AND ($2::uuid IS NULL OR operation_id>$2) ORDER BY operation_id LIMIT 100',[context.userId,after])).rows;
+   for(const row of rows){signal?.throwIfAborted();const r=await this.receipt(client,context,row);
+    yield {section:'pendingItemOperations',record:{id:r.operationId,itemId:r.itemId,action:r.action,generation:r.generation,createdAt:r.createdAt}};
+   }
+   if(rows.length<100)break;after=rows.at(-1)!.operation_id;
+  }
+  let trackAfter:string|null=null;
+  for(;;){
+   signal?.throwIfAborted();
+   const rows:Record<string,any>[]=(await client.query('SELECT track,sequence FROM platform_career_resume_counters WHERE user_id=$1 AND ($2::text IS NULL OR track>$2) ORDER BY track LIMIT 100',[context.userId,trackAfter])).rows;
+   for(const row of rows){
+    if(!CAREER_ROLE_FAMILIES.includes(row.track)||!Number.isSafeInteger(row.sequence)||row.sequence<1||row.sequence<(sequences.get(row.track)??0))throw unavailable();
+    sequences.delete(row.track);yield {section:'careerResumeCounters',record:{track:row.track,sequence:row.sequence}};
+   }
+   if(rows.length<100)break;trackAfter=rows.at(-1)!.track;
+  }
+  if(sequences.size)throw unavailable();
+  await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
  }
  private async decode(client:PoolClient,context:FixedSessionContext,row:any,proofs?:PreparationProofs):Promise<Readonly<ResumeReviewView>>{
   try{const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:'platform_pending_items',column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.generation}),item=parseResumeReviewItem(JSON.parse(raw)),latest=proofs?await this.receipt(client,context,proofs.latest.get(row.id)):await this.latest(client,context,row.id);
