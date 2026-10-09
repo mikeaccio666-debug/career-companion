@@ -1147,3 +1147,18 @@ JSON 当前覆盖 121 表、剩余 43；带私有文件覆盖 124、剩余 40；
 - JSON 覆盖 129 表、剩余 35；带私有文件覆盖 132、剩余 32；既有豁免 7 项，总清单 171。共享 safety_events/问题实际发生记录等仍待投影，完整自助下载、删除协调与整个 P0 未完成，complete=false 保持。
 
 私有日志：ci-regression-20261008/name-delivery-final-targeted.log、name-delivery-final-types.log、name-delivery-regression.log。普通回归不含 PR151 独立的 105 次采用压力脚本；该脚本本轮未修改或重跑。组合回归覆盖本次共用解码/读取抽取影响到的原执行路径。
+
+## 共享安全准备事件与问题交付历史导出（2026-10-09 UTC）
+
+新增 [AccountSharedSafetyExport](account-shared-safety-export.md)，接入混合来源 safety_events、问题 scope/occurrence/operation 与 legacy exposure 五表。准备事件对应同一事务内原始响应；操作链使用原协议验证，再逐次核对到原发布、审核问题、来源类型与时间窗口。预留、领取、客户端展示声明与旧版可能展示保持不同语义，不补造真人阅读。
+
+- **415 个不同用例分批通过**：组合回归原始结果为 414 通过、1 失败、零跳过。唯一失败是旧 core 测试仍断言 safety_events 未导出；更新为已覆盖且空账户无事件后，该同一用例单独 1/1 复验通过。未把原整批命令写成零失败，也未为改一条清单断言重复运行全部测试。
+- 新增 11 项全部在组合回归通过，包含两类来源的原准备事件、实际 reserve/claim/present、同一学生混合 scope、旧可能展示、未初始化/未领取/未声明状态、政策/同意/邮箱变化、105 个真实独立来源的准备事件/occurrence/operation 跨页。所有分页使用原 5 秒捕获事务；约 36 秒的批量用例总时长包含原服务准备与清理，不代表导出耗时或线上 SLA。
+- 密文损坏/串户、缺失 root/child/event、真实旧 scope 回滚、操作后缀截断、原锚点/来源坐标变动、取消、晚到认证变化和容量失败均整份拒绝且保留再验证凭据。额外构造密文与摘要链自洽的替换问题，原 journal 内部校验可过，归档的实际发布绑定仍拒绝；真实数据库外键也拒绝该变动，所以最终损坏场景通过读取层注入实现，未移除约束。
+- 最终 API TypeScript 检查通过。初期检查发现分页局部变量类型与空值断言问题，已修复。测试准备阶段还修正了原信号重复提问被禁止、历史 source 查询缺排序、扩展登录对象不能当固定会话、写坏数据被外键拦截等 fixture 问题；保留早期失败日志，没有放宽正式流程。
+- 原正常交付读查询和锁为默认行为；归档在同一 REPEATABLE READ 事务使用 lock=false，100 条分页读取。每个 scope 仍在内存中核验完整链，不声称已实现任意规模的流式 worker。
+- 全部使用虚构资料、隔离 PostgreSQL schema 和受控 loopback provider，各 fixture 清理并确认临时 schema 不存在。无付费调用、真实申请、主库迁移、主预览重启、合并或部署。展示声明来自测试客户端，不替代浏览器视觉或真人阅读证据。
+
+JSON 覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；既有豁免 7 项，总清单 171。独立核对当前覆盖常量和 schema 清单：剩余为 5 张本人记录、22 张待审阅组织资料、3 张文件表（文件模式已有读取）。完整自助下载、归档 worker、删除协调、主对话评测及 P0 仍未完成，complete=false 保持。
+
+私有证据在 ci-regression-20261008：shared-safety-regression.log、shared-safety-core-coverage-fixed.log、shared-safety-final-types.log、shared-safety-resealed-read.log、remaining-export-inventory.log；早期专项日志保留。PR151 的独立采用压力脚本本轮未更改或运行。

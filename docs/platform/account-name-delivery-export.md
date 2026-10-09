@@ -13,7 +13,7 @@
 | nameFollowups | safety_followups | 实际展示、确认、支持请求与明确处理动作 |
 | nameHandledSources | safety_handled | 明确继续或澄清操作与原检测来源的关联 |
 
-读取保留原始状态：pending、prepared、published、projected、presented、acknowledged、handled 分别来自各自记录，不相互推定。问题模板不证明问题真的问过；共享提问 occurrence/operation/scope/exposure 及混合来源 safety_events 表仍没有完整导出，继续留在 remainingTables。
+读取保留原始状态：pending、prepared、published、projected、presented、acknowledged、handled 分别来自各自记录，不相互推定。问题模板不证明问题真的问过；共享提问 occurrence/operation/scope/exposure 及混合来源 safety_events 表由[共享安全历史导出](account-shared-safety-export.md)独立核验与投影。
 
 原始响应核验真实检测来源、准备事件、原密文、来源代次、语言来源证明与时间关系。原检测已产生 L1/L2 时，响应整行缺失也使导出失败，即使还没有发布记录；不以重新创建记录来掩盖缺失。已准备的响应不得早于原记录创建时间，创建时间不得在未来。
 
@@ -25,6 +25,6 @@
 
 返回的是本人历史，不调用模型、发布/恢复服务、签发凭据或创建共享记忆。不返回密钥、session hash、展示凭据/摘要、执行令牌、原密文、内部审核人身份或历史 authVersion；处理时的协议版本保留。资源资产与审核操作仅用于核验，不因被读取就算作用户数据表已经导出。
 
-JSON 当前覆盖 129 表、剩余 35；带私有文件覆盖 132、剩余 32；另有 7 项既有豁免，总清单 171。两种模式保持 complete=false。没有 schema 或 UI 变更；完整自助下载、删除协调、其余资料及整个 P0 仍需继续完成。
+JSON 当前覆盖 134 表、剩余 30；带私有文件覆盖 137、剩余 27；另有 7 项既有豁免，总清单 171。两种模式保持 complete=false。没有 schema 或 UI 变更；完整自助下载、删除协调、其余资料及整个 P0 仍需继续完成。
 
 验证使用虚构资料、隔离 PostgreSQL schema 和受控 loopback provider；11 个专项用例覆盖原始状态、实际处理、105 条重试/投影/操作分页、七类密文损坏或串户、八类表缺失、旧状态回滚、操作后缀截断、历史资产/激活丢失、原语言证明变动、未发布响应缺失、时间不一致及取消/鉴权/容量回滚。详细回归结果见 [验证记录](verification.md)。
