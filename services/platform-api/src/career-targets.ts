@@ -1,3 +1,4 @@
+import { accountExportRows } from './account-export-rows.ts';
 import type { OwnedCareerTarget } from './career-run-context.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
@@ -41,6 +42,18 @@ export class CareerTargets {
   }catch{throw unavailable();}
  }
  private async row(client:PoolClient,context:FixedSessionContext,id:string){return (await client.query('SELECT * FROM platform_career_targets WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,context.userId])).rows[0];}
+ /** Internal reader for the account-export transaction: the coordinator
+  * consumes the fresh password proof and commits before exposing any section. */
+ async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
+  const s=this.fixed(value);await this.authorize(client,s,signal);
+  for await(const row of accountExportRows(client,s.userId,'platform_career_targets',signal)){
+   const record=await this.record(client,s,row);yield {section:'careerTargets' as const,record};
+  }
+  for await(const row of accountExportRows(client,s.userId,'platform_career_target_operations',signal)){
+   const r=await this.receipt(client,s,row);yield {section:'careerTargetOperations' as const,record:{id:r.operationId,targetId:r.targetId,action:r.action,revision:r.appliedRevision,createdAt:r.createdAt}};
+  }
+  await authorizeFixedSession(client,s,signal);
+ }
  async get(value:FixedSessionContext,key:unknown,signal?:AbortSignal){const context=this.fixed(value);let id:string;try{id=careerTargetId(key);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);const row=await this.row(client,context,id);if(!row)throw notFound();const target=await this.record(client,context,row);await authorizeFixedSession(client,context,signal);return target;});
  }

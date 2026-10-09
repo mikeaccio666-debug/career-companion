@@ -1,3 +1,4 @@
+import { accountExportRows } from './account-export-rows.ts';
 import type { OwnedCareerApplication, OwnedCareerSavedJob } from './career-run-context.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
@@ -236,6 +237,21 @@ export class CareerApplications {
         const result = careerApplicationSummary(await this.record(client, context, row));
         await authorizeFixedSession(client, context, signal);
         return result;
+    }
+    /** Internal reader for the account-export transaction: the coordinator
+     * consumes the fresh password proof and commits before exposing any section. */
+    async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
+     const s=this.fixed(value);await this.authorize(client,s,signal);
+     for await(const row of accountExportRows(client,s.userId,'platform_career_applications',signal)){
+      const record=await this.record(client,s,row);yield {section:'careerApplications' as const,record};
+     }
+     for await(const row of accountExportRows(client,s.userId,'platform_career_application_operations',signal)){
+      const r=await this.receipt(s,row);yield {section:'careerApplicationOperations' as const,record:{id:r.operationId,applicationId:r.applicationId,action:r.action,revision:r.appliedRevision,createdAt:r.createdAt}};
+     }
+     for await(const row of accountExportRows(client,s.userId,'platform_career_application_events',signal)){
+      yield {section:'careerApplicationEvents' as const,record:await this.event(client,s,row)};
+     }
+     await authorizeFixedSession(client,s,signal);
     }
     async get(value: FixedSessionContext, key: unknown, signal?: AbortSignal) {
         const context = this.fixed(value);

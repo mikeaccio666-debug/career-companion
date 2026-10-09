@@ -1,3 +1,4 @@
+import { accountExportRows } from './account-export-rows.ts';
 import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId,careerRecordObject,parseManualJob,parseManualJobCommand,manualJobSummary,manualJobsDuplicate,type ManualJob,type ManualJobAction } from '@companion/platform-contracts';
@@ -73,6 +74,18 @@ export class ManualJobs {
         await authorizeFixedSession(client, context, signal);
         return Object.freeze(metadata);
     }
+ /** Internal reader for the account-export transaction: the coordinator
+  * consumes the fresh password proof and commits before exposing any section. */
+ async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
+  const s=this.fixed(value);await this.authorize(client,s,signal);
+  for await(const row of accountExportRows(client,s.userId,'platform_career_job_observations',signal)){
+   const record=await this.record(client,s,row);yield {section:'savedJobs' as const,record};
+  }
+  for await(const row of accountExportRows(client,s.userId,'platform_career_job_observation_operations',signal)){
+   const r=await this.receipt(client,s,row);yield {section:'savedJobOperations' as const,record:{id:r.operationId,observationId:r.observationId,action:r.action,revision:r.appliedRevision,createdAt:r.createdAt}};
+  }
+  await authorizeFixedSession(client,s,signal);
+ }
  async get(value:FixedSessionContext,key:unknown,signal?:AbortSignal){const context=this.fixed(value);return this.db.withBoundedTransaction(client=>this.readInTransaction(client,context,key,signal));}
  async list(value:FixedSessionContext,query:unknown={},signal?:AbortSignal){const context=this.fixed(value);let after:string|null;try{const q=careerRecordObject(query,[],['after']);after=Object.hasOwn(q,'after')?careerRecordId(q.after):null;}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);let cursor:any=null;if(after){cursor=await this.row(client,context,after);if(!cursor)throw missing();await this.record(client,context,cursor);}
