@@ -49,7 +49,7 @@ test('fresh owner proof returns decoded current/retained memory and metadata wit
   const text=JSON.stringify(result);
   for(const secret of [password,encoded,token,a.tokenHash,b.userId,foreign,'Fictional other-account-only content','acceptedAuthVersion','commandDigest','receipt_ciphertext','record_ciphertext'])assert(!text.includes(secret),secret);
   assert(await consumed(a));assert(Object.isFrozen(result));assert(Object.isFrozen(result.sections.memories));
-  assert(result.remainingTables.includes('platform_conversations'));
+  assert(result.includedTables.includes('platform_conversations'));assert(!result.remainingTables.includes('platform_conversations'));
   assert(result.remainingTables.includes('platform_memory_safety_sources'));
   await assert.rejects(capture(a,token),code('ACCOUNT_REAUTH_REQUIRED'));
   assert.equal((await memories.list(a)).memories.length,1,'Export must not restore the deleted memory.');

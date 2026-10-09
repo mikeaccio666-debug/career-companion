@@ -1,3 +1,4 @@
+import {exportConversationsInTransaction,CONVERSATION_EXPORT_TABLES,type ConversationExportSection} from './account-conversation-export.ts';
 import { ResumeOriginalReview,RESUME_EXPORT_TABLES,type ResumeExportSection } from './resume-original-review.ts';
 import { CAREER_EXPORT_TABLES,type CareerExportSection } from './account-export-rows.ts';
 import { CareerTargets } from './career-targets.ts';
@@ -15,8 +16,8 @@ import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
-const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES)]);
-type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection;
+const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES]);
+type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
   try{const row=careerRecordObject(value,['userId','tokenHash']);
@@ -54,6 +55,7 @@ export class AccountCoreExport {
       const capturedAt=(await client.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
       const sections:{account:Record<string,unknown>}&Record<ArraySection,unknown[]>={
         account:{...account,createdAt:account.createdAt.toISOString(),emailVerifiedAt:account.emailVerifiedAt?.toISOString()??null},
+        conversations:[],messages:[],chatCalls:[],audioTranscriptions:[],
         termsConsents:[],sessions:[],memories:[],memoryOperations:[],memoryEvents:[],memoryUses:[],
         careerTargets:[],careerTargetOperations:[],careerProjects:[],careerStories:[],careerLibraryOperations:[],
         savedJobs:[],savedJobOperations:[],careerApplications:[],careerApplicationOperations:[],careerApplicationEvents:[],
@@ -84,6 +86,7 @@ export class AccountCoreExport {
       }
       for await(const item of this.memories.exportInTransaction(client,who,signal))append(item.section,item.record);
       for(const reader of this.careerReaders)for await(const item of reader.exportInTransaction(client,who,signal))append(item.section,item.record);
+      for await(const item of exportConversationsInTransaction(client,who,signal))append(item.section,item.record);
       await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
       return freeze({schemaVersion:1 as const,scope:'account_core_export_sections' as const,complete:false as const,
         ownerId:who.userId,capturedAt,sections,
