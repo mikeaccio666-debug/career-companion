@@ -28,7 +28,7 @@
 
 ## 成长记录的范围
 
-GET /career/progress 从真实当前解密项目账本调用原 careerProgress，subjectId 为同一个实际项目 ID，referenceId 指向真实项目记录版本。self_reported 仅计临时项目记录；本人确认才按既定规则计项目记录；修改失去确认，撤回/删除不计。没有导师审核凭证或导师身份字段，不允许本人把 verification 改成 mentor_reviewed/observed。接口 coverage 仅为 project，其他类型尚未接入；返回的其他计数不表示现实中没有投递或面试，也不代表完整成就系统验收。故事数量不等于技能、项目能力或面试成绩。
+项目来源从真实当前解密项目账本调用原 careerProgress，subjectId 为同一个实际项目 ID，referenceId 指向真实项目记录版本。self_reported 仅计临时项目记录；本人确认才按既定规则计项目记录；修改失去确认，撤回/删除不计。没有导师审核凭证或导师身份字段，不允许本人把 verification 改成 mentor_reviewed/observed。现有 HTTP 接口已合并本人投递声明，coverage 为 project、application，见 [本人成长记录](career-progress.md)；其他类型尚未接入，零值不代表现实中从未做过，也不代表完整成就系统验收。故事数量不等于技能、项目能力或面试成绩。
 
 ## 接口与验证
 
