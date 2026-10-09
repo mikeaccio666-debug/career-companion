@@ -45,8 +45,8 @@ test('real committed birth exports its immutable identity and reviewed provenanc
  const bytes=await f.db.transaction(client=>new CompanionBirthOriginStore(f.crypto).readSealAsset(client,p.who.userId,p.receipt.identity.sealAssetId));assert(bytes);
  assert.equal(asset.svgDigest,createHash('sha256').update(bytes.svg).digest('hex'));assert.equal(asset.pngDigest,createHash('sha256').update(bytes.png).digest('hex'));
  assert.equal(asset.svgSizeBytes,bytes.svg.length);assert.equal(asset.pngSizeBytes,bytes.png.length);assert.equal(asset.bytesVerified,true);assert.equal(asset.bytesIncluded,false);
- assert.equal(result.includedTables.length,34);assert(result.includedTables.includes('platform_companion_birth_receipts'));assert(!result.remainingTables.includes('platform_companion_birth_receipts'));
- assert(result.remainingTables.includes('platform_companion_birth_assets'));assert(result.remainingTables.includes('platform_companions'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+ assert.equal(result.includedTables.length,36);assert(result.includedTables.includes('platform_companion_birth_receipts'));assert(!result.remainingTables.includes('platform_companion_birth_receipts'));
+ assert(result.remainingTables.includes('platform_companion_birth_assets'));assert(result.includedTables.includes('platform_companions'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
  const text=JSON.stringify(result);for(const secret of [p.who.tokenHash,encoded,password,token,foreign.who.userId,foreign.receipt.id,'acceptedAuthVersion','accepted_auth_version','request_digest','request_ciphertext','snapshot_ciphertext','svgCipherDigest','pngCipherDigest',bytes.png.toString('base64'),bytes.svg.toString()])assert(!text.includes(secret));
  assert(Object.isFrozen(saved.source.identity.sealCandidates));assert(Object.isFrozen(asset));
 });
@@ -59,7 +59,7 @@ test('unborn owner has empty birth sections; exporting does not create a compani
 test('retirement, changed current identity and withdrawn model admission preserve the original birth and seal',async()=>{
  const p=await prepare();await f.db.query("UPDATE platform_companions SET name='虚构后来名字',relationship_stage='familiar',stage_changed_at=clock_timestamp(),status='retired',retired_at=clock_timestamp() WHERE id=$1",[p.receipt.identity.companionId]);
  await f.db.query('DELETE FROM platform_terms_consents WHERE user_id=$1',[p.who.userId]);await f.db.query('UPDATE platform_users SET email_verified_at=NULL WHERE id=$1',[p.who.userId]);
- const result=await capture(p.who);assert.deepEqual((result.sections.companionBirthReceipts[0] as any).receipt,p.receipt);assert(!JSON.stringify(result).includes('虚构后来名字'));
+ const result=await capture(p.who);assert.deepEqual((result.sections.companionBirthReceipts[0] as any).receipt,p.receipt);assert.equal((result.sections.companions[0] as any).name,'虚构后来名字');
  assert.equal((result.sections.companionBirthAssetMetadata[0] as any).sealChar,p.receipt.identity.sealChar);
 });
 
