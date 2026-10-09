@@ -109,7 +109,7 @@ export async function readNameRawSourceInTransaction(client: PoolClient, crypto:
     || original.rulesRevision !== task.rules_revision || original.generatorVersion !== task.generator_version) throw nameResourceSourceUnavailable();
   signal?.throwIfAborted(); return Object.freeze({kind:'raw_name_observation' as const,source:row,sourceCapture:capture.payload});
 }
-async function completedUsage(client: PoolClient, row: CompanionNameSubmissionRow) {
+async function completedUsage(client: PoolClient, row: CompanionNameSubmissionRow,lock=true) {
   const found = await client.query(`SELECT call_id,provider,model,usage_status,input_tokens,output_tokens,
     EXTRACT(EPOCH FROM admitted_at)::text AS admitted_exact,EXTRACT(EPOCH FROM finished_at)::text AS finished_exact
     FROM platform_safety_model_usage WHERE source_kind='companion_name' AND submission_id=$1 AND user_id=$2 AND operation_id=$3
@@ -117,7 +117,7 @@ async function completedUsage(client: PoolClient, row: CompanionNameSubmissionRo
       AND generation=$10 AND auth_version=$11 AND detector_revision=$12 AND name_execution_token=$13
       AND draft_id IS NULL AND question_id IS NULL AND purpose='safety_classify' AND call_index=1 AND status='complete'
       AND usage_status IN ('reported','missing','invalid') AND admitted_at IS NOT NULL AND finished_at IS NOT NULL
-      AND admitted_at<=finished_at AND finished_at<=clock_timestamp() FOR SHARE`,
+      AND admitted_at<=finished_at AND finished_at<=clock_timestamp()${lock?' FOR SHARE':''}`,
   [row.id,row.user_id,row.operation_id,row.entry_id,row.task_id,row.companion_id,row.preview_revision,row.submitted_revision,
     row.expected_identity_revision,row.generation,row.auth_version,row.detector_revision,row.execution_token]);
   if (found.rows.length !== 1) throw nameResourceSourceUnavailable();
@@ -129,20 +129,20 @@ async function completedUsage(client: PoolClient, row: CompanionNameSubmissionRo
 /** No source/current-preview/prefix/all-history/identity admission is consumed.
  * The original source lease/session is historical evidence, not current access. */
 export async function readNameResourceSourceInTransaction(client: PoolClient, crypto: DataCrypto | undefined,
-  actualSubmissionId: string, signal?: AbortSignal): Promise<Readonly<AuthenticatedNameResourceSource>> {
+  actualSubmissionId: string, signal?: AbortSignal,lock=true): Promise<Readonly<AuthenticatedNameResourceSource>> {
   const id = companionNameUuid(actualSubmissionId); signal?.throwIfAborted();
   if (!crypto) throw nameResourceSourceUnavailable();
   const reference = (await client.query<{user_id:string}>('SELECT user_id FROM platform_companion_name_submissions WHERE id=$1',[id])).rows[0];
   if (!reference) throw new ApiError(404,'NOT_FOUND','The classified name source is not available.');
   // Match all owner writes: the live account lock precedes source/entry locks.
-  const account = (await client.query<{account_kind:string}>('SELECT account_kind FROM platform_users WHERE id=$1 FOR NO KEY UPDATE',[reference.user_id])).rows[0];
+  const account = (await client.query<{account_kind:string}>(`SELECT account_kind FROM platform_users WHERE id=$1${lock?' FOR NO KEY UPDATE':''}`,[reference.user_id])).rows[0];
   if (!account || account.account_kind !== 'student') throw nameResourceSourceUnavailable();
-  const row = (await client.query<CompanionNameSubmissionRow>('SELECT * FROM platform_companion_name_submissions WHERE id=$1 AND user_id=$2 FOR UPDATE',[id,reference.user_id])).rows[0];
+  const row = (await client.query<CompanionNameSubmissionRow>(`SELECT * FROM platform_companion_name_submissions WHERE id=$1 AND user_id=$2${lock?' FOR UPDATE':''}`,[id,reference.user_id])).rows[0];
   if (!row || row.status !== 'detected' || !row.result_ciphertext || !row.claim_ciphertext || !row.execution_token
     || row.preview_revision !== 1) throw nameResourceSourceUnavailable();
-  const entry = (await client.query<EntryBinding>('SELECT id,user_id,task_id,companion_id,preview_revision FROM platform_companion_name_entries WHERE id=$1 FOR SHARE',[row.entry_id])).rows[0];
+  const entry = (await client.query<EntryBinding>(`SELECT id,user_id,task_id,companion_id,preview_revision FROM platform_companion_name_entries WHERE id=$1${lock?' FOR SHARE':''}`,[row.entry_id])).rows[0];
   const task = (await client.query<TaskBinding>(`SELECT id,user_id,companion_id,source_draft_id,source_revision,answers_id,
-    questionnaire_revision,rules_revision,generator_version,purpose FROM platform_companion_generation_tasks WHERE id=$1 FOR SHARE`,[row.task_id])).rows[0];
+    questionnaire_revision,rules_revision,generator_version,purpose FROM platform_companion_generation_tasks WHERE id=$1${lock?' FOR SHARE':''}`,[row.task_id])).rows[0];
   if (!entry || !task || entry.user_id !== row.user_id || entry.task_id !== row.task_id || entry.companion_id !== row.companion_id
     || entry.preview_revision !== row.preview_revision || task.user_id !== row.user_id || task.companion_id !== row.companion_id
     || task.purpose !== 'companion_preview') throw nameResourceSourceUnavailable();
@@ -159,9 +159,12 @@ export async function readNameResourceSourceInTransaction(client: PoolClient, cr
     decision = parseCompanionNameSafetyDecision(data.decision);
     companionNameUuid(row.execution_token);
   } catch { throw nameResourceSourceUnavailable(); }
-  const modelUsage = decision.mode === 'full' ? await completedUsage(client,row) : null;
+  const modelUsage = decision.mode === 'full' ? await completedUsage(client,row,lock) : null;
   if (row.level !== decision.level || row.detector_mode !== decision.mode || text !== JSON.stringify({schemaVersion:1,claim,
     executionToken:row.execution_token,sourceCapture:capture.payload,decision,modelUsage})) throw nameResourceSourceUnavailable();
   signal?.throwIfAborted();
   return Object.freeze({kind:'classified_name_resource_source',source:Object.freeze(row),decision,previewSource:original});
 }
+
+// Pure original bytes for private archive composition; these confer no live authority.
+export {requestCapture as captureArchivedNameRequest,authenticateClaim as authenticateArchivedNameClaim};

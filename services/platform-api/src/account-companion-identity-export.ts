@@ -37,6 +37,36 @@ function nameCommand(value:unknown){
  if(typeof name!=='string'||name.length>128||name!==name.trim().normalize('NFC')||/[<>\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ud800-\udfff]/u.test(name))throw unavailable();
  return {taskId:id(raw.taskId),expectedRevision:integer(raw.expectedRevision,0),operationId:id(raw.operationId),name};
 }
+/** Internal historical validator shared by private identity and source archives.
+ * Its returned snapshots are data, never current name/preview execution grants. */
+export function identityArchiveValidator(client:PoolClient,owner:string,archive:IdentityGenerationArchive) {
+ const originals=sources(owner,archive);
+   const assetCache=new Map<string,{bundle:ReturnType<typeof parseCompanionIdentityBundle>;review:ReturnType<typeof parseCompanionIdentityReview>}>();
+   const assets=async(row:Row)=>{
+    const key=row.content_digest+':'+row.review_digest;let saved=assetCache.get(key);
+    if(!saved){const found=(await client.query('SELECT revision,bundle_json,review_json FROM platform_companion_identity_assets WHERE content_digest=$1 AND review_digest=$2',[row.content_digest,row.review_digest])).rows[0];
+     if(!found)throw unavailable();const bundle=parseCompanionIdentityBundle(JSON.parse(found.bundle_json)),review=parseCompanionIdentityReview(JSON.parse(found.review_json));
+     if(found.revision!==bundle.revision||review.bundleRevision!==bundle.revision||review.schemaVersion!==bundle.schemaVersion||bundle.contentDigest!==row.content_digest
+      ||review.bundleDigest!==bundle.contentDigest||review.reviewDigest!==row.review_digest||JSON.stringify(bundle)!==found.bundle_json||JSON.stringify(review)!==found.review_json)throw unavailable();
+     saved={bundle,review};
+     // Shared resource bytes are not included in the archive size budget. Keep
+     // their cache bounded while still reading every historical choice.
+     if(assetCache.size>=8)assetCache.delete(assetCache.keys().next().value!);
+     assetCache.set(key,saved);
+    }
+    if(saved.bundle.revision!==row.bundle_revision)throw unavailable();return saved;
+   };
+   const snapshot=async(row:Row,text:string)=>{
+    const original=originals.get(row.task_id);if(!original||row.user_id!==owner||row.companion_id!==original.source.companionId||row.preview_revision!==1)throw unavailable();
+    const data=JSON.parse(text),{bundle}=await assets(row);integer(row.revision);
+    const name=bundle.schemaVersion===1?validateCompanionName({name:data?.name,userName:data?.userNameAtSave,policy:bundle.policy}):validateCompanionNameV2({name:data?.name,userName:data?.userNameAtSave,policy:bundle.policy});
+    const sealCandidates=bundle.schemaVersion===1?companionSealCandidates({companionId:row.companion_id,name,dimensions:original.dimensions,policy:bundle.policy}):companionSealCandidatesV2({companionId:row.companion_id,name,dimensions:original.dimensions,policy:bundle.policy});
+    const expected={schemaVersion:1,id:row.id,userId:owner,companionId:row.companion_id,taskId:row.task_id,previewRevision:1,revision:row.revision,
+     source:original.source,bundleRevision:row.bundle_revision,contentDigest:row.content_digest,reviewDigest:row.review_digest,userNameAtSave:data.userNameAtSave,name,nameOrigin:'user_typed',sealCandidates,inkToken:original.inkToken};
+    if(JSON.stringify(expected)!==text)throw unavailable();return expected;
+   };
+ return {originals,snapshot};
+}
 export class AccountCompanionIdentityExport {
  constructor(private readonly config:Pick<PlatformConfig,'dataCrypto'>){}
  private open(row:Row,table:string,column:string,key:string,owner:string,revision:number){
@@ -55,31 +85,8 @@ export class AccountCompanionIdentityExport {
   if(typeof who.tokenHash!=='string'||!/^[0-9a-f]{64}$/.test(who.tokenHash))throw new ApiError(401,'AUTH_REQUIRED','Sign in to continue.');
   await authorizeFixedSession(client,who,signal);
   try{
-   const originals=sources(who.userId,archive),drafts=new Map<string,{row:Row;snapshot:Row;names:Map<number,ReturnType<typeof nameCommand>>}>();
-   const assetCache=new Map<string,{bundle:ReturnType<typeof parseCompanionIdentityBundle>;review:ReturnType<typeof parseCompanionIdentityReview>}>();
-   const assets=async(row:Row)=>{
-    const key=row.content_digest+':'+row.review_digest;let saved=assetCache.get(key);
-    if(!saved){const found=(await client.query('SELECT revision,bundle_json,review_json FROM platform_companion_identity_assets WHERE content_digest=$1 AND review_digest=$2',[row.content_digest,row.review_digest])).rows[0];
-     if(!found)throw unavailable();const bundle=parseCompanionIdentityBundle(JSON.parse(found.bundle_json)),review=parseCompanionIdentityReview(JSON.parse(found.review_json));
-     if(found.revision!==bundle.revision||review.bundleRevision!==bundle.revision||review.schemaVersion!==bundle.schemaVersion||bundle.contentDigest!==row.content_digest
-      ||review.bundleDigest!==bundle.contentDigest||review.reviewDigest!==row.review_digest||JSON.stringify(bundle)!==found.bundle_json||JSON.stringify(review)!==found.review_json)throw unavailable();
-     saved={bundle,review};
-     // Shared resource bytes are not included in the archive size budget. Keep
-     // their cache bounded while still reading every historical choice.
-     if(assetCache.size>=8)assetCache.delete(assetCache.keys().next().value!);
-     assetCache.set(key,saved);
-    }
-    if(saved.bundle.revision!==row.bundle_revision)throw unavailable();return saved;
-   };
-   const snapshot=async(row:Row,text:string)=>{
-    const original=originals.get(row.task_id);if(!original||row.user_id!==who.userId||row.companion_id!==original.source.companionId||row.preview_revision!==1)throw unavailable();
-    const data=JSON.parse(text),{bundle}=await assets(row);integer(row.revision);
-    const name=bundle.schemaVersion===1?validateCompanionName({name:data?.name,userName:data?.userNameAtSave,policy:bundle.policy}):validateCompanionNameV2({name:data?.name,userName:data?.userNameAtSave,policy:bundle.policy});
-    const sealCandidates=bundle.schemaVersion===1?companionSealCandidates({companionId:row.companion_id,name,dimensions:original.dimensions,policy:bundle.policy}):companionSealCandidatesV2({companionId:row.companion_id,name,dimensions:original.dimensions,policy:bundle.policy});
-    const expected={schemaVersion:1,id:row.id,userId:who.userId,companionId:row.companion_id,taskId:row.task_id,previewRevision:1,revision:row.revision,
-     source:original.source,bundleRevision:row.bundle_revision,contentDigest:row.content_digest,reviewDigest:row.review_digest,userNameAtSave:data.userNameAtSave,name,nameOrigin:'user_typed',sealCandidates,inkToken:original.inkToken};
-    if(JSON.stringify(expected)!==text)throw unavailable();return expected;
-   };
+   const drafts=new Map<string,{row:Row;snapshot:Row;names:Map<number,ReturnType<typeof nameCommand>>}>();
+   const {originals,snapshot}=identityArchiveValidator(client,who.userId,archive);
    for await(const row of this.rows(client,who.userId,'platform_companion_identity_drafts',signal)){
     const decoded=await snapshot(row,this.open(row,'platform_companion_identity_drafts','payload_ciphertext',row.id,who.userId,integer(row.revision)).text);
     drafts.set(row.id,{row,snapshot:decoded,names:new Map()});yield {section:'companionIdentityDrafts',record:{...decoded,createdAt:at(row.created_at),updatedAt:at(row.updated_at)}};
