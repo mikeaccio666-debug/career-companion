@@ -1,3 +1,4 @@
+import {AccountUploadJournalExport,UPLOAD_JOURNAL_EXPORT_TABLES,type UploadJournalExportSection} from './account-upload-journal-export.ts';
 import type {AccountFileCapture,AccountFileSection,ArchiveFile} from './account-file-capture.ts';
 import {AccountMentorExport,MENTOR_EXPORT_TABLES,type MentorExportSection} from './account-mentor-export.ts';
 import {exportPlansInTransaction,PLAN_EXPORT_TABLES,type PlanExportSection} from './account-plan-export.ts';
@@ -29,8 +30,8 @@ import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
-const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES,...COMPANION_EXPORT_TABLES,...COMPANION_GENERATION_EXPORT_TABLES,...ONBOARDING_EXPORT_TABLES,...COST_EXPORT_TABLES,...SECURITY_EXPORT_TABLES,...VOICE_USAGE_EXPORT_TABLES,...PRIVATE_KNOWLEDGE_EXPORT_TABLES,...MCP_EXPORT_TABLES,...PLAN_EXPORT_TABLES,...MENTOR_EXPORT_TABLES]);
-type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection|CompanionGenerationExportSection|OnboardingExportSection|CostExportSection|SecurityExportSection|VoiceUsageExportSection|PrivateKnowledgeExportSection|McpExportSection|PlanExportSection|MentorExportSection|AccountFileSection;
+const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES),...Object.keys(RESUME_EXPORT_TABLES),...CONVERSATION_EXPORT_TABLES,...WELCOME_EXPORT_TABLES,...BIRTH_EXPORT_TABLES,...COMPANION_EXPORT_TABLES,...COMPANION_GENERATION_EXPORT_TABLES,...ONBOARDING_EXPORT_TABLES,...COST_EXPORT_TABLES,...SECURITY_EXPORT_TABLES,...VOICE_USAGE_EXPORT_TABLES,...PRIVATE_KNOWLEDGE_EXPORT_TABLES,...MCP_EXPORT_TABLES,...PLAN_EXPORT_TABLES,...MENTOR_EXPORT_TABLES,...UPLOAD_JOURNAL_EXPORT_TABLES]);
+type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection|ResumeExportSection|ConversationExportSection|WelcomeExportSection|BirthExportSection|CompanionExportSection|CompanionGenerationExportSection|OnboardingExportSection|CostExportSection|SecurityExportSection|VoiceUsageExportSection|PrivateKnowledgeExportSection|McpExportSection|PlanExportSection|MentorExportSection|AccountFileSection|UploadJournalExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
 const tooLarge=()=>new ApiError(503,'ACCOUNT_EXPORT_TOO_LARGE','This export requires the archive worker. No partial export was returned.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
@@ -45,6 +46,7 @@ function freeze<T>(value:T):T{
 /** Partial internal archive input, not a complete export or a download endpoint.
  * No consumer sees the returned private sections before COMMIT succeeds. */
 export class AccountCoreExport {
+  private readonly uploadJournals:AccountUploadJournalExport;
   private readonly fileCapture:AccountFileCapture|undefined;
   private readonly mentors:AccountMentorExport;
   private readonly memories:SharedMemories;
@@ -56,6 +58,7 @@ export class AccountCoreExport {
   private readonly maxBytes:number;
   private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords|ResumeOriginalReview)[];
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number;fileCapture?:AccountFileCapture}={}){
+    this.uploadJournals=new AccountUploadJournalExport(config);
     this.fileCapture=limits.fileCapture;
     this.mentors=new AccountMentorExport(config);
     this.memories=new SharedMemories(db,config,null);
@@ -84,6 +87,7 @@ export class AccountCoreExport {
       const sections:{account:Record<string,unknown>}&Record<ArraySection,unknown[]>={
         account:{...account,createdAt:account.createdAt.toISOString(),emailVerifiedAt:account.emailVerifiedAt?.toISOString()??null},
         uploads:[],artifacts:[],privateFiles:[],
+        uploadWrites:[],uploadWriteEvents:[],uploadRemovals:[],uploadRemovalEvents:[],
         mentorSessions:[],mentorIntentOperations:[],mentorRatings:[],
         mentorOrders:[],mentorOrderOperations:[],mentorSlotReservations:[],mentorReservationOperations:[],mentorFinancialRecords:[],mentorFinancialOperations:[],
         goalPlans:[],goalPlanRevisions:[],goalPlanSteps:[],goalPlanProposals:[],
@@ -141,6 +145,7 @@ export class AccountCoreExport {
       for await(const item of exportMcpInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of exportPlansInTransaction(client,who,signal))append(item.section,item.record);
       for await(const item of this.mentors.exportInTransaction(client,who,signal))append(item.section,item.record);
+      for await(const item of this.uploadJournals.exportInTransaction(client,who,signal))append(item.section,item.record);
       if(this.fileCapture){
         for(const item of await this.fileCapture.captureInTransaction(client,who,signal))append(item.section,item.record);
         const files=sections.privateFiles as ArchiveFile[];
