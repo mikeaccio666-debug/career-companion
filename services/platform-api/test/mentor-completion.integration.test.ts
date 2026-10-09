@@ -1,3 +1,8 @@
+import type {PoolClient} from 'pg';
+import type {Database} from '../src/database.ts';
+import type {FixedSessionContext} from '../src/auth.ts';
+import {AccountCoreExport} from '../src/account-core-export.ts';
+import {AccountReauthentication} from '../src/account-reauthentication.ts';
 import { MentorRatings } from '../src/mentor-ratings.ts';
 import { MentorPayments } from '../src/mentor-payments.ts';
 import { readMentorOrder } from '../../../apps/web/src/mentor-intent-api.ts';
@@ -183,4 +188,122 @@ test('real student session expiry after feedback INSERT rolls back the decision 
   if(typeof args[0]==='string'&&args[0].startsWith('INSERT INTO platform_mentor_ratings(')){entered=true;await query("UPDATE platform_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE token_hash=$1",[s.owner.tokenHash]);}return x;};return run(intercept);});
  try{await assert.rejects(s.ratings.decide(s.owner,s.intent.session.id,rating()),error('AUTH_REQUIRED'));assert(entered);}finally{f.db.withBoundedTransaction=real;}
  assert.equal((await s.ratings.get(s.owner,s.intent.session.id)).rating,null);
+});
+
+const exportPassword='Fictional-mentor-export-password';
+async function exportProof(who:FixedSessionContext){
+ await f.db.query('UPDATE platform_users SET password_hash=$2 WHERE id=$1',[who.userId,await hashPassword(exportPassword)]);
+ return (await new AccountReauthentication(f.db).verify(who,{purpose:'account_export',password:exportPassword})).token;
+}
+const archive=async(who:FixedSessionContext)=>new AccountCoreExport(f.db,f.config).capture(who,await exportProof(who));
+const exportConsumed=async(who:FixedSessionContext)=>(await f.db.query("SELECT consumed_at FROM platform_account_reauthentications WHERE user_id=$1 AND purpose='account_export'",[who.userId])).rows[0].consumed_at;
+function exportDb(transform:(sql:string,rows:Record<string,any>[])=>void|Promise<void>):Database{return {withBoundedTransaction:<T>(run:(client:PoolClient)=>Promise<T>,options?:{readOnly?:boolean;timeoutMs?:number})=>f.db.withBoundedTransaction(client=>run(new Proxy(client,{get(target,key){
+ if(key==='query')return async(sql:string,values:unknown[])=>{const result=await target.query(sql,values);await transform(sql,result.rows);return result;};const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+}})),options)} as Database;}
+const exportSessions=(sql:string)=>sql.startsWith('SELECT id,user_id,org_id,offer_id,offer_revision,kind,duration_min,status');
+const exportOperations=(sql:string)=>sql.startsWith('SELECT user_id,org_id,operation_id,session_id,action,applied_revision,created_at,receipt_ciphertext');
+const exportRatings=(sql:string)=>sql.startsWith('SELECT session_id,user_id,org_id,operation_id,created_at,payload_ciphertext');
+async function mentorSnapshot(who:FixedSessionContext){
+ const rows:Record<string,unknown>={};for(const name of ['sessions','intent_operations','ratings','orders','order_proofs','slot_reservations','reservation_proofs'])
+  rows[name]=(await f.db.query(`SELECT row_to_json(t)::text AS value FROM platform_mentor_${name} t WHERE user_id=$1 ORDER BY row_to_json(t)::text`,[who.userId])).rows;
+ return rows;
+}
+async function futureIntent(){const now=Date.now();fixtureStarts=new Date(now+3*3600000).toISOString();fixtureEnds=new Date(now+4*3600000).toISOString();return setup();}
+
+test('account archive preserves actual completed service, original offer and private rating without staff identity or evidence',async context=>{
+ const s=await completed(),rated=await s.ratings.decide(s.owner,s.intent.session.id,rating()),pair=await s.service.getOrder(s.owner,s.intent.session.id),other=await completed();
+ context.mock.method(globalThis,'fetch',async()=>{throw Error('No external requests');});
+ const before=await mentorSnapshot(s.owner),queries:string[]=[],result=await new AccountCoreExport(exportDb(sql=>{queries.push(sql);}),f.config).capture(s.owner,await exportProof(s.owner));
+ const session=result.sections.mentorSessions[0] as any,ops=result.sections.mentorIntentOperations as any[];
+ assert.equal(result.sections.mentorSessions.length,1);assert.equal(session.intentNote,s.command.intentNote);assert.equal(session.contactName,s.command.contactName);assert.equal(session.contactEmail,s.owner.userId+'@example.invalid');
+ assert.equal(session.status,'completed');assert.equal(session.completedAt,s.slot.endsAt);assert.equal(session.assignment.mentorDisplayName,'Fictional mentor');assert.equal(session.scheduled.meetingUrl,'https://meet.google.com/fictional-completed');
+ assert.deepEqual(ops.map(x=>x.action).sort(),['complete','create','match','schedule']);assert.equal(ops.find(x=>x.action==='create').acceptedOffer.refundRules,s.source.terms.refundRules);assert.equal(ops.find(x=>x.action==='match').command.priceCents,9500);
+ assert.deepEqual(result.sections.mentorRatings,[rated.rating]);assert.deepEqual(await mentorSnapshot(s.owner),before);
+ for(const secret of [s.operator.userId,s.mentor.userId,s.ref,s.profile.recordId,s.slot.recordId,other.owner.userId,other.intent.session.id,pair.order.handoffCode!,s.owner.tokenHash,exportPassword])assert(!JSON.stringify(result).includes(secret));
+ assert(!queries.some(sql=>/\b(?:FROM|JOIN)\s+platform_mentor_capacity_(?:records|proofs)\b/i.test(sql)));
+ assert(!queries.some(sql=>/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+platform_mentor_/i.test(sql)));
+ assert(Object.isFrozen(session.assignment));assert.equal(result.includedTables.length,72);assert.equal(result.remainingTables.length,87);assert(result.remainingTables.includes('platform_mentor_orders'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
+});
+
+test('all saved intent phases and both cancellation routes retain their own original operation histories',async()=>{
+ for(const state of ['requested','matched','cancelled_requested','cancelled_matched','scheduled','cancelled_scheduled']){
+  const s=state==='scheduled'||state==='cancelled_scheduled'?await historical():await futureIntent();
+  if(state==='matched'||state==='cancelled_matched')await match(s);
+  if(state==='cancelled_requested'||state==='cancelled_matched')await s.service.cancel(s.owner,s.intent.session.id,{operationId:randomUUID(),expectedRevision:state==='cancelled_requested'?1:2});
+  if(state==='cancelled_scheduled')await s.service.recordSchedule(s.operator,s.org,{action:'cancel_scheduled',operationId:randomUUID(),sessionId:s.intent.session.id,expectedRevision:3,occurredAt:new Date().toISOString(),evidenceRef:s.ref,confirmRecorded:true});
+  const before=await mentorSnapshot(s.owner),data=await archive(s.owner),session=data.sections.mentorSessions[0] as any;
+  assert.equal(session.status,state.startsWith('cancelled')?'cancelled':state);assert.equal(data.sections.mentorIntentOperations.length,session.revision);assert.deepEqual(data.sections.mentorRatings,[]);assert.deepEqual(await mentorSnapshot(s.owner),before);
+  assert(!JSON.stringify(data).includes(s.ref));assert(!JSON.stringify(data).includes(s.operator.userId));
+ }
+});
+
+test('catalog withdrawal, revoked staff membership, changed email and withdrawn model terms do not erase owner history or skipped ratings',async()=>{
+ const s=await completed(),skip=await s.ratings.decide(s.owner,s.intent.session.id,{operationId:randomUUID(),action:'skip'});
+ await capacity.withdraw(s.operator,s.org,{operationId:randomUUID(),recordId:s.profile.recordId,expectedRevision:1,reason:'Fictional historical withdrawal'});
+ await f.db.query("UPDATE platform_org_roles SET status='revoked',revoked_at=now() WHERE org_id=$1",[s.org]);
+ await f.db.query('DELETE FROM platform_terms_consents WHERE user_id=$1',[s.owner.userId]);await f.db.query("UPDATE platform_users SET email=$2,email_verified_at=NULL WHERE id=$1",[s.owner.userId,randomUUID()+'@example.invalid']);
+ const before=await mentorSnapshot(s.owner),data=await archive(s.owner);assert.deepEqual(data.sections.mentorRatings,[skip.rating]);assert.equal((data.sections.mentorRatings[0] as any).score,null);
+ assert.equal((data.sections.mentorSessions[0] as any).contactEmail,s.owner.userId+'@example.invalid');assert.deepEqual(await mentorSnapshot(s.owner),before);
+});
+
+test('105 actual owner intents cross both session and operation pages without normal list limits',async()=>{
+ const s=await futureIntent(),ids=[s.intent.session.id];for(let i=1;i<105;i++)ids.push((await s.service.create(s.owner,{...s.command,operationId:randomUUID(),intentNote:'Fictional intent '+i})).session.id);
+ const queries:string[]=[],result=await new AccountCoreExport(exportDb(sql=>{queries.push(sql);}),f.config).capture(s.owner,await exportProof(s.owner));
+ assert.deepEqual((result.sections.mentorSessions as any[]).map(r=>r.id),ids.sort());assert.equal(result.sections.mentorIntentOperations.length,105);assert.equal(queries.filter(exportSessions).length,2);assert.equal(queries.filter(exportOperations).length,2);
+});
+
+test('real rollback to an older authentic intent cannot hide the immutable cancellation receipt',async()=>{
+ const s=await futureIntent(),old=(await f.db.query('SELECT * FROM platform_mentor_sessions WHERE id=$1',[s.intent.session.id])).rows[0];
+ await s.service.cancel(s.owner,s.intent.session.id,{operationId:randomUUID(),expectedRevision:1});const current=(await f.db.query('SELECT * FROM platform_mentor_sessions WHERE id=$1',[s.intent.session.id])).rows[0],token=await exportProof(s.owner);
+ const restore=async(row:any)=>f.db.query('UPDATE platform_mentor_sessions SET status=$2,revision=$3,last_operation_id=$4,updated_at=$5,payload_ciphertext=$6 WHERE id=$1',[row.id,row.status,row.revision,row.last_operation_id,row.updated_at,row.payload_ciphertext]);
+ await restore(old);try{await assert.rejects(new AccountCoreExport(f.db,f.config).capture(s.owner,token),{code:'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE'});assert.equal(await exportConsumed(s.owner),null);}finally{await restore(current);}
+ assert.equal(((await new AccountCoreExport(f.db,f.config).capture(s.owner,token)).sections.mentorSessions[0] as any).status,'cancelled');
+});
+
+test('ciphertext corruption, wrong owner and orphan operations or ratings reject the whole archive and preserve reauthentication',async()=>{
+ const s=await completed();await s.ratings.decide(s.owner,s.intent.session.id,rating());const token=await exportProof(s.owner);
+ const cases:[(sql:string)=>boolean,(row:any)=>void][]=[
+  [exportSessions,r=>{r.payload_ciphertext=Buffer.from(r.payload_ciphertext);r.payload_ciphertext[r.payload_ciphertext.length-1]^=1;}],
+  [exportSessions,r=>{r.user_id=randomUUID();}], [exportSessions,r=>{r.status='requested';}],
+  [exportOperations,r=>{r.session_id=randomUUID();}], [exportOperations,r=>{r.org_id=randomUUID();}],
+  [exportRatings,r=>{r.user_id=randomUUID();}], [exportRatings,r=>{r.session_id=randomUUID();}],
+  [exportRatings,r=>{r.payload_ciphertext=Buffer.from(r.payload_ciphertext);r.payload_ciphertext[r.payload_ciphertext.length-1]^=1;}],
+ ];
+ for(const [matches,mutate] of cases){let reached=false;await assert.rejects(new AccountCoreExport(exportDb((sql,rows)=>{if(matches(sql)&&rows.length){reached=true;mutate(rows[0]);}}),f.config).capture(s.owner,token),{code:'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE'});assert(reached);assert.equal(await exportConsumed(s.owner),null);}
+ assert.equal((await new AccountCoreExport(f.db,f.config).capture(s.owner,token)).sections.mentorRatings.length,1);
+});
+
+test('authenticated unknown rating fields fail closed; rated and skipped records are never converted into absence',async()=>{
+ const s=await completed();await s.ratings.decide(s.owner,s.intent.session.id,rating());const token=await exportProof(s.owner);
+ let reached=false;const db=exportDb((sql,rows)=>{if(exportRatings(sql)&&rows.length){reached=true;const row=rows[0],context={table:'mentor_rating',column:'payload',rowId:row.session_id,ownerId:row.user_id,revision:1};
+  const payload=JSON.parse(f.crypto.openUtf8(row.payload_ciphertext,context));payload.rating.privateStaffField='Fictional unexpected field';row.payload_ciphertext=f.crypto.sealUtf8(JSON.stringify(payload),context);}});
+ await assert.rejects(new AccountCoreExport(db,f.config).capture(s.owner,token),{code:'ACCOUNT_MENTOR_EXPORT_UNAVAILABLE'});assert(reached);assert.equal(await exportConsumed(s.owner),null);
+ assert.equal((await new AccountCoreExport(f.db,f.config).capture(s.owner,token)).sections.mentorRatings.length,1);
+});
+
+test('empty service history, cancellation and capacity errors do not consume the owner proof or return partial records',async()=>{
+ const nobody=await f.actor(),empty=await archive(nobody);assert.deepEqual(empty.sections.mentorSessions,[]);assert.deepEqual(empty.sections.mentorIntentOperations,[]);assert.deepEqual(empty.sections.mentorRatings,[]);
+ const s=await completed();await s.ratings.decide(s.owner,s.intent.session.id,rating());const token=await exportProof(s.owner),abort=new AbortController();
+ await assert.rejects(new AccountCoreExport(exportDb(sql=>{if(exportRatings(sql))abort.abort();}),f.config).capture(s.owner,token,abort.signal),{code:'ACCOUNT_EXPORT_CANCELLED'});assert.equal(await exportConsumed(s.owner),null);
+ await assert.rejects(new AccountCoreExport(f.db,f.config,{maxBytes:3000}).capture(s.owner,token),{code:'ACCOUNT_EXPORT_TOO_LARGE'});assert.equal(await exportConsumed(s.owner),null);
+ assert.equal((await new AccountCoreExport(f.db,f.config).capture(s.owner,token)).sections.mentorRatings.length,1);
+});
+
+test('recorded payment and refund validate historical service without exporting financial evidence or handoff credentials',async()=>{
+ const s=await completed(),payments=new MentorPayments(f.db,{...s.config,mentorRetentionDays:365,mentorRetentionEvidenceRef:s.ref},s.service,offers,capacity,blobs);
+ const paid={action:'pay',operationId:randomUUID(),sessionId:s.intent.session.id,expectedRevision:1,amountCents:9500,externalRef:'Fictional_export_payment_'+randomUUID(),occurredAt:new Date().toISOString(),evidenceRef:s.ref,confirmRecorded:true};
+ await payments.record(s.operator,s.org,paid);
+ const refund={action:'refund',operationId:randomUUID(),sessionId:s.intent.session.id,expectedRevision:2,amountCents:2500,externalRef:'Fictional_export_refund_'+randomUUID(),occurredAt:new Date().toISOString(),evidenceRef:s.ref,confirmRecorded:true};
+ await payments.record(s.operator,s.org,refund);const pair=await s.service.getOrder(s.owner,s.intent.session.id),before=await mentorSnapshot(s.owner),data=await archive(s.owner);
+ assert.equal(pair.order.status,'refunded_partial');assert.equal((data.sections.mentorSessions[0] as any).status,'completed');assert.deepEqual(await mentorSnapshot(s.owner),before);
+ for(const value of [paid.externalRef,refund.externalRef,paid.operationId,refund.operationId,s.ref,s.operator.userId,pair.order.handoffCode!])assert(!JSON.stringify(data).includes(value));
+ for(const table of ['platform_mentor_orders','platform_mentor_order_proofs','platform_mentor_financial_records','platform_mentor_financial_proofs'])assert(data.remainingTables.includes(table));
+});
+
+test('actual concurrent owner cancellation waits for the export snapshot without mixing old and new intent receipts',async()=>{
+ const s=await futureIntent();let changed=false,pending:Promise<void>|undefined,failure:unknown;
+ const data=await new AccountCoreExport(exportDb(sql=>{if(!changed&&exportSessions(sql)){changed=true;
+  pending=s.service.cancel(s.owner,s.intent.session.id,{operationId:randomUUID(),expectedRevision:1}).then(()=>{},error=>{failure=error;});}}),f.config).capture(s.owner,await exportProof(s.owner));
+ await pending;assert.equal(failure,undefined);assert(changed);assert.equal((data.sections.mentorSessions[0] as any).status,'requested');assert.equal(data.sections.mentorIntentOperations.length,1);
+ assert.equal((await s.service.get(s.owner,s.intent.session.id)).status,'cancelled');
 });
