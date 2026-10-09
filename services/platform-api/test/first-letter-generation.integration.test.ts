@@ -596,3 +596,55 @@ test('an explicitly refreshed task generates from its new preparation, while old
   assert.equal(p.calls,1);assert.deepEqual(await g.generate(a.who,pick(a),next),generated);assert.equal(p.calls,1);
  });
 });
+
+test('student letter progress follows authenticated preparation, actual generation and review without exposing draft text',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const {FirstLetterProgressService}=await import('../src/first-letter-progress.ts');
+  const raw=await setup(birthRuntime,values),tasks=new FirstLetterTasks(f.db,f.config,raw.sources);
+  const off=createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'}});
+  const emptyGeneration=new FirstLetterGeneration(f.db,f.config,off,tasks);
+  const progress=new FirstLetterProgressService(f.db,f.config,raw.sources,emptyGeneration);
+  assert.equal((await progress.read(raw.who)).state,'not_started');
+  await tasks.prepare(raw.who,settings);assert.equal((await progress.read(raw.who)).state,'prepared');
+  const a=await reviewActor(birthRuntime);let call=0,entered!:()=>void,release!:()=>void;
+  const atReview=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+  const p=provider({outputs:[validLetter(a),assessment()],hook:async()=>{if(++call===2){entered();await gate;}}}),g=service(a,p.runtime);
+  const reader=new FirstLetterProgressService(f.db,f.config,a.sources,g);
+  await g.generate(a.who,pick(a),settings);assert.equal((await reader.read(a.who)).state,'draft_saved');
+  const running=g.review(a.who,pick(a),settings);
+  try{await Promise.race([atReview,running.then(()=>{throw Error('Review ended before observation.');})]);assert.equal((await reader.read(a.who)).state,'checking');}
+  finally{release();}
+  await running;
+  const view=await reader.read(a.who);assert.equal(view.state,'reviewed');assert.equal(view.delivered,false);assert.equal(p.calls,2);
+  assert.deepEqual(Object.keys(view).sort(),['capturedAt','companionId','delivered','ownerId','state','welcomeId']);
+  const wire=JSON.stringify(view);for(const secret of [a.who.tokenHash,validLetter(a),pick(a).taskId,model,'receipt','costMicros'])assert(!wire.includes(secret));
+  assert.equal((await a.welcome.read(a.who) as any).step,'C7');
+  assert.equal((await reader.read(a.who)).state,'reviewed');assert.equal(p.calls,2);
+ });
+});
+test('live letter progress distinguishes real execution from expired work without recovering or charging it',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const {FirstLetterProgressService}=await import('../src/first-letter-progress.ts');
+  const a=await prepared(birthRuntime),off=service(a,createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'}}));
+  const reader=new FirstLetterProgressService(f.db,f.config,a.sources,off);
+  await withFirstLetterTransport(text,true,async(local,calls)=>{
+   await firstLetterChild(a,'generate',local,'dispatch');assert.equal((await reader.read(a.who)).state,'writing');
+   const saved=await expireFirstLetterStage(pick(a).taskId,'write_original');
+   assert.equal((await reader.read(a.who)).state,'interrupted');assert.equal((await row(a)).status,'running');
+   assert.equal((await f.db.query('SELECT count(*)::int n FROM platform_cost_ledger WHERE reservation_id=$1',[saved.reservation_id])).rows[0].n,0);
+   assert.equal(calls(),1);
+  });
+ });
+});
+test('letter progress rejects damaged evidence and revoked users instead of reporting an empty or successful letter',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const {FirstLetterProgressService}=await import('../src/first-letter-progress.ts');
+  const a=await prepared(birthRuntime),p=provider(),g=service(a,p.runtime),reader=new FirstLetterProgressService(f.db,f.config,a.sources,g);
+  await g.generate(a.who,pick(a),settings);const saved=await row(a),damaged=Buffer.from(saved.output_ciphertext);damaged[damaged.length-1]^=1;
+  await f.db.query('UPDATE platform_first_letter_stages SET output_ciphertext=$2 WHERE id=$1',[saved.id,damaged]);
+  await assert.rejects(reader.read(a.who),{code:'FIRST_LETTER_STAGE_UNAVAILABLE'});
+  await f.db.query('UPDATE platform_first_letter_stages SET output_ciphertext=$2 WHERE id=$1',[saved.id,saved.output_ciphertext]);
+  await f.db.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[a.who.userId]);
+  await assert.rejects(reader.read(a.who),{code:'AUTH_REQUIRED'});assert.equal(p.calls,1);
+ });
+});

@@ -181,3 +181,22 @@ test('actual source IDs, non-null stage choices and account deletion preserve th
     assert.deepEqual(await count(a), { welcomes: 0, operations: 0, intros: 0, jobs: 0 });
     assert.equal((await fixture.db.query('SELECT id FROM platform_messages WHERE id=$1', [first.intro.id])).rowCount, 0);
 });
+
+test('first-letter progress HTTP is a private read of actual preparation and never publishes or starts a model',async()=>{
+ const a=await actor(),url='/api/platform/companion/first-letter/progress';
+ assert.equal((await system.app.inject({url,headers:headers(a)})).statusCode,409);
+ await born(a);await open(a);
+ assert.equal((await system.app.inject({url,headers:headers(a)})).statusCode,409);
+ await choose(a,{operationId:randomUUID(),expectedRevision:1,choice:'direct_letter'});
+ let result=await system.app.inject({url,headers:headers(a)});assert.equal(result.statusCode,200,result.body);
+ assert.equal(result.json().state,'not_started');assert.equal(result.headers['cache-control'],'private, no-store');
+ const before=await count(a);
+ await system.firstLetterTasks.prepare(a.who,{rosterRevision:1,enabledExperts:[],localDate:'2026-10-09'});
+ result=await system.app.inject({url,headers:headers(a)});assert.equal(result.statusCode,200,result.body);
+ assert.equal(result.json().state,'prepared');assert.equal(result.json().delivered,false);assert.equal(result.json().ownerId,a.who.userId);
+ assert.equal((await system.app.inject({url})).statusCode,401);
+ assert.equal((await system.app.inject({url,headers:{...headers(a),[PLATFORM_ACCOUNT_HEADER]:randomUUID()}})).statusCode,409);
+ assert.equal((await system.app.inject({url:url+'?taskId='+randomUUID(),headers:headers(a)})).statusCode,400);
+ assert.equal((await system.app.inject({method:'POST',url,headers:headers(a),payload:{state:'reviewed'}})).statusCode,404);
+ assert.deepEqual(await count(a),before);assert.equal((await read(a)).json().step,'C7');assert.equal(providerCalls,0);
+});

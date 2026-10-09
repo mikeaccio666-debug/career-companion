@@ -1,3 +1,4 @@
+import {FirstLetterProgressService} from './first-letter-progress.ts';
 import { TodayWeeklyService } from './today-weekly.ts';
 import {FirstLetterGeneration} from './first-letter-generation.ts';
 import {FirstLetterTasks} from './first-letter-tasks.ts';
@@ -134,6 +135,7 @@ export async function buildApp(options:AppOptions={}) {
   const firstLetterSources=new FirstLetterSources(db,config,bundle,companion.generation,studentOnboarding.prebirth);
   const firstLetterTasks=new FirstLetterTasks(db,config,firstLetterSources);
   const firstLetterGeneration=new FirstLetterGeneration(db,config,runtime,firstLetterTasks);
+  const firstLetterProgress=new FirstLetterProgressService(db,config,firstLetterSources,firstLetterGeneration);
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
   const sharedMemories=new SharedMemories(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
@@ -393,6 +395,10 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/companion/welcome`,birthReadAccess,async(request,reply)=>{
     birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
     try{return await welcome.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}
+  });
+  app.get(`${prefix}/companion/first-letter/progress`,limitedAccount,async(request,reply)=>{
+    birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');
+    try{return await firstLetterProgress.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}
   });
   app.post(`${prefix}/companion/welcome/open`,limitedAccount,async(request,reply)=>{
     birthQuery(request);const cancellation=requestSignal(request,reply);reply.header('Cache-Control','private, no-store');

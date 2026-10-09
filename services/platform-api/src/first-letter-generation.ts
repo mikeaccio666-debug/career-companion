@@ -71,8 +71,11 @@ export class FirstLetterGeneration{
   return {plan,predecessor,records,held:null};
  }
  async readReview(value:FixedSessionContext,input:unknown,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
+  return this.db.withBoundedTransaction(c=>this.readReviewInTransaction(c,value,input,settings,signal));
+ }
+ /** Reconstruct the saved review under the caller's existing owner lock. */
+ async readReviewInTransaction(c:PoolClient,value:FixedSessionContext,input:unknown,settings:FirstLetterCompositionSettings,signal?:AbortSignal){
   const who=session(value),pick=selection(input),saved=snapshotFirstLetterSettings(settings);
-  return this.db.withBoundedTransaction(async c=>{
    const {preparation}=await this.tasks.readInTransaction(c,who,pick,saved,signal);
    const state=await this.continuation(c,who,preparation,pick.taskId);
    await authorizeFixedSession(c,who,signal);signal?.throwIfAborted();
@@ -80,7 +83,6 @@ export class FirstLetterGeneration{
    const evidence=Object.freeze(state.records.map(r=>Object.freeze({stageId:r.id,stage:r.stage,callId:r.call!.id,
     preparationId:r.preparationId,predecessorId:r.predecessorId,predecessorDigest:r.predecessorDigest,requestDigest:r.requestDigest})));
    return Object.freeze({...state.plan,evidence,...(state.plan.kind==='reviewed_draft'?{assurance:'durable_model_judgment' as const}:{})});
-  });
  }
  /** At most the three review/rewrite slots; every iteration reconstructs SQL
   * history. A restarted caller never resets the rewrite count or invents calls. */
