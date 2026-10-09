@@ -1,3 +1,10 @@
+import { CAREER_EXPORT_TABLES,type CareerExportSection } from './account-export-rows.ts';
+import { CareerTargets } from './career-targets.ts';
+import { CareerStories } from './career-stories.ts';
+import { ManualJobs } from './manual-jobs.ts';
+import { CareerApplications } from './career-applications.ts';
+import { CareerInterviews } from './career-interviews.ts';
+import { CareerIdentityRecords } from './career-identity.ts';
 import { careerRecordId,careerRecordObject } from '@companion/platform-contracts';
 import { authorizeFixedSession,type FixedSessionContext } from './auth.ts';
 import { AccountReauthentication } from './account-reauthentication.ts';
@@ -7,6 +14,8 @@ import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
 import { ApiError } from './errors.ts';
 
+const projectedTables=Object.freeze(['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses',...Object.keys(CAREER_EXPORT_TABLES)]);
+type ArraySection='termsConsents'|'sessions'|'memories'|'memoryOperations'|'memoryEvents'|'memoryUses'|CareerExportSection;
 const unavailable=()=>new ApiError(503,'ACCOUNT_EXPORT_UNAVAILABLE','The private export could not be confirmed. Try again.');
 function fixed(value:FixedSessionContext):Readonly<FixedSessionContext>{
   try{const row=careerRecordObject(value,['userId','tokenHash']);
@@ -22,8 +31,12 @@ function freeze<T>(value:T):T{
 export class AccountCoreExport {
   private readonly memories:SharedMemories;
   private readonly maxBytes:number;
+  private readonly careerReaders:readonly (CareerTargets|CareerStories|ManualJobs|CareerApplications|CareerInterviews|CareerIdentityRecords)[];
   constructor(private readonly db:Database,config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,limits:{maxBytes?:number}={}){
     this.memories=new SharedMemories(db,config,null);
+    const jobs=new ManualJobs(db,config,null),applications=new CareerApplications(db,config,null,jobs);
+    this.careerReaders=Object.freeze([new CareerTargets(db,config,null),new CareerStories(db,config,null),jobs,applications,
+      new CareerInterviews(db,config,null,applications),new CareerIdentityRecords(db,config,null)]);
     this.maxBytes=limits.maxBytes??16*1024*1024;
     if(!Number.isSafeInteger(this.maxBytes)||this.maxBytes<1024||this.maxBytes>16*1024*1024)throw unavailable();
   }
@@ -38,9 +51,12 @@ export class AccountCoreExport {
         email_verified_at AS "emailVerifiedAt" FROM platform_users WHERE id=$1`,[who.userId])).rows[0];
       if(account?.accountKind!=='student')throw new ApiError(403,'STUDENT_ACCOUNT_REQUIRED','Use a student account.');
       const capturedAt=(await client.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString();
-      const sections:{account:Record<string,unknown>;termsConsents:unknown[];sessions:unknown[];memories:unknown[];memoryOperations:unknown[];memoryEvents:unknown[];memoryUses:unknown[]}={
+      const sections:{account:Record<string,unknown>}&Record<ArraySection,unknown[]>={
         account:{...account,createdAt:account.createdAt.toISOString(),emailVerifiedAt:account.emailVerifiedAt?.toISOString()??null},
         termsConsents:[],sessions:[],memories:[],memoryOperations:[],memoryEvents:[],memoryUses:[],
+        careerTargets:[],careerTargetOperations:[],careerProjects:[],careerStories:[],careerLibraryOperations:[],
+        savedJobs:[],savedJobOperations:[],careerApplications:[],careerApplicationOperations:[],careerApplicationEvents:[],
+        careerInterviews:[],careerInterviewOperations:[],careerIdentity:[],careerIdentityOperations:[],
       };
       let bytes=Buffer.byteLength(JSON.stringify(sections));
       const append=(section:Exclude<keyof typeof sections,'account'>,record:unknown)=>{
@@ -65,11 +81,12 @@ export class AccountCoreExport {
         if(rows.length<100)break;after=rows.at(-1)!.token_hash;
       }
       for await(const item of this.memories.exportInTransaction(client,who,signal))append(item.section,item.record);
+      for(const reader of this.careerReaders)for await(const item of reader.exportInTransaction(client,who,signal))append(item.section,item.record);
       await authorizeFixedSession(client,who,signal);signal?.throwIfAborted();
       return freeze({schemaVersion:1 as const,scope:'account_core_export_sections' as const,complete:false as const,
         ownerId:who.userId,capturedAt,sections,
-        includedTables:['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses'],
-        remainingTables:coverage.tables.filter(table=>table.exportStatus!=='excluded_nonpersonal'&&!['platform_users','platform_terms_consents','platform_sessions','platform_memories','platform_memory_operations','platform_memory_events','platform_memory_uses'].includes(table.table)).map(table=>table.table),
+        includedTables:projectedTables,
+        remainingTables:coverage.tables.filter(table=>table.exportStatus!=='excluded_nonpersonal'&&!projectedTables.includes(table.table)).map(table=>table.table),
         filesIncluded:false as const});
     },{timeoutMs:5000});}catch(error){
       if(signal?.aborted)throw new ApiError(499,'ACCOUNT_EXPORT_CANCELLED','The private export was cancelled.');

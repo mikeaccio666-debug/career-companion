@@ -1,3 +1,4 @@
+import { accountExportRows } from './account-export-rows.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordObject, careerRecordId, parseCareerIdentityCommand, parseCareerIdentityRecord, parseCareerIdentityEntry, type CareerIdentityAction, type CareerIdentityRecord } from '@companion/platform-contracts';
@@ -138,6 +139,18 @@ export class CareerIdentityRecords {
             throw bad();
         }
         return this.db.withBoundedTransaction(async (client) => { await this.authorize(client, s, signal); const records = await this.all(client, s, signal); await authorizeFixedSession(client, s, signal); return Object.freeze({ records }); });
+    }
+    /** Internal reader for the account-export transaction: the coordinator
+     * consumes the fresh password proof and commits before exposing any section. */
+    async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
+     const s=this.fixed(value);await this.authorize(client,s,signal);
+     for await(const row of accountExportRows(client,s.userId,'platform_career_identity_dates',signal)){
+      const record=await this.decode(s,row,await this.latest(client,s,row.id));yield {section:'careerIdentity' as const,record};
+     }
+     for await(const row of accountExportRows(client,s.userId,'platform_career_identity_operations',signal)){
+      const r=this.receipt(s,row);yield {section:'careerIdentityOperations' as const,record:{id:r.operationId,recordId:r.recordId,action:r.action,revision:r.appliedRevision,createdAt:r.createdAt}};
+     }
+     await authorizeFixedSession(client,s,signal);
     }
     async get(value: FixedSessionContext, key: unknown, signal?: AbortSignal) {
         const s = this.fixed(value);

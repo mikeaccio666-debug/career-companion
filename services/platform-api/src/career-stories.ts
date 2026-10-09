@@ -1,3 +1,4 @@
+import { accountExportRows } from './account-export-rows.ts';
 import type { OwnedCareerEvidence,OwnedCareerInput } from './career-run-context.ts';
 import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
@@ -51,6 +52,21 @@ export class CareerStories {
    if(p.experienceKind!==story.experienceKind)throw new ApiError(400,'CAREER_STORY_SOURCE_KIND','Keep the actual experience label when linking project facts.');
    if(rank[story.sensitivity]<rank[p.sensitivity])throw new ApiError(400,'CAREER_STORY_SENSITIVITY','The story privacy level must also protect its linked facts.');
   }
+ }
+ /** Internal reader for the account-export transaction: the coordinator
+  * consumes the fresh password proof and commits before exposing any section. */
+ async *exportInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal){
+  const s=this.fixed(value);await this.authorize(client,s,signal);
+  for await(const row of accountExportRows(client,s.userId,'platform_career_evidence',signal)){
+   const record=await this.record(client,s,'project',row);yield {section:'careerProjects' as const,record};
+  }
+  for await(const row of accountExportRows(client,s.userId,'platform_career_stories',signal)){
+   const record=await this.record(client,s,'story',row);yield {section:'careerStories' as const,record};
+  }
+  for await(const row of accountExportRows(client,s.userId,'platform_career_library_operations',signal)){
+   const r=await this.receipt(client,s,row);yield {section:'careerLibraryOperations' as const,record:{id:r.operationId,recordId:r.recordId,recordKind:r.recordKind,action:r.action,revision:r.appliedRevision,createdAt:r.createdAt}};
+  }
+  await authorizeFixedSession(client,s,signal);
  }
  async get(value:FixedSessionContext,inputKind:CareerLibraryKind,key:unknown,signal?:AbortSignal){const context=this.fixed(value),kind=this.kind(inputKind);let id:string;try{id=careerRecordId(key);}catch{throw bad();}
   return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);const row=await this.row(client,context,kind,id);if(!row)throw missing();const record=await this.record(client,context,kind,row),evidenceAvailability=kind==='story'?await this.availability(client,context,record as CareerStory,signal):null;await authorizeFixedSession(client,context,signal);return Object.freeze({record,evidenceAvailability});});}
