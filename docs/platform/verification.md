@@ -1135,3 +1135,15 @@ API 类型检查与 git diff --check 通过。没有 schema 变更、主库/主�
 私有证据：ci-regression-20261008 下 name-source-regression.log、name-source-pagination-bulk.log、name-source-types-final.log、name-source-separated-types.log、name-source-separated-integration.log，及重复实例识别／取消日志。早期失败日志保留，未用通过结果覆盖原失败记录。
 
 JSON 当前覆盖 121 表、剩余 43；带私有文件覆盖 124、剩余 40；另有 7 项既有豁免，总清单 171。命名提示发布／展示／处理、其他剩余资料、自助下载和删除协调仍未全部交付，complete=false；整体 P0 goal 继续。
+
+## 命名原始提示与交付历史的本人导出（2026-10-09 UTC）
+
+依据产品 09 §11、13 §4.5，新增 [AccountNameDeliveryExport](account-name-delivery-export.md)，覆盖命名原始固定响应、发布 head/命令、发布正文、投影、后续状态/操作与明确处理八表。原响应、准备事件、检测来源、当时语言证明、资源审核/激活及连续操作链均复用原协议验证；执行路径默认锁保持不变，归档在原 REPEATABLE READ 内只读。发布、投影、展示、确认与处理保持不同事实，不补造问题真正提问或用户已读。
+
+- 最终账户导出、覆盖清单、命名来源/队列/运行/资源交付及原生 V2 组合回归 **404/404** 通过，零失败、零取消、零跳过。新增专项 **11/11** 也独立通过，已包含在 404 项内，不重复计数。API TypeScript 检查和 git diff --check 通过。
+- 真实服务写入的 105 条发布重试、投影与支持操作跨页完整；L1/L2、pending、prepared-only、published-but-not-presented、实际确认/处理与旧政策撤回均按原状态保留。没有重新分类、发布、恢复、采用名字或写入共享记忆。
+- 七类密文逐一损坏/串户、八类表缺失、原状态回滚、操作后缀截断、首份发布锚点变化、原准备事件/语言证明/历史资产/激活与处理元数据不一致均拒绝整个导出。来源审计补上尚未发布时原响应整行缺失的情况；响应创建晚于准备或在未来也拒绝。取消、晚到身份变化和容量超限保留密码再验证凭据供重试，不返回半份结果。
+- 新测试全部使用虚构资料、隔离 PostgreSQL schema 和受控 loopback provider；fixture 完成时清理其 schema 并验证不存在。没有真实付费模型、申请、主库迁移、预览重启、合并或部署。
+- JSON 覆盖 129 表、剩余 35；带私有文件覆盖 132、剩余 32；既有豁免 7 项，总清单 171。共享 safety_events/问题实际发生记录等仍待投影，完整自助下载、删除协调与整个 P0 未完成，complete=false 保持。
+
+私有日志：ci-regression-20261008/name-delivery-final-targeted.log、name-delivery-final-types.log、name-delivery-regression.log。普通回归不含 PR151 独立的 105 次采用压力脚本；该脚本本轮未修改或重跑。组合回归覆盖本次共用解码/读取抽取影响到的原执行路径。

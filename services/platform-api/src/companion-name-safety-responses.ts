@@ -45,7 +45,7 @@ function capture(row: CompanionNameSafetyResponseRow, proof: LocaleProof, respon
   return {schemaVersion:1,...Object.fromEntries(coordinates.map(key => [key,row[key]])),
     preparedAt:row.prepared_at!.toISOString(),retentionUntil:row.retention_until!.toISOString(),localeProof:proof,response};
 }
-function decode(crypto: DataCrypto, row: CompanionNameSafetyResponseRow, target: AuthenticatedNameResourceSource): SafetyResponseRenderResult {
+function decodeCapture(crypto: DataCrypto, row: CompanionNameSafetyResponseRow, target: AuthenticatedNameResourceSource) {
   try {
     const text = crypto.openUtf8(row.payload_ciphertext!,{table:'platform_companion_name_safety_responses',column:'payload_ciphertext',
       rowId:row.id,ownerId:row.user_id,revision:1});
@@ -55,8 +55,38 @@ function decode(crypto: DataCrypto, row: CompanionNameSafetyResponseRow, target:
     const proof = localeProof(data.localeProof,row,target), response = parseSafetyResponseRenderResult(data.response);
     if ((row.level === 'L2') !== Object.hasOwn(response,'question') || response.resourceCard.contacts.length !== (row.level === 'L2'?3:1)
       || text !== JSON.stringify(capture(row,proof,response))) throw nameResponseStorageUnavailable();
-    return response;
+    return capture(row,proof,response);
   } catch { throw nameResponseStorageUnavailable(); }
+}
+
+/** Historical original response only; no policy admission or publication. */
+export async function readNameSafetyResponseRecord(client:PoolClient,crypto:DataCrypto|undefined,row:CompanionNameSafetyResponseRow,
+ target:AuthenticatedNameResourceSource,signal?:AbortSignal,lock=true) {
+    assertNameSafetyResponseSource(row,target.source,target.decision);
+    const events = (await client.query(`SELECT *,created_at<=clock_timestamp() AS actual_time
+      FROM platform_safety_events WHERE name_response_id=$1 ${lock?' FOR UPDATE':''}`,[row.id])).rows;
+    if (row.status === 'pending') {
+      if (events.length) throw nameResponseStorageUnavailable(); return null;
+    }
+    const event = events[0];
+    if (row.status !== 'ready' || !crypto || !row.prepared_at || !row.retention_until || events.length !== 1
+      || event.user_id !== row.user_id || event.name_submission_id !== row.submission_id || event.name_response_id !== row.id
+      || event.name_source_generation !== row.source_generation || event.submission_id !== null || event.response_id !== null
+      || event.source_kind !== 'companion_name' || event.event_kind !== 'response_prepared' || event.actual_time !== true || event.level !== row.level
+      || event.detector_revision !== row.detector_revision || event.detector_mode !== row.detector_mode
+      || event.created_at.toISOString() !== row.prepared_at.toISOString() || event.retention_until.toISOString() !== row.retention_until.toISOString()) throw nameResponseStorageUnavailable();
+    signal?.throwIfAborted();return decodeCapture(crypto,row,target);
+  }
+/** Caller-owned snapshot reader. Defaults preserve existing execution locks. */
+export async function readNameOriginalCaptureInTransaction(client:PoolClient,crypto:DataCrypto|undefined,value:string,signal?:AbortSignal,lock=true) {
+ const target=await readNameResourceSourceInTransaction(client,crypto,companionNameUuid(value),signal,lock);
+ if(target.decision.level==='L0')return null;
+ const row=(await client.query<CompanionNameSafetyResponseRow>(`SELECT * FROM platform_companion_name_safety_responses WHERE submission_id=$1 AND user_id=$2${lock?' FOR UPDATE':''}`,[target.source.id,target.source.user_id])).rows[0];
+ const capture=row?await readNameSafetyResponseRecord(client,crypto,row,target,signal,lock):null;
+ if(!row||!capture)throw nameSafetyResponseUnavailable();
+ const current=(await client.query<{actual:boolean}>('SELECT $1::timestamptz<=clock_timestamp() AS actual',[row.prepared_at])).rows[0];
+ if(!current.actual)throw nameResponseStorageUnavailable();
+ signal?.throwIfAborted();return Object.freeze({target,row:Object.freeze(row),response:capture.response});
 }
 
 /** Server-only internal foundation. Captured is not published, displayed,
@@ -72,21 +102,8 @@ export class CompanionNameSafetyResponses {
     return (await client.query<CompanionNameSafetyResponseRow>('SELECT * FROM platform_companion_name_safety_responses WHERE submission_id=$1 AND user_id=$2 FOR UPDATE',
       [target.source.id,target.source.user_id])).rows[0];
   }
-  private async authenticate(client: PoolClient, target: AuthenticatedNameResourceSource, row: CompanionNameSafetyResponseRow) {
-    assertNameSafetyResponseSource(row,target.source,target.decision);
-    const events = (await client.query(`SELECT *,created_at<=clock_timestamp() AS actual_time
-      FROM platform_safety_events WHERE name_response_id=$1 FOR UPDATE`,[row.id])).rows;
-    if (row.status === 'pending') {
-      if (events.length) throw nameResponseStorageUnavailable(); return null;
-    }
-    const event = events[0];
-    if (row.status !== 'ready' || !this.crypto || !row.prepared_at || !row.retention_until || events.length !== 1
-      || event.user_id !== row.user_id || event.name_submission_id !== row.submission_id || event.name_response_id !== row.id
-      || event.name_source_generation !== row.source_generation || event.submission_id !== null || event.response_id !== null
-      || event.source_kind !== 'companion_name' || event.event_kind !== 'response_prepared' || event.actual_time !== true || event.level !== row.level
-      || event.detector_revision !== row.detector_revision || event.detector_mode !== row.detector_mode
-      || event.created_at.toISOString() !== row.prepared_at.toISOString() || event.retention_until.toISOString() !== row.retention_until.toISOString()) throw nameResponseStorageUnavailable();
-    return decode(this.crypto,row,target);
+  private async authenticate(client:PoolClient,target:AuthenticatedNameResourceSource,row:CompanionNameSafetyResponseRow){
+    return (await readNameSafetyResponseRecord(client,this.crypto,row,target))?.response??null;
   }
   private async optionalLocale(client: PoolClient, target: AuthenticatedNameResourceSource): Promise<Readonly<{locale:'zh'|'en';proof:LocaleProof}>> {
     const source = target.previewSource, fallback = Object.freeze({locale:'zh' as const,proof:Object.freeze({kind:'default_zh' as const})});
@@ -183,14 +200,8 @@ export class CompanionNameSafetyResponses {
   /** Composition port using the caller's actual transaction. This is historical
    * resource authenticity only, never current preview, naming or tool authority.
    * The original encrypted capture/event remains exact, including after expiry. */
-  async readCaptureInTransaction(client: PoolClient, value: string, signal?: AbortSignal) {
-    const target = await readNameResourceSourceInTransaction(client,this.crypto,companionNameUuid(value),signal);
-    if (target.decision.level === 'L0') return null;
-    const row = await this.row(client,target), response = row ? await this.authenticate(client,target,row) : null;
-    if (!row || !response) throw nameSafetyResponseUnavailable();
-    const current = (await client.query<{actual:boolean}>('SELECT $1::timestamptz<=clock_timestamp() AS actual',[row.prepared_at])).rows[0];
-    if (!current.actual) throw nameResponseStorageUnavailable();
-    signal?.throwIfAborted(); return Object.freeze({target,row:Object.freeze(row),response});
+  async readCaptureInTransaction(client:PoolClient,value:string,signal?:AbortSignal,lock=true) {
+    return readNameOriginalCaptureInTransaction(client,this.crypto,value,signal,lock);
   }
   async readBody(context: FixedSessionContext, value: unknown, signal?: AbortSignal) {
     const fixed = Object.freeze({userId:context.userId,tokenHash:context.tokenHash}), id = readRequest(value);
