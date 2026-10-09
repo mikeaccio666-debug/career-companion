@@ -121,6 +121,40 @@ export class SharedMemories {
     await this.authorize(client,s,signal);const row=await this.row(client,s,id);if(!row)throw notFound();const snapshot=await this.decode(client,s,row);
     if(snapshot.state.deletedAt!==null)throw notFound();await authorizeFixedSession(client,s,signal);return snapshot.state;
   }
+  /** Internal export reader. The account-export coordinator must consume its
+   * fresh password proof and keep all pages in the SAME transaction. Includes
+   * retained deletion/undo data; never restores it or grants model visibility. */
+  async *exportInTransaction(client:PoolClient,context:FixedSessionContext,signal?:AbortSignal) {
+    const s=fixed(context);await this.authorize(client,s,signal);
+    let after:string|null=null;
+    for(;;){
+      const rows:Record<string,any>[]=(await client.query('SELECT * FROM platform_memories WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100',[s.userId,after])).rows;
+      for(const row of rows){signal?.throwIfAborted();const snapshot=await this.decode(client,s,row);
+        yield {section:'memories' as const,record:{state:snapshot.state,retainedUndo:snapshot.undoPrevious}};}
+      if(rows.length<100)break;after=rows.at(-1)!.id;
+    }
+    after=null;
+    for(;;){
+      const rows:Record<string,any>[]=(await client.query('SELECT * FROM platform_memory_operations WHERE user_id=$1 AND ($2::uuid IS NULL OR operation_id>$2) ORDER BY operation_id LIMIT 100',[s.userId,after])).rows;
+      for(const row of rows){signal?.throwIfAborted();const r=await this.receipt(client,s,row);
+        yield {section:'memoryOperations' as const,record:{id:r.operationId,memoryId:r.memoryId,action:r.action,revision:r.appliedRevision,createdAt:r.createdAt}};}
+      if(rows.length<100)break;after=rows.at(-1)!.operation_id;
+    }
+    // Explicit projections: no raw ciphertext, authentication version, command
+    // digest, leases or execution tokens can enter these metadata sections.
+    for(const table of ['platform_memory_events','platform_memory_uses'] as const){
+      after=null;
+      for(;;){
+        const sql=table==='platform_memory_events'
+          ? 'SELECT id,memory_id AS "memoryId",operation_id AS "operationId",action,actor,channel,revision,created_at AS "createdAt" FROM platform_memory_events WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100'
+          : 'SELECT id,memory_id AS "memoryId",memory_revision AS "memoryRevision",conversation_id AS "conversationId",message_id AS "messageId",speaker,channel,purpose,created_at AS "createdAt" FROM platform_memory_uses WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 100';
+        const rows:Record<string,any>[]=(await client.query(sql,[s.userId,after])).rows;
+        for(const row of rows){signal?.throwIfAborted();yield {section:table==='platform_memory_events'?'memoryEvents' as const:'memoryUses' as const,record:{...row,createdAt:row.createdAt.toISOString()}};}
+        if(rows.length<100)break;after=rows.at(-1)!.id;
+      }
+    }
+    await authorizeFixedSession(client,s,signal);
+  }
   async get(context:FixedSessionContext,value:unknown,signal?:AbortSignal) {
     let id:string;try{id=sharedMemoryId(value);}catch{throw bad();}
     const s=fixed(context);
