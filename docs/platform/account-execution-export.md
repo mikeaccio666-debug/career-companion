@@ -2,7 +2,7 @@
 
 对应产品 09 §11，内部账户捕获新增 workflowTemplates、workflowCheckpoints、workflowStepEvents、browserCheckpoints、browserActionEvents，覆盖五张已有表。它们是底座已保存的本人历史，不扩展通用工作台，不向学生开放浏览器页或工作流编辑器。
 
-普通 JSON 当前 100 张已投影、7 张明确排除、64 张待处理；带私有文件为 103 / 7 / 61。两者仍 complete=false。完整个人数据、归档 worker、公开下载、删除协调和其余 P0 仍需继续实现。
+普通 JSON 当前 102 张已投影、7 张明确排除、62 张待处理；带私有文件为 105 / 7 / 59。两者仍 complete=false。完整个人数据、归档 worker、公开下载、删除协调和其余 P0 仍需继续实现。
 
 ## 保留内容与边界
 
@@ -31,4 +31,4 @@
 
 最终新增 13/13 归档测试通过，API 类型检查与 git diff --check 通过。相关回归共 309 项：307 通过、0 失败、2 项 Chromium 测试因默认浏览器路径缺失而跳过。测试随后支持与 runtime 相同的 PLATFORM_BROWSER_EXECUTABLE 显式配置；指定远端已有 Chromium 后，原两项真实浏览器测试均在启动阶段失败。独立同配置启动复现 No usable sandbox，浏览器进程退出，临时目录已清理。因此不能将本轮描述为全部真实浏览器检查通过；远端沙箱环境仍需修复，运行时沙箱要求保持，没有加入 no-sandbox 或改变系统配置。
 
-覆盖计数核对于 2026-10-09，包含日常偏好、休息和计划记录，以及本轮加入的[共享记忆分类与待处理记录](account-memory-safety-export.md)。
+覆盖计数核对于 2026-10-09，包含日常偏好、休息和计划记录，以及[共享记忆分类与待处理记录](account-memory-safety-export.md)和[模型调用记录](account-model-audit-export.md)。
