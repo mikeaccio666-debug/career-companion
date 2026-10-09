@@ -14,3 +14,17 @@
 .career-source-message{font-size:15px;line-height:1.6;color:var(--ink-2)}
 .career-source-page :focus-visible,.career-source-link:focus-visible{outline:2px solid var(--air);outline-offset:3px}
 @media(max-width:639px){.career-source-page{padding:16px}.career-source-panel{padding:16px}.career-source-panel h1{font-size:20px}}
+
+.career-method-disclosure{margin-top:16px}
+.career-method-details{border-top:1px solid var(--rule);margin-top:20px;padding-top:20px;overflow-wrap:anywhere;line-height:1.7}
+.career-method-details h2{font-size:19px;margin:0 0 12px}
+.career-method-details h3{font-size:16px;margin:24px 0 8px}
+.career-method-details h4{font-size:16px;margin:0}
+.career-method-details p,.career-method-details li{white-space:pre-wrap}
+.career-method-conditions{display:grid;grid-template-columns:6em minmax(0,1fr);gap:10px 16px;font-size:14px}
+.career-method-conditions dt{color:var(--ink-2)}
+.career-method-conditions dd{margin:0}
+.career-method-steps{padding-left:24px}
+.career-method-steps>li{padding-left:4px;margin:0 0 24px}
+.career-method-details ul{padding-left:24px}
+@media(max-width:639px){.career-method-conditions{grid-template-columns:minmax(0,1fr);gap:4px}.career-method-conditions dd{margin-bottom:8px}}

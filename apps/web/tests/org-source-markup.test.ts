@@ -1,3 +1,4 @@
+import { fictionalMethodDetails } from './fixtures/org-method.ts';
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { mkdir, mkdtemp, rm, writeFile, chmod } from 'node:fs/promises';
@@ -44,4 +45,30 @@ test('historical method version keeps the exact citation and explains that exist
   assert.match(html, /蔓藤方法 · v7/); assert.match(html, /历史方法版本/); assert.match(html, /不会自动更新已有计划/);
   const current = renderToStaticMarkup(createElement(views.OrgSourceScene, { snapshot: { state: 'ready', passage }, onRetry() {} }));
   assert(!current.includes('历史方法版本'));
+});
+
+test('expanded method shows conditions, numbered steps, outputs and counterexamples as escaped text', () => {
+  const method = fictionalMethodDetails(), { content: _content, ...header } = method;
+  method.content.steps[0].method = '<script>fictional()</script>\n核对自己的贡献。';
+  const html = renderToStaticMarkup(createElement(views.OrgSourceScene, {
+    snapshot: { state: 'ready', passage: { ...header, text: '虚构摘录。' }, details: { state: 'ready', method } },
+    onRetry() {}, onExpandMethod() {}, onCollapseMethod() {},
+  }));
+  for (const text of ['适用条件与完整方法', '数据／业务分析', '课程项目', '项目事实', '怎么做', '这一步的产出', '哪些情况不适用', '团队成果不能全部说成个人贡献', '真人帮助'])
+    assert(html.includes(text), text);
+  assert(html.includes('&lt;script&gt;')); assert(!html.includes('<script>'));
+  assert(html.includes('aria-expanded="true"')); assert(html.includes('收起完整方法'));
+  assert(!html.includes('author_id')); assert(!html.includes('allowed_tools'));
+});
+test('closed, loading and full-permission-limited scenes never render retained full content', () => {
+  const method = fictionalMethodDetails(), { content: _content, ...header } = method;
+  for (const state of ['closed', 'loading', 'limited', 'unavailable']) {
+    const html = renderToStaticMarkup(createElement(views.OrgSourceScene, {
+      snapshot: { state: 'ready', passage: { ...header, text: '虚构摘录。' }, details: { state, method } },
+      onRetry() {}, onExpandMethod() {}, onCollapseMethod() {},
+    }));
+    assert(!html.includes('核对一个真实判断')); assert(!html.includes('团队成果不能全部说成个人贡献'));
+    if (state === 'limited') assert(html.includes('完整方法尚未授权展示'));
+    if (state === 'closed') assert.match(html, /id="career-method-content" hidden=""/);
+  }
 });

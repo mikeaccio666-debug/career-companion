@@ -1,3 +1,4 @@
+import { fictionalMethodDetails } from './fixtures/org-method.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OrgSourceController, type OrgSourceSnapshot } from '../src/org-source-controller.ts';
@@ -41,4 +42,49 @@ test('timeout settles even if transport ignores abort; later content and old cal
   h.controller.start(); await until(() => h.controller.snapshot().state === 'unavailable'); assert(signal?.aborted);
   h.invalidate(); resolve({ passage }); await new Promise(r => setTimeout(r, 5)); assert.equal(h.controller.snapshot().passage, null); assert.equal(h.controller.snapshot().state, 'idle');
   await h.controller.refresh(); assert.equal(h.controller.snapshot().state, 'idle');
+});
+
+const methodPassage = () => { const { content: _content, ...header } = fictionalMethodDetails(); return { ...header, text: '已核对的一段虚构方法。' }; };
+test('full method is fetched only after an explicit expand; close discards it and reopen rereads', async () => {
+  const paths: string[] = [], h = harness(path => { paths.push(path); return path.includes('/methods/') ? { method: fictionalMethodDetails() } : { passage: methodPassage() }; });
+  h.controller.start(); await until(() => h.controller.snapshot().state === 'ready');
+  assert.equal(paths.length, 1); assert.equal(h.controller.snapshot().details.state, 'closed');
+  await h.controller.expandMethod();
+  assert.equal(h.controller.snapshot().details.state, 'ready'); assert.equal(paths.length, 2);
+  await h.controller.expandMethod(); assert.equal(paths.length, 2);
+  h.controller.closeMethod(); assert.equal(h.controller.snapshot().details.method, null);
+  await h.controller.expandMethod(); assert.equal(paths.length, 3);
+  await h.controller.refresh(); assert.equal(h.controller.snapshot().details.state, 'closed');
+  h.controller.stop();
+});
+test('method close, suspension and account invalidation discard ignored-abort results', async () => {
+  for (const action of ['close', 'suspend', 'invalidate'] as const) {
+    let resolve: (value: unknown) => void = () => {}, signal: AbortSignal | undefined;
+    const h = harness((path, init) => path.includes('/methods/') ? new Promise(r => { resolve = r; signal = init.signal!; }) : { passage: methodPassage() });
+    h.controller.start(); await until(() => h.controller.snapshot().state === 'ready');
+    const pending = h.controller.expandMethod();
+    if (action === 'close') h.controller.closeMethod(); else if (action === 'suspend') h.controller.suspend(); else h.invalidate();
+    assert(signal?.aborted); resolve({ method: fictionalMethodDetails() }); await pending;
+    assert.equal(h.controller.snapshot().details.state, 'closed'); assert.equal(h.controller.snapshot().details.method, null);
+    if (action !== 'close') assert.equal(h.controller.snapshot().passage, null);
+    h.controller.stop();
+  }
+});
+test('excerpt-only permission keeps the verified excerpt; revocation, withdrawal and session reset erase everything', async () => {
+  for (const [status, code, expected] of [[403, 'METHOD_FULL_NOT_ALLOWED', 'limited'], [403, 'NOT_ENTITLED', 'denied'],
+    [409, 'STALE_REVISION', 'stale'], [401, 'AUTH_REQUIRED', 'account_inactive']] as const) {
+    const h = harness(path => { if (path.includes('/methods/')) throw { status, code }; return { passage: methodPassage() }; });
+    h.controller.start(); await until(() => h.controller.snapshot().state === 'ready'); await h.controller.expandMethod();
+    if (expected === 'limited') { assert.equal(h.controller.snapshot().details.state, 'limited'); assert(h.controller.snapshot().passage); }
+    else { assert.equal(h.controller.snapshot().state, expected); assert.equal(h.controller.snapshot().passage, null); }
+    assert.equal(h.controller.snapshot().details.method, null); h.controller.stop();
+  }
+});
+test('method timeout settles and a malformed method version never replaces the original citation', async () => {
+  const h = harness(path => path.includes('/methods/') ? new Promise(() => {}) : { passage: methodPassage() }, 4);
+  h.controller.start(); await until(() => h.controller.snapshot().state === 'ready'); await h.controller.expandMethod();
+  assert.equal(h.controller.snapshot().details.state, 'unavailable'); assert.equal(h.controller.snapshot().details.method, null); h.controller.stop();
+  const wrong = harness(path => path.includes('/methods/') ? { method: { ...fictionalMethodDetails(), assetRevision: 8, provenanceLabel: '蔓藤方法 · v8' } } : { passage: methodPassage() });
+  wrong.controller.start(); await until(() => wrong.controller.snapshot().state === 'ready'); await wrong.controller.expandMethod();
+  assert.equal(wrong.controller.snapshot().details.state, 'unavailable'); assert.equal(wrong.controller.snapshot().passage?.assetRevision, 7); wrong.controller.stop();
 });

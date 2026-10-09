@@ -1,4 +1,4 @@
-import { careerRecordObject, careerRecordId, CAREER_ROLE_FAMILIES, careerLibraryTime, type AgentSpeakerKey } from '@companion/platform-contracts';
+import { parseOrgMethodContent, careerRecordObject, careerRecordId, CAREER_ROLE_FAMILIES, careerLibraryTime, type AgentSpeakerKey } from '@companion/platform-contracts';
 import { CAREER_SKILLS } from '../skills.ts';
 export const ORG_P0_ASSET_CLASSES = ['question', 'method_card', 'conversation_pattern'] as const;
 export type OrgP0AssetClass = typeof ORG_P0_ASSET_CLASSES[number];
@@ -117,4 +117,15 @@ export function orgAssetSpeakers(assetClass: OrgP0AssetClass, asset: OrgP0Asset)
   if (assetClass === 'method_card') return (asset as { bound_speakers: readonly AgentSpeakerKey[] }).bound_speakers;
   if (assetClass === 'conversation_pattern') return ['companion', 'planner'];
   return ['guide', 'applier', 'interviewer', 'coach'];
+}
+
+/** Shared public projection for skill reads and student source details. */
+export function orgMethodContent(asset: OrgP0Asset) {
+  if (!('method_id' in asset)) return fail();
+  return parseOrgMethodContent({
+    whenToUse: asset.when_to_use, appliesTo: asset.applies_to, prerequisites: asset.prerequisites,
+    evidenceNature: asset.evidence_nature,
+    steps: asset.steps.map(step => ({ goal: step.goal, method: step.method, output: step.output })),
+    rubricRef: asset.rubric_ref, stopWhen: asset.stop_when, counterexamples: asset.counterexamples, escalateWhen: asset.escalate_when,
+  });
 }

@@ -467,6 +467,7 @@ aliasErrorCodes(['PROVIDER_FAILED', 'INVALID_PROVIDER_RESPONSE', 'INVALID_PROVID
 
 keepErrorCodes(['UPLOAD_WRITE_UNAVAILABLE'], '文件保存状态暂时无法确认，请重新查看文件列表。');
 keepErrorCodes(['NOT_ENTITLED'], '这份内容目前不可访问。');
+keepErrorCodes(['METHOD_FULL_NOT_ALLOWED'], '这份资料暂未授权展示完整方法。');
 keepErrorCodes(['STALE_REVISION'], '来源版本已变化或撤回。');
 keepErrorCodes(['ORG_CONTENT_INPUT_INVALID'], '请使用支持的来源坐标。');
 keepErrorCodes(['ORG_CONTENT_STORAGE_UNAVAILABLE'], '内容来源暂时无法核对。');
