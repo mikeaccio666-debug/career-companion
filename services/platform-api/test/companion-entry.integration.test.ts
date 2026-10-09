@@ -47,7 +47,7 @@ before(async () => {
   approver = await actor(true);
   await db.query(`INSERT INTO platform_cost_global_policy(singleton,month_hard_micros,day_hard_micros,approved_by,approved_at,effective_from)
     VALUES(true,100000000,100000000,$1,clock_timestamp(),clock_timestamp())`, [approver.userId]);
-  for (const [unit, price] of [['input_token', '1'], ['output_token', '2']]) {
+  for (const [unit, price] of [['input_token', '1'], ['cached_input_token', '1'], ['cache_write_input_token', '1'], ['output_token', '2']]) {
     await db.query(`INSERT INTO platform_model_prices(id,provider,model,capability,unit,micros_per_unit,effective_from)
       VALUES($1,'openai','fictional-companion-model','background',$2,$3,clock_timestamp())`, [randomUUID(), unit, price]);
   }

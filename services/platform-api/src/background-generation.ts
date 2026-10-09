@@ -15,7 +15,7 @@ import { CompanionIntakePreparation } from './companion-intake-preparation.ts';
 import { OnboardingStorage, intakeUnavailable } from './onboarding-storage.ts';
 import { resolveModelRoute } from './model-routing.ts';
 import { acquireRuntimeLease } from './runtime-leases.ts';
-import { CostGuard, tokenCostMicros } from './cost-guard.ts';
+import { CostGuard, estimateTokenCost, reportedTokenCost } from './cost-guard.ts';
 import type { CostReservationBinding, CostReserveInput } from './cost-guard.ts';
 import { parseCapturedCompanionAnswers } from './companion-captured-answers.ts';
 import { verifyCompanionSourcePrefixInTransaction } from './companion-source-prefix.ts';
@@ -85,7 +85,7 @@ interface RecoveryState {
 interface CallRow {
   call_id: string; task_id: string; user_id: string; companion_id: string; generation: number; attempt: number;
   provider: string; model: string; purpose: string; reservation_id: string; status: string; usage_status: string;
-  input_tokens: number | null; output_tokens: number | null; admitted_at: Date | null; finished_at: Date | null;
+  input_tokens: number | null; output_tokens: number | null; cached_input_tokens: number | null; cache_write_input_tokens: number | null; admitted_at: Date | null; finished_at: Date | null;
   validation_status: string | null;
   structured_outcome: string | null;
 }
@@ -281,16 +281,20 @@ export class BackgroundGeneration {
       const reservation = (await client.query('SELECT * FROM platform_cost_reservations WHERE id=$1 FOR UPDATE', [call.reservation_id])).rows[0];
       const ledger = (await client.query('SELECT * FROM platform_cost_ledger WHERE reservation_id=$1 FOR UPDATE', [call.reservation_id])).rows[0];
       const prices = (await client.query('SELECT * FROM platform_model_prices WHERE id=ANY($1::uuid[]) FOR SHARE',
-        [[reservation?.input_price_id, reservation?.output_price_id].filter(Boolean)])).rows;
+        [[reservation?.input_price_id, reservation?.output_price_id, reservation?.cached_input_price_id, reservation?.cache_write_input_price_id].filter(Boolean)])).rows;
       const input = prices.find(p => p.id === reservation?.input_price_id), output = prices.find(p => p.id === reservation?.output_price_id);
       const matching = (row: any) => row && row.user_id === call.user_id && row.source_kind === 'job'
         && row.source_id === call.task_id && row.capability === 'background' && row.purpose === call.purpose
         && row.provider === call.provider && row.model === call.model;
-      if (!matching(reservation) || prices.length !== 2 || !input || !output || input.unit !== 'input_token' || output.unit !== 'output_token'
+      const cached = prices.find(p => p.id === reservation?.cached_input_price_id), written = prices.find(p => p.id === reservation?.cache_write_input_price_id);
+      if (!matching(reservation) || ![1, 2].includes(reservation.pricing_revision)
+        || prices.length !== (reservation.pricing_revision === 2 ? 4 : 2)
+        || reservation.pricing_revision === 2 && (!cached || !written || cached.unit !== 'cached_input_token' || written.unit !== 'cache_write_input_token'
+          || [cached, written].some(p => p.provider !== call.provider || p.model !== call.model || p.capability !== 'background')
+          || cached.micros_per_unit !== reservation.cached_input_micros_per_unit || written.micros_per_unit !== reservation.cache_write_input_micros_per_unit) || !input || !output || input.unit !== 'input_token' || output.unit !== 'output_token'
         || [input, output].some(p => p.provider !== call.provider || p.model !== call.model || p.capability !== 'background')
         || input.micros_per_unit !== reservation.input_micros_per_unit || output.micros_per_unit !== reservation.output_micros_per_unit
-        || reservation.estimate_micros !== tokenCostMicros(reservation.max_input_tokens, reservation.max_output_tokens,
-          reservation.input_micros_per_unit, reservation.output_micros_per_unit)
+        || reservation.estimate_micros !== estimateTokenCost(reservation, reservation.max_input_tokens, reservation.max_output_tokens)
         || ledger && !matching(ledger)) throw unavailable();
       const terminal = ['complete', 'failed', 'cancelled', 'interrupted'].includes(call.status);
       if (!terminal) {
@@ -325,17 +329,21 @@ export class BackgroundGeneration {
       // A terminal call whose authorization COMMIT was lost can have a settled
       // risk ledger but no execution admission. It is never an eligible attempt.
       if (reservation.status !== 'committed' || !reservation.dispatch_intent_at || !ledger
-        || ledger.usage_status !== call.usage_status || ledger.estimated !== (call.usage_status !== 'reported')) throw unavailable();
-      const units: Record<string, number> = call.usage_status === 'reported' ? { inputTokens: call.input_tokens!, outputTokens: call.output_tokens! }
-        : { maxInputTokens: reservation.max_input_tokens, maxOutputTokens: reservation.max_output_tokens };
-      const cost = call.usage_status === 'reported'
-        ? tokenCostMicros(call.input_tokens!, call.output_tokens!, reservation.input_micros_per_unit, reservation.output_micros_per_unit)
-        : reservation.estimate_micros;
-      if (!sameUnits(ledger.units, units) || ledger.cost_micros !== cost) throw unavailable();
+        || ledger.usage_status !== call.usage_status) throw unavailable();
+      const actual: ModelCallUsage = call.usage_status === 'reported' ? { status: 'reported', inputTokens: call.input_tokens!, outputTokens: call.output_tokens!,
+        ...(call.cached_input_tokens !== null ? { cachedInputTokens: call.cached_input_tokens } : {}),
+        ...(call.cache_write_input_tokens !== null ? { cacheWriteInputTokens: call.cache_write_input_tokens } : {}) } : { status: call.usage_status as 'missing' | 'invalid' };
+      const calculated = actual.status === 'reported' ? reportedTokenCost(reservation, actual)
+        : { units: { maxInputTokens: reservation.max_input_tokens, maxOutputTokens: reservation.max_output_tokens }, costMicros: reservation.estimate_micros, estimated: true };
+      const { units } = calculated;
+      if (!sameUnits(ledger.units, units) || ledger.cost_micros !== calculated.costMicros || ledger.estimated !== calculated.estimated) throw unavailable();
       result.push(Object.freeze({ call, receipt: Object.freeze({ callId: call.call_id, reservationId: call.reservation_id,
         attempt: call.attempt, status: call.status, structuredOutcome: call.structured_outcome, validationStatus: call.validation_status,
         admittedAt: call.admitted_at?.toISOString() ?? null, finishedAt: call.finished_at.toISOString(),
         usageStatus: call.usage_status, units, costMicros: ledger.cost_micros, estimated: ledger.estimated,
+        ...(reservation.pricing_revision === 2 ? { pricingRevision: 2, cachedInputPriceId: reservation.cached_input_price_id,
+          cacheWriteInputPriceId: reservation.cache_write_input_price_id, cachedInputRate: reservation.cached_input_micros_per_unit,
+          cacheWriteInputRate: reservation.cache_write_input_micros_per_unit } : {}),
         inputPriceId: reservation.input_price_id, outputPriceId: reservation.output_price_id,
         inputRate: reservation.input_micros_per_unit, outputRate: reservation.output_micros_per_unit,
         estimateMicros: reservation.estimate_micros, rejectionRules: bad ? [...blocks[0].rules] : [] }) }));
@@ -682,20 +690,27 @@ export class BackgroundGeneration {
     // transition rechecks time, which those locks cannot freeze. No expensive
     // history scan or other asynchronous database operation follows before launch.
     const saved = await client.query(`UPDATE platform_companion_generation_calls c SET status='admitted',admitted_at=clock_timestamp()
-      FROM platform_cost_reservations r,platform_model_prices pi,platform_model_prices po
+      FROM platform_cost_reservations r,platform_model_prices pi,platform_model_prices po,platform_model_prices pc,platform_model_prices pw
       WHERE c.call_id=$1 AND c.user_id=$2 AND c.task_id=$3 AND c.generation=$4 AND c.status='prepared'
       AND r.id=c.reservation_id AND r.user_id=c.user_id AND r.status='admitted' AND r.expires_at>clock_timestamp()
       AND r.provider=c.provider AND r.model=c.model AND r.purpose=c.purpose AND r.capability='background'
       AND r.source_kind='job' AND r.source_id=c.task_id
       AND pi.id=r.input_price_id AND po.id=r.output_price_id AND pi.unit='input_token' AND po.unit='output_token'
+      AND r.pricing_revision=2 AND pc.id=r.cached_input_price_id AND pw.id=r.cache_write_input_price_id
+      AND pc.unit='cached_input_token' AND pw.unit='cache_write_input_token'
+      AND pc.provider=r.provider AND pw.provider=r.provider AND pc.model=r.model AND pw.model=r.model
+      AND pc.capability=r.capability AND pw.capability=r.capability
+      AND pc.micros_per_unit=r.cached_input_micros_per_unit AND pw.micros_per_unit=r.cache_write_input_micros_per_unit
+      AND pc.effective_from<=clock_timestamp() AND pw.effective_from<=clock_timestamp()
+      AND (pc.effective_to IS NULL OR pc.effective_to>clock_timestamp()) AND (pw.effective_to IS NULL OR pw.effective_to>clock_timestamp())
       AND pi.provider=r.provider AND po.provider=r.provider AND pi.model=r.model AND po.model=r.model
       AND pi.capability=r.capability AND po.capability=r.capability
       AND pi.micros_per_unit=r.input_micros_per_unit AND po.micros_per_unit=r.output_micros_per_unit
       AND pi.effective_from<=clock_timestamp() AND po.effective_from<=clock_timestamp()
       AND (pi.effective_to IS NULL OR pi.effective_to>clock_timestamp()) AND (po.effective_to IS NULL OR po.effective_to>clock_timestamp())
       AND (SELECT count(*) FROM platform_model_prices p WHERE p.provider=r.provider AND p.model=r.model
-        AND p.capability=r.capability AND p.unit IN ('input_token','output_token') AND p.effective_from<=clock_timestamp()
-        AND (p.effective_to IS NULL OR p.effective_to>clock_timestamp()))=2
+        AND p.capability=r.capability AND p.unit IN ('input_token','cached_input_token','cache_write_input_token','output_token') AND p.effective_from<=clock_timestamp()
+        AND (p.effective_to IS NULL OR p.effective_to>clock_timestamp()))=4
       AND EXISTS(SELECT 1 FROM platform_cost_global_policy g JOIN platform_cost_user_policy u ON u.user_id=$2
         WHERE g.singleton=true AND g.approved_by IS NOT NULL AND u.approved_by IS NOT NULL
         AND g.approved_at<=clock_timestamp() AND u.approved_at<=clock_timestamp()
@@ -776,7 +791,7 @@ export class BackgroundGeneration {
         if (!user.rowCount) throw unavailable();
         const row = (await client.query<CallRow>('SELECT * FROM platform_companion_generation_calls WHERE call_id=$1 FOR UPDATE', [callId])).rows[0];
         if (!matches(row) || !['prepared', 'admitted'].includes(row.status) || (status === 'complete' || outcome !== undefined) && row.admitted_at === null) throw unavailable();
-        if (launched) await this.costs.settleDispatchRiskInTransaction(client, binding!, actual.status === 'reported' ? { status: 'reported', inputTokens: actual.inputTokens, outputTokens: actual.outputTokens } : actual);
+        if (launched) await this.costs.settleDispatchRiskInTransaction(client, binding!, actual);
         else {
           if (actual.status === 'reported' && (actual.inputTokens !== 0 || actual.outputTokens !== 0)) throw unavailable();
           await this.costs.releaseRiskInTransaction(client, binding!);

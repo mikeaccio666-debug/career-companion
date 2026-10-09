@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { CostGuard, tokenCostMicros } from '../src/cost-guard.ts';
+import { CostGuard, tokenCostMicros, estimateTokenCost, reportedTokenCost } from '../src/cost-guard.ts';
 import { ApiError } from '../src/errors.ts';
 import type { Database } from '../src/database.ts';
 
@@ -52,4 +52,38 @@ test('admit, commit and release all require the closed actual reservation bindin
     await assert.rejects(guard.commitInTransaction(client, binding as never, usage as never), denied);
   }
   assert.equal(queried, 0);
+});
+
+const rates = { pricing_revision: 2, input_micros_per_unit: '2', output_micros_per_unit: '10',
+  cached_input_micros_per_unit: '0.2', cache_write_input_micros_per_unit: '3' };
+test('cache prices reserve the highest class and round mixed actual costs only once', () => {
+  assert.equal(estimateTokenCost(rates, 10, 5), '80');
+  const usage = { status: 'reported' as const, inputTokens: 10, outputTokens: 1, cachedInputTokens: 6, cacheWriteInputTokens: 2 };
+  assert.deepEqual(reportedTokenCost(rates, usage), { costMicros: '22', estimated: false,
+    units: { inputTokens: 10, outputTokens: 1, cachedInputTokens: 6, cacheWriteInputTokens: 2 } });
+  assert.throws(() => reportedTokenCost(rates, { ...usage, cacheWriteInputTokens: 5 }), denied);
+  assert.throws(() => estimateTokenCost({ ...rates, cached_input_micros_per_unit: null }, 10, 1), denied);
+  assert.throws(() => estimateTokenCost({ ...rates, cache_write_input_micros_per_unit: '99999999999999.999999' }, 2147483647, 1), denied);
+});
+test('unknown breakdown stays estimated unless no allocation can change the exact amount', () => {
+  const usage = { status: 'reported' as const, inputTokens: 10, outputTokens: 1 };
+  assert.equal(reportedTokenCost(rates, usage).costMicros, '40'); assert(reportedTokenCost(rates, usage).estimated);
+  assert.equal(reportedTokenCost(rates, { ...usage, cachedInputTokens: 6 }).costMicros, '24');
+  assert.equal(reportedTokenCost(rates, { ...usage, cacheWriteInputTokens: 2 }).costMicros, '32');
+  assert.equal(reportedTokenCost(rates, { ...usage, cachedInputTokens: 10 }).estimated, false);
+  const equal = { ...rates, cached_input_micros_per_unit: '2', cache_write_input_micros_per_unit: '2' };
+  assert.equal(reportedTokenCost(equal, usage).estimated, false);
+  assert.equal(reportedTokenCost(rates, { ...usage, inputTokens: 0 }).estimated, false);
+  const old = { ...rates, pricing_revision: 1, cached_input_micros_per_unit: null, cache_write_input_micros_per_unit: null };
+  assert.deepEqual(reportedTokenCost(old, { ...usage, cachedInputTokens: 8 }), { costMicros: '30', estimated: false, units: { inputTokens: 10, outputTokens: 1 } });
+});
+test('conservative partial cost bounds every possible actual cache allocation', () => {
+  for (let total = 0; total <= 6; total++) for (let cached = 0; cached <= total; cached++) for (let written = 0; written <= total - cached; written++) {
+    const measured = { status: 'reported' as const, inputTokens: total, outputTokens: 1, cachedInputTokens: cached, cacheWriteInputTokens: written };
+    const exact = BigInt(reportedTokenCost(rates, measured).costMicros);
+    assert(exact <= BigInt(estimateTokenCost(rates, total, 1)));
+    for (const partial of [{ status: 'reported' as const, inputTokens: total, outputTokens: 1 },
+      { status: 'reported' as const, inputTokens: total, outputTokens: 1, cachedInputTokens: cached },
+      { status: 'reported' as const, inputTokens: total, outputTokens: 1, cacheWriteInputTokens: written }]) assert(exact <= BigInt(reportedTokenCost(rates, partial).costMicros));
+  }
 });

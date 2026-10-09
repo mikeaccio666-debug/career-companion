@@ -33,7 +33,7 @@ async function policies(userId: string, hard = '1000', soft = '800', day: string
     VALUES($1,'fictional-explicit-policy',$2,$3,$4,$5,$6,$7,clock_timestamp(),clock_timestamp())`, [userId, period, softBehavior, soft, hard, day, approver]);
 }
 async function prices(capability = 'background', input = '1', output = '2') {
-  for (const [unit, price] of [['input_token', input], ['output_token', output]]) await db.query(`INSERT INTO platform_model_prices(id,provider,model,capability,unit,micros_per_unit,effective_from)
+  for (const [unit, price] of [['input_token', input], ['cached_input_token', input], ['cache_write_input_token', input], ['output_token', output]]) await db.query(`INSERT INTO platform_model_prices(id,provider,model,capability,unit,micros_per_unit,effective_from)
     VALUES($1,'fictional-provider','fictional-model',$2,$3,$4,clock_timestamp())`, [randomUUID(), capability, unit, price]);
 }
 function input(userId: string, options: Partial<CostReserveInput> = {}): CostReserveInput {
@@ -57,6 +57,8 @@ test('migration seeds no price, approved budget, cohort or reservation; absent p
   for (const table of ['platform_model_prices', 'platform_cost_global_policy', 'platform_cost_user_policy', 'platform_cost_reservations', 'platform_cost_ledger']) {
     assert.equal((await db.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0);
   }
+  const revision = (await db.query("SELECT column_default,is_nullable FROM information_schema.columns WHERE table_schema=$1 AND table_name='platform_cost_reservations' AND column_name='pricing_revision'", [schema])).rows[0];
+  assert.equal(revision.column_default, null); assert.equal(revision.is_nullable, 'NO');
   const userId = await actor(); assert.deepEqual(await guard.reserve(input(userId)), { decision: 'block', reason: 'global_policy_unavailable' });
   assert.equal((await db.query('SELECT count(*)::int AS n FROM platform_cost_reservations')).rows[0].n, 0);
 });
@@ -296,4 +298,57 @@ test('aborted operations roll back and a dispatched request cannot be released a
   await db.query("UPDATE platform_cost_reservations SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [r.binding.id]);
   await assert.rejects(guard.release(r.binding), denied); assert.equal((await row(r)).status, 'admitted');
   await guard.commit(r.binding, { status: 'invalid' }); assert.equal((await ledger(r)).estimated, true);
+});
+
+async function distinctCachePrices() {
+  await db.query("UPDATE platform_model_prices SET micros_per_unit=CASE unit WHEN 'cached_input_token' THEN 0.1 WHEN 'cache_write_input_token' THEN 3 ELSE micros_per_unit END");
+}
+test('new reservations require both cache prices and reserve write surcharges before any admission', async () => {
+  const userId = await fixture('30', '15'); await distinctCachePrices();
+  const deniedCost = await guard.reserve(input(userId)); assert.equal(deniedCost.decision, 'block');
+  assert(deniedCost.decision === 'block' && deniedCost.reason === 'user_hard_limit');
+  await db.query('UPDATE platform_cost_user_policy SET hard_micros=100 WHERE user_id=$1', [userId]);
+  for (const unit of ['cached_input_token', 'cache_write_input_token']) {
+    await db.query('UPDATE platform_model_prices SET effective_to=clock_timestamp() WHERE unit=$1', [unit]);
+    assert.deepEqual(await guard.reserve(input(userId)), { decision: 'block', reason: 'price_unavailable' });
+    await db.query('UPDATE platform_model_prices SET effective_to=NULL WHERE unit=$1', [unit]);
+  }
+  const r = allowed(await guard.reserve(input(userId))); assert.equal(r.estimateMicros, '40'); assert.equal((await row(r)).pricing_revision, 2);
+  await db.query("UPDATE platform_model_prices SET micros_per_unit=4 WHERE unit='cache_write_input_token'");
+  await assert.rejects(admit(r), denied); assert.equal((await row(r)).status, 'reserved');
+});
+test('complete cached usage settles from captured rates after prices change and retries remain idempotent', async () => {
+  const userId = await fixture(); await distinctCachePrices(); const r = allowed(await guard.reserve(input(userId))); await admit(r);
+  await db.query('UPDATE platform_model_prices SET micros_per_unit=99');
+  const usage = { status: 'reported' as const, inputTokens: 10, outputTokens: 5, cachedInputTokens: 6, cacheWriteInputTokens: 2 };
+  assert.deepEqual(await guard.commit(r.binding, usage), { costMicros: '19', estimated: false });
+  assert.deepEqual(await guard.commit(r.binding, usage), { costMicros: '19', estimated: false });
+  assert.deepEqual((await ledger(r)).units, { inputTokens: 10, outputTokens: 5, cachedInputTokens: 6, cacheWriteInputTokens: 2 });
+  await assert.rejects(guard.commit(r.binding, { ...usage, cachedInputTokens: 5 }), denied);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM platform_cost_ledger WHERE reservation_id=$1', [r.binding.id])).rows[0].n, 1);
+});
+test('partial cache estimates may gain evidence but cannot rewrite or lose previously reported counts', async () => {
+  const userId = await fixture(); await distinctCachePrices(); const r = allowed(await guard.reserve(input(userId))); await admit(r);
+  const base = { status: 'reported' as const, inputTokens: 10, outputTokens: 5 };
+  assert.deepEqual(await guard.commit(r.binding, base), { costMicros: '40', estimated: true });
+  assert.deepEqual(await guard.commit(r.binding, { ...base, cachedInputTokens: 6 }), { costMicros: '23', estimated: true });
+  await assert.rejects(guard.commit(r.binding, base), denied);
+  await assert.rejects(guard.commit(r.binding, { ...base, inputTokens: 11, cachedInputTokens: 6 }), denied);
+  await assert.rejects(guard.commit(r.binding, { ...base, cachedInputTokens: 5 }), denied);
+  assert.deepEqual(await guard.commit(r.binding, { ...base, cachedInputTokens: 6, cacheWriteInputTokens: 2 }), { costMicros: '19', estimated: false });
+});
+test('late cache evidence corrects expired spending once without granting a new call', async () => {
+  const userId = await fixture(); await distinctCachePrices(); const r = allowed(await guard.reserve(input(userId))); await admit(r);
+  await db.query("UPDATE platform_cost_reservations SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [r.binding.id]);
+  await guard.reserve(input(userId)); assert.equal((await ledger(r)).cost_micros, '40'); assert.equal((await ledger(r)).usage_status, 'expired');
+  assert.deepEqual(await guard.commit(r.binding, { status: 'reported', inputTokens: 10, outputTokens: 5, cachedInputTokens: 6, cacheWriteInputTokens: 2 }), { costMicros: '19', estimated: false });
+  await assert.rejects(admit(r), denied);
+});
+test('historical pricing remains readable but cannot admit a new call under old two-price rules', async () => {
+  const userId = await fixture(); const r = allowed(await guard.reserve(input(userId)));
+  await db.query('UPDATE platform_cost_reservations SET pricing_revision=1,cached_input_price_id=NULL,cache_write_input_price_id=NULL,cached_input_micros_per_unit=NULL,cache_write_input_micros_per_unit=NULL WHERE id=$1', [r.binding.id]);
+  await assert.rejects(admit(r), denied);
+  await db.query("UPDATE platform_cost_reservations SET status='admitted',admitted_at=clock_timestamp() WHERE id=$1", [r.binding.id]);
+  assert.deepEqual(await guard.commit(r.binding, { status: 'reported', inputTokens: 10, outputTokens: 5 }), { costMicros: '20', estimated: false });
+  const saved = await ledger(r); assert.deepEqual(saved.units, { inputTokens: 10, outputTokens: 5 });
 });

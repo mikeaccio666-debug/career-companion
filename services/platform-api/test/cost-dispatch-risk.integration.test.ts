@@ -36,7 +36,7 @@ async function fixture(hard = '1000',soft = '800',behavior = 'notify') {
     VALUES(true,1000000,1000000,$1,clock_timestamp(),clock_timestamp())`,[approver]);
   await db.query(`INSERT INTO platform_cost_user_policy(user_id,policy_key,period,soft_behavior,soft_micros,hard_micros,approved_by,approved_at,effective_from)
     VALUES($1,'fictional-risk-policy','week',$2,$3,$4,$5,clock_timestamp(),clock_timestamp())`,[userId,behavior,soft,hard,approver]);
-  for (const [unit,price] of [['input_token','1'],['output_token','2']]) await db.query(`INSERT INTO platform_model_prices(id,provider,model,capability,unit,micros_per_unit,effective_from)
+  for (const [unit,price] of [['input_token','1'],['cached_input_token','1'],['cache_write_input_token','1'],['output_token','2']]) await db.query(`INSERT INTO platform_model_prices(id,provider,model,capability,unit,micros_per_unit,effective_from)
     VALUES($1,'fictional-provider','fictional-model','background',$2,$3,clock_timestamp())`,[randomUUID(),unit,price]);
   return userId;
 }

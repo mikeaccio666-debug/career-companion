@@ -39,7 +39,7 @@ before(async () => {
   const approver = await actor(true);
   await db.query(`INSERT INTO platform_cost_global_policy(singleton,month_hard_micros,day_hard_micros,approved_by,approved_at,effective_from)
     VALUES(true,100000000,100000000,$1,clock_timestamp(),clock_timestamp())`, [approver.userId]);
-  for (const [unit, amount] of [['input_token', '1'], ['output_token', '2']]) {
+  for (const [unit, amount] of [['input_token', '1'], ['cached_input_token', '1'], ['cache_write_input_token', '1'], ['output_token', '2']]) {
     await db.query(`INSERT INTO platform_model_prices(id,provider,model,capability,unit,micros_per_unit,effective_from)
       VALUES($1,'openai','fictional-companion-model','background',$2,$3,clock_timestamp())`, [randomUUID(), unit, amount]);
   }
@@ -763,7 +763,7 @@ test('a retry rechecks actual prior validation, completion proof and cost bindin
 
 test('final dispatch grant rejects prices or global policy that expire after earlier admission checks', async () => {
   await loopback(() => assert.fail('An expired final money grant must not launch HTTP.'), async (runtime, bodies) => {
-    for (const mode of ['price', 'global_policy'] as const) {
+    for (const mode of ['output_token', 'cached_input_token', 'cache_write_input_token', 'global_policy'] as const) {
       const { who, prepared } = await ready(runtime); let held = false, expired = false, grantRows: number | null | undefined;
       const isGrant = (text: string) => text.startsWith("UPDATE platform_companion_generation_calls c SET status='admitted'");
       const gated = new QueryGateDatabase(async (client, text) => {
@@ -772,11 +772,11 @@ test('final dispatch grant rejects prices or global policy that expire after ear
           FROM platform_companion_generation_calls c JOIN platform_cost_reservations r ON r.id=c.reservation_id WHERE c.task_id=$1`, [prepared.taskId])).rows[0];
         assert.equal(prior.call_status, 'prepared'); assert.equal(prior.admitted_at, null);
         assert.equal(prior.cost_status, 'admitted'); assert(prior.dispatch_intent_at instanceof Date);
-        if (mode === 'price') await client.query("UPDATE platform_model_prices SET effective_to=clock_timestamp()+interval '50 milliseconds' WHERE provider='openai' AND model='fictional-companion-model' AND unit='output_token'");
+        if (mode !== 'global_policy') await client.query("UPDATE platform_model_prices SET effective_to=clock_timestamp()+interval '50 milliseconds' WHERE provider='openai' AND model='fictional-companion-model' AND unit=$1", [mode]);
         else await client.query("UPDATE platform_cost_global_policy SET effective_to=clock_timestamp()+interval '50 milliseconds' WHERE singleton=true");
         await client.query('SELECT pg_sleep(0.08)');
-        const actual = mode === 'price'
-          ? await client.query("SELECT effective_to<=clock_timestamp() AS expired FROM platform_model_prices WHERE provider='openai' AND model='fictional-companion-model' AND unit='output_token'")
+        const actual = mode !== 'global_policy'
+          ? await client.query("SELECT effective_to<=clock_timestamp() AS expired FROM platform_model_prices WHERE provider='openai' AND model='fictional-companion-model' AND unit=$1", [mode])
           : await client.query('SELECT effective_to<=clock_timestamp() AS expired FROM platform_cost_global_policy WHERE singleton=true');
         expired = actual.rows[0].expired; assert.equal(expired, true);
       }, (text, rowCount) => { if (isGrant(text)) grantRows = rowCount; });
@@ -819,7 +819,7 @@ test('runtime expiry immediately before final completion CAS rolls back preview 
   });
 });
 
-test('actual background HTTP cache evidence persists without changing historical total-token settlement', async () => {
+test('actual background HTTP cache evidence persists with equal-rate exact settlement', async () => {
   await loopback((_body, reply) => respond(reply, validPreview, { usage: { input_tokens: 34, output_tokens: 21,
     input_tokens_details: { cached_tokens: 20, cache_write_tokens: 4 } } }), async runtime => {
     const { who, prepared } = await ready(runtime), service = generator(runtime);
@@ -829,4 +829,22 @@ test('actual background HTTP cache evidence persists without changing historical
     assertPrivatePreview(await service.read(who, { taskId: prepared.taskId }), prepared.companionId);
     await assert.rejects(db.query('UPDATE platform_companion_generation_calls SET cache_write_input_tokens=15 WHERE call_id=$1', [state.calls[0].call_id]));
   });
+});
+
+test('actual generation uses cache rates for settlement, replay and authenticated evidence', async () => {
+  await db.query("UPDATE platform_model_prices SET micros_per_unit=CASE unit WHEN 'cached_input_token' THEN 0.1 WHEN 'cache_write_input_token' THEN 3 ELSE micros_per_unit END");
+  try {
+    for (const details of [{ cached_tokens: 20, cache_write_tokens: 4 }, { cached_tokens: 20 }, null]) {
+      await loopback((_body, reply) => respond(reply, validPreview, { usage: { input_tokens: 34, output_tokens: 21, input_tokens_details: details } }), async (runtime, bodies) => {
+        const { who, prepared } = await ready(runtime), service = generator(runtime);
+        const view = await service.generate(who, { taskId: prepared.taskId }); assertPrivatePreview(view, prepared.companionId);
+        const state = await stored(who), expected = details === null ? '144' : 'cache_write_tokens' in details ? '66' : '86';
+        assert.equal(state.costs[0].cost_micros, expected); assert.equal(state.costs[0].estimated, details?.cache_write_tokens === undefined);
+        assert.equal(state.reservations[0].pricing_revision, 2); assert.equal(bodies.length, 1);
+        assertPrivatePreview(await service.read(who, { taskId: prepared.taskId }), prepared.companionId);
+        await db.query('UPDATE platform_cost_ledger SET cost_micros=cost_micros+1 WHERE reservation_id=$1', [state.reservations[0].id]);
+        await assert.rejects(service.read(who, { taskId: prepared.taskId }), code('COMPANION_GENERATION_UNAVAILABLE'));
+      });
+    }
+  } finally { await db.query("UPDATE platform_model_prices SET micros_per_unit=1 WHERE unit IN ('cached_input_token','cache_write_input_token')"); }
 });

@@ -441,7 +441,7 @@
 
 | 动作 | 内容 | 分期 |
 |---|---|---|
-| 新建价格表 | `platform_model_prices`：`provider`、`model`、`capability`、`unit`（输入 token / 缓存命中输入 token / 输出 token / 音频秒 / 字符 / 会话分钟）、`micros_per_unit`、`effective_from`、`effective_to`；只在服务端配置 | P0 |
+| 新建价格表 | `platform_model_prices`：`provider`、`model`、`capability`、`unit`（输入 token / 缓存命中输入 token / 缓存写入输入 token / 输出 token / 音频秒 / 字符 / 会话分钟）、`micros_per_unit`、`effective_from`、`effective_to`；只在服务端配置 | P0 |
 | 新建成本账本 | `platform_cost_ledger`：`user_id`、`capability`、`source_kind`（`chat_call` / `realtime_session` / `tts` / `transcription` / `job` / `external_tool`）、`source_id`、`units` jsonb、`cost_micros`、`estimated`、`purpose`、`speaker`、`created_at` | P0 |
 | 改 `chatAccounting` | 记账键改为（轮次、段、尝试、调用序号）加 `purpose`、`speaker`，安全分级、`consult` 和校验重写都记（03 §6.5 第 5 条）；finished 事件写成本账本；`platform_chat_calls` 加 `cached_input_tokens`，同时改 `ModelCallUsage` 和 `usageCollector` 读缓存命中键；missing 时按请求估算、标 `estimated=true`。旧 `platform_usage` 只读，不再写入 | P0 |
 | 改朗读、转写、worker | 按字符或秒写成本；后台任务按任务的 `user_id` 归属 | P0 |
