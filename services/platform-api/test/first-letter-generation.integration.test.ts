@@ -417,3 +417,131 @@ test('recovery of a lost review callback reconciles that stage without replaying
   assert.equal(ledger.source_id,review.id);assert.equal(ledger.estimated,true);assert.equal(ledger.usage_status,'expired');
  });
 });
+
+async function firstLetterChild(a:Awaited<ReturnType<typeof prepared>>,mode:string,local:string|null=null,phase:string|null=null){
+ const {fork}=await import('node:child_process'),{fileURLToPath}=await import('node:url');
+ const {readConfig}=await import('../src/config.ts');
+ const url=new URL(readConfig().databaseUrl);url.searchParams.set('options','-c search_path='+f.schema);
+ const child=fork(fileURLToPath(new URL('./fixtures/first-letter-process-child.ts',import.meta.url)),[],{
+  execArgv:['--import',fileURLToPath(new URL('../node_modules/tsx/dist/esm/index.mjs',import.meta.url))],
+  // Deliberate allowlist: do not inherit any configured commercial credentials.
+  env:{PATH:process.env.PATH,NODE_ENV:'test'},stdio:['ignore','ignore','ignore','ipc'],
+ });
+ let observed:any,paused=false,timedOut=false;
+ const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},15000);timer.unref();
+ try{
+  const exit=await new Promise<{code:number|null;signal:NodeJS.Signals|null}>((resolve,reject)=>{
+   child.once('error',reject);
+   child.on('message',(event:any)=>{
+    if(event.kind==='ready')child.send({databaseUrl:url.toString(),who:a.who,taskId:pick(a).taskId,settings,
+     asset:a.b.ready.authority.asset,review:a.b.ready.authority.review,mode,local,phase});
+    else if(event.kind==='paused'){paused=event.phase===phase;child.kill('SIGKILL');}
+    else observed=event;
+   });
+   child.once('exit',(code,signal)=>resolve({code,signal}));
+  });
+  assert.equal(timedOut,false,'The disposable child timed out before its observed boundary.');
+  if(phase){assert(paused,'Expected a committed crash boundary.');assert.equal(exit.signal,'SIGKILL');return;}
+  assert.equal(exit.signal,null);assert.equal(exit.code,0);assert(observed);return observed;
+ }finally{
+  clearTimeout(timer);
+  if(child.exitCode===null&&child.signalCode===null){
+   const ended=new Promise<void>(resolve=>child.once('exit',()=>resolve()));
+   child.kill('SIGKILL');await ended;
+  }
+ }
+}
+async function withFirstLetterTransport(body:string,hold:boolean,run:(local:string,requests:()=>number)=>Promise<void>){
+ const {createServer}=await import('node:http');let calls=0,failure:unknown;
+ const server=createServer(async(req,res)=>{
+  try{
+   assert.equal(req.method,'POST');assert.equal(req.url,'/v1/responses');
+   const chunks:Buffer[]=[];for await(const part of req)chunks.push(part);
+   const input=JSON.parse(Buffer.concat(chunks).toString());assert.equal(input.model,model);assert.equal(input.store,false);
+   assert.deepEqual(input.tools,[]);assert.equal(input.tool_choice,'none');calls++;
+   res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();
+   if(!hold)res.end('data: '+JSON.stringify({type:'response.completed',response:{status:'completed',
+    usage:{input_tokens:10,output_tokens:10},output:[{type:'message',role:'assistant',status:'completed',
+    content:[{type:'output_text',text:body}]}]}})+'\n\ndata: [DONE]\n\n');
+  }catch(error){failure=error;res.destroy();}
+ });
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();
+ assert(address&&typeof address==='object');
+ try{await run('http://127.0.0.1:'+address.port,()=>calls);if(failure)throw failure;}
+ finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+}
+async function expireFirstLetterStage(taskId:string,stage:string){
+ // Only advance expiry in the disposable schema. Statuses, receipts, costs and
+ // outputs must all come from the real killed execution and recovery services.
+ const saved=(await f.db.query('SELECT * FROM platform_first_letter_stages WHERE task_id=$1 AND stage=$2',[taskId,stage])).rows[0];
+ assert(saved);assert.equal(saved.status,'running');
+ await f.db.query("UPDATE platform_first_letter_stages SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",[saved.id]);
+ await f.db.query("UPDATE platform_runtime_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[saved.runtime_lease_id]);
+ await f.db.query("UPDATE platform_cost_reservations SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[saved.reservation_id]);
+ return saved;
+}
+test('SIGKILL after real original HTTP dispatch recovers in a new process without sending or charging twice',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await prepared(birthRuntime),before=await a.welcome.read(a.who);
+  await withFirstLetterTransport(text,true,async(local,calls)=>{
+   await firstLetterChild(a,'generate',local,'dispatch');assert.equal(calls(),1);
+   let saved=await row(a);assert.equal(saved.call_status,'admitted');assert.equal(saved.receipt_ciphertext,null);
+   const held=await firstLetterChild(a,'recover');assert.equal(held.kind,'result');assert.equal(held.result.status,'running');
+   assert.equal((await f.db.query('SELECT count(*)::int n FROM platform_cost_ledger WHERE source_id=$1',[pick(a).taskId])).rows[0].n,0);
+   saved=await expireFirstLetterStage(pick(a).taskId,'write_original');
+   const recovered=await firstLetterChild(a,'recover');assert.equal(recovered.kind,'result');assert.equal(recovered.result.status,'uncertain');
+   assert.equal(recovered.result.output,null);assert.equal(recovered.result.call.receipt,null);
+   assert.deepEqual(await firstLetterChild(a,'recover'),recovered);
+   const retry=await firstLetterChild(a,'generate',local);assert.equal(retry.code,'FIRST_LETTER_RECOVERY_REQUIRED');assert.equal(calls(),1);
+   const ledger=(await f.db.query('SELECT * FROM platform_cost_ledger WHERE reservation_id=$1',[saved.reservation_id])).rows;
+   assert.equal(ledger.length,1);assert.equal(ledger[0].estimated,true);assert.equal(ledger[0].usage_status,'expired');
+   assert.equal((await f.db.query('SELECT count(*)::int n FROM platform_runtime_leases WHERE id=$1',[saved.runtime_lease_id])).rows[0].n,0);
+   assert.deepEqual(await a.welcome.read(a.who),before);
+  });
+ });
+});
+test('SIGKILL after actual receipt COMMIT preserves the settled charge but does not invent a lost output',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await prepared(birthRuntime);
+  await withFirstLetterTransport(text,false,async(local,calls)=>{
+   await firstLetterChild(a,'generate',local,'receipt');assert.equal(calls(),1);
+   const saved=await expireFirstLetterStage(pick(a).taskId,'write_original');assert(saved.receipt_ciphertext);assert.equal(saved.output_ciphertext,null);
+   const recovered=await firstLetterChild(a,'recover');assert.equal(recovered.result.status,'uncertain');assert.equal(recovered.result.output,null);
+   assert.equal(recovered.result.call.receipt.costMicros,'30');
+   assert.equal((await firstLetterChild(a,'generate',local)).code,'FIRST_LETTER_RECOVERY_REQUIRED');assert.equal(calls(),1);
+   const ledger=(await f.db.query('SELECT * FROM platform_cost_ledger WHERE reservation_id=$1',[saved.reservation_id])).rows;
+   assert.equal(ledger.length,1);assert.equal(ledger[0].estimated,false);assert.equal(String(ledger[0].cost_micros),'30');
+  });
+ });
+});
+test('SIGKILL after saved original COMMIT restores exactly that output in a provider-disabled process',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await prepared(birthRuntime);
+  await withFirstLetterTransport(text,false,async(local,calls)=>{
+   await firstLetterChild(a,'generate',local,'saved');assert.equal(calls(),1);
+   const recovered=await firstLetterChild(a,'generate');assert.equal(recovered.kind,'result');assert.equal(recovered.result.status,'draft_saved');
+   assert.equal(recovered.result.output.text,text);assert.equal(recovered.result.call.receipt.costMicros,'30');
+   assert.deepEqual(await firstLetterChild(a,'recover'),recovered);assert.equal(calls(),1);
+   const saved=await row(a);assert.equal(saved.lease_token,null);assert.equal(saved.runtime_lease_id,null);
+   assert.equal((await f.db.query('SELECT count(*)::int n FROM platform_cost_ledger WHERE source_id=$1',[pick(a).taskId])).rows[0].n,1);
+  });
+ });
+});
+test('SIGKILL in review preserves the original and never resets review or rewrite slots after process restart',async()=>{
+ await withPrebirthLoopback(async birthRuntime=>{
+  const a=await reviewActor(birthRuntime),p=provider({body:validLetter(a)});await service(a,p.runtime).generate(a.who,pick(a),settings);
+  await withFirstLetterTransport(assessment(),true,async(local,calls)=>{
+   await firstLetterChild(a,'review',local,'dispatch');assert.equal(calls(),1);
+   const saved=await expireFirstLetterStage(pick(a).taskId,'review_original');
+   const recovered=await firstLetterChild(a,'recoverReview');
+   assert.deepEqual(recovered,{kind:'result',result:{kind:'needs_stage',stage:'review_original',status:'uncertain'}});
+   assert.deepEqual(await firstLetterChild(a,'recoverReview'),recovered);
+   assert.equal((await firstLetterChild(a,'review',local)).code,'FIRST_LETTER_RECOVERY_REQUIRED');assert.equal(calls(),1);
+   const original=await firstLetterChild(a,'generate');assert.equal(original.result.output.text,validLetter(a));
+   const stages=(await f.db.query('SELECT stage FROM platform_first_letter_stages WHERE task_id=$1 ORDER BY stage',[pick(a).taskId])).rows;
+   assert.deepEqual(stages.map(r=>r.stage),['review_original','write_original']);
+   const costs=(await f.db.query('SELECT * FROM platform_cost_ledger WHERE reservation_id=$1',[saved.reservation_id])).rows;
+   assert.equal(costs.length,1);assert.equal(costs[0].source_id,saved.id);assert.equal(costs[0].estimated,true);
+  });
+ });
+});
