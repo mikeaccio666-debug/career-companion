@@ -34,6 +34,8 @@ start_ciphertext 认证准备身份和路线；receipt_ciphertext 认证实际�
 
 ## 后续工作与上线边界
 
-语义复核、至多一次重写及第二次复核已接入 [持久化阶段与费用回执](first-letter-durable-review.md)，不会通过重启 runFirstLetterReviewCycle 重置计数。准备配置过期后的显式刷新、无人值守 worker/恢复调度、唯一 post 发布、C7 完成和 UI 仍未接通。
+语义复核、至多一次重写及第二次复核已接入 [持久化阶段与费用回执](first-letter-durable-review.md)，不会通过重启 runFirstLetterReviewCycle 重置计数。已有执行记录的准备配置过期恢复、无人值守 worker/恢复调度、唯一 post 发布、C7 完成和 UI 仍未接通。
 
 真实模型质量评测和 PR3 顺序门槛保留。本轮只以虚构资料、实际 runtime 的注入传输和隔离数据库验证工程行为，没有修改主应用商业调用开关、真实价格/预算或密钥，没有主库迁移、付费调用、部署、预览重启或发信。
+
+尚未执行的准备现可通过 [FirstLetterTasks.refresh](first-letter-task-preparation.md) 显式更新，保留原任务身份；已有执行或费用记录不会被刷新。

@@ -182,3 +182,77 @@ test('the private file archive includes the same task metadata and disposes gene
   }finally{await fs.rm(root,{recursive:true,force:true});}
  });
 });
+
+const refreshedSettings={...settings,rosterRevision:2,enabledExperts:['guide'] as const,localDate:'2026-10-10'};
+const refreshPick=(task:{taskId:string;preparationId:string})=>({taskId:task.taskId,expectedPreparationId:task.preparationId});
+test('explicit refresh uses current server settings while preserving one task identity and owner export',async()=>{
+ await withPrebirthLoopback(async(runtime,calls)=>{
+  const a=await setup(runtime,values),service=tasks(a),one=await service.prepare(a.who,settings),count=calls.length;
+  const before=await a.welcome.read(a.who),pick=refreshPick(one.task);
+  const next=await service.refresh(a.who,pick,refreshedSettings);
+  assert.equal(next.task.taskId,one.task.taskId);assert.equal(next.task.createdAt,one.task.createdAt);
+  assert.equal(next.task.sourceId,one.task.sourceId);assert.notEqual(next.task.preparationId,one.task.preparationId);
+  assert.deepEqual(next.task.settings,refreshedSettings);assert.equal(next.preparation.signature.date,'2026-10-10');
+  assert.deepEqual(await tasks(a).refresh(a.who,pick,refreshedSettings),next);
+  assert.deepEqual(await service.read(a.who,{taskId:one.task.taskId},refreshedSettings),next);
+  await assert.rejects(service.read(a.who,{taskId:one.task.taskId},settings),{code:'FIRST_LETTER_TASK_PREPARATION_CHANGED'});
+  assert.equal((await rows(a.who.userId)).rows.length,1);assert.equal(calls.length,count);
+  assert.equal((await f.db.query('SELECT count(*)::int n FROM platform_first_letter_stages WHERE task_id=$1',[one.task.taskId])).rows[0].n,0);
+  assert.equal((await f.db.query("SELECT count(*)::int n FROM platform_cost_reservations WHERE source_kind='job' AND source_id=$1",[one.task.taskId])).rows[0].n,0);
+  assert.deepEqual(await a.welcome.read(a.who),before);
+  const archived=await new AccountCoreExport(f.db,f.config).capture(a.who,await exportProof(a.who));
+  assert.deepEqual(archived.sections.firstLetterTasks,[next.task]);
+ });
+});
+test('competing refreshes cannot overwrite a preparation they did not observe',async()=>{
+ await withPrebirthLoopback(async runtime=>{
+  const a=await setup(runtime,values),service=tasks(a),one=await service.prepare(a.who,settings);
+  const variants=[refreshedSettings,{...refreshedSettings,localDate:'2026-10-11'}];
+  const results=await Promise.allSettled(variants.map(v=>tasks(a).refresh(a.who,refreshPick(one.task),v)));
+  assert.equal(results.filter(v=>v.status==='fulfilled').length,1);
+  const loser=results.find(v=>v.status==='rejected');assert(loser&&loser.status==='rejected');
+  assert.equal(loser.reason.code,'FIRST_LETTER_TASK_PREPARATION_CHANGED');
+  const winner=results.find(v=>v.status==='fulfilled');assert(winner&&winner.status==='fulfilled');
+  assert.deepEqual((await service.read(a.who,{taskId:one.task.taskId},winner.value.task.settings)).task,winner.value.task);
+  const next=await service.refresh(a.who,refreshPick(winner.value.task),{...refreshedSettings,localDate:'2026-10-12'});
+  assert.equal(next.task.taskId,one.task.taskId);assert.equal(next.task.settings.localDate,'2026-10-12');
+ });
+});
+test('refresh rejects foreign selection, extra input, corrupted preparation and withdrawn admission',async()=>{
+ await withPrebirthLoopback(async runtime=>{
+  const a=await setup(runtime,values),b=await setup(runtime,values),one=await tasks(a).prepare(a.who,settings),pick=refreshPick(one.task);
+  await assert.rejects(tasks(b).refresh(b.who,pick,refreshedSettings),{code:'NOT_FOUND'});
+  for(const input of [{...pick,approved:true},{...pick,expectedPreparationId:'bad'},{taskId:pick.taskId},null])
+   await assert.rejects(tasks(a).refresh(a.who,input,refreshedSettings),{code:'FIRST_LETTER_TASK_INPUT_INVALID'});
+  const saved=(await rows(a.who.userId)).rows[0],damaged=Buffer.from(saved.preparation_ciphertext);damaged[damaged.length-1]^=1;
+  await f.db.query('UPDATE platform_first_letter_tasks SET preparation_ciphertext=$2 WHERE id=$1',[one.task.taskId,damaged]);
+  await assert.rejects(tasks(a).refresh(a.who,pick,refreshedSettings),{code:'FIRST_LETTER_TASK_UNAVAILABLE'});
+  await f.db.query('UPDATE platform_first_letter_tasks SET preparation_ciphertext=$2 WHERE id=$1',[one.task.taskId,saved.preparation_ciphertext]);
+  await f.db.query('DELETE FROM platform_terms_consents WHERE user_id=$1',[a.who.userId]);
+  await assert.rejects(tasks(a).refresh(a.who,pick,refreshedSettings),(e:any)=>e.status===403);
+  assert.equal((await rows(a.who.userId)).rows[0].preparation_id,one.task.preparationId);
+ });
+});
+test('late revocation and abort roll back refreshed ciphertext and metadata together',async()=>{
+ await withPrebirthLoopback(async runtime=>{
+  for(const mode of ['revoke','abort']){
+   const a=await setup(runtime,values),one=await tasks(a).prepare(a.who,settings);
+   const before=(await rows(a.who.userId)).rows[0],controller=new AbortController();
+   const original=f.db.withBoundedTransaction.bind(f.db);let touched=false;
+   f.db.withBoundedTransaction=async(run,options)=>original(c=>run(new Proxy(c,{get(target,key){
+    if(key==='query')return async(sql:any,...args:any[])=>{
+     const result=await(target.query as any)(sql,...args);
+     if(typeof sql==='string'&&sql.startsWith('UPDATE platform_first_letter_tasks SET source_id=')){
+      touched=true;
+      if(mode==='revoke')await target.query('UPDATE platform_users SET auth_version=auth_version+1 WHERE id=$1',[a.who.userId]);
+      else controller.abort();
+     }return result;
+    };
+    const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+   }})),options);
+   try{await assert.rejects(tasks(a).refresh(a.who,refreshPick(one.task),refreshedSettings,controller.signal));}
+   finally{f.db.withBoundedTransaction=original;}
+   assert(touched);assert.deepEqual((await rows(a.who.userId)).rows[0],before);
+  }
+ });
+});
