@@ -33,6 +33,7 @@ import { ResumeOriginalReview } from './resume-original-review.ts';
 import { CareerPreparationSources } from './career-preparation-sources.ts';
 import { CareerStories } from './career-stories.ts';
 import { ManualJobs } from './manual-jobs.ts';
+import { CareerProfiles } from './career-profiles.ts';
 import { CareerTargets } from './career-targets.ts';
 import { CareerIdentityRecords } from './career-identity.ts';
 import { SharedMemorySafety } from './shared-memory-safety.ts';
@@ -146,6 +147,7 @@ export async function buildApp(options:AppOptions={}) {
   const welcome=new CompanionWelcomeService(db,config,bundle,new CompanionBirthOriginStore(config.dataCrypto),studentOnboarding.prebirth);
   const firstLetterStart=new FirstLetterStart(db,config,welcome,firstLetterSettings,firstLetterTasks,firstLetterDispatch);
   const sharedMemories=new SharedMemories(db,config,bundle);
+  const careerProfiles=new CareerProfiles(db,config,bundle);
   const careerTargets=new CareerTargets(db,config,bundle);
   const companionPaidSettings=new CompanionPaidSettingsService(db,config,bundle);
   const todayRest=new TodayRestService(db,config,bundle);
@@ -159,7 +161,7 @@ export async function buildApp(options:AppOptions={}) {
   const storage=options.storage??createStorage(config);
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage),uploadWrites=new UploadWrites(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
-  const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview,careerApplications);
+  const careerPreparationSources=new CareerPreparationSources(db,careerTargets,careerStories,resumeReview,careerApplications,undefined,careerProfiles);
   const todayWeekly=new TodayWeeklyService(db,{settings:companionDailySettings,stories:careerStories,resumes:resumeReview});
   const todayAgenda=new TodayAgendaService(db,{settings:companionDailySettings,rest:todayRest,jobs:manualJobs,interviews:careerInterviews,resumes:resumeReview});
   const todaySources=new TodaySources(db,{behavior:new CompanionPlanningSources(db,config,bundle,companion.generation),plans:dailyPlans,rest:todayRest,settings:companionDailySettings,targets:careerTargets,library:careerStories,resumes:resumeReview,jobs:manualJobs,applications:careerApplications,interviews:careerInterviews});
@@ -872,6 +874,9 @@ export async function buildApp(options:AppOptions={}) {
   app.get(`${prefix}/companion/settings/daily`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.read(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/companion/settings/daily/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.operation(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
   app.patch(`${prefix}/companion/settings/daily`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await companionDailySettings.change(fixedRequestSession(request,userId(request)),request.body,cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/career/profile`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerProfiles.get(fixedRequestSession(request,userId(request)),cancellation.signal);}finally{cancellation.dispose();}});
+  app.get(`${prefix}/career/profile/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerProfiles.observe(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
+  for(const [method,action] of [['patch','save'],['delete','delete']] as const)app[method](`${prefix}/career/profile`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerProfiles.mutate(fixedRequestSession(request,userId(request)),action,request.body,cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets`,limitedAccount,async(request,reply)=>{const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerTargets.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets/operations/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerTargets.observe(fixedRequestSession(request,userId(request)),params(request),cancellation.signal);}finally{cancellation.dispose();}});
   app.get(`${prefix}/career/targets/:id`,limitedAccount,async(request,reply)=>{targetQuery(request);const cancellation=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {target:await careerTargets.get(fixedRequestSession(request,userId(request)),params(request),cancellation.signal)};}finally{cancellation.dispose();}});
@@ -1048,5 +1053,5 @@ export async function buildApp(options:AppOptions={}) {
     if(companionNameQueue)companionNameQueue.start();
     if(firstLetterQueue)firstLetterQueue.start();
   }catch(error){await app.close();throw error;}
-  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,firstLetterSources,firstLetterTasks,firstLetterGeneration,firstLetterDispatch,firstLetterStart,firstLetterSettings,firstLetterQueue,contextSources,sharedMemories,memorySafety,careerTargets,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
+  return {app,db,jobs,queue,companion,companionQueue,studentOnboarding,safetyResources,naming,companionNameQueue,birth,welcome,firstLetterSources,firstLetterTasks,firstLetterGeneration,firstLetterDispatch,firstLetterStart,firstLetterSettings,firstLetterQueue,contextSources,sharedMemories,memorySafety,careerTargets,careerProfiles,careerIdentity,manualJobs,careerApplications,careerInterviews,careerStories,careerPreparationSources,todaySources,resumeReview,orgKnowledge,runtime,goalPlans,goalPlanProposals,jobOutcomeReviews,audioTranscriptions,conversationTurns};
 }

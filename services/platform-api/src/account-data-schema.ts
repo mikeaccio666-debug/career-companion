@@ -1,6 +1,6 @@
 import type { AccountDataPolicy } from './account-data-coverage.ts';
 
-// Reviewed against migrations 001–087, using catalog metadata only. This is a
+// Reviewed against migrations 001–088, using catalog metadata only. This is a
 // fixed review baseline, not a runtime auto-classifier or completed export map.
 // Re-review the actual columns and relationships before changing a fingerprint.
 export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: AccountDataPolicy; fingerprint: string}>[] = Object.freeze([
@@ -24,6 +24,11 @@ export const ACCOUNT_DATA_SCHEMA: readonly Readonly<{table: string; policy: Acco
   Object.freeze({ table: 'platform_career_job_observation_operations', policy: 'owner_projection', fingerprint: '4323fb03fc3e2b91f49ca20b2efda8f622a3fb9454e75d038edb0da399a71a2a' }),
   Object.freeze({ table: 'platform_career_job_observations', policy: 'owner_projection', fingerprint: '219432b0dfdd377711dc834289c08bf332ac16a3d8430f97b0f673d6da406f81' }),
   Object.freeze({ table: 'platform_career_library_operations', policy: 'owner_projection', fingerprint: '896896c6a54ff712d2398629e7e810431626586835401187aefada608fa999c4' }),
+  // Both rows belong directly to user_id and cascade on account deletion. The
+  // profile ciphertext contains confirmed structured facts; receipts contain
+  // only coordinates/digests/auth-version, exported through sanitized readers.
+  Object.freeze({ table: 'platform_career_profile_operations', policy: 'owner_projection', fingerprint: '3a6007a8f5968a6a5b7e90fe838ecce303ed595b63b62053d13fc52feafde62c' }),
+  Object.freeze({ table: 'platform_career_profiles', policy: 'owner_projection', fingerprint: '54fd2595eb0a0bdd83de473f8a809d23294d1ddd51da1ef2330423f8a3f4426d' }),
   Object.freeze({ table: 'platform_career_resume_counters', policy: 'owner_projection', fingerprint: 'cafc980a60f10d503a5aa41853895dbf2855e34e6d6d01fed7e95ab6f9c49cc3' }),
   Object.freeze({ table: 'platform_career_resume_versions', policy: 'owner_projection', fingerprint: '6c4aabc6da0042d4b4b467927ef506dd5f38861a66e5b0edf1afb1e73838cb40' }),
   Object.freeze({ table: 'platform_career_stories', policy: 'owner_projection', fingerprint: 'e00fe34dc1795aeb6ec389b4432dfe48c7c0374d5db7e6c4856c12341dbf9ef7' }),

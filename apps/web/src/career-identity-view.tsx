@@ -1,3 +1,4 @@
+import {CareerProfilePanel} from './career-profile-view';
 import {StudentPageNavigation} from './app/StudentPageNavigation';
 import { MentorHumanEntry } from './mentor-human-entry';
 import {useEffect,useMemo,useState} from 'react';
@@ -28,7 +29,7 @@ export function CareerIdentityScene({state,editor,setEditor,deleting,setDeleting
  if(!state?.entry)return <section className="identity-loading"><p role="status">{state?.error||'正在读取你的个人资料…'}</p><button type="button" disabled={state?.busy} onClick={()=>void controller.refresh()}>重新读取</button></section>;
  // No title, form, footer, empty-state prompt or field values on declined/skipped
  // or unproven intake. A saved date alone never establishes a qualifying stage.
- if(state.entry.kind==='hidden')return <p className="identity-hidden">这里暂无可展示的资料。</p>;
+ if(state.entry.kind==='hidden')return null;
  const locked=state.busy||!!state.pending;
  function save(){
   if(!editor||!editor.field||locked)return;
@@ -57,4 +58,4 @@ export function CareerIdentityScene({state,editor,setEditor,deleting,setDeleting
   <footer className="identity-footer">{IDENTITY_FOOTER}</footer>
  </section>;
 }
-export function CareerIdentityPage({onLogout}:{onLogout:()=>void}){return <main className="identity-page"><StudentPageNavigation><a href="/">回到对话</a><a href="/me/memory">它记得的你</a><button type="button" onClick={onLogout}>退出登录</button></StudentPageNavigation><p className="identity-ai">AI 主理人和队伍 · 个人资料</p><section className="mentor-human-group career-surface" aria-label="真人与社区"><h2>真人与社区</h2><MentorHumanEntry/></section><CareerIdentityPanel/></main>;}
+export function CareerIdentityPage({onLogout}:{onLogout:()=>void}){return <main className="identity-page"><StudentPageNavigation><a href="/">回到对话</a><a href="/me/memory">它记得的你</a><button type="button" onClick={onLogout}>退出登录</button></StudentPageNavigation><p className="identity-ai">AI 主理人和队伍 · 个人资料</p><section className="mentor-human-group career-surface" aria-label="真人与社区"><h2>真人与社区</h2><MentorHumanEntry/></section><CareerProfilePanel/><CareerIdentityPanel/></main>;}

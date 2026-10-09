@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { AccountCoreExport } from '../src/account-core-export.ts';
 import { AccountReauthentication } from '../src/account-reauthentication.ts';
 import { accountExportRows,CAREER_EXPORT_TABLES } from '../src/account-export-rows.ts';
+import { CareerProfiles } from '../src/career-profiles.ts';
 import { CareerTargets } from '../src/career-targets.ts';
 import { CareerStories } from '../src/career-stories.ts';
 import { ManualJobs } from '../src/manual-jobs.ts';
@@ -49,7 +50,7 @@ test('all seven career record kinds and their 14 table projections round-trip th
   for(const [section,record] of [['careerTargets',g.target],['careerProjects',g.project],['careerStories',g.story],['savedJobs',g.job],['careerApplications',g.application],['careerInterviews',g.interview],['careerIdentity',g.status]] as const)
     assert.deepEqual(s[section],[record]);
   for(const section of ['careerTargetOperations','savedJobOperations','careerApplicationOperations','careerApplicationEvents','careerInterviewOperations','careerIdentityOperations'] as const)assert.equal(s[section].length,1);
-  assert.equal(s.careerLibraryOperations.length,2);assert.equal(result.includedTables.length,145);
+  assert.equal(s.careerLibraryOperations.length,2);assert.equal(result.includedTables.length,147);
   for(const table of Object.keys(CAREER_EXPORT_TABLES)){assert(result.includedTables.includes(table));assert(!result.remainingTables.includes(table));}
   assert(result.includedTables.includes('platform_conversations'));assert(!result.remainingTables.includes('platform_conversations'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
   const serialized=JSON.stringify(result);
@@ -121,4 +122,16 @@ test('the internal pager rejects unreviewed identifiers before executing SQL',as
     await assert.rejects((async()=>{for await(const _row of accountExportRows({query:async()=>{called=true;throw new Error('Must not run');}} as any,a.userId,table as any))void _row;})(),(e:unknown)=>e instanceof ApiError&&e.code==='ACCOUNT_EXPORT_TABLE_UNREVIEWED');
     assert.equal(called,false);
   }
+});
+
+test('confirmed profile participates in the authenticated archive, aborts on corruption, and forgets content without losing sanitized history',async()=>{
+ const a=await actor(),b=await actor(),profiles=new CareerProfiles(f.db,f.config,FICTIONAL_LEGAL);
+ const command={...action(0),confirmed:true,facts:{degreeField:'cs',graduationMonth:'2029-04',graduated:false,targetTracks:['swe']}};
+ const saved=await profiles.mutate(a,'save',command);await profiles.mutate(b,'save',{...command,operationId:randomUUID()});
+ const result=await capture(a);assert.deepEqual(result.sections.careerProfile,[saved.profile]);assert.equal(result.sections.careerProfileOperations.length,1);assert(!JSON.stringify(result).includes(b.userId));
+ const original=(await f.db.query('SELECT record_ciphertext FROM platform_career_profiles WHERE user_id=$1',[a.userId])).rows[0].record_ciphertext,broken=Buffer.from(original);broken[broken.length-1]^=1;
+ await f.db.query('UPDATE platform_career_profiles SET record_ciphertext=$2 WHERE user_id=$1',[a.userId,broken]);
+ const token=await proof(a);await assert.rejects(capture(a,token),(e:unknown)=>e instanceof ApiError&&e.status===503);assert.equal(await consumed(a),null);
+ await f.db.query('UPDATE platform_career_profiles SET record_ciphertext=$2 WHERE user_id=$1',[a.userId,original]);await profiles.mutate(a,'delete',action(1));
+ const deleted=await capture(a,token);assert.deepEqual(deleted.sections.careerProfile,[]);assert.equal(deleted.sections.careerProfileOperations.length,2);assert(!JSON.stringify(deleted).includes('2029-04'));
 });

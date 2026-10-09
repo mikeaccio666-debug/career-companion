@@ -1,3 +1,4 @@
+import type { CareerProfiles } from './career-profiles.ts';
 import type { BoundCareerKnowledge } from './career-knowledge.ts';
 import type { CareerApplications } from './career-applications.ts';
 import { createHash } from 'node:crypto';
@@ -9,13 +10,14 @@ import type { Database } from './database.ts';
 import type { CareerTargets } from './career-targets.ts';
 import type { CareerStories } from './career-stories.ts';
 import type { ResumeOriginalReview } from './resume-original-review.ts';
-import { buildCareerRunContext, type OwnedCareerTarget, type OwnedCareerResume, type OwnedCareerEvidence, type OwnedCareerInput, type OwnedCareerApplication, type OwnedCareerSavedJob, type CareerInputSelection } from './career-run-context.ts';
+import { buildCareerRunContext, type OwnedCareerProfile, type OwnedCareerTarget, type OwnedCareerResume, type OwnedCareerEvidence, type OwnedCareerInput, type OwnedCareerApplication, type OwnedCareerSavedJob, type CareerInputSelection } from './career-run-context.ts';
 import { ApiError } from './errors.ts';
 export interface CareerPreparationSourceIndex {
     readonly kind: 'owned_career_preparation_source_index';
     readonly ownerId: string;
     /** Content address of actual current metadata, not a persisted expert run. */
     readonly indexId: string;
+    readonly profileSource: Readonly<{available:boolean;profile:Readonly<OwnedCareerProfile>|null}>;
     readonly targets: readonly Readonly<OwnedCareerTarget>[];
     readonly projects: readonly Readonly<OwnedCareerEvidence>[];
     readonly stories: readonly Readonly<OwnedCareerInput>[];
@@ -52,21 +54,22 @@ function request(value: unknown): {
     }
 }
 /** Actual owned source composition shared by application assembly. No student
- * endpoint, capability registration, fake profile, knowledge batch, turn,
+ * endpoint, capability registration, invented profile, knowledge batch, turn,
  * source safety grade, model use, review or execution lease is created here. */
 export class CareerPreparationSources {
-    constructor(private readonly db: Database, private readonly targets: Pick<CareerTargets, 'readForPreparationInTransaction'>, private readonly library: Pick<CareerStories, 'readPreparationIndexInTransaction'>, private readonly resumeVersions?: Pick<ResumeOriginalReview, 'readForPreparationInTransaction'>, private readonly journey?: Pick<CareerApplications, 'readForPreparationInTransaction'>, private readonly knowledge?: Pick<BoundCareerKnowledge, 'readKnowledgeAccessInTransaction'>) { }
+    constructor(private readonly db: Database, private readonly targets: Pick<CareerTargets, 'readForPreparationInTransaction'>, private readonly library: Pick<CareerStories, 'readPreparationIndexInTransaction'>, private readonly resumeVersions?: Pick<ResumeOriginalReview, 'readForPreparationInTransaction'>, private readonly journey?: Pick<CareerApplications, 'readForPreparationInTransaction'>, private readonly knowledge?: Pick<BoundCareerKnowledge, 'readKnowledgeAccessInTransaction'>, private readonly profiles?: Pick<CareerProfiles, 'readForPreparationInTransaction'>) { }
     async readInTransaction(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal): Promise<Readonly<CareerPreparationSourceIndex>> {
         const context = fixed(value);
         await authorizeFixedSession(client, context, signal);
         // Sequential reads share this exact bounded transaction and owner lock.
+        const profileSource = Object.freeze({available:!!this.profiles,profile:this.profiles ? await this.profiles.readForPreparationInTransaction(client,context,signal) : null});
         const targets = await this.targets.readForPreparationInTransaction(client, context, signal);
         const { projects, stories } = await this.library.readPreparationIndexInTransaction(client, context, signal);
         const resumes = this.resumeVersions ? await this.resumeVersions.readForPreparationInTransaction(client, context, signal) : null;
         const journey = this.journey ? await this.journey.readForPreparationInTransaction(client, context, signal) : null;
         await authorizeFixedSession(client, context, signal);
         signal?.throwIfAborted();
-        const content = { kind: 'owned_career_preparation_source_index' as const, ownerId: context.userId, targets, projects, stories, resumes, applications: journey?.applications ?? null, savedJobs: journey?.savedJobs ?? null };
+        const content = { kind: 'owned_career_preparation_source_index' as const, ownerId: context.userId, profileSource, targets, projects, stories, resumes, applications: journey?.applications ?? null, savedJobs: journey?.savedJobs ?? null };
         return Object.freeze({ ...content, indexId: 'career_index_' + createHash('sha256').update(canonical(content)).digest('hex') });
     }
  async read(value:FixedSessionContext,signal?:AbortSignal){
@@ -89,6 +92,7 @@ export class CareerPreparationSources {
         }) => { if (scope.ownerId !== context.userId)
             throw new ApiError(404, 'NOT_FOUND', 'The preparation source was not found.'); signal?.throwIfAborted(); };
         const built = await buildCareerRunContext({ ownerId: context.userId, skillId: r.skillId, selection: r.selection, signal, tools, ports: {
+                ...(sourceIndex.profileSource.available ? {readProfile:async(scope:{ownerId:string})=>{assertScope(scope);return sourceIndex.profileSource.profile;}} : {}),
                 listTargets: async (scope) => { assertScope(scope); return sourceIndex.targets; },
                 ...(this.knowledge ? { readKnowledgeAccess: async (scope: {ownerId:string;signal?:AbortSignal}) => { assertScope(scope); return this.knowledge!.readKnowledgeAccessInTransaction(client,context,scope.signal); } } : {}),
                 ...(sourceIndex.applications === null ? {} : { listApplications: async (scope: {
