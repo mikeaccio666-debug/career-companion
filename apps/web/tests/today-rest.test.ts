@@ -140,3 +140,16 @@ test('invalid rest choice produces no write',async()=>{let writes=0;const h=harn
 test('an acknowledgement at its applied revision must carry the effect of the requested rest action',async()=>{
  for(const choice of ['1_day','3_days','7_days','reminders_off'] as const){const c={...cmd(),choice};await assert.rejects(changeTodayRest(harness(()=>saved(c)).client,c));}
 });
+
+test('hidden-page rest recovery observes a newer choice and never revives a delayed earlier acknowledgement',async()=>{
+ const {bindPrivatePageLifecycle}=await import('../src/private-page-lifecycle.ts');
+ const events=new EventTarget(),page=Object.assign(new EventTarget(),{visibilityState:'hidden'});let reads=0,writes=0,c:any,resolve!:(v:unknown)=>void,newer:any;
+ const h=harness((_p,i)=>{if(i.method){writes++;c=JSON.parse(String(i.body));return new Promise(r=>resolve=r);}reads++;return{settings:newer??initial};});
+ const lifecycle=bindPrivatePageLifecycle(h.controller,events,page,()=>true);assert.equal(reads,0);
+ page.visibilityState='visible';page.dispatchEvent(new Event('visibilitychange'));await until(()=>h.controller.snapshot().loaded);h.controller.begin(choice);const pending=h.controller.snapshot().pending;
+ page.visibilityState='hidden';page.dispatchEvent(new Event('visibilitychange'));assert.equal(h.controller.snapshot().settings,null);
+ newer={...saved(c).settings,revision:2,lastOperationId:randomUUID(),reminders:'off'};lifecycle.refresh();assert.equal(reads,1);
+ page.visibilityState='visible';page.dispatchEvent(new Event('visibilitychange'));await until(()=>h.controller.snapshot().loaded);assert.equal(h.controller.snapshot().settings?.revision,2);
+ resolve(saved(c));await new Promise(r=>setTimeout(r,5));assert.equal(h.controller.snapshot().settings?.revision,2);assert.equal(h.controller.snapshot().pending,pending);assert.equal(writes,1);
+ lifecycle.dispose();events.dispatchEvent(new Event('online'));assert.equal(h.controller.snapshot().pending,null);assert.equal(reads,2);
+});
