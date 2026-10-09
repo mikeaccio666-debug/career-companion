@@ -2,7 +2,7 @@ import type { OwnedCareerEvidence,OwnedCareerInput } from './career-run-context.
 import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId,careerRecordObject,parseCareerLibraryCommand,parseCareerProject,parseCareerStory,careerLibrarySummary,type CareerLibraryKind,type CareerLibraryAction,type CareerLibraryRecord,type CareerProject,type CareerStory,type CareerStoryEvidenceAvailability } from '@companion/platform-contracts';
-import { careerProgress } from '@companion/career-core';
+import { type CareerEvidence, careerProgress } from '@companion/career-core';
 import { authorizeFixedSession,type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
@@ -36,7 +36,7 @@ export class CareerStories {
   const raw=this.storage.crypto!.openUtf8(row.record_ciphertext,{table:tables[kind],column:'record_ciphertext',rowId:row.id,ownerId:context.userId,revision:row.revision}),record=kind==='project'?parseCareerProject(JSON.parse(raw)):parseCareerStory(JSON.parse(raw)),latest=proofs?await this.receipt(client,context,proofs.latest.get(proofKey(kind,row.id))):await this.latest(client,context,kind,row.id);
   if(canonical(record)!==raw||record.id!==row.id||record.ownerId!==context.userId||record.revision!==row.revision||record.createdAt!==row.created_at.toISOString()||record.updatedAt!==row.updated_at.toISOString()||record.sensitivity!==row.sensitivity||record.lastOperationId!==row.last_operation_id||row.record_kind!==kind||latest.action==='delete'||latest.appliedRevision!==record.revision||latest.operationId!==record.lastOperationId||latest.createdAt!==record.updatedAt)throw unavailable();
   if(kind==='project'){const p=record as CareerProject;if(p.kind!==row.kind||p.state!==row.state||p.verification!==row.verification||row.mentor_review!==null)throw unavailable();if(p.state==='active'){if(row.withdrawn_at!==null)throw unavailable();}else{const r=proofs?proofs.withdrawn.get(p.id):(await client.query("SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND record_kind='project' AND record_id=$2 AND action='withdraw' ORDER BY applied_revision DESC LIMIT 1 FOR SHARE",[context.userId,p.id])).rows[0];if(!r)throw unavailable();const withdrawal=await this.receipt(client,context,r);if(withdrawal.appliedRevision>p.revision||withdrawal.createdAt!==row.withdrawn_at?.toISOString())throw unavailable();}}else if((record as CareerStory).status!==row.status)throw unavailable();
-  if(record.confirmedRevision!==null){const row=proofs?proofs.confirmed.get(proofKey(kind,record.id)):(await client.query('SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND record_kind=$2 AND record_id=$3 AND applied_revision=$4 FOR SHARE',[context.userId,kind,record.id,record.confirmedRevision])).rows[0];if(!row)throw unavailable();const confirmation=await this.receipt(client,context,row);if(confirmation.action!=='confirm'||confirmation.createdAt!==record.confirmedAt)throw unavailable();}
+  if(record.confirmedRevision!==null){const row=proofs?proofs.confirmed.get(proofKey(kind,record.id)):(await client.query('SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND record_kind=$2 AND record_id=$3 AND applied_revision=$4 FOR SHARE',[context.userId,kind,record.id,record.confirmedRevision])).rows[0];if(!row)throw unavailable();const confirmation=await this.receipt(client,context,row);if(confirmation.action!=='confirm'||confirmation.recordId!==record.id||confirmation.recordKind!==kind||confirmation.appliedRevision!==record.confirmedRevision||confirmation.createdAt!==record.confirmedAt)throw unavailable();}
   return record;
  }catch{throw unavailable();}}
  private async row(client:PoolClient,context:FixedSessionContext,kind:CareerLibraryKind,id:string){return (await client.query('SELECT * FROM '+tables[kind]+' WHERE user_id=$1 AND id=$2 FOR UPDATE',[context.userId,id])).rows[0];}
@@ -95,7 +95,24 @@ export class CareerStories {
   await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();
   return Object.freeze({projects:Object.freeze(evidence),stories:Object.freeze(stories)});
  }
- async progress(value:FixedSessionContext,signal?:AbortSignal){const context=this.fixed(value);return this.db.withBoundedTransaction(async client=>{await this.authorize(client,context,signal);const rows=(await client.query('SELECT * FROM platform_career_evidence WHERE user_id=$1 ORDER BY created_at,id LIMIT 501 FOR SHARE',[context.userId])).rows;if(rows.length>500)throw unavailable();const evidence=[];for(const row of rows){signal?.throwIfAborted();evidence.push(await this.record(client,context,'project',row) as CareerProject);}const progress=careerProgress(context.userId,evidence);await authorizeFixedSession(client,context,signal);return Object.freeze({progress,coverage:Object.freeze(['project'])});});}
+ /** Private owner ledger projection. Does not filter by model visibility or
+  * grant access to project facts; no body or sensitivity leaves this reader. */
+ async readProgressEvidenceInTransaction(client:PoolClient,value:FixedSessionContext,signal?:AbortSignal):Promise<readonly Readonly<CareerEvidence>[]> {
+  const context=this.fixed(value);await this.authorize(client,context,signal);
+  const rows=(await client.query('SELECT * FROM platform_career_evidence WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE',[context.userId])).rows;
+  if(rows.length>500)throw unavailable();
+  const ids=rows.map(r=>r.id);
+  const latest=(await client.query("SELECT o.* FROM unnest($2::uuid[]) c(id) JOIN LATERAL (SELECT operation_id FROM platform_career_library_operations WHERE user_id=$1 AND record_kind='project' AND record_id=c.id ORDER BY applied_revision DESC LIMIT 1) chosen ON true JOIN platform_career_library_operations o ON o.user_id=$1 AND o.operation_id=chosen.operation_id FOR SHARE OF o",[context.userId,ids])).rows;
+  const confirmations=(await client.query("SELECT o.* FROM unnest($2::uuid[]) c(id) JOIN LATERAL (SELECT operation_id FROM platform_career_library_operations WHERE user_id=$1 AND record_kind='project' AND record_id=c.id AND action='confirm' ORDER BY applied_revision DESC LIMIT 1) chosen ON true JOIN platform_career_library_operations o ON o.user_id=$1 AND o.operation_id=chosen.operation_id FOR SHARE OF o",[context.userId,ids])).rows;
+  const withdrawals=(await client.query("SELECT o.* FROM unnest($2::uuid[]) c(id) JOIN LATERAL (SELECT operation_id FROM platform_career_library_operations WHERE user_id=$1 AND record_kind='project' AND record_id=c.id AND action='withdraw' ORDER BY applied_revision DESC LIMIT 1) chosen ON true JOIN platform_career_library_operations o ON o.user_id=$1 AND o.operation_id=chosen.operation_id FOR SHARE OF o",[context.userId,rows.filter(r=>r.state==='withdrawn').map(r=>r.id)])).rows;
+  const proofs:PreparationProofs={latest:new Map(latest.map(r=>[proofKey(r.record_kind,r.record_id),r])),confirmed:new Map(confirmations.map(r=>[proofKey(r.record_kind,r.record_id),r])),withdrawn:new Map(withdrawals.map(r=>[r.record_id,r]))};
+  const evidence:Readonly<CareerEvidence>[]=[];
+  for(const row of rows){signal?.throwIfAborted();const p=await this.record(client,context,'project',row,proofs) as CareerProject;
+   evidence.push(Object.freeze({id:p.id,ownerId:p.ownerId,subjectId:p.subjectId,kind:p.kind,state:p.state,verification:p.verification,referenceId:p.referenceId,occurredAt:p.occurredAt}));
+  }
+  await authorizeFixedSession(client,context,signal);signal?.throwIfAborted();return Object.freeze(evidence);
+ }
+ async progress(value:FixedSessionContext,signal?:AbortSignal){const context=this.fixed(value);return this.db.withBoundedTransaction(async client=>{const evidence=await this.readProgressEvidenceInTransaction(client,context,signal);return Object.freeze({progress:careerProgress(context.userId,evidence),coverage:Object.freeze(['project'])});});}
  async mutate(value:FixedSessionContext,inputKind:CareerLibraryKind,action:CareerLibraryAction,key:unknown,input:unknown,signal?:AbortSignal){const context=this.fixed(value),kind=this.kind(inputKind);let command:ReturnType<typeof parseCareerLibraryCommand>,requested:string|null;try{command=parseCareerLibraryCommand(kind,action,input);requested=action==='create'?null:careerRecordId(key);}catch{throw bad();}
   const digest=createHash('sha256').update(canonical({kind,action,recordId:requested,command})).digest('hex');
   return this.db.withBoundedTransaction(async client=>{const auth=await this.authorize(client,context,signal),prior=(await client.query('SELECT * FROM platform_career_library_operations WHERE user_id=$1 AND operation_id=$2 FOR SHARE',[context.userId,command.operationId])).rows[0];

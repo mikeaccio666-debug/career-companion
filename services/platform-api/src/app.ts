@@ -1,3 +1,4 @@
+import { CareerProgressService } from './career-progress.ts';
 import { CompanionPaidSettingsService } from './companion-paid-settings.ts';
 import { MentorRatings } from './mentor-ratings.ts';
 import { MentorCapacity } from './mentor-capacity.ts';
@@ -126,6 +127,7 @@ export async function buildApp(options:AppOptions={}) {
   const careerApplications=new CareerApplications(db,config,bundle,manualJobs);
   const careerInterviews=new CareerInterviews(db,config,bundle,careerApplications);
   const careerStories=new CareerStories(db,config,bundle);
+  const careerProgressService=new CareerProgressService(db,careerStories,careerApplications);
   const storage=options.storage??createStorage(config);
   const uploadRemovals=new UploadRemovals(db,config.dataCrypto,storage);
   const resumeReview=new ResumeOriginalReview(db,config,bundle,storage);
@@ -618,7 +620,7 @@ export async function buildApp(options:AppOptions={}) {
     if(kind==='project')app.post(root+'/:id/withdraw',limitedAccount,(request,reply)=>mutateLibrary(request,reply,'withdraw'));
     app.delete(root+'/:id',limitedAccount,(request,reply)=>mutateLibrary(request,reply,'delete'));
   }
-  app.get(prefix+'/career/progress',limitedAccount,async(request,reply)=>{libraryQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerStories.progress(fixedRequestSession(request,userId(request)),c.signal);}finally{c.dispose();}});
+  app.get(prefix+'/career/progress',limitedAccount,async(request,reply)=>{libraryQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await careerProgressService.read(fixedRequestSession(request,userId(request)),c.signal);}finally{c.dispose();}});
   function manualJobQuery(request:FastifyRequest){if(Object.keys(object(request.query)).length)throw new ApiError(400,'MANUAL_JOB_INPUT_INVALID','Unsupported saved-job query.');}
   app.get(`${prefix}/career/job-observations`,limitedAccount,async(request,reply)=>{const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return await manualJobs.list(fixedRequestSession(request,userId(request)),careerHttpQuery(request.query),c.signal);}finally{c.dispose();}});
   app.get(`${prefix}/career/job-observations/:id`,limitedAccount,async(request,reply)=>{manualJobQuery(request);const c=requestSignal(request,reply);try{reply.header('Cache-Control','private, no-store');return {job:await manualJobs.get(fixedRequestSession(request,userId(request)),params(request),c.signal)};}finally{c.dispose();}});

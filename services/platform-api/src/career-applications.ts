@@ -2,7 +2,7 @@ import type { OwnedCareerApplication, OwnedCareerSavedJob } from './career-run-c
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { careerRecordId, careerRecordObject, parseCareerApplication, parseCareerApplicationCommand, parseCareerApplicationEvent, careerApplicationSummary, manualJobSummary, type CareerApplication, type CareerApplicationAction, type CareerApplicationEvent, type ApplicationStageState } from '@companion/platform-contracts';
-import { planApplicationStageChange, applicationNeedsPostRejection } from '@companion/career-core';
+import { type CareerEvidence, planApplicationStageChange, applicationNeedsPostRejection } from '@companion/career-core';
 import { authorizeFixedSession, type FixedSessionContext } from './auth.ts';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
@@ -135,14 +135,9 @@ export class CareerApplications {
         return null;
     }
     private ack(r: Receipt, replayed: boolean) { return Object.freeze({ id: r.operationId, applicationId: r.applicationId, action: r.action, appliedRevision: r.appliedRevision, replayed }); }
-    /** Complete, body-free metadata. Source existence and all immutable proofs
-     * are read within the actual consuming transaction, never from UI summaries. */
-    async readForPreparationInTransaction(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal) {
-        const context = this.fixed(value);
-        await this.authorize(client, context, signal);
-        await this.storage.authorizeSession(client, context, signal);
-        const savedJobs = await this.jobs.readForPreparationInTransaction(client, context, signal);
-        const jobById = new Map(savedJobs.map(job => [job.id, job]));
+    /** Caller holds the authenticated owner lock. Batch proofs avoid using a
+     * first-page summary or unauthenticated SQL counts as the ledger. */
+    private async currentRecords(client: PoolClient, context: FixedSessionContext, signal?: AbortSignal) {
         const rows = (await client.query('SELECT * FROM platform_career_applications WHERE user_id=$1 ORDER BY id LIMIT 501 FOR SHARE', [context.userId])).rows;
         if (rows.length > 500)
             throw unavailable();
@@ -186,10 +181,43 @@ export class CareerApplications {
         const events = new Map(eventRows.map(row => [row.id, row]));
         if (events.size !== eventIds.size || [...eventIds].some(id => !operations.has(id)))
             throw unavailable();
-        const proofs: PreparationProofs = { latest, operations, events }, applications: Readonly<OwnedCareerApplication>[] = [];
+        const proofs: PreparationProofs = { latest, operations, events };
+        const records: Readonly<CareerApplication>[] = [];
         for (const row of rows) {
             signal?.throwIfAborted();
-            const v = await this.record(client, context, row, proofs), job = jobById.get(v.job.id) ?? null;
+            records.push(await this.record(client, context, row, proofs));
+        }
+        return records;
+    }
+    /** Owner-only evidence projection, not a model/context port. A manual
+     * "applied" is provisional even after an offer; closed does not undo effort.
+     * occurredAt is this declaration's current record time, never a verified
+     * submission time. Correcting to saved clears the declaration. */
+    async readProgressEvidenceInTransaction(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal): Promise<readonly Readonly<CareerEvidence>[]> {
+        const context = this.fixed(value);
+        await this.authorize(client, context, signal);
+        const records = await this.currentRecords(client, context, signal);
+        const evidence = records.filter(v => v.submittedVia === 'user_sends').map(v => Object.freeze({
+            id: v.id, ownerId: context.userId, subjectId: v.id, kind: 'application' as const,
+            state: 'active' as const, verification: 'self_reported' as const,
+            referenceId: 'career-application:' + v.id + ':' + v.revision, occurredAt: v.updatedAt,
+        }));
+        await authorizeFixedSession(client, context, signal);
+        signal?.throwIfAborted();
+        return Object.freeze(evidence);
+    }
+    /** Complete, body-free metadata. Source existence and all immutable proofs
+     * are read within the actual consuming transaction, never from UI summaries. */
+    async readForPreparationInTransaction(client: PoolClient, value: FixedSessionContext, signal?: AbortSignal) {
+        const context = this.fixed(value);
+        await this.authorize(client, context, signal);
+        await this.storage.authorizeSession(client, context, signal);
+        const savedJobs = await this.jobs.readForPreparationInTransaction(client, context, signal);
+        const jobById = new Map(savedJobs.map(job => [job.id, job]));
+        const records = await this.currentRecords(client, context, signal);
+        const applications: Readonly<OwnedCareerApplication>[] = [];
+        for (const v of records) {
+            const job = jobById.get(v.job.id) ?? null;
             applications.push(Object.freeze({ ownerId: context.userId, id: v.id, revision: v.revision, state: 'current', stage: v.stage, track: v.job.roleFamily, job,
                 normalSummary: '本人记录的申请 · ' + v.job.roleFamily + ' · ' + v.stage + ' · ' + (job ? '关联原 JD 存在，未核实是否仍开放。' : '原 JD 已移除。') }));
         }

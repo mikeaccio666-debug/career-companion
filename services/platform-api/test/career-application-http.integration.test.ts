@@ -80,3 +80,23 @@ test('buildApp composes actual password-login-created application and JD into pr
     assert.notEqual(after.sourceIndex.indexId, index.indexId);
     assert.equal(calls, 0);
 });
+
+test('real password-authenticated progress route composes actual current applications and projects with explicit coverage', async () => {
+    const a = await actor(), b = await actor(), { app } = await make(a), url = '/api/platform/career/progress';
+    const read = () => system.app.inject({ url, headers: a.headers });
+    assert.equal((await read()).json().progress.provisionalCounts.application, 0);
+    const staged = await system.app.inject({ method: 'POST', url: prefix + '/' + app.id + '/stage', headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 1, stage: 'applied' } });
+    assert.equal(staged.statusCode, 200, staged.body);
+    const response = await read(); assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.headers['cache-control'], 'private, no-store');
+    assert.deepEqual(response.json().coverage, ['project', 'application']);
+    assert.equal(response.json().progress.provisionalCounts.application, 1);
+    assert.equal(response.json().progress.counts.application, 0);
+    assert(!response.body.includes('Fictional'));
+    assert.equal((await system.app.inject({ url, headers: b.headers })).json().progress.provisionalCounts.application, 0);
+    assert.equal((await system.app.inject({ url })).statusCode, 401);
+    assert.equal((await system.app.inject({ url: url + '?ownerId=' + a.id, headers: b.headers })).statusCode, 400);
+    assert.equal((await system.app.inject({ url, headers: { ...b.headers, [PLATFORM_ACCOUNT_HEADER]: a.id } })).statusCode, 409);
+    await system.app.inject({ method: 'DELETE', url: prefix + '/' + app.id, headers: a.headers, payload: { operationId: randomUUID(), expectedRevision: 2 } });
+    assert.equal((await read()).json().progress.provisionalCounts.application, 0);
+});
