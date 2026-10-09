@@ -2,7 +2,7 @@
 
 对应 09 §11 的本人数据覆盖要求，账户捕获新增六个区段：jobs、jobApprovals、jobAttempts、jobDispatches、conversationTasks、jobOutcomeReviews。它们读取底座中已经保存的用户历史，不向学生开放通用工作台，也不改变 03 §9 对产品待确认卡和内部任务审批的区分。
 
-普通 JSON 当前覆盖 102 张已投影、7 张明确排除、62 张待处理；带私有文件模式为 105 / 7 / 59。两者仍 complete=false。当前计数包含后续加入的[浏览器/工作流执行历史](account-execution-export.md)。其他个人数据表、持久化归档任务、公开下载及删除协调仍未全部交付。
+普通 JSON 当前覆盖 106 张已投影、7 张明确排除、58 张待处理；带私有文件模式为 109 / 7 / 55。两者仍 complete=false。当前计数包含后续加入的[浏览器/工作流执行历史](account-execution-export.md)。其他个人数据表、持久化归档任务、公开下载及删除协调仍未全部交付。
 
 ## 历史内容
 
@@ -28,4 +28,4 @@
 
 首轮测试修正了三个夹具引用错误（ProviderError 的导出包、结果读取方法和审批查询）；随后发现审批载荷的合法可选字段被误设为必填，改为闭合的必填/可选字段集合。前 10 项定向测试通过。扩展到 15 项后全部通过；完整相关回归首轮 279/280，唯一失败是旧 MCP 断言仍要求整包不含任务原文。改为分别检查任务原文保留与 MCP 元数据不含正文；修正过程中一处夹具 SQL 值被误删，已恢复，MCP 8/8 定向复验通过。计划归档 10/10 也通过。最终累计 282 项不同测试已有通过结果，无跳过；API 类型检查、git diff --check 通过。没有真实模型、外部 RPC、主数据库或部署操作。
 
-覆盖计数核对于 2026-10-09，包含日常偏好、休息和计划记录，以及[共享记忆分类与待处理记录](account-memory-safety-export.md)和[模型调用记录](account-model-audit-export.md)。
+覆盖计数核对于 2026-10-09，包含日常偏好、休息和计划记录，以及[共享记忆分类与待处理记录](account-memory-safety-export.md)、[模型调用记录](account-model-audit-export.md)及[主理人名字与选择历史](account-companion-identity-export.md)。

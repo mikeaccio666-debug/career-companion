@@ -51,7 +51,7 @@ test('actual discovered connection metadata excludes service configuration, sche
  assert.equal((result.sections.jobs[0] as any).definition.prompt,'Fictional task body not projected here');assert(!JSON.stringify([row,call]).includes('Fictional task body not projected here'));
  for(const secret of [who.tokenHash,password,encoded,other.userId,foreign.connectionId!,otherCall.job,'fictional-schema-default-private','fictional-service-key','fictional-mcp.example.invalid','fictional-result-not-loaded','a'.repeat(64),'b'.repeat(64),'c'.repeat(64),'d'.repeat(64)])assert(!JSON.stringify(result).includes(secret));
  assert(!queries.filter(sql=>connectionRead(sql)||receiptRead(sql)).some(sql=>/policy_hash|definition_hash|arguments_hash|response_hash|execution_policy/.test(sql)));assert.deepEqual(m.counts(),counts);assert.deepEqual(await snapshot(who),before);
- assert(Object.isFrozen(row.tools[0]));assert.equal(result.includedTables.length,102);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(result.remainingTables.includes('platform_artifacts'));
+ assert(Object.isFrozen(row.tools[0]));assert.equal(result.includedTables.length,106);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(result.remainingTables.includes('platform_artifacts'));
 });
 
 test('revocation and removed live catalog do not rewrite historical grants or trigger discovery',async()=>{
