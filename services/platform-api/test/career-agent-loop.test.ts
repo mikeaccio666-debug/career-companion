@@ -123,9 +123,60 @@ test('a prepared expert skill narrows the actual eight-round room budget to six 
 test('registered authorization failure and forged owner arguments never cross the executor boundary', async () => {
   const current = scope(); let accessed = 0;
   const registry = new CapabilityRegistry({ registrations: [{ id: 'search_memories', reviewed: true, authorize: async () => { throw new ApiError(403, 'TOOL_NOT_ALLOWED', 'Fictional grant was revoked.'); }, execute: async () => { accessed++; return {}; } }] });
-  const session = registry.session(() => current); session.beforeStep(input('openai')); session.resolveTools();
+  const session = registry.session(() => current); await session.beforeStep(input('openai')); session.resolveTools();
   const execution = { turnId: current.turnId, callId: 'fictional-call', idempotencyKey: `${current.turnId}:fictional-call`, effect: 'read' as const };
   await assert.rejects(session.executeTool('search_memories', { query: 'fictional', ownerId: 'different-owner' }, execution), { code: 'TOOL_ARGUMENTS_INVALID' });
   await assert.rejects(session.executeTool('search_memories', { query: 'fictional' }, execution), { code: 'TOOL_NOT_ALLOWED' });
   assert.equal(accessed, 0);
+});
+
+test('method full reference survives the real loop tool-result budget without leaking reviewer identities', async () => {
+  const current = scope(), fullText = 'Fictional detailed method. '.repeat(1000);
+  const registry = new CapabilityRegistry({
+    methodReferences: { 'career-intake': [{ methodId: 'fictional.method', revision: 1 }] },
+    readMethodReferences: async (_scope, _refs, request) => [{ methodId: 'fictional.method', revision: 1,
+      licenseId: 'fictional-license', editedBy: 'fictional-private-editor', reviewedBy: 'fictional-private-reviewer',
+      state: 'published', excerpt: 'Read the full fictional method.', ...(request.detail === 'full' ? { fullText } : {}) }],
+    careerPorts: { readProfile: async () => ({ ownerId, id: 'fictional-profile', revision: 1, state: 'current',
+      normalSummary: 'Fictional profile.', confirmed: { degree: true, graduation: true, roleFamily: true } }) },
+    registrations: ['read_profile', 'save_plan_draft'].map(id => ({ id, reviewed: true, execute: async () => ({}) })),
+  });
+  const session = registry.session(() => current), f = await fixture('ollama', [
+    { calls: [call('use_skill', 'load', { id: 'career-intake' })] },
+    { calls: [call('read_skill_reference', 'full', { id: 'career-intake', ref: 'fictional.method' })] },
+    { calls: [call('read_skill_reference', 'full-1', { id: 'career-intake', ref: 'fictional.method', part: 1 }), call('read_skill_reference', 'full-2', { id: 'career-intake', ref: 'fictional.method', part: 2 })] },
+    { text: 'The fictional reference is available.' },
+  ]);
+  try {
+    await collect(runAgentLoop(f.adapter, input('ollama'), { turnId: current.turnId, purpose: 'companion_reply',
+      toolDefinitions: session.toolDefinitions, resolveTools: session.resolveTools, beforeStep: session.beforeStep,
+      executeTool: session.executeTool, drainInterjections: () => [], limits: { maxRounds: 4, maxToolCalls: 6, maxOutputTokens: 1500, timeoutMs: 5000 } }));
+    assert.equal(f.requests.length, 4);
+    const parts = [toolResult('ollama', f.requests[2], 'full').references[0], toolResult('ollama', f.requests[3], 'full-1').references[0], toolResult('ollama', f.requests[3], 'full-2').references[0]];
+    assert.deepEqual(parts.map(part => [part.part, part.totalParts, part.nextPart]), [[0, 3, 1], [1, 3, 2], [2, 3, null]]);
+    assert.equal(parts.map(part => part.text).join(''), fullText);
+    assert(!JSON.stringify(f.requests).includes('fictional-private-editor'));
+    assert(!JSON.stringify(f.requests).includes('fictional-private-reviewer'));
+  } finally { await f.close(); }
+});
+test('revoked loaded method stops the real loop before the next model request', async () => {
+  const current = scope(); let reads = 0;
+  const registry = new CapabilityRegistry({
+    methodReferences: { 'career-intake': [{ methodId: 'fictional.method', revision: 1 }] },
+    readMethodReferences: async () => {
+      if (++reads > 1) throw new ApiError(403, 'NOT_ENTITLED', 'Fictional method access revoked.');
+      return [{ methodId: 'fictional.method', revision: 1, licenseId: 'fictional-license', editedBy: 'fictional-editor',
+        reviewedBy: 'fictional-reviewer', state: 'published', excerpt: 'Fictional licensed words.' }];
+    },
+    careerPorts: { readProfile: async () => ({ ownerId, id: 'fictional-profile', revision: 1, state: 'current',
+      normalSummary: 'Fictional profile.', confirmed: { degree: true, graduation: true, roleFamily: true } }) },
+    registrations: ['read_profile', 'save_plan_draft'].map(id => ({ id, reviewed: true, execute: async () => ({}) })),
+  });
+  const session = registry.session(() => current), f = await fixture('ollama', [{ calls: [call('use_skill', 'load', { id: 'career-intake' })] }]);
+  try {
+    await assert.rejects(collect(runAgentLoop(f.adapter, input('ollama'), { turnId: current.turnId, purpose: 'companion_reply',
+      toolDefinitions: session.toolDefinitions, resolveTools: session.resolveTools, beforeStep: session.beforeStep,
+      executeTool: session.executeTool, drainInterjections: () => [], limits: { maxRounds: 4, maxToolCalls: 6, maxOutputTokens: 1500, timeoutMs: 5000 } })), { code: 'NOT_ENTITLED' });
+    assert.equal(f.requests.length, 1); assert.equal(reads, 2);
+  } finally { await f.close(); }
 });

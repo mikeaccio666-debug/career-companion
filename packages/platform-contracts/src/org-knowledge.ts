@@ -7,7 +7,7 @@ export interface StudentOrgKnowledgePassage extends OrgKnowledgeReference {
   readonly title: string; readonly text: string; readonly updatedAt: string;
   readonly scope: 'org'; readonly assetClass: 'question' | 'method_card';
   readonly provenanceLabel: string; readonly provenance: 'untrusted_knowledge';
-  readonly deidentified: true; readonly older: false;
+  readonly deidentified: true; readonly older: boolean;
   readonly brand: string; readonly assetRevision: number | null;
 }
 function invalid(): never { throw Error('内容出处暂时无法核对。'); }
@@ -38,7 +38,7 @@ export function parseStudentOrgKnowledgePassage(value: unknown): Readonly<Studen
     'scope', 'assetClass', 'provenanceLabel', 'provenance', 'deidentified', 'older', 'brand', 'assetRevision']);
   const ref = parseOrgKnowledgeReference({ sourceId: v.sourceId, revision: v.revision, passageId: v.passageId });
   if (v.scope !== 'org' || !['question', 'method_card'].includes(v.assetClass as string) ||
-      v.provenance !== 'untrusted_knowledge' || v.deidentified !== true || v.older !== false) return invalid();
+      v.provenance !== 'untrusted_knowledge' || v.deidentified !== true || typeof v.older !== 'boolean' || v.older && v.assetClass !== 'method_card') return invalid();
   const brand = orgKnowledgeBrand(v.brand), assetClass = v.assetClass as 'question' | 'method_card';
   const assetRevision = assetClass === 'question' ? null : integer(v.assetRevision);
   if (assetClass === 'question' && v.assetRevision !== null) return invalid();
@@ -46,5 +46,5 @@ export function parseStudentOrgKnowledgePassage(value: unknown): Readonly<Studen
   if (v.provenanceLabel !== label) return invalid();
   return Object.freeze({ ...ref, title: text(v.title, 120), text: text(v.text, 1200),
     updatedAt: careerLibraryTime(v.updatedAt), scope: 'org', assetClass,
-    provenanceLabel: label, provenance: 'untrusted_knowledge', deidentified: true, older: false, brand, assetRevision });
+    provenanceLabel: label, provenance: 'untrusted_knowledge', deidentified: true, older: v.older, brand, assetRevision });
 }

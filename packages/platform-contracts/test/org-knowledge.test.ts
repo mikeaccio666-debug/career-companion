@@ -14,6 +14,8 @@ test('server provenance and method version are exact; patterns, private content 
   assert.equal(parseStudentOrgKnowledgePassage(passage()).provenanceLabel, '蔓藤题库');
   const method = { ...passage(), assetClass: 'method_card', assetRevision: 7, provenanceLabel: '蔓藤方法 · v7' };
   assert.equal(parseStudentOrgKnowledgePassage(method).assetRevision, 7);
+  assert.equal(parseStudentOrgKnowledgePassage({ ...method, older: true }).older, true);
+  assert.throws(() => parseStudentOrgKnowledgePassage({ ...method, older: 'true' }));
   for (const patch of [{ assetClass: 'conversation_pattern' }, { scope: 'private' }, { provenanceLabel: '蔓藤面经' }, { older: true }, { deidentified: false },
     { assetRevision: 2 }, { model: 'invented' }, { text: 'x'.repeat(1201) }, { updatedAt: 'not a date' }])
     assert.throws(() => parseStudentOrgKnowledgePassage({ ...passage(), ...patch }));

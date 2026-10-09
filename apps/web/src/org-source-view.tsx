@@ -29,6 +29,7 @@ export function OrgSourceScene({ snapshot, onRetry }: { snapshot: OrgSourceSnaps
       <p className="career-source-meta"><span className="career-source-tag">{passage.provenanceLabel}</span>
         <span>收录于 <time dateTime={passage.updatedAt}>{passage.updatedAt.slice(0, 7)}</time></span></p>
       <p className="career-source-kind">{passage.assetClass === 'question' ? '本次引用的题目或评分依据' : '本次引用的方法依据 · 真人导师整理'}</p>
+      {passage.older && <p className="career-source-note">这是历史方法版本；查看它不会自动更新已有计划。</p>}
       <blockquote>{passage.text}</blockquote>
       <p className="career-source-note">这里只展示本次引用的段落。它是参考资料，不代表你的经历或求职结果。</p>
       <button type="button" onClick={onRetry}>重新核对出处</button>
