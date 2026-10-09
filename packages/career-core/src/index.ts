@@ -28,3 +28,4 @@ export * from './assets/p0-assets.ts';
 export * from './team/members.ts';
 export * from './team/name-call.ts';
 export * from './team/personas.ts';
+export * from './paid-suggestion-policy.ts';
