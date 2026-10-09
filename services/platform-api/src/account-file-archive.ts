@@ -8,6 +8,7 @@ import type {FixedSessionContext} from './auth.ts';
 import {AccountCoreExport} from './account-core-export.ts';
 import {AccountFileCapture,accountFileUnavailable} from './account-file-capture.ts';
 import {ApiError} from './errors.ts';
+import {packageAccountCapture} from './account-zip.ts';
 
 /** Internal archive parts, not a public download. The caller must dispose after
  * packaging/delivery. A later HTTP/worker layer must recheck delivery authority. */
@@ -15,6 +16,16 @@ export class AccountFileArchive {
  constructor(private readonly db:Database,private readonly config:Pick<PlatformConfig,'dataCrypto'|'requireVerifiedEmail'>,
   private readonly storage:BlobStorage,private readonly workspaceDirectory:string,
   private readonly limits:{maxFileBytes?:number;maxFiles?:number;maxJsonBytes?:number}={}){}
+ /** Capture is committed before packaging. ZIP failure consumes the proof;
+  * callers must reauthenticate, and delivery must check current authority. */
+ async captureZip(who:FixedSessionContext,proof:string,signal?:AbortSignal){
+  const captured=await this.capture(who,proof,signal);
+  try{return Object.freeze({...captured,...await packageAccountCapture(captured,signal)});}
+  catch(error){
+   try{await captured.dispose();}catch{throw new ApiError(503,'ACCOUNT_ARCHIVE_CLEANUP_REQUIRED','The private archive needs cleanup before retrying.');}
+   throw error;
+  }
+ }
  async capture(who:FixedSessionContext,proof:string,signal?:AbortSignal){
   let directory:string|undefined,files:AccountFileCapture|undefined;const cancellation=new AbortController();
   const io=signal?AbortSignal.any([signal,cancellation.signal]):cancellation.signal;

@@ -8,6 +8,7 @@ import os from 'node:os';
 import {Readable} from 'node:stream';
 import type {PoolClient} from 'pg';
 import type {Database} from '../src/database.ts';
+import {readZip} from './fixtures/account-zip.ts';
 import {AccountFileArchive} from '../src/account-file-archive.ts';
 import {AccountCoreExport} from '../src/account-core-export.ts';
 import {AccountReauthentication} from '../src/account-reauthentication.ts';
@@ -145,8 +146,8 @@ test('file count, byte budget and JSON budget failures leave no staged archive a
 
 test('105 actual published files cross inventory pages; empty files and duplicate original names are preserved once each',async()=>{
  const who=await actor(),ids:string[]=[];for(let i=0;i<105;i++){const u=await upload(who,'duplicate.txt',i?Buffer.from('Fictional '+i):Buffer.alloc(0));ids.push(u.id);await artifact(who,u.id);}
- let pages=0,artifactPages=0;const result=await archive(blobs,instrument(sql=>{if(sql.startsWith('SELECT id,user_id,filename,mime,byte_size'))pages++;if(sql.startsWith('SELECT id,user_id,job_id,kind,mime,filename'))artifactPages++;})).capture(who,await proof(who));
- try{assert.equal(pages,2);assert.equal(artifactPages,2);assert.equal(result.snapshot.sections.artifacts.length,105);assert.deepEqual((result.snapshot.sections.uploads as any[]).map(x=>x.id),ids.sort());assert.equal(result.snapshot.sections.privateFiles.length,105);assert.equal((await fs.readdir(path.join(result.directory,'uploads'))).length,105);}
+ let pages=0,artifactPages=0;const result=await archive(blobs,instrument(sql=>{if(sql.startsWith('SELECT id,user_id,filename,mime,byte_size'))pages++;if(sql.startsWith('SELECT id,user_id,job_id,kind,mime,filename'))artifactPages++;})).captureZip(who,await proof(who));
+ try{const zipped=await readZip(result.filePath);assert.equal(zipped.size,106);for(const id of ids)assert.deepEqual(zipped.get('uploads/'+id),await fs.readFile(path.join(result.directory,'uploads/'+id)));assert.equal(pages,2);assert.equal(artifactPages,2);assert.equal(result.snapshot.sections.artifacts.length,105);assert.deepEqual((result.snapshot.sections.uploads as any[]).map(x=>x.id),ids.sort());assert.equal(result.snapshot.sections.privateFiles.length,105);assert.equal((await fs.readdir(path.join(result.directory,'uploads'))).length,105);}
  finally{await result.dispose();}await emptyRoot();
 });
 
@@ -192,4 +193,34 @@ test('actual S3 adapter uses conditional private object reads; changed ETag reje
   assert.equal(gets,2);assert.equal(heads,3);const file=result.snapshot.sections.privateFiles[0] as any;assert.deepEqual(await fs.readFile(path.join(result.directory,file.path)),u.bytes);
   for(const secret of [u.key,'fictional-private-bucket',version,'fictional-access','fictional-secret'])assert(!JSON.stringify(result.snapshot).includes(secret));
  }finally{await result.dispose();}await emptyRoot();
+});
+
+test('authenticated captureZip delivers actual owner uploads and persisted birth bytes in a readable private ZIP',async()=>{
+ const who=await actor(),other=await actor(),own=await upload(who,'../虚构.txt'),foreign=await upload(other);let assetId='';
+ await withPrebirthLoopback(async runtime=>{const ready=await readyBirth(f,runtime,{who}),born=await ready.service.birth(who,ready.body,ready.key);assetId=born.receipt.identity.sealAssetId;});
+ const original=await f.db.transaction(c=>new CompanionBirthOriginStore(f.crypto).readSealAsset(c,who.userId,assetId));assert(original);
+ const result=await archive().captureZip(who,await proof(who));
+ try{
+  const files=await readZip(result.filePath);
+  assert.deepEqual([...files.keys()].sort(),['account.json','uploads/'+own.id,'birth/'+assetId+'.svg','birth/'+assetId+'.png'].sort());
+  assert.deepEqual(JSON.parse(files.get('account.json')!.toString()),result.snapshot);
+  assert.equal(result.snapshot.complete,false);assert.equal(result.snapshot.remainingTables.length,20);
+  assert.deepEqual(files.get('uploads/'+own.id),own.bytes);
+  for(const format of ['svg','png'] as const)assert.deepEqual(files.get('birth/'+assetId+'.'+format),original[format]);
+  assert.equal((await fs.stat(result.filePath)).mode&0o777,0o600);
+  assert.equal(result.byteSize,(await fs.stat(result.filePath)).size);
+  assert.equal(result.sha256,createHash('sha256').update(await fs.readFile(result.filePath)).digest('hex'));
+  for(const secret of [foreign.id,foreign.key,other.userId,own.key,who.tokenHash,password,encoded,directory])assert(!JSON.stringify(result.snapshot).includes(secret));
+  assert.notEqual(await consumed(who),null);
+ }finally{await result.dispose();await result.dispose();}
+ await emptyRoot();await blobs.stat(own.key);
+});
+test('ZIP output failure after capture commit cleans the staging directory and requires a fresh proof',async context=>{
+ const who=await actor();await upload(who);const token=await proof(who),original=fs.open;let attempted=false;
+ context.mock.method(fs,'open',async(...args:Parameters<typeof fs.open>)=>{
+  if(String(args[0]).endsWith('/account.zip')){attempted=true;throw new Error('Fictional disk failure');}
+  return original(...args);
+ });
+ await assert.rejects(archive().captureZip(who,token),{code:'ACCOUNT_FILE_EXPORT_UNAVAILABLE'});
+ assert(attempted);await emptyRoot();assert.notEqual(await consumed(who),null);
 });
