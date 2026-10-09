@@ -24,6 +24,6 @@ export default defineConfig(({ mode }) => {
     },
       ...VitePWA(platformPwaOptions(() => pwaOutputDirectory))],
     server: { host: '127.0.0.1', port: 4321, proxy: { '/api': { target: env.VITE_PLATFORM_PROXY || 'http://127.0.0.1:4320', changeOrigin: false } } },
-    build: { target: 'es2022' },
+    build: { target: 'es2022', manifest: true },
   };
 });
