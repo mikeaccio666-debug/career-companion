@@ -1,3 +1,4 @@
+import { parseModelCallUsage, type ModelCallUsage } from '@companion/platform-contracts';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { Database } from './database.ts';
@@ -18,8 +19,7 @@ export type CostReason = 'global_policy_unavailable' | 'user_policy_unavailable'
   | 'global_month_limit' | 'global_day_limit' | 'user_hard_limit' | 'user_soft_limit' | 'user_day_limit' | 'global_budget_warning';
 export type CostDecision = Readonly<{ decision: 'ok' | 'degrade'; reservation: CostReservation; reasons: readonly CostReason[] }>
   | Readonly<{ decision: 'block'; reason: CostReason; resumeAt?: string }>;
-export type CostActualUsage = Readonly<{ status: 'reported'; inputTokens: number; outputTokens: number }>
-  | Readonly<{ status: 'missing' | 'invalid' }>;
+export type CostActualUsage = ModelCallUsage;
 export interface CostSettlement { readonly costMicros: string; readonly estimated: boolean; }
 const MAX_MICROS = 9_223_372_036_854_775_807n;
 const unavailable = () => new ApiError(503, 'COST_RECORD_UNCONFIRMED', 'The model cost record could not be confirmed.');
@@ -81,19 +81,54 @@ function parseReserve(value: unknown) {
   return Object.freeze({ binding, maxInputTokens, maxOutputTokens, ttlSeconds });
 }
 function parseUsage(value: unknown): CostActualUsage {
-  const data = record(value, ['status'], ['inputTokens', 'outputTokens']);
-  if (data.status === 'reported') {
-    record(value, ['status', 'inputTokens', 'outputTokens']);
-    return Object.freeze({ status: 'reported', inputTokens: tokens(data.inputTokens), outputTokens: tokens(data.outputTokens) });
-  }
-  record(value, ['status']); if (data.status !== 'missing' && data.status !== 'invalid') throw unavailable();
-  return Object.freeze({ status: data.status });
+  try { return parseModelCallUsage(value); } catch { throw unavailable(); }
 }
-interface ReservationRow {
+export interface CostPriceSnapshot {
+  pricing_revision: number; input_micros_per_unit: string; output_micros_per_unit: string;
+  cached_input_micros_per_unit: string | null; cache_write_input_micros_per_unit: string | null;
+}
+function priceRates(row: CostPriceSnapshot) {
+  const input = rate(row.input_micros_per_unit), output = rate(row.output_micros_per_unit);
+  if (row.pricing_revision === 1) {
+    if (row.cached_input_micros_per_unit !== null || row.cache_write_input_micros_per_unit !== null) throw unavailable();
+    return { input, output, cached: input, written: input };
+  }
+  if (row.pricing_revision !== 2) throw unavailable();
+  return { input, output, cached: rate(row.cached_input_micros_per_unit), written: rate(row.cache_write_input_micros_per_unit) };
+}
+function roundMicros(numerator: bigint): string {
+  const result = (numerator + 999_999n) / 1_000_000n;
+  if (result < 0n || result > MAX_MICROS) throw unavailable(); return result.toString();
+}
+const highest = (values: bigint[]) => values.reduce((a, b) => a > b ? a : b);
+/** Reserve the worst input class, without assuming any cache hits or writes. */
+export function estimateTokenCost(row: CostPriceSnapshot, maxInput: number, maxOutput: number): string {
+  const r = priceRates(row);
+  return roundMicros(BigInt(tokens(maxInput)) * highest([r.input, r.cached, r.written]) + BigInt(tokens(maxOutput)) * r.output);
+}
+/** One rounding for all classes. Missing breakdown uses the highest possible
+ * remaining class and is estimated unless those classes have equal prices. */
+export function reportedTokenCost(row: CostPriceSnapshot, raw: CostActualUsage): CostSettlement & { units: Record<string, number> } {
+  const usage = parseUsage(raw); if (usage.status !== 'reported') throw unavailable();
+  const r = priceRates(row), legacy = row.pricing_revision === 1;
+  const cached = legacy ? 0 : usage.cachedInputTokens, written = legacy ? 0 : usage.cacheWriteInputTokens;
+  const remaining = usage.inputTokens - (cached ?? 0) - (written ?? 0);
+  const possible = [r.input, ...(cached === undefined ? [r.cached] : []), ...(written === undefined ? [r.written] : [])];
+  const units: Record<string, number> = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
+  if (!legacy && cached !== undefined) units.cachedInputTokens = cached;
+  if (!legacy && written !== undefined) units.cacheWriteInputTokens = written;
+  return { units, costMicros: roundMicros(BigInt(remaining) * highest(possible) + BigInt(cached ?? 0) * r.cached
+    + BigInt(written ?? 0) * r.written + BigInt(usage.outputTokens) * r.output),
+    estimated: remaining > 0 && possible.some(v => v !== possible[0]) };
+}
+function sameUnits(left: Record<string, unknown>, right: Record<string, number>): boolean {
+  return Object.keys(left).length === Object.keys(right).length && Object.keys(right).every(k => left[k] === right[k]);
+}
+interface ReservationRow extends CostPriceSnapshot {
   id: string; user_id: string | null; source_kind: string; source_id: string; capability: string; purpose: string;
   provider: string; model: string; max_input_tokens: number; max_output_tokens: number; estimate_micros: string;
   input_micros_per_unit: string; output_micros_per_unit: string; status: string; expires_at: Date;
-  input_price_id: string; output_price_id: string; ttl_seconds: number; admitted_at: Date | null; dispatch_intent_at: Date | null; created_at: Date;
+  input_price_id: string; output_price_id: string; cached_input_price_id: string | null; cache_write_input_price_id: string | null; ttl_seconds: number; admitted_at: Date | null; dispatch_intent_at: Date | null; created_at: Date;
 }
 function matches(row: ReservationRow | undefined, binding: CostReservationBinding): row is ReservationRow {
   return !!row && row.id === binding.id && row.user_id === binding.userId && row.source_kind === binding.sourceKind
@@ -180,13 +215,19 @@ export class CostGuard {
       AND approved_at<=clock_timestamp() AND effective_from<=clock_timestamp() AND (effective_to IS NULL OR effective_to>clock_timestamp()) FOR UPDATE`, [binding.userId])).rows[0];
     if (!policy) return block('user_policy_unavailable');
     const prices = (await client.query(`SELECT id,unit,micros_per_unit::text FROM platform_model_prices WHERE provider=$1 AND model=$2 AND capability=$3
-      AND unit IN ('input_token','output_token') AND effective_from<=clock_timestamp() AND (effective_to IS NULL OR effective_to>clock_timestamp())`,
+      AND unit IN ('input_token','cached_input_token','cache_write_input_token','output_token') AND effective_from<=clock_timestamp() AND (effective_to IS NULL OR effective_to>clock_timestamp())`,
     [binding.provider, binding.model, binding.capability])).rows;
     const inPrices = prices.filter(p => p.unit === 'input_token'), outPrices = prices.filter(p => p.unit === 'output_token');
-    if (inPrices.length !== 1 || outPrices.length !== 1) return block('price_unavailable');
-    const estimate = money(tokenCostMicros(maxInputTokens, maxOutputTokens, inPrices[0].micros_per_unit, outPrices[0].micros_per_unit));
+    const cachedPrices = prices.filter(p => p.unit === 'cached_input_token'), writePrices = prices.filter(p => p.unit === 'cache_write_input_token');
+    if (inPrices.length !== 1 || outPrices.length !== 1 || cachedPrices.length !== 1 || writePrices.length !== 1) return block('price_unavailable');
+    const snapshot: CostPriceSnapshot = { pricing_revision: 2, input_micros_per_unit: inPrices[0].micros_per_unit,
+      output_micros_per_unit: outPrices[0].micros_per_unit, cached_input_micros_per_unit: cachedPrices[0].micros_per_unit,
+      cache_write_input_micros_per_unit: writePrices[0].micros_per_unit };
+    const estimate = money(estimateTokenCost(snapshot, maxInputTokens, maxOutputTokens));
     if (estimate === 0n) throw unavailable();
-    if (existing && (existing.input_price_id !== inPrices[0].id || existing.output_price_id !== outPrices[0].id
+    if (existing && (existing.pricing_revision !== 2 || existing.cached_input_price_id !== cachedPrices[0].id
+      || existing.cache_write_input_price_id !== writePrices[0].id || rate(existing.cached_input_micros_per_unit) !== rate(snapshot.cached_input_micros_per_unit)
+      || rate(existing.cache_write_input_micros_per_unit) !== rate(snapshot.cache_write_input_micros_per_unit) || existing.input_price_id !== inPrices[0].id || existing.output_price_id !== outPrices[0].id
       || rate(existing.input_micros_per_unit) !== rate(inPrices[0].micros_per_unit)
       || rate(existing.output_micros_per_unit) !== rate(outPrices[0].micros_per_unit) || money(existing.estimate_micros) !== estimate)) throw unavailable();
     const month = await this.sums(client, null, t.month, t.month_end), day = await this.sums(client, null, t.day, t.day_end, true);
@@ -202,10 +243,10 @@ export class CostGuard {
     if (owner.settled >= money(policy.soft_micros)) reasons.push('user_soft_limit');
     if (policy.day_micros !== null && ownerDay.settled >= money(policy.day_micros)) reasons.push('user_day_limit');
     const inserted = existing ?? (await client.query<ReservationRow>(`INSERT INTO platform_cost_reservations(id,user_id,source_kind,source_id,capability,purpose,provider,model,
-      max_input_tokens,max_output_tokens,input_price_id,output_price_id,input_micros_per_unit,output_micros_per_unit,estimate_micros,ttl_seconds,status,expires_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'reserved',clock_timestamp()+$16::int*interval '1 second') RETURNING *`,
+      max_input_tokens,max_output_tokens,input_price_id,output_price_id,input_micros_per_unit,output_micros_per_unit,estimate_micros,ttl_seconds,status,expires_at,pricing_revision,cached_input_price_id,cache_write_input_price_id,cached_input_micros_per_unit,cache_write_input_micros_per_unit)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'reserved',clock_timestamp()+$16::int*interval '1 second',2,$17,$18,$19,$20) RETURNING *`,
     [binding.id, binding.userId, binding.sourceKind, binding.sourceId, binding.capability, binding.purpose, binding.provider, binding.model,
-      maxInputTokens, maxOutputTokens, inPrices[0].id, outPrices[0].id, inPrices[0].micros_per_unit, outPrices[0].micros_per_unit, estimate.toString(), ttlSeconds])).rows[0];
+      maxInputTokens, maxOutputTokens, inPrices[0].id, outPrices[0].id, inPrices[0].micros_per_unit, outPrices[0].micros_per_unit, estimate.toString(), ttlSeconds, cachedPrices[0].id, writePrices[0].id, snapshot.cached_input_micros_per_unit, snapshot.cache_write_input_micros_per_unit])).rows[0];
     signal?.throwIfAborted();
     return Object.freeze({ decision: policy.soft_behavior === 'degrade' && reasons.some(r => r === 'user_soft_limit' || r === 'user_day_limit') ? 'degrade' : 'ok',
       reservation: reservation(inserted, binding), reasons: Object.freeze(reasons) });
@@ -241,11 +282,15 @@ export class CostGuard {
     // There is no price-mutation API. Hold the complete route stable through the caller's launch transaction.
     await client.query('LOCK TABLE platform_model_prices IN SHARE MODE');
     const prices = (await client.query(`SELECT id,unit,micros_per_unit::text FROM platform_model_prices WHERE provider=$1 AND model=$2 AND capability=$3
-      AND unit IN ('input_token','output_token') AND effective_from<=clock_timestamp()
+      AND unit IN ('input_token','cached_input_token','cache_write_input_token','output_token') AND effective_from<=clock_timestamp()
       AND (effective_to IS NULL OR effective_to>clock_timestamp()) FOR SHARE`, [binding.provider, binding.model, binding.capability])).rows;
     const inputPrice = prices.find(p => p.id === row.input_price_id && p.unit === 'input_token'), outputPrice = prices.find(p => p.id === row.output_price_id && p.unit === 'output_token');
-    if (prices.length !== 2 || !inputPrice || !outputPrice || rate(inputPrice.micros_per_unit) !== rate(row.input_micros_per_unit)
-      || rate(outputPrice.micros_per_unit) !== rate(row.output_micros_per_unit)) throw unavailable();
+    const cachedPrice = prices.find(p => p.id === row.cached_input_price_id && p.unit === 'cached_input_token');
+    const writePrice = prices.find(p => p.id === row.cache_write_input_price_id && p.unit === 'cache_write_input_token');
+    if (row.pricing_revision !== 2 || prices.length !== 4 || !inputPrice || !outputPrice || !cachedPrice || !writePrice
+      || rate(inputPrice.micros_per_unit) !== rate(row.input_micros_per_unit) || rate(outputPrice.micros_per_unit) !== rate(row.output_micros_per_unit)
+      || rate(cachedPrice.micros_per_unit) !== rate(row.cached_input_micros_per_unit) || rate(writePrice.micros_per_unit) !== rate(row.cache_write_input_micros_per_unit)
+      || estimateTokenCost(row, row.max_input_tokens, row.max_output_tokens) !== row.estimate_micros) throw unavailable();
     const changed = await client.query(`UPDATE platform_cost_reservations SET status='admitted',admitted_at=clock_timestamp()
       WHERE id=$1 AND status='reserved' AND expires_at>clock_timestamp()
         AND EXISTS(SELECT 1 FROM platform_cost_global_policy g JOIN platform_cost_user_policy u ON u.user_id=$2
@@ -256,6 +301,14 @@ export class CostGuard {
         AND EXISTS(SELECT 1 FROM platform_model_prices p WHERE p.id=platform_cost_reservations.input_price_id
           AND p.effective_from<=clock_timestamp() AND (p.effective_to IS NULL OR p.effective_to>clock_timestamp()))
         AND EXISTS(SELECT 1 FROM platform_model_prices p WHERE p.id=platform_cost_reservations.output_price_id
+          AND p.effective_from<=clock_timestamp() AND (p.effective_to IS NULL OR p.effective_to>clock_timestamp()))
+        AND (SELECT count(*) FROM platform_model_prices p WHERE p.provider=platform_cost_reservations.provider
+          AND p.model=platform_cost_reservations.model AND p.capability=platform_cost_reservations.capability
+          AND p.unit IN ('input_token','cached_input_token','cache_write_input_token','output_token')
+          AND p.effective_from<=clock_timestamp() AND (p.effective_to IS NULL OR p.effective_to>clock_timestamp()))=4
+        AND EXISTS(SELECT 1 FROM platform_model_prices p WHERE p.id=platform_cost_reservations.cached_input_price_id
+          AND p.effective_from<=clock_timestamp() AND (p.effective_to IS NULL OR p.effective_to>clock_timestamp()))
+        AND EXISTS(SELECT 1 FROM platform_model_prices p WHERE p.id=platform_cost_reservations.cache_write_input_price_id
           AND p.effective_from<=clock_timestamp() AND (p.effective_to IS NULL OR p.effective_to>clock_timestamp()))`, [binding.id, binding.userId]);
     signal?.throwIfAborted(); if (changed.rowCount !== 1) throw unavailable();
   }
@@ -270,21 +323,25 @@ export class CostGuard {
     return this.settleRow(client,row,binding,usage,signal);
   }
   private async settleRow(client: PoolClient, row: ReservationRow, binding: Readonly<CostReservationBinding>, usage: CostActualUsage, signal?: AbortSignal): Promise<CostSettlement> {
-    const estimated = usage.status !== 'reported', units = usage.status === 'reported'
-      ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
-      : { maxInputTokens: row.max_input_tokens, maxOutputTokens: row.max_output_tokens };
-    const costMicros = estimated ? money(row.estimate_micros).toString()
-      : tokenCostMicros(usage.inputTokens, usage.outputTokens, row.input_micros_per_unit, row.output_micros_per_unit);
+    const { units, costMicros, estimated } = usage.status === 'reported' ? reportedTokenCost(row, usage)
+      : { units: { maxInputTokens: row.max_input_tokens, maxOutputTokens: row.max_output_tokens },
+        costMicros: money(row.estimate_micros).toString(), estimated: true };
     const ledger = (await client.query('SELECT * FROM platform_cost_ledger WHERE reservation_id=$1 FOR UPDATE', [binding.id])).rows[0];
     if (ledger) {
       if (ledger.user_id !== binding.userId || ledger.source_id !== binding.sourceId || ledger.source_kind !== binding.sourceKind
         || ledger.provider !== binding.provider || ledger.model !== binding.model || ledger.capability !== binding.capability || ledger.purpose !== binding.purpose) throw unavailable();
-      if (ledger.usage_status === usage.status && ledger.cost_micros === costMicros && JSON.stringify(ledger.units) === JSON.stringify(units)) {
+      if (ledger.usage_status === usage.status && ledger.cost_micros === costMicros && ledger.estimated === estimated && sameUnits(ledger.units, units)) {
         signal?.throwIfAborted(); return Object.freeze({ costMicros, estimated });
       }
-      if (!ledger.estimated || usage.status !== 'reported' && !['expired','dispatch_uncertain'].includes(ledger.usage_status)) throw unavailable();
+      // An estimated breakdown can be refined, never rewritten or forgotten.
+      // Equal-rate exact costs may also gain missing counts without changing the amount.
+      if (ledger.usage_status === 'reported') {
+        if (usage.status !== 'reported' || ledger.units.inputTokens !== usage.inputTokens || ledger.units.outputTokens !== usage.outputTokens
+          || Object.keys(ledger.units).some(k => ledger.units[k] !== units[k])
+          || !ledger.estimated && (estimated || ledger.cost_micros !== costMicros)) throw unavailable();
+      } else if (!ledger.estimated || usage.status !== 'reported' && !['expired','dispatch_uncertain'].includes(ledger.usage_status)) throw unavailable();
       await client.query(`UPDATE platform_cost_ledger SET units=$2::jsonb,cost_micros=$3,estimated=$4,usage_status=$5,settled_at=clock_timestamp()
-        WHERE reservation_id=$1 AND estimated=true`, [binding.id, JSON.stringify(units), costMicros, estimated, usage.status]);
+        WHERE reservation_id=$1`, [binding.id, JSON.stringify(units), costMicros, estimated, usage.status]);
     } else {
       await client.query(`INSERT INTO platform_cost_ledger(reservation_id,user_id,capability,source_kind,source_id,provider,model,units,cost_micros,estimated,usage_status,purpose,created_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13)`,
