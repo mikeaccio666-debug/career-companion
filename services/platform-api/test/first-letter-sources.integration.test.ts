@@ -1,3 +1,4 @@
+import {CompanionDailySettingsService} from '../src/companion-daily-settings.ts';
 import {before,after,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -187,14 +188,25 @@ test('late actual session revocation and cancellation cannot publish the compose
 test('real app composition exposes only an internal source service and adds no public source injection endpoint',async()=>{
  await withPrebirthLoopback(async(runtime,calls)=>{
   const a=await setup(runtime,values),count=calls.length;
+  const config={...readConfig(),dataCrypto:f.crypto,requireVerifiedEmail:true,
+   expertRoster:{schemaVersion:1 as const,revision:7,enabledExperts:[]}};
   const system=await buildApp({db:f.db,legalBundle:FICTIONAL_LEGAL,enableQueue:false,
-   config:{...readConfig(),dataCrypto:f.crypto,requireVerifiedEmail:true},
-   runtime:createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'}})});
+   config,runtime:createProviderRuntime({env:{PLATFORM_ALLOW_PROVIDER_CALLS:'0'}})});
   try{
    assert.equal((await system.firstLetterSources.read(a.who)).sourceId,(await a.sources.read(a.who)).sourceId);
-   const task=await system.firstLetterTasks.prepare(a.who,settings);
+   // Real app wiring requires the owner's saved preferences and server release.
+   // A hand-built date/roster cannot stand in for either prerequisite.
+   await assert.rejects(system.firstLetterTasks.prepare(a.who,settings),{code:'DAILY_SETTINGS_REQUIRED'});
+   assert.equal((await f.db.query('SELECT id FROM platform_first_letter_tasks WHERE user_id=$1',[a.who.userId])).rowCount,0);
+   await new CompanionDailySettingsService(f.db,config,FICTIONAL_LEGAL).change(a.who,{
+    operationId:randomUUID(),expectedRevision:0,companionId:a.birth.receipt.identity.companionId,
+    preferences:{timeZone:'America/New_York',morningTime:'09:00',quietStart:'22:30',quietEnd:'08:30',dailyMinutes:90,webAlert:'none'}});
+   const savedSettings=await system.firstLetterSettings.read(a.who);
+   assert.equal(savedSettings.rosterRevision,7);assert.deepEqual(savedSettings.enabledExperts,[]);
+   const task=await system.firstLetterTasks.prepare(a.who,savedSettings);
    assert.equal(task.task.sourceId,(await a.sources.read(a.who)).sourceId);
-   assert.equal(await system.firstLetterGeneration.read(a.who,{taskId:task.task.taskId},settings),null);
+   assert.deepEqual(task.task.settings,savedSettings);
+   assert.equal(await system.firstLetterGeneration.read(a.who,{taskId:task.task.taskId},savedSettings),null);
    assert.equal(system.app.hasRoute({method:'POST',url:'/api/platform/first-letter/generate'}),false);
    assert.equal(system.app.hasRoute({method:'POST',url:'/api/platform/first-letter/tasks'}),false);
    assert.equal(calls.length,count);
