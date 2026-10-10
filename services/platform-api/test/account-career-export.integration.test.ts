@@ -1,3 +1,4 @@
+import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import { before,after,test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -50,7 +51,7 @@ test('all seven career record kinds and their 14 table projections round-trip th
   for(const [section,record] of [['careerTargets',g.target],['careerProjects',g.project],['careerStories',g.story],['savedJobs',g.job],['careerApplications',g.application],['careerInterviews',g.interview],['careerIdentity',g.status]] as const)
     assert.deepEqual(s[section],[record]);
   for(const section of ['careerTargetOperations','savedJobOperations','careerApplicationOperations','careerApplicationEvents','careerInterviewOperations','careerIdentityOperations'] as const)assert.equal(s[section].length,1);
-  assert.equal(s.careerLibraryOperations.length,2);assert.equal(result.includedTables.length,147);
+  assert.equal(s.careerLibraryOperations.length,2);assertPartialExportInventory(result);
   for(const table of Object.keys(CAREER_EXPORT_TABLES)){assert(result.includedTables.includes(table));assert(!result.remainingTables.includes(table));}
   assert(result.includedTables.includes('platform_conversations'));assert(!result.remainingTables.includes('platform_conversations'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
   const serialized=JSON.stringify(result);

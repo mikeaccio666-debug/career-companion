@@ -1,3 +1,4 @@
+import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import {before,after,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -49,7 +50,7 @@ test('actual create, update, confirmation, pause and cancellation preserve every
  assert.equal(steps.find(r=>r.planId===first.id&&r.revision===1).input.model,undefined);assert.equal(steps.find(r=>r.planId===first.id&&r.revision===2).input.model,'fictional-model');
  assert.deepEqual((result.sections.goalPlans as any[]).map(r=>r.storedStatus).sort(),['cancelled','paused']);assert.deepEqual(await snapshot(who),before);
  for(const privateValue of [other.userId,foreign.id,'Fictional foreign plan',who.tokenHash,encoded,password])assert(!JSON.stringify(result).includes(privateValue));
- assert.equal(result.includedTables.length,147);assert.equal(result.remainingTables.length,23);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(Object.isFrozen(steps[0].input));
+ assertPartialExportInventory(result);assert.equal(result.remainingTables.length,23);assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);assert(Object.isFrozen(steps[0].input));
 });
 
 test('actual proposal origin survives editing and message deletion without requiring an active lease or matching the edited definition',async()=>{

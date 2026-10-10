@@ -1,3 +1,4 @@
+import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -91,7 +92,7 @@ test('a genuine original call reserves and settles money before saving encrypted
   const saved=await row(a);assert(Buffer.isBuffer(saved.output_ciphertext));assert(!saved.output_ciphertext.includes(Buffer.from(text)));
   assert.equal(saved.lease_token,null);assert.equal(saved.runtime_lease_id,null);
   assert.equal((await f.db.query("SELECT count(*)::int AS n FROM platform_runtime_leases WHERE user_id=$1 AND kind='background'",[a.who.userId])).rows[0].n,0);
-  const archive=await capture(a);assert.deepEqual(archive.sections.firstLetterStages,[result]);assert.equal(archive.includedTables.length,147);
+  const archive=await capture(a);assert.deepEqual(archive.sections.firstLetterStages,[result]);assertPartialExportInventory(archive);
   const wire=JSON.stringify(archive.sections.firstLetterStages);
   for(const secret of [a.who.tokenHash,'authVersion','lease_token','runtime_lease_id','ciphertext'])assert(!wire.includes(secret));
   assert.equal(archive.complete,false);assert(Object.isFrozen(result.call?.receipt?.usage));
@@ -274,7 +275,7 @@ test('the private file archive retains the actual unreviewed draft and receipt w
    const archive=await new AccountFileArchive(f.db,f.config,new LocalBlobStorage(path.join(root,'blobs')),path.join(root,'archives')).capture(a.who,proof.token);
    try{
     const saved=JSON.parse(await fs.readFile(path.join(archive.directory,'account.json'),'utf8'));
-    assert.deepEqual(saved.sections.firstLetterStages,[result]);assert.equal(saved.includedTables.length,150);
+    assert.deepEqual(saved.sections.firstLetterStages,[result]);assertPartialExportInventory(saved,true);
     assert.equal(saved.remainingTables.length,20);assert.equal(saved.complete,false);
     const wire=JSON.stringify(saved.sections.firstLetterStages);
     for(const forbidden of [a.who.tokenHash,proof.token,'authVersion','lease_token','runtime_lease_id','ciphertext'])assert(!wire.includes(forbidden));
@@ -668,7 +669,7 @@ test('accepted first-letter intent is atomic, private, replayable and fixes prep
   const exported=await capture(a);assert.equal(exported.sections.firstLetterRequests.length,1);assert.equal(exported.sections.firstLetterOutbox.length,1);
   const json=JSON.stringify([one,exported.sections.firstLetterRequests,exported.sections.firstLetterOutbox]);
   for(const secret of [a.who.tokenHash,'tokenHash','authVersion','payload_ciphertext','payload_digest'])assert(!json.includes(secret));
-  assert.equal(exported.includedTables.length,147);assert.equal(exported.complete,false);
+  assertPartialExportInventory(exported);assert.equal(exported.complete,false);
  });
 });
 test('reference-only delivery runs original and review once; renewed service reads retained results without spending again',async()=>{

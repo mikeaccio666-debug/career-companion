@@ -1,3 +1,4 @@
+import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import {before,after,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -38,7 +39,7 @@ test('owner export includes current companion data and every real paid preferenc
  const operations=result.sections.companionPaidSettingOperations as any[];assert.equal(operations.length,2);
  assert.deepEqual(operations.map(x=>[x.operationId,x.expectedRevision,x.appliedRevision,x.paidSuggestionsMode]),[[first.operation.id,0,1,'only_when_asked'],[second.operation.id,1,2,'when_relevant']]);
  assert.equal(operations[1].createdAt,second.settings.updatedAt);assert.equal(profile.overlays,null);
- assert.equal(result.includedTables.length,147);for(const t of ['platform_companions','platform_companion_paid_setting_operations']){assert(result.includedTables.includes(t));assert(!result.remainingTables.includes(t));}
+ assertPartialExportInventory(result);for(const t of ['platform_companions','platform_companion_paid_setting_operations']){assert(result.includedTables.includes(t));assert(!result.remainingTables.includes(t));}
  assert(result.includedTables.includes('platform_companion_revisions'));assert(result.includedTables.includes('platform_companion_answers'));assert(result.includedTables.includes('platform_companion_source_prefixes'));assert.equal(result.complete,false);assert.equal(result.filesIncluded,false);
  const json=JSON.stringify(result);for(const secret of [other.who.userId,other.companionId,p.who.tokenHash,encoded,password,token,'acceptedAuthVersion','receipt_ciphertext','paid_suggestions_ciphertext','commandDigest'])assert(!json.includes(secret));
  assert(Object.isFrozen(profile.paidSuggestions));assert(Object.isFrozen(operations[0]));

@@ -85,7 +85,10 @@ test('actual buildApp assembly feeds an HTTP-confirmed original into the real so
  assert.deepEqual((await system.careerPreparationSources.read(a.context)).resumes,[]);
  const confirmed=await system.app.inject({method:'POST',url:root+'pending-items/'+v.item.id+'/decision',headers:a.headers,payload:{operationId:randomUUID(),revision:1,payloadDigest:v.item.payloadDigest,decision:'approve'}});assert.equal(confirmed.statusCode,200,confirmed.body);
  const index=await system.careerPreparationSources.read(a.context);assert.equal(index.resumes!.length,1);assert.equal(index.resumes![0].id,v.item.resumeVersionId);assert.equal(index.resumes![0].revision,1);assert(!JSON.stringify(index).includes(body.text));assert(!JSON.stringify(index).includes(body.label));
- const prepared=await system.careerPreparationSources.prepare(a.context,{skillId:'resume-revision',selection:{resumeId:v.item.resumeVersionId}});assert.equal(prepared.built.context.inputs.find(r=>r.input==='resume-source')!.id,v.item.resumeVersionId);assert.deepEqual(prepared.built.context.tools,{});assert(prepared.built.unavailableSources.includes('readProfile'));assert.equal(calls,0);
+ const prepared=await system.careerPreparationSources.prepare(a.context,{skillId:'resume-revision',selection:{resumeId:v.item.resumeVersionId}});assert.equal(prepared.built.context.inputs.find(r=>r.input==='resume-source')!.id,v.item.resumeVersionId);assert.deepEqual(prepared.built.context.tools,{});assert(!prepared.built.unavailableSources.includes('readProfile'));
+ assert.deepEqual(prepared.sourceIndex.profileSource,{available:true,profile:null});
+ assert.equal(prepared.built.context.profileRevision,0);
+ assert(!prepared.built.context.inputs.some(input=>input.input==='confirmed-profile'));assert.equal(calls,0);
 });
 
 test('actual multipart upload to original review preserves owned file provenance and leaves text unconfirmed until one full Web decision',async()=>{
