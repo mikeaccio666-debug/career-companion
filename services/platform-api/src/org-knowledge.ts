@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { parseSkillMethodRefs } from './skill-method-references.ts';
 import type { PoolClient } from 'pg';
-import { careerRecordObject, parseOrgKnowledgeReference, parseStudentOrgMethod, type StudentOrgMethod, orgKnowledgeBrand, careerRecordId, careerLibraryTime, STAFF_ROLES, type AgentSpeakerKey } from '@companion/platform-contracts';
+import { parseStaffContentWithdrawalPage, careerRecordObject, parseOrgKnowledgeReference, parseStudentOrgMethod, type StudentOrgMethod, orgKnowledgeBrand, careerRecordId, careerLibraryTime, STAFF_ROLES, type AgentSpeakerKey } from '@companion/platform-contracts';
 import { parseOrgP0Asset, careerSkill, ROLE_FAMILIES, orgChoice, orgArray, orgInteger, orgText, orgAssetBody, orgMethodContent, orgAssetLegacyBody, orgAssetSpeakers } from '@companion/career-core';
 import type { Database } from './database.ts';
 import type { PlatformConfig } from './config.ts';
@@ -222,6 +222,33 @@ export class OrgKnowledge {
       return { batchId: cmd.batchId, publishBatch, sourceIds: rows.map(r => r.id) };
     }, signal);
   }
+
+  /** P0 operations view: persisted tombstones only; viewing never restores content. */
+  async listWithdrawals(session: FixedSessionContext, organizationId: string, input: unknown = {}, signal?: AbortSignal) {
+    let after: string | null;
+    try { const v = careerRecordObject(input, [], ['after']); after = v.after === undefined ? null : careerRecordId(v.after); }
+    catch { throw orgInvalid(); }
+    const s = fixed(session), orgId = careerRecordId(organizationId);
+    return this.staff.readWithAccess(s, orgId, {roles:['ops','org_admin'],action:'org_sources_viewed',targetId:orgId}, async c => {
+      if (after) {
+        const anchor=(await c.query("SELECT * FROM platform_org_knowledge_sources WHERE org_id=$1 AND id=$2 AND review_status='withdrawn' FOR SHARE",[orgId,after])).rows[0];
+        if (!anchor) throw new ApiError(404,'NOT_FOUND','下架记录不存在。');
+        await this.source(c,anchor);
+      }
+      const rows=(await c.query("SELECT * FROM platform_org_knowledge_sources WHERE org_id=$1 AND review_status='withdrawn' AND ($2::uuid IS NULL OR id>$2::uuid) ORDER BY id LIMIT 51 FOR SHARE",[orgId,after])).rows;
+      const records=[];
+      for (const row of rows.slice(0,50)) {
+        signal?.throwIfAborted(); await this.source(c,row);
+        if (!row.withdrawn_at || row.body!=='' || orgDigest(row.structured)!==orgDigest({})) throw orgUnavailable();
+        records.push({sourceId:row.id,title:row.title,revision:row.revision,withdrawnAt:row.withdrawn_at.toISOString()});
+      }
+      let value;
+      try {value=parseStaffContentWithdrawalPage({actorId:s.userId,organizationId:orgId,records,nextCursor:rows.length>50?records.at(-1)!.sourceId:null});}
+      catch {throw orgUnavailable();}
+      signal?.throwIfAborted();return {value,recordCount:records.length};
+    },signal);
+  }
+
   async withdrawSource(session: FixedSessionContext, organizationId: string, sourceId: string, input: unknown, signal?: AbortSignal) {
     const v = careerRecordObject(input, ['operationId', 'expectedRevision', 'reason']), cmd = { operationId: careerRecordId(v.operationId), expectedRevision: orgInteger(v.expectedRevision, 1, 2147483646), reason: orgText(v.reason, 500), sourceId: careerRecordId(sourceId) }, orgId = careerRecordId(organizationId);
     return this.authorized(session, orgId, 'org_content_withdrawn', cmd, async c => {

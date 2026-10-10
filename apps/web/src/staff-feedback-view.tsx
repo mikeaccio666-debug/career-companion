@@ -31,7 +31,7 @@ export function StaffFeedback({onLogout,blocked=false}:{onLogout:()=>void;blocke
  return <main className="career-surface staff-feedback">
   <header className="staff-feedback-header"><div><small>CAREER COMPANION · 产品运营</small><h1>反馈收件箱</h1><p>查看学生主动分享的问题，把处理结果回给本人。</p></div><button type="button" onClick={onLogout}>退出登录</button></header>
   {state?.suspended?<p role="status">页面暂不可用。回到页面并连接网络后，会重新核对。</p>:<>
-   <div className="staff-feedback-toolbar"><label>处理状态<select aria-label="筛选处理状态" value={state?.status??'all'} disabled={locked} onChange={e=>void controller.filter(e.target.value==='all'?null:e.target.value as FeedbackStatus)}>
+   <div className="staff-feedback-toolbar">{state?.organizationId&&!state.suspended?<a href={"/staff/orgs/"+state.organizationId+"/content-withdrawals"}>下架记录</a>:null}<label>处理状态<select aria-label="筛选处理状态" value={state?.status??'all'} disabled={locked} onChange={e=>void controller.filter(e.target.value==='all'?null:e.target.value as FeedbackStatus)}>
     <option value="all">全部状态</option>{FEEDBACK_STATUSES.map(k=><option key={k} value={k}>{feedbackStatuses[k]}</option>)}</select></label>
     <button type="button" disabled={locked} onClick={()=>void controller.refresh()}>重新读取</button></div>
    {state?.busy&&<p role="status">正在核对反馈…</p>}

@@ -361,3 +361,5 @@ export * from './career-profile.ts';
 export * from './product-events.ts';
 
 export * from './product-feedback.ts';
+
+export * from './staff-content.ts';

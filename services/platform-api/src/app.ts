@@ -779,6 +779,8 @@ export async function buildApp(options:AppOptions={}) {
   app.post(mentorIntentRoot+'/:id/cancel',secure,(request,reply)=>{
     mentorIntentQuery(request);return applicationRead(request,reply,signal=>mentorIntents.cancel(fixedRequestSession(request,userId(request)),params(request),request.body,signal));
   });
+  app.get(prefix+'/staff/orgs/:id/content-withdrawals',secure,(request,reply)=>applicationRead(request,reply,
+    signal=>orgKnowledge.listWithdrawals(fixedRequestSession(request,userId(request)),params(request),careerHttpQuery(request.query),signal)));
   app.get(prefix+'/staff/orgs/:id/mentor-intents',secure,(request,reply)=>applicationRead(request,reply,
     signal=>mentorIntents.opsList(fixedRequestSession(request,userId(request)),params(request),careerHttpQuery(request.query),signal)));
   for(const [path,kind] of [['profiles','profile'],['slots','slot']] as const) {
