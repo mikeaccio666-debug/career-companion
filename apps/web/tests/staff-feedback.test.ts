@@ -57,7 +57,7 @@ test('revocation removes previously visible records, hidden views do not read an
 });
 test('exact staff route keeps email gate and server authorization while preserving all student gates',()=>{
  assert(isStaffFeedbackPath('/staff/feedback'));for(const p of ['/staff','/staff/feedback/','/staff/feedback/evil','/welcome'])assert(!isStaffFeedbackPath(p));
- const app=readFileSync(new URL('../src/App.tsx',import.meta.url),'utf8'),gate=app.indexOf('if (!accountReady) return'),staff=app.indexOf('if (staffFeedbackRoute) return null'),consent=app.indexOf('if (!consentCurrent) return'),letter=app.indexOf('if (!privateAllowed) return');
+ const app=readFileSync(new URL('../src/App.tsx',import.meta.url),'utf8'),gate=app.indexOf('if (!accountReady) return'),staff=app.indexOf('if (staffRoute) return null'),consent=app.indexOf('if (!consentCurrent) return'),letter=app.indexOf('if (!privateAllowed) return');
  assert(gate<staff&&staff<consent&&consent<letter);assert(app.includes('const privateAllowed = false;'));
- assert(app.includes('initialLogin={staffFeedbackRoute ||'));assert(app.includes('!accountReady || staffFeedbackRoute'));
+ assert(app.includes('initialLogin={staffRoute ||'));assert(app.includes('!accountReady || staffRoute'));
 });

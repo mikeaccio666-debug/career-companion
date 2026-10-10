@@ -1,3 +1,4 @@
+import {readStaffContentWithdrawals} from '../../../apps/web/src/staff-content-api.ts';
 import {assertPartialExportInventory} from './fixtures/account-export-inventory.ts';
 import { CareerMethodReferences } from '../src/career-method-references.ts';
 import { CapabilityRegistry, type CapabilityScope } from '../src/capabilities.ts';
@@ -689,4 +690,58 @@ test('full method rejects stale, withdrawn, corrupt and cancelled reads without 
   assert.equal((await f.db.query("SELECT count(*)::int AS n FROM platform_knowledge_access_log WHERE source_id=$1 AND purpose='view_method_full'", [p.source])).rows[0].n, 0);
   await service.withdrawSource(s.operator, s.org, p.source, { operationId: randomUUID(), expectedRevision: 2, reason: 'Fictional method removed' });
   await assert.rejects(service.readMethodDetails(s.owner, reference), rejected('STALE_REVISION'));
+});
+
+test('staff withdrawal list reads actual tombstones through password HTTP and the real Web client without exposing source content',async()=>{
+ const s=await setup(),published=await s.published(),active=await s.published([s.row(q('fictional.active'))]);
+ await service.withdrawSource(s.operator,s.org,published.source,{operationId:randomUUID(),expectedRevision:2,reason:'Fictional private operator reason'});
+ const web=await sourceWebClient(s.operator),root='/api/platform/staff/orgs/'+s.org+'/content-withdrawals';
+ const response=await system.app.inject({url:root,headers:web.headers});assert.equal(response.statusCode,200,response.body);
+ assert.equal(response.headers['cache-control'],'private, no-store');
+ const result=await readStaffContentWithdrawals(web.client,s.org);
+ assert.equal(result.actorId,s.operator.userId);assert.equal(result.organizationId,s.org);
+ assert.equal(result.records.length,1);assert.equal(result.records[0].sourceId,published.source);assert.equal(result.records[0].revision,3);
+ assert.equal(result.records[0].title,'Fictional reviewed asset');assert.equal(result.nextCursor,null);
+ for(const hidden of [active.source,q().prompt_en,'Fictional private operator reason',s.agreementRef,s.editor.userId,s.reviewer.userId])assert(!JSON.stringify(result).includes(hidden));
+ const audit=(await f.db.query("SELECT action,record_count,outcome FROM platform_staff_audit WHERE org_id=$1 AND action='org_sources_viewed'",[s.org])).rows;
+ assert.equal(audit.length,2);assert(audit.every(r=>r.record_count===1&&r.outcome==='allow'));
+ assert.equal((await system.app.inject({url:root})).statusCode,401);
+ assert.equal((await system.app.inject({url:root,headers:{cookie:web.headers.cookie,origin}})).statusCode,409);
+ assert.equal((await system.app.inject({url:root,headers:{...web.headers,[PLATFORM_ACCOUNT_HEADER]:s.owner.userId}})).statusCode,409);
+ for(const query of ['?after=nope','?role=ops','?after='+published.source+'&after='+published.source])
+  assert.equal((await system.app.inject({url:root+query,headers:web.headers})).statusCode,400);
+ assert.equal((await system.app.inject({method:'POST',url:root,headers:web.headers,payload:{}})).statusCode,404);
+});
+test('staff withdrawal pages are organization scoped and cover 55 authentic removed sources once',async()=>{
+ const s=await setup(),batch=await s.published(Array.from({length:55},(_,i)=>s.row(q('fictional.withdrawal.'+i))));
+ for(const source of batch.batch.sourceIds)await service.withdrawSource(s.operator,s.org,source,{operationId:randomUUID(),expectedRevision:2,reason:'Fictional withdrawal'});
+ const first=await service.listWithdrawals(s.operator,s.org),second=await service.listWithdrawals(s.operator,s.org,{after:first.nextCursor});
+ assert.equal(first.records.length,50);assert.equal(second.records.length,5);assert.equal(second.nextCursor,null);
+ assert.deepEqual([...first.records,...second.records].map(r=>r.sourceId),[...batch.batch.sourceIds].sort());
+ const other=await setup(),foreign=await other.published();
+ await service.withdrawSource(other.operator,other.org,foreign.source,{operationId:randomUUID(),expectedRevision:2,reason:'Fictional other organization'});
+ await assert.rejects(service.listWithdrawals(s.operator,s.org,{after:foreign.source}),rejected('NOT_FOUND'));
+ await assert.rejects(service.listWithdrawals(s.operator,other.org),rejected('STAFF_ROLE_REQUIRED'));
+ assert.deepEqual((await service.listWithdrawals(other.operator,other.org)).records.map(r=>r.sourceId),[foreign.source]);
+});
+test('withdrawal list denies students, editors and revoked roles and audits denials',async()=>{
+ const s=await setup();
+ for(const who of [s.owner,s.editor,s.reviewer])await assert.rejects(service.listWithdrawals(who,s.org),rejected('STAFF_ROLE_REQUIRED'));
+ await f.db.query("UPDATE platform_org_roles SET status='revoked',revoked_at=clock_timestamp() WHERE org_id=$1 AND user_id=$2",[s.org,s.operator.userId]);
+ await assert.rejects(service.listWithdrawals(s.operator,s.org),rejected('STAFF_ROLE_REQUIRED'));
+ const denied=(await f.db.query("SELECT outcome,record_count FROM platform_staff_audit WHERE org_id=$1 AND action='org_sources_viewed'",[s.org])).rows;
+ assert.equal(denied.length,4);assert(denied.every(r=>r.outcome==='deny'&&r.record_count===0));
+});
+test('damaged withdrawal receipts and failed audits never deliver a page or a partial success audit',async()=>{
+ const s=await setup(),p=await s.published();await service.withdrawSource(s.operator,s.org,p.source,{operationId:randomUUID(),expectedRevision:2,reason:'Fictional withdrawal'});
+ const old=(await f.db.query('SELECT receipt_ciphertext FROM platform_org_knowledge_sources WHERE id=$1',[p.source])).rows[0].receipt_ciphertext;
+ await f.db.query("UPDATE platform_org_knowledge_sources SET receipt_ciphertext=decode('00','hex') WHERE id=$1",[p.source]);
+ await assert.rejects(service.listWithdrawals(s.operator,s.org),rejected('ORG_CONTENT_STORAGE_UNAVAILABLE'));
+ await f.db.query('UPDATE platform_org_knowledge_sources SET receipt_ciphertext=$2 WHERE id=$1',[p.source,old]);
+ await f.db.query(`CREATE FUNCTION fail_withdrawal_audit() RETURNS trigger AS $$ BEGIN IF NEW.action='org_sources_viewed' THEN RAISE EXCEPTION 'Fictional audit outage'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+ await f.db.query('CREATE TRIGGER fail_withdrawal_audit BEFORE INSERT ON platform_staff_audit FOR EACH ROW EXECUTE FUNCTION fail_withdrawal_audit()');
+ try{await assert.rejects(service.listWithdrawals(s.operator,s.org));}finally{await f.db.query('DROP TRIGGER fail_withdrawal_audit ON platform_staff_audit');await f.db.query('DROP FUNCTION fail_withdrawal_audit()');}
+ const cancelled=new AbortController();cancelled.abort();await assert.rejects(service.listWithdrawals(s.operator,s.org,{},cancelled.signal));
+ assert.equal((await f.db.query("SELECT id FROM platform_staff_audit WHERE org_id=$1 AND action='org_sources_viewed'",[s.org])).rowCount,0);
+ assert.equal((await service.listWithdrawals(s.operator,s.org)).records.length,1);
 });
